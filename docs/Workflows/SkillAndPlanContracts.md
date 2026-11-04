@@ -127,6 +127,14 @@ Canonical document sources retain `sourceReference.path` and real stable `claimI
 
 Tracker success, saved output, and Git publication are distinct effects. A requested fallback must already be authorized; a tracker outage cannot silently choose a new publication destination. Reconcile existing issue mappings before retrying a batch so accepted issues are not duplicated. GitHub issue dependency claims require actual established provider relationships. Downstream MoonMind workflow dependencies are different and use their existing preset/admission owner.
 
+### 5.5 GitLab merge-request tool
+
+`gitlab.merge_request` reads one merge request, its discussions, and its approval and pipeline status, and can post one ordinary note. It runs through `mm.tool.execute` on the integrations fleet. Inline review, merge, and resolver operations are not offered, and the GitHub-only PR resolver still rejects GitLab selectors.
+
+The step names a recorded repository connection (`connectionRef`), never a credential. It must be a generic Git connection with a SecretRef credential and a verified assignment for the project. That assignment's operations decide authority: `read` for reads, plus `review_request` to post. Endpoint, project, and operation checks run before the secret is read, and a redirect to another instance is refused without forwarding the token. The served enrollment API validates GitHub hosts only, so a GitLab connection is recorded through the connection service.
+
+The note's footer carries an operation identity derived from the workflow, logical step, and body, so a retried activity or restarted step reuses it; `note.operationId` continues an earlier operation. Before posting, the tool pages through the merge request's notes for that footer within a bounded budget, because a partial lookup is no evidence the earlier write did not land. Only a complete lookup without the footer permits the POST. A lost acknowledgment fails the attempt as retryable, and the retry reconciles first. An exhausted or ambiguous lookup fails the step as `uncertain` without posting and keeps the body and next automated action in its `output.primary` result artifact. Incomplete discussion or status pages report `readsComplete: false`.
+
 ## 6) Plan contract
 
 ### 6.1 Definition

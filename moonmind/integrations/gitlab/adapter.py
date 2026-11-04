@@ -12,14 +12,14 @@ Scope is deliberately narrow:
   populates diff/mergeability fields asynchronously, so unknown mergeability
   is reported as unknown — never as an empty blocker set. Notes, resolvable
   discussions, approvals, and pipeline results stay distinct.
-* The only implemented write is an ordinary note. Its intent persists in a
-  per-adapter operation ledger keyed by caller-supplied ``operation_id``
-  (the existing operation-identity pattern: the same ``operation_id`` is
-  never posted twice). A lost acknowledgment triggers a bounded note lookup
-  for the operation footer before any repeat mutation. Exhausted or ambiguous
-  observations retain the candidate plus a concrete authorized automation
-  handoff — never an automatic human-review task, never an exactly-once
-  promise.
+* The only implemented write is an ordinary note carrying a footer with the
+  caller-supplied ``operation_id``. The per-adapter ledger only short-cuts a
+  confirmed note; any other state, including a fresh adapter after a worker
+  restart, first pages through the MR's notes for that footer. Only a
+  complete lookup without the footer authorizes one POST: an exhausted page
+  budget, an ambiguous match, or a failed read stays uncertain and returns a
+  concrete authorized automation handoff — never an automatic human-review
+  task, never an exactly-once promise.
 * Inline review and merge are additional operations, not prerequisites.
   They raise ``GitLabCapabilityUnavailable`` until diff-identity /
   source-head-SHA plus target/check/approval safeguards are enforced, and
@@ -34,6 +34,8 @@ from typing import Any
 from moonmind.integrations.gitlab.client import GitLabClient
 from moonmind.integrations.gitlab.errors import (
     GitLabCapabilityUnavailable,
+    GitLabIdentityError,
+    GitLabTokenExpiredError,
     GitLabToolError,
 )
 from moonmind.integrations.gitlab.identity import GitLabMRRef
@@ -101,11 +103,13 @@ class GitLabMRAdapter:
         identity: GitLabMRRef,
         max_discussion_pages: int = 10,
         discussion_per_page: int = 100,
+        max_note_lookup_pages: int = 10,
     ) -> None:
         self._client = client
         self._identity = identity
         self._max_pages = max(1, int(max_discussion_pages))
         self._per_page = max(1, min(100, int(discussion_per_page)))
+        self._max_note_pages = max(1, int(max_note_lookup_pages))
         self._note_ledger: dict[str, dict[str, Any]] = {}
 
     @property
@@ -131,13 +135,7 @@ class GitLabMRAdapter:
         mr = await self._client.request_json(
             method="GET", path=self._base_path(), action="read_mr"
         )
-        if not isinstance(mr, dict):
-            raise GitLabToolError(
-                "GitLab MR response has an unexpected shape.",
-                code="gitlab_request_failed",
-                status_code=502,
-                action="read_mr",
-            )
+        self._check_mr_identity(mr)
         return {
             "id": mr.get("id"),
             "iid": mr.get("iid"),
@@ -150,19 +148,55 @@ class GitLabMRAdapter:
             "raw": mr,
         }
 
-    async def read_discussions(self) -> dict[str, Any]:
-        """Bounded paginated discussion read with a completeness report."""
+    def _check_mr_identity(self, mr: Any) -> None:
+        """Fail closed when the response is not the requested merge request."""
 
-        discussions: list[Any] = []
+        if not isinstance(mr, dict):
+            raise GitLabToolError(
+                "GitLab MR response has an unexpected shape.",
+                code="gitlab_request_failed",
+                status_code=502,
+                action="read_mr",
+            )
+        project_id = self._identity.project.project_id
+        if mr.get("iid") != self._identity.mr_iid or (
+            project_id is not None and mr.get("project_id") != project_id
+        ):
+            raise GitLabIdentityError(
+                "GitLab returned a different merge request than requested.",
+                action="read_mr",
+            )
+
+    async def _read_pages(
+        self,
+        path: str,
+        *,
+        action: str,
+        max_pages: int,
+        params: dict[str, str] | None = None,
+        stop: Any = None,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """Follow ``X-Next-Page`` within ``max_pages``; report what was read.
+
+        ``stop(batch)`` ends the walk early once a page holds what the caller
+        looks for. ``complete`` is true only when the server reported no
+        further page; an unrecognized page ends the walk incomplete.
+        """
+
+        items: list[Any] = []
         page: str | None = "1"
         pages_fetched = 0
         total_pages: int | None = None
-        while page is not None and pages_fetched < self._max_pages:
+        while page is not None and pages_fetched < max_pages:
             response = await self._client._request_raw(
                 method="GET",
-                path=f"{self._base_path()}/discussions",
-                action="read_discussions",
-                params={"page": page, "per_page": str(self._per_page)},
+                path=path,
+                action=action,
+                params={
+                    **(params or {}),
+                    "page": page,
+                    "per_page": str(self._per_page),
+                },
             )
             try:
                 batch = response.json()
@@ -171,53 +205,68 @@ class GitLabMRAdapter:
                     "GitLab response could not be decoded.",
                     code="gitlab_request_failed",
                     status_code=502,
-                    action="read_discussions",
+                    action=action,
                 ) from exc
-            if isinstance(batch, list):
-                discussions.extend(batch)
+            if not isinstance(batch, list):
+                break
+            items.extend(batch)
             pages_fetched += 1
             next_page = (response.headers.get("X-Next-Page") or "").strip()
             total_raw = (response.headers.get("X-Total-Pages") or "").strip()
             total_pages = int(total_raw) if total_raw.isdigit() else total_pages
             page = next_page or None
-        complete = page is None
-        return {
-            "discussions": discussions,
-            "completeness": {
-                "complete": complete,
-                "pages_fetched": pages_fetched,
-                "total_pages": total_pages,
-                "next_page": page,
-            },
+            if stop is not None and stop(batch):
+                break
+        return items, {
+            "complete": page is None,
+            "pages_fetched": pages_fetched,
+            "total_pages": total_pages,
+            "next_page": page,
         }
 
+    async def read_discussions(self) -> dict[str, Any]:
+        """Bounded paginated discussion read with a completeness report."""
+
+        discussions, completeness = await self._read_pages(
+            f"{self._base_path()}/discussions",
+            action="read_discussions",
+            max_pages=self._max_pages,
+        )
+        return {"discussions": discussions, "completeness": completeness}
+
     async def read_status(self) -> dict[str, Any]:
-        """Read approvals and pipelines distinctly from notes/discussions."""
+        """Read approvals and pipelines distinctly from notes/discussions.
+
+        A pipeline page budget left unread or an unrecognized approvals shape
+        makes the status incomplete rather than an apparently complete set.
+        """
 
         mr = await self._client.request_json(
             method="GET", path=self._base_path(), action="read_mr"
         )
+        self._check_mr_identity(mr)
         approvals = await self._client.request_json(
             method="GET", path=f"{self._base_path()}/approvals", action="read_approvals"
         )
-        pipelines = await self._client.request_json(
-            method="GET", path=f"{self._base_path()}/pipelines", action="read_pipelines"
+        pipelines, pipeline_pages = await self._read_pages(
+            f"{self._base_path()}/pipelines",
+            action="read_pipelines",
+            max_pages=self._max_pages,
         )
-        if not isinstance(mr, dict):
-            raise GitLabToolError(
-                "GitLab MR response has an unexpected shape.",
-                code="gitlab_request_failed",
-                status_code=502,
-                action="read_mr",
-            )
+        approvals_known = isinstance(approvals, dict)
         mergeability = _mergeability_from_mr(mr)
         return {
             "state": mr.get("state"),
             "head_sha": mr.get("sha"),
             "source_branch": mr.get("source_branch"),
             "target_branch": mr.get("target_branch"),
-            "approvals": approvals,
-            "pipelines": pipelines if isinstance(pipelines, list) else [],
+            "approvals": approvals if approvals_known else None,
+            "pipelines": pipelines,
+            "completeness": {
+                "complete": approvals_known and pipeline_pages["complete"],
+                "approvals_known": approvals_known,
+                "pipelines": pipeline_pages,
+            },
             **mergeability,
         }
 
@@ -264,53 +313,32 @@ class GitLabMRAdapter:
             }
         footer = note_footer_for(key)
         full_body = clean_body if footer in clean_body else f"{clean_body}\n\n{footer}"
-        if existing is None:
-            # Fresh adapter (or first use of this operation_id): the
-            # in-memory ledger cannot prove the note was never posted
-            # (worker restart / Activity retry / adapter recreation all
-            # clear it). Reconcile the footer before the first mutation so
-            # a retried operation_id never posts twice.
-            lookup = await self._lookup_note_by_footer(footer)
-            if lookup.get("found"):
-                self._remember(
-                    key,
-                    {
-                        "state": "completed",
-                        "note_id": lookup.get("note_id"),
-                        "reconciled": True,
-                    },
-                )
-                return {"note_id": lookup.get("note_id"), "reconciled": True}
-            if lookup.get("exhausted"):
-                self._remember(key, {"state": "exhausted", "body": clean_body})
-                return {
-                    "note_id": None,
-                    "reconciled": False,
-                    "automation_handoff": self._automation_handoff(
-                        operation_id=key, body=clean_body, reason="note_lookup_exhausted"
-                    ),
-                }
-        if existing is not None and existing.get("state") == "uncertain":
-            lookup = await self._lookup_note_by_footer(footer)
-            if lookup.get("found"):
-                self._remember(
-                    key,
-                    {
-                        "state": "completed",
-                        "note_id": lookup.get("note_id"),
-                        "reconciled": True,
-                    },
-                )
-                return {"note_id": lookup.get("note_id"), "reconciled": True}
-            if lookup.get("exhausted"):
-                self._remember(key, {"state": "exhausted", "body": clean_body})
-                return {
-                    "note_id": None,
-                    "reconciled": False,
-                    "automation_handoff": self._automation_handoff(
-                        operation_id=key, body=clean_body, reason="note_lookup_exhausted"
-                    ),
-                }
+        # Only a confirmed note skips reconciliation. A fresh adapter (worker
+        # restart, Activity retry) cannot prove from memory that the note was
+        # never posted, and an uncertain attempt may have landed.
+        lookup = await self._lookup_note_by_footer(footer)
+        if lookup.get("found"):
+            self._remember(
+                key,
+                {
+                    "state": "completed",
+                    "note_id": lookup.get("note_id"),
+                    "reconciled": True,
+                },
+            )
+            return {"note_id": lookup.get("note_id"), "reconciled": True}
+        if lookup.get("uncertain"):
+            self._remember(key, {"state": "uncertain", "body": clean_body})
+            return {
+                "note_id": None,
+                "reconciled": False,
+                "automation_handoff": self._automation_handoff(
+                    operation_id=key,
+                    body=clean_body,
+                    reason=lookup["reason"],
+                    pages_examined=lookup["pages_examined"],
+                ),
+            }
         try:
             created = await self._client.request_json(
                 method="POST",
@@ -330,34 +358,54 @@ class GitLabMRAdapter:
         return {"note_id": note_id, "reconciled": False}
 
     async def _lookup_note_by_footer(self, footer: str) -> dict[str, Any]:
-        """Bounded lookup for a possibly-issued note before repeat mutation."""
+        """Page through the MR's notes for the footer before any mutation.
+
+        Absence is confirmed only when every page was read. A page budget left
+        unread, more than one match, or a failed read is uncertain, because a
+        partial lookup is no evidence that the earlier write did not happen.
+        An expired credential or identity rejection is raised as itself.
+        """
+
+        def _matches(batch: list[Any]) -> list[Any]:
+            return [
+                note
+                for note in batch
+                if isinstance(note, dict) and footer in str(note.get("body") or "")
+            ]
 
         try:
-            notes = await self._client.request_json(
-                method="GET",
-                path=f"{self._base_path()}/notes",
+            notes, pages = await self._read_pages(
+                f"{self._base_path()}/notes",
                 action="lookup_note",
-                params={"order_by": "created_at", "sort": "desc", "per_page": "20"},
+                max_pages=self._max_note_pages,
+                params={"order_by": "created_at", "sort": "desc"},
+                stop=lambda batch: bool(_matches(batch)),
             )
+        except (GitLabTokenExpiredError, GitLabIdentityError):
+            raise
         except GitLabToolError:
-            return {"found": False, "exhausted": True}
-        if not isinstance(notes, list):
-            return {"found": False, "exhausted": True}
-        matches = [
-            note
-            for note in notes
-            if isinstance(note, dict) and footer in str(note.get("body") or "")
-        ]
+            return {
+                "uncertain": True,
+                "reason": "note_lookup_failed",
+                "pages_examined": 0,
+            }
+        matches = _matches(notes)
         if len(matches) == 1:
             return {"found": True, "note_id": matches[0].get("id")}
-        if len(matches) == 0:
-            # Successful lookup with no footer present: safe for the caller
-            # to proceed to exactly one mutation.
-            return {"found": False, "exhausted": False}
-        return {"found": False, "exhausted": True}
+        if matches:
+            reason = "note_lookup_ambiguous"
+        elif not pages["complete"]:
+            reason = "note_lookup_exhausted"
+        else:
+            return {"found": False}
+        return {
+            "uncertain": True,
+            "reason": reason,
+            "pages_examined": pages["pages_fetched"],
+        }
 
     def _automation_handoff(
-        self, *, operation_id: str, body: str, reason: str
+        self, *, operation_id: str, body: str, reason: str, pages_examined: int
     ) -> dict[str, Any]:
         """Concrete authorized automation handoff retaining the candidate."""
 
@@ -370,6 +418,7 @@ class GitLabMRAdapter:
             "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
             "body_chars": len(body),
             "reason": reason,
+            "pages_examined": pages_examined,
             "retry": "authorized automation may retry post_note with the same operation_id",
         }
 

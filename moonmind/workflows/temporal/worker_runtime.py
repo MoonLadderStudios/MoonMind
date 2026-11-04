@@ -94,6 +94,9 @@ from moonmind.workflows.skills.deployment_execution import (
 from moonmind.workflows.skills.deployment_overview import (
     register_deployment_overview_tool_handler,
 )
+from moonmind.workflows.skills.gitlab_merge_request import (
+    register_gitlab_merge_request_tool_handler,
+)
 from moonmind.workflows.skills.ops_diagnostics_execution import (
     HostDockerComposeOpsDiagnosisRunner,
     OpsStackDiagnosisExecutor,
@@ -2904,6 +2907,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         dispatcher = SkillActivityDispatcher()
         register_security_assessment_tool_handler(dispatcher)
+        register_gitlab_merge_request_tool_handler(dispatcher)
 
         async def _read_story_output_artifact(artifact_ref: str) -> bytes:
             _artifact, payload = await artifact_service.read(
