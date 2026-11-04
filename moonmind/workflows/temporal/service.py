@@ -4418,7 +4418,11 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Unsupported signal name: {signal_name}"
             )
-        record = await self._require_source_execution(workflow_id)
+        record = await (
+            self._require_cancel_target_execution(workflow_id)
+            if signal_name in {"Pause", "Resume"}
+            else self._require_source_execution(workflow_id)
+        )
         if expected_run_id is not None:
             await self._session.refresh(record)
             if record.run_id != expected_run_id:
