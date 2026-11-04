@@ -12,6 +12,7 @@ composition root (:mod:`moonmind.omnigent.production`).
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -40,6 +41,8 @@ from moonmind.omnigent.host_ports import (
     host_correlation_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -424,35 +427,52 @@ class GenericOmnigentHostRuntime:
                 egress_attestation=prepared.egress_attestation,
             )
         except BaseException as exc:
-            # The host is removed here, before any caller can inspect it. Carry
-            # the cleanup evidence (including the captured host log tail) on
-            # the failure so the realizer's single publication point persists
-            # it; otherwise the only runner diagnostics for a registration or
-            # attestation failure would be lost with the container.
+            failure: BaseException = exc
             try:
-                host_cleanup_evidence = await self._cleanup.cleanup(
-                    container_name=launch["containerName"],
-                    host_lease_ref=host_lease_ref,
-                    host_lease_generation=host_lease_generation,
-                    state_volume_ref=launch["stateVolumeRef"],
-                    control_volume_ref=launch.get("controlVolumeRef"),
-                    **(
-                        {
-                            "static_host_id": spec.expectedOmnigentHostId,
-                            "static_host_image_ref": spec.imageRef,
-                            "static_previous_container_id": spec.runtime.get(
-                                "staticPreviousContainerId"
-                            ),
-                        }
-                        if static_selection is not None
-                        else {}
-                    ),
-                )
-                setattr(exc, "host_cleanup_evidence", host_cleanup_evidence)
-            except Exception as cleanup_error:
-                # The durable owner retains cleanup authority. An auxiliary
-                # cleanup failure must not replace the startup failure.
-                setattr(exc, "host_cleanup_error", type(cleanup_error).__name__)
+                if (
+                    isinstance(exc, HarnessPlatformError)
+                    and exc.code
+                    == HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH
+                ):
+                    failure = await self._ended_login_failure(
+                        exc,
+                        plan=plan,
+                        launch=launch,
+                        credential_handles=credential_handles,
+                    )
+            finally:
+                # The host is removed here, before any caller can inspect it.
+                # Carry the cleanup evidence (including the captured host log
+                # tail) on the failure so the realizer's single publication
+                # point persists it; otherwise the only runner diagnostics for
+                # a registration or attestation failure would be lost with the
+                # container.
+                try:
+                    host_cleanup_evidence = await self._cleanup.cleanup(
+                        container_name=launch["containerName"],
+                        host_lease_ref=host_lease_ref,
+                        host_lease_generation=host_lease_generation,
+                        state_volume_ref=launch["stateVolumeRef"],
+                        control_volume_ref=launch.get("controlVolumeRef"),
+                        **(
+                            {
+                                "static_host_id": spec.expectedOmnigentHostId,
+                                "static_host_image_ref": spec.imageRef,
+                                "static_previous_container_id": spec.runtime.get(
+                                    "staticPreviousContainerId"
+                                ),
+                            }
+                            if static_selection is not None
+                            else {}
+                        ),
+                    )
+                    setattr(failure, "host_cleanup_evidence", host_cleanup_evidence)
+                except Exception as cleanup_error:
+                    # The durable owner retains cleanup authority. An auxiliary
+                    # cleanup failure must not replace the startup failure.
+                    setattr(failure, "host_cleanup_error", type(cleanup_error).__name__)
+            if failure is not exc:
+                raise failure from exc
             raise
         return {
             **(
@@ -498,6 +518,33 @@ class GenericOmnigentHostRuntime:
             ),
             **attestations,
         }
+
+    async def _ended_login_failure(
+        self,
+        needs_auth: HarnessPlatformError,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        launch: dict[str, Any],
+        credential_handles: list[dict[str, Any]],
+    ) -> BaseException:
+        """Let the still-running exact host explain its ``needs-auth`` verdict.
+
+        An unproven login or a failed observation keeps the host's own verdict.
+        """
+
+        try:
+            ended = await self._attestor.prove_ended_oauth_login(
+                plan=plan,
+                launch_result=launch,
+                credential_handles=credential_handles,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Ended OAuth login check failed on the exact host: error_type=%s",
+                type(exc).__name__,
+            )
+            return needs_auth
+        return ended or needs_auth
 
     async def refresh_github_projection(
         self,
