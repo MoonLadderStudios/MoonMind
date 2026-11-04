@@ -34,6 +34,7 @@ from moonmind.schemas.temporal_models import StepExecutionIdentityModel
 from moonmind.schemas.temporal_activity_models import ArtifactReadInput
 from moonmind.workflows.temporal import github_issue_claim_lease as claim_leases
 from moonmind.workflows.temporal import retry_from_step, story_output_tools
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
@@ -317,12 +318,15 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )
             app = _app(service, session, env, user)
-            async with Worker(
-                env.client,
-                task_queue=TASK_QUEUE,
-                workflows=[workflow_class],
-                activities=[run_step, child_save, read_child_save],
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[workflow_class],
+                    activities=[run_step, child_save],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(env.client, task_queue=ARTIFACTS_TASK_QUEUE, activities=[read_child_save]),
             ):
                 handle = await env.client.start_workflow(
                     workflow_class.run,
