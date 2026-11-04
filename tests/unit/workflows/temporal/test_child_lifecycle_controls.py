@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
@@ -23,7 +24,7 @@ class _LifecycleBoundaryAgentRun(MoonMindAgentRun):
     """Keep the production controls; replace only the agent's compute body."""
 
     @workflow.run
-    async def run(self) -> None:
+    async def run(self, request: AgentExecutionRequest) -> None:
         await workflow.wait_condition(lambda: False)
 
     @workflow.query
@@ -39,7 +40,7 @@ async def _wait_for_child(client, child_id):
             return child
         except Exception:
             await asyncio.sleep(0.02)
-    pytest.fail("The controlled AgentRun did not start")
+    raise AssertionError("The controlled AgentRun did not start")
 
 
 @pytest.mark.asyncio
@@ -55,7 +56,15 @@ async def test_parent_pause_reaches_real_agent_controls_and_replays(
         self._active_agent_child_workflow_id = child_id
         try:
             await workflow.execute_child_workflow(
-                _LifecycleBoundaryAgentRun.run, id=child_id, task_queue=queue
+                _LifecycleBoundaryAgentRun.run,
+                AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="codex_cli",
+                    correlation_id=parent_id,
+                    idempotency_key=child_id,
+                ),
+                id=child_id,
+                task_queue=queue,
             )
         finally:
             self._active_agent_child_workflow_id = None
