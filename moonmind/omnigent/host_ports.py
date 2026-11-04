@@ -25,6 +25,7 @@ from moonmind.auth.bound_acquisition import AcquiredCredential
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -328,6 +329,16 @@ class OmnigentHostAttestationPort(Protocol):
         credential_handles: list[dict[str, Any]],
         egress_attestation: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+    async def prove_ended_oauth_login(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        launch_result: dict[str, Any],
+        credential_handles: list[dict[str, Any]],
+    ) -> HarnessPlatformError | None:
+        """Return a reconnect error when the exact host proves its login ended."""
+        ...
 
 
 @runtime_checkable

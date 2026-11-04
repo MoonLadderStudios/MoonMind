@@ -30,6 +30,10 @@ from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_github_access,
 )
+from moonmind.omnigent.oauth_login import (
+    CLAUDE_LOGIN_SESSION_PROBE,
+    record_ended_oauth_login,
+)
 from moonmind.omnigent.workspace_intent import authored_github_mutation_required
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
@@ -364,6 +368,60 @@ class DockerOmnigentHostAttestor:
         self._backend = backend
         self._client = client
         self._artifacts = artifacts
+
+    async def prove_ended_oauth_login(
+        self,
+        *,
+        plan: Any,
+        launch_result: dict[str, Any],
+        credential_handles: list[dict[str, Any]],
+    ) -> HarnessPlatformError | None:
+        """Explain a ``needs-auth`` Claude host from its mounted OAuth home.
+
+        Claude reports ``needs-auth`` alike for a missing, cleared, or
+        unrefreshable login. Only when the exact host's mounted home proves the
+        login can no longer refresh is the enrollment disabled, so Settings asks
+        for a reconnect and routing stops launching hosts for it. Never retain
+        login file contents or vendor output.
+        """
+
+        if str(getattr(plan.payload, "harnessId", "") or "") != "claude-native":
+            return None
+        for handle in credential_handles:
+            if handle.get("materializerRef") != "claude-oauth-home@1":
+                continue
+            for attachment in handle.get("attachments", []):
+                if not _declared_access_is_writable(attachment.get("accessMode")):
+                    continue
+                code, verdict, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/opt/venv/bin/python",
+                        "-c",
+                        CLAUDE_LOGIN_SESSION_PROBE,
+                        str(attachment["targetPath"]),
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code != 0 or verdict.strip() != "ended":
+                    continue
+                profile_id = str(handle.get("providerProfileRef") or "")
+                await record_ended_oauth_login(
+                    profile_id,
+                    int(handle["credentialGeneration"]),
+                    runtime_id="claude_code",
+                    reason="claude_login_session_ended",
+                )
+                return HarnessPlatformError(
+                    f"The Claude login stored for Provider Profile {profile_id} "
+                    "has ended and cannot be refreshed. Reconnect OAuth in "
+                    "Settings, then retry the failed step.",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+                )
+        return None
 
     async def attest(
         self,
