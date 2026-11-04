@@ -148,6 +148,7 @@ def capture_git_history(
     Existing origin objects remain an explicit restore dependency. No unrelated
     branch, credential configuration, reflog, or repository hooks are exported.
     A repository without an origin baseline gets a bounded self-contained HEAD.
+    HEAD is the closest possible origin baseline; finding it ends ref traversal.
     """
     workspace = workspace.resolve()
     git = partial(_git, workspace, deadline=time.monotonic() + 120)
@@ -162,7 +163,7 @@ def capture_git_history(
         .splitlines()
     )
     baseline = None
-    for ref in dict.fromkeys(refs):
+    for ref in sorted(dict.fromkeys(refs), key=lambda ref: ref != head):
         ancestor = (
             git(["merge-base", head, ref], limit=4096, allow_unrelated=True)
             .decode()
@@ -170,6 +171,9 @@ def capture_git_history(
         )
         if not ancestor:
             continue
+        if ancestor == head:
+            baseline = head
+            break  # No other origin ref can provide a closer baseline.
         if (
             baseline is None
             or git(["merge-base", baseline, ancestor], limit=4096).decode().strip()
