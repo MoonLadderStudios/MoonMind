@@ -74,6 +74,35 @@ class _History:
             attributes.upserted_memo.fields[key].CopyFrom(_CONVERTER.to_payload(value))
         self.events.append(event)
 
+    def checkpoint(self, step_id="step-3", *, ordinal=1, failed=True) -> int:
+        task = self.workflow_task()
+        event = HistoryEvent(
+            event_id=self._next_id(),
+            event_type=EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
+        )
+        attributes = event.activity_task_scheduled_event_attributes
+        attributes.workflow_task_completed_event_id = task
+        attributes.activity_type.name = "workspace.capture_checkpoint"
+        attributes.input.payloads.append(
+            _CONVERTER.to_payload(
+                {
+                    "identity": {"logicalStepId": step_id, "executionOrdinal": ordinal},
+                    "boundary": "before_publication",
+                }
+            )
+        )
+        self.events.append(event)
+        if failed:
+            failure = HistoryEvent(
+                event_id=self._next_id(),
+                event_type=EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT,
+            )
+            failure.activity_task_timed_out_event_attributes.scheduled_event_id = (
+                event.event_id
+            )
+            self.events.append(failure)
+        return task
+
 
 def _reset_failure(
     base_run_id: str, started_event_id: int, message: str
@@ -281,6 +310,91 @@ def test_without_a_failed_row_the_last_started_step_is_restarted() -> None:
     )
 
     assert plan.logical_step_id == "step-3"
+
+
+def _completed_with_failed_save():
+    rows = _rows("completed", "completed", "completed", "pending")
+    rows[2].update(
+        executionOrdinal=1,
+        executionOutcome={"status": "succeeded"},
+        finalizationOutcome={
+            "status": "failed",
+            "phase": "before_publication_checkpoint",
+        },
+    )
+    return rows
+
+
+def test_completed_execution_retries_only_its_failed_checkpoint() -> None:
+    history, wt_by_order = _three_step_failure()
+    capture_task = history.checkpoint()
+    plan = plan_retry_from_step(
+        events=iter(history.events),
+        ledger_rows=_completed_with_failed_save(),
+        decode_memo_value=_decode,
+    )
+    assert plan.logical_step_id == "step-3"
+    assert plan.reset_event_id == capture_task > wt_by_order[3]
+    assert plan.replay_until_event_id == capture_task - 1
+
+
+@pytest.mark.parametrize("step_id,ordinal", [("another-step", 1), ("step-3", 2)])
+def test_completed_result_cannot_restart_at_an_unrelated_failed_save(step_id, ordinal):
+    history, _ = _three_step_failure()
+    history.checkpoint(step_id, ordinal=ordinal)
+    with pytest.raises(RetryFromStepUnavailable) as raised:
+        plan_retry_from_step(
+            events=history.events,
+            ledger_rows=_completed_with_failed_save(),
+            decode_memo_value=_decode,
+        )
+    assert raised.value.reason == "finalization_boundary_unavailable"
+
+
+def test_failed_execution_still_restarts_the_step_instead_of_adopting_its_save():
+    history, tasks = _three_step_failure()
+    history.checkpoint()
+    rows = _completed_with_failed_save()
+    rows[2]["executionOutcome"]["status"] = "failed"
+    rows[2]["status"] = "failed"
+    plan = plan_retry_from_step(
+        events=history.events, ledger_rows=rows, decode_memo_value=_decode
+    )
+    assert plan.reset_event_id == tasks[3]
+
+
+def test_completed_result_does_not_rewind_past_a_later_capture():
+    history, _ = _three_step_failure()
+    history.checkpoint()
+    history.checkpoint(failed=False)
+    with pytest.raises(RetryFromStepUnavailable) as raised:
+        plan_retry_from_step(
+            events=history.events, ledger_rows=_completed_with_failed_save(),
+            decode_memo_value=_decode,
+        )
+    assert raised.value.reason == "finalization_boundary_unavailable"
+
+
+def test_finalization_retry_is_recognized_after_successor_ledger_advances():
+    history, _ = _three_step_failure()
+    capture_task = history.checkpoint()
+    rows = _completed_with_failed_save()
+    rows[2]["finalizationOutcome"] = {"status": "succeeded"}
+    accepted = accepted_retry_step(
+        successor_events=[
+            _reset_failure(
+                "source-run",
+                capture_task - 1,
+                retry_reset_reason("step-3", "save-retry"),
+            )
+        ],
+        source_events=iter(history.events),
+        ledger_rows=rows,
+        source_run_id="source-run",
+        request_id="save-retry",
+        decode_memo_value=_decode,
+    )
+    assert accepted is not None and accepted.logical_step_id == "step-3"
 
 
 def test_steps_the_run_never_started_are_not_candidates() -> None:

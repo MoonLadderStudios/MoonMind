@@ -3,9 +3,10 @@
 A retry resets the run's Temporal history to the workflow task that started
 the chosen step. Temporal replays every earlier event, so completed steps,
 their results and the workflow state they produced are kept exactly as
-recorded; the chosen step and everything after it run again on the installed
-MoonMind code. Saved Omnigent workspaces reach the retried step through the
-same restore references the original attempt used.
+recorded. A successful execution whose checkpoint failed resumes at that
+checkpoint rather than repeating the execution. Other chosen steps and later
+steps run again on installed code. Saved Omnigent workspaces reach the retried
+step through the same restore references the original attempt used.
 
 The run workflow upserts ``mm_current_step_order`` into its memo in the
 workflow task that starts each plan step, so the first memo change to an order
@@ -69,6 +70,16 @@ class RetryFromStepPlan:
     title: str | None
     reset_event_id: int
     replay_until_event_id: int
+
+
+@dataclass(frozen=True)
+class _CheckpointCapture:
+    logical_step_id: str
+    execution_ordinal: int
+    checkpoint_boundary: str
+    task_completed_id: int
+    task_started_id: int
+    failed: bool = False
 
 
 def _positive_int(value: Any) -> int | None:
@@ -205,6 +216,94 @@ def _text(value: Any) -> str | None:
     return candidate or None
 
 
+def _checkpoint_captures(
+    events: Iterable[HistoryEvent], decode_memo_value: Callable[[Any], Any]
+) -> list[_CheckpointCapture]:
+    """Bind recorded capture failures to their issuing workflow task."""
+    tasks: dict[int, int] = {}
+    captures: dict[int, _CheckpointCapture] = {}
+    for event in events:
+        if event.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
+            tasks[event.event_id] = int(
+                event.workflow_task_completed_event_attributes.started_event_id
+            )
+        elif event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
+            attributes = event.activity_task_scheduled_event_attributes
+            task_id = int(attributes.workflow_task_completed_event_id)
+            if (
+                attributes.activity_type.name != "workspace.capture_checkpoint"
+                or task_id not in tasks
+                or len(attributes.input.payloads) != 1
+            ):
+                continue
+            try:
+                request = decode_memo_value(attributes.input.payloads[0])
+            except Exception:
+                continue
+            identity = request.get("identity") if isinstance(request, Mapping) else None
+            if not isinstance(identity, Mapping):
+                continue
+            step_id = _text(identity.get("logicalStepId"))
+            ordinal = _positive_int(identity.get("executionOrdinal"))
+            boundary = request.get("boundary")
+            if (
+                step_id
+                and ordinal
+                and boundary in {"after_execution", "before_publication"}
+            ):
+                captures[event.event_id] = _CheckpointCapture(
+                    step_id, ordinal, boundary, task_id, tasks[task_id]
+                )
+        elif event.event_type in {
+            EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT,
+        }:
+            attributes = getattr(event, event.WhichOneof("attributes"))
+            scheduled_id = int(attributes.scheduled_event_id)
+            if scheduled_id in captures:
+                captures[scheduled_id] = replace(captures[scheduled_id], failed=True)
+    return list(captures.values())
+
+
+def _retry_boundary(
+    events: Sequence[HistoryEvent],
+    row: Mapping[str, Any],
+    start: StepBoundary,
+    decode_memo_value: Callable[[Any], Any],
+) -> StepBoundary:
+    finalization = row.get("finalizationOutcome") or {}
+    execution = row.get("executionOutcome") or {}
+    if not (
+        row.get("status") == "completed"
+        and execution.get("status") == "succeeded"
+        and finalization.get("status") == "failed"
+    ):
+        return start
+    boundary = {
+        "after_execution_checkpoint": "after_execution",
+        "before_publication_checkpoint": "before_publication",
+    }.get(finalization.get("phase"))
+    matches = [
+        capture
+        for capture in _checkpoint_captures(events, decode_memo_value)
+        if capture.logical_step_id == row.get("logicalStepId")
+        and capture.execution_ordinal == _positive_int(row.get("executionOrdinal"))
+        and capture.checkpoint_boundary == boundary
+        and capture.task_completed_id > start.workflow_task_completed_event_id
+    ]
+    if not matches or not matches[-1].failed:
+        raise RetryFromStepUnavailable(
+            "finalization_boundary_unavailable",
+            "The step completed, but its failed checkpoint has no verified retry boundary; its execution was not restarted.",
+        )
+    capture = matches[-1]
+    return replace(
+        start,
+        workflow_task_completed_event_id=capture.task_completed_id,
+        workflow_task_started_event_id=capture.task_started_id,
+    )
+
+
 def default_retry_order(
     ledger_rows: Sequence[Mapping[str, Any]],
     boundaries: Mapping[int, StepBoundary],
@@ -279,6 +378,7 @@ def plan_retry_from_step(
 ) -> RetryFromStepPlan:
     """Choose the reset point for a retry, or explain why there is none."""
 
+    events = tuple(events)
     boundaries = step_boundaries(events, decode_memo_value, ledger_rows=ledger_rows)
     candidates = retry_candidates(
         ledger_rows, boundaries, failed_step_id=failed_step_id
@@ -302,7 +402,12 @@ def plan_retry_from_step(
                 f"Step {requested} did not start in this run before it stopped, "
                 "so the run cannot restart from it.",
             )
-    boundary = boundaries[chosen.order]
+    boundary = _retry_boundary(
+        events,
+        _ledger_rows_by_order(ledger_rows)[chosen.order],
+        boundaries[chosen.order],
+        decode_memo_value,
+    )
     return RetryFromStepPlan(
         logical_step_id=chosen.logical_step_id,
         order=chosen.order,
@@ -350,6 +455,8 @@ def accepted_retry_step(
             reset_task = event.workflow_task_failed_event_attributes
     if reset_task is None or reset_task.base_run_id != source_run_id:
         return None
+    source_events = tuple(source_events)
+    captures = _checkpoint_captures(source_events, decode_memo_value)
     rows_by_order = _ledger_rows_by_order(ledger_rows)
     for order, boundary in step_boundaries(
         source_events, decode_memo_value, ledger_rows=ledger_rows
@@ -358,9 +465,14 @@ def accepted_retry_step(
         if row is None:
             continue
         logical_step_id = str(row.get("logicalStepId")).strip()
-        if boundary.workflow_task_started_event_id == int(
+        starts = {boundary.workflow_task_started_event_id} | {
+            capture.task_started_id
+            for capture in captures
+            if capture.failed and capture.logical_step_id == logical_step_id
+        }
+        if int(
             reset_task.started_event_id
-        ) and reset_task.failure.message == retry_reset_reason(
+        ) in starts and reset_task.failure.message == retry_reset_reason(
             logical_step_id, request_id
         ):
             return RetryCandidate(
