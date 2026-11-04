@@ -185,8 +185,11 @@ quiescence and compacts committed chunks into complete JSONL journals for old
 readers. References/event locators commit atomically; original chunks remain
 recoverable until that commit. Recorded source helper images support rollback.
 Unavailable storage, artifacts or consumer observations prevent recreation.
-Interrupted Activities recover under their existing logical steps and budgets;
-completed workflow effects are not repeated.
+Default workers execute Python directly so Docker's stop signal reaches the
+SDK's graceful drain. An explicit `TEMPORAL_WORKER_COMMAND` is a shell override:
+it must `exec` the long-lived worker or forward stop signals and await its drain.
+Interrupted Activities use their existing recovery owners, logical steps and
+budgets; completed workflow effects are not repeated.
 
 After a partial apply, every journal consumer is stopped again. Retry recompacts
 before recreation because a partial writer may have committed more chunks.
