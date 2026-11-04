@@ -7308,11 +7308,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
             or {}
         ).get("after_execution")
+        saved_identity = identity
+        if isinstance(saved, Mapping) and self._workflow_is_replaying():
+            source_run_id = saved.get("sourceChildRunId")
+            if source_run_id:
+                saved_identity = identity.model_copy(update={"run_id": source_run_id})
         if (
             boundary == "after_execution"
             and self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
             and isinstance(saved, Mapping)
-            and saved.get("sourceChildStepExecutionId") == build_step_execution_id(identity)
+            and saved.get("sourceChildStepExecutionId") == build_step_execution_id(saved_identity)
         ):
             return saved["checkpointRef"]
         task_input_snapshot_ref = (
@@ -7460,6 +7465,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "workflow_id", "run_id", "logical_step_id", "execution_ordinal"
             )
         }
+        # A reset changes the parent run ID while replaying a completed child.
+        # Its recorded result retains the exact parent identity, including a
+        # child created after an earlier reset. Live results still require the
+        # current request's identity; an unbound historical save is not guessed.
+        if self._workflow_is_replaying():
+            recorded_run_id = metadata.get("parentTemporalRunId") or metadata.get("parentRunId")
+            if (
+                metadata.get("parentWorkflowId") == identity.workflow_id
+                and isinstance(recorded_run_id, str) and recorded_run_id.strip()
+                and all(
+                    metadata.get(key) in (None, "", recorded_run_id)
+                    for key in ("parentTemporalRunId", "parentRunId")
+                )
+            ):
+                expected["run_id"] = recorded_run_id
         workspace = checkpoint.workspace.model_dump(
             by_alias=True, mode="json", exclude_none=True
         )
@@ -7498,7 +7518,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "workspaceIdentityDigest": workspace["workspaceIdentityDigest"],
             "checkpointManifestRef": workspace["manifestRef"],
             "workspaceArchiveRef": workspace["archiveRef"],
-            "sourceChildStepExecutionId": identity.step_execution_id,
+            "sourceChildStepExecutionId": build_step_execution_id(
+                StepExecutionIdentityModel.model_validate(expected)
+            ),
+            "sourceChildRunId": expected["run_id"],
             **({"baseCommit": workspace["baseCommit"]} if workspace.get("baseCommit") else {}),
         }
         if self._step_ledger_row_for(logical_step_id) is None:
