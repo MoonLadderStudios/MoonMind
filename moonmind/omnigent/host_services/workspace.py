@@ -595,9 +595,25 @@ class OmnigentWorkspaceMaterializer:
             workflow_input = (
                 target.get("inputArtifactRef") if isinstance(target, dict) else None
             )
-            if not isinstance(workflow_input, str) or same_ref(
-                workflow_input
-            ) != same_ref(checkpoint.task_input_snapshot_ref):
+            # Inline workflow input lives in this admitted snapshot rather than
+            # a separate artifact. Its checkpoint URI names the producer run,
+            # which remains the input owner after a failed-step reset.
+            inline_input = (
+                isinstance(origin, dict)
+                and origin.get("kind") in {"create", "schedule"}
+                and isinstance(target, dict)
+                and workflow_input is None
+                and checkpoint.task_input_snapshot_ref
+                == (
+                    f"temporal://{checkpoint.source.workflow_id}/"
+                    f"{checkpoint.source.run_id}/task-input"
+                )
+            )
+            if not inline_input and (
+                not isinstance(workflow_input, str)
+                or same_ref(workflow_input)
+                != same_ref(checkpoint.task_input_snapshot_ref)
+            ):
                 raise CheckpointRestoreError(
                     "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
                     "saved step input is not bound by the admitted snapshot",
