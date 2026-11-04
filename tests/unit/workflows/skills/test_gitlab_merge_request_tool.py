@@ -1109,6 +1109,150 @@ async def test_unadmitted_principals_and_selections_are_refused_at_submission(
     assert runs == 0
 
 
+def _raw_request(inputs, **parameters):
+    """A raw ``CreateExecutionRequest`` with one GitLab tool step."""
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": "Raw GitLab run",
+        "initialParameters": {
+            "workflow": {
+                "instructions": "Read the merge request.",
+                "steps": [
+                    {
+                        "id": "gitlab-0",
+                        "type": "tool",
+                        "tool": {"id": TOOL_NAME, "inputs": inputs},
+                    }
+                ],
+            },
+            **parameters,
+        },
+    }
+
+
+async def _counts(maker):
+    from sqlalchemy import func, select
+
+    from api_service.db.models import (
+        RecurringWorkflowDefinition,
+        TemporalExecutionCanonicalRecord,
+    )
+
+    async with maker() as session:
+        return [
+            (
+                await session.execute(select(func.count()).select_from(model))
+            ).scalar_one()
+            for model in (TemporalExecutionCanonicalRecord, RecurringWorkflowDefinition)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_client_authored_admissions_are_refused_on_every_create_surface(
+    served, monkeypatch
+):
+    """Only submission writes a run's admissions; a client-supplied one is refused."""
+
+    from unittest.mock import AsyncMock
+
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    await _seed_foreign_connection(served.maker)
+    # A refusal must happen before any schedule is created.
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.TemporalClientAdapter",
+        lambda *args, **kwargs: AsyncMock(),
+    )
+    forged = [
+        {
+            "tool": TOOL_NAME,
+            "connectionRef": "gitlab-foreign",
+            "repository": PROJECT,
+            "principalRef": "principal:foreign",
+            "scopeType": "system",
+            "scopeRef": None,
+            "providerRepoId": "99",
+            "assignmentRevision": 1,
+        }
+    ]
+    step = _inputs(connectionRef="gitlab-foreign", read=["mr"])
+    recurring = {"mode": "recurring", "cron": "0 6 * * *", "name": "Forged"}
+    reads, requests = len(served.secret_reads), len(served.gitlab.requests)
+
+    raw = await served.client.post(
+        "/api/executions", json=_raw_request(step, repositoryToolAdmissions=forged)
+    )
+    raw_recurring = await served.client.post(
+        "/api/executions",
+        json={
+            **_raw_request(step, repositoryToolAdmissions=forged),
+            "schedule": recurring,
+        },
+    )
+    envelope_recurring = await served.client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": _raw_request(step)["initialParameters"]["workflow"],
+                "repositoryToolAdmissions": forged,
+            },
+            "schedule": recurring,
+        },
+    )
+
+    for refused in (raw, raw_recurring, envelope_recurring):
+        assert refused.status_code == 422, refused.text
+        assert (
+            "admissions are recorded by submission"
+            in refused.json()["detail"]["message"]
+        )
+    assert await _counts(served.maker) == [0, 0]
+    served.temporal.start_workflow.assert_not_awaited()
+    assert len(served.secret_reads) == reads
+    assert len(served.gitlab.requests) == requests
+
+
+@pytest.mark.asyncio
+async def test_raw_submission_admits_its_gitlab_steps_like_the_envelope(
+    served, tmp_path
+):
+    from api_service.auth_providers import instance_operator_principal
+
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    await _seed_foreign_connection(served.maker)
+
+    foreign = await served.client.post(
+        "/api/executions",
+        json=_raw_request(_inputs(connectionRef="gitlab-foreign", read=["mr"])),
+    )
+    assert foreign.status_code == 422, foreign.text
+    assert "not admitted" in foreign.json()["detail"]["message"]
+    assert await _counts(served.maker) == [0, 0]
+
+    inputs = _inputs(read=["mr"])
+    submitted = await served.client.post("/api/executions", json=_raw_request(inputs))
+    assert submitted.status_code == 201, submitted.text
+    record = await _recorded_run(served.maker, submitted.json()["workflowId"])
+    assert record.parameters["repositoryToolAdmissions"] == [
+        {
+            "tool": TOOL_NAME,
+            "connectionRef": "gitlab-main",
+            "repository": PROJECT,
+            "principalRef": instance_operator_principal(),
+            "scopeType": "system",
+            "scopeRef": None,
+            "providerRepoId": "99",
+            "assignmentRevision": 1,
+        }
+    ]
+    result, records = await _execute_for(record, tmp_path, inputs)
+
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["mr"]["title"] == "Small slice"
+    assert [r["outcome"] for r in records] == ["completed"]
+
+
 @pytest.mark.asyncio
 async def test_execution_scoped_principal_is_not_connection_authority(served, tmp_path):
     """A run whose admission names its own workflow principal is refused."""
