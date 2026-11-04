@@ -159,6 +159,7 @@ def capture_git_history(
     Existing origin objects remain an explicit restore dependency. No unrelated
     branch, credential configuration, reflog, or repository hooks are exported.
     A repository without an origin baseline gets a bounded self-contained HEAD.
+    An empty boundary walk selects an already published HEAD without more traversal.
     """
     workspace = workspace.resolve()
     git = partial(_git, workspace, deadline=time.monotonic() + 120)
