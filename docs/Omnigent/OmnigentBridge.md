@@ -269,14 +269,14 @@ Authentication is layered: the MoonMind user is authorized by MoonMind, the scop
 | Caller unauthorized; session or endpoint substitution | `403`/`409` with audit | Fails closed before upstream without revealing other sessions. |
 | Capability or policy denial; scan blocked or unavailable | typed rejection | Redacted findings; no provider send. |
 | Native boot or render failure; required transcript denied | visible unavailable state | Never an empty transcript; optional denials stay feature-local. |
-| Upstream unavailable, unreachable host, upstream auth failure | `integration_error` (auth non-retryable until fixed) | Requests that never connected are re-sent for up to 120s; answered requests are never replayed. |
+| Upstream transport or authentication failure | `integration_error` | Auth requires repair. Retry unconnected requests for 120s; reconcile answered requests. |
 | Invalid payload; interrupted request body; first-message digest mismatch | `user_error` | Incomplete Workflow Chat bodies fail with 400 and are never forwarded. |
 | Ambiguous `posting`; stream disconnect | `integration_error` | Reconcile instead of reposting. |
 | Turn never started | `OMNIGENT_CURRENT_TURN_NOT_STARTED` | `retry_step_execution` (§9.3). |
 | Harness never started | Omnigent's code, e.g. `agent_startup_pending` | Ended Codex login becomes `reauthenticate`. |
 | Host lost for 180s | `OMNIGENT_SESSION_HOST_LOST` | Retry on a fresh host within the remaining ceiling. |
 | Stalled or ambiguous turn | `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED`, `..._TERMINAL_AMBIGUOUS` | Cleanup deferred while work may be live. |
-| Harness failure; timeout | `execution_error`; `system_error` | `timed_out` stays distinct. |
+| Harness failure; timeout; provider quota | `execution_error`; `system_error`; quota cooldown | Structured terminal errors survive retry; `timed_out` stays distinct. |
 | Optional harvest failure | result plus diagnostics | Unless policy requires full evidence. |
 | Required artifact persistence failure | `system_error` | |
 

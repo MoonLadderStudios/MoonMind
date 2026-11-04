@@ -32,6 +32,11 @@ from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.provider_failures import (
+    ProviderFailureEvent,
+    classify_provider_failure,
+    provider_failure_event_from_metadata,
+)
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
@@ -1744,6 +1749,32 @@ def _optional_resource_harvest_failed(manifest: dict[str, Any]) -> bool:
     )
 
 
+def _snapshot_provider_failure(
+    snapshot: Mapping[str, Any],
+) -> ProviderFailureEvent | None:
+    """Normalize the owned terminal error, preserving structured provider facts."""
+    event = provider_failure_event_from_metadata(snapshot.get("providerFailure"))
+    if event is not None:
+        return event
+    task_error = snapshot.get("last_task_error")
+    if not isinstance(task_error, Mapping):
+        return None
+    error = dict(task_error)
+    error.setdefault("providerErrorCode", error.get("code"))
+    event = provider_failure_event_from_metadata(error)
+    if event is None or (
+        event.provider_error_class is None
+        and event.retry_recommendation is None
+        and event.observation == "confirmed"
+        and event.retry_disposition == "unknown"
+    ):
+        classification = classify_provider_failure(error.get("message"))
+        if classification is not None:
+            error["providerErrorClass"] = classification.provider_error_class
+            event = provider_failure_event_from_metadata(error)
+    return event
+
+
 def build_omnigent_result(
     *,
     request: AgentExecutionRequest,
@@ -1788,6 +1819,7 @@ def build_omnigent_result(
         else failure_class_for_terminal_status(terminal_status)
     )
     retry_recommendation = None
+    provider_failure = final_snapshot.get("providerFailure")
     task_error = final_snapshot.get("last_task_error")
     if terminal_status == "failed" and isinstance(task_error, dict):
         failure_summary = failure_summary or task_error.get("message")
@@ -1804,6 +1836,21 @@ def build_omnigent_result(
                 OmnigentFailureReason.AUTH_FAILURE
             )
             retry_recommendation = "reauthenticate"
+        if failure_reason is None:
+            event = _snapshot_provider_failure(final_snapshot)
+            if event is not None:
+                provider_failure = event.to_metadata()
+                provider_error_code = provider_error_code or event.provider_error_code
+                retry_recommendation = (
+                    retry_recommendation or event.retry_recommendation
+                )
+                if event.provider_error_class in {
+                    "auth",
+                    "credential_scope",
+                    "rate_limit",
+                    "capacity",
+                }:
+                    failure_class = "integration_error"
 
     # A classified failure must never be summarized with the provider's
     # success snapshot text (for example a full-evidence harvest escalation on
@@ -1908,11 +1955,13 @@ def build_omnigent_result(
             else (
                 "failed"
                 if terminal_status in {"completed", "failed", "timed_out"}
-                else "cancelled" if terminal_status == "canceled" else "unknown"
+                else "cancelled"
+                if terminal_status == "canceled"
+                else "unknown"
             )
         ),
         publicationState=final_snapshot.get("publicationState", "unknown"),
-        providerFailure=final_snapshot.get("providerFailure"),
+        providerFailure=provider_failure,
         observation=(
             "unavailable"
             if terminal_status in {"delivery_unknown", "unknown"}
@@ -1970,7 +2019,7 @@ def build_omnigent_terminal_refs(
         terminal_status == "completed"
         and capture_bundle.resource_harvest_failure_class is not None
     )
-    return {
+    terminal_refs = {
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
@@ -1987,12 +2036,16 @@ def build_omnigent_terminal_refs(
             or final_snapshot.get("failureCode")
         ),
         "summary": (
-            "Required Omnigent resource evidence was missing after session "
-            "completion"
+            "Required Omnigent resource evidence was missing after session completion"
             if required_evidence_failed
             else summary
         ),
     }
+    if terminal_status == "failed":
+        event = _snapshot_provider_failure(final_snapshot)
+        if event is not None:
+            terminal_refs["providerFailure"] = event.to_metadata()
+    return terminal_refs
 
 
 def _assert_no_provider_native_refs(refs: list[str]) -> None:
