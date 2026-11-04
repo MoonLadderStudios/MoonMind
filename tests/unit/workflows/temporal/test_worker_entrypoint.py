@@ -117,6 +117,7 @@ def _launch_and_stop(probe, *, command=None, arguments=()):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
+            # Graceful shutdown may already have removed the whole group.
             pass
         process.wait(timeout=5)
         process.stderr.close()
