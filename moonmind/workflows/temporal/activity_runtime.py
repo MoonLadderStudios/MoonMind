@@ -2898,6 +2898,15 @@ class TemporalSandboxActivities:
         self,
         request: Mapping[str, Any] | WorkspaceCheckpointCaptureInput,
     ) -> dict[str, Any]:
+        return await _await_with_activity_heartbeats(
+            self._workspace_capture_checkpoint(request),
+            heartbeat_payload={"operation": "workspace.capture_checkpoint"},
+        )
+
+    async def _workspace_capture_checkpoint(
+        self,
+        request: Mapping[str, Any] | WorkspaceCheckpointCaptureInput,
+    ) -> dict[str, Any]:
         model = (
             request
             if isinstance(request, WorkspaceCheckpointCaptureInput)
