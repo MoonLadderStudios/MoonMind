@@ -276,7 +276,7 @@ Authentication is layered: the MoonMind user is authorized by MoonMind, the scop
 | Harness never started | Omnigent's code, e.g. `agent_startup_pending` | Ended Codex login becomes `reauthenticate`. |
 | Host lost for 180s | `OMNIGENT_SESSION_HOST_LOST` | Retry on a fresh host within the remaining ceiling. |
 | Stalled or ambiguous turn | `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED`, `..._TERMINAL_AMBIGUOUS` | Cleanup deferred while work may be live. |
-| Harness failure; timeout; provider quota | `execution_error`; `system_error`; quota cooldown | Structured terminal errors survive retry; `timed_out` stays distinct. |
+| Harness failure; timeout; provider quota | `execution_error`; `system_error`; quota cooldown | Preserve provider facts and ordinary retries through recovery; `timed_out` stays distinct. |
 | Optional harvest failure | result plus diagnostics | Unless policy requires full evidence. |
 | Required artifact persistence failure | `system_error` | |
 
