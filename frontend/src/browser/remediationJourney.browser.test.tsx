@@ -104,8 +104,8 @@ const createdRelationship = {
   remediationRunId: 'remediation-run',
   targetWorkflowId: 'source-workflow',
   targetRunId: 'source-run',
-  mode: 'snapshot_then_follow',
-  authorityMode: 'approval_gated',
+  mode: 'snapshot',
+  authorityMode: 'observe_only',
   status: 'executing',
   deliveryStatus: 'pending',
   verificationOutcome: null,
@@ -115,7 +115,7 @@ const createdRelationship = {
   authoredContract: {
     instructions: 'Repair the routed browser failure with bounded evidence.',
     runtime: { mode: 'omnigent' },
-    remediation: { authorityMode: 'approval_gated' },
+    remediation: { mode: 'snapshot', authorityMode: 'observe_only' },
   },
   selectedStepEvidence: [
     {
@@ -131,41 +131,6 @@ const createdRelationship = {
     repair: { repairOutcome: 'running' },
     prevention: { status: 'pending' },
     cleanup: 'pending',
-  },
-  checkpointBranches: [
-    {
-      workflowId: 'source-workflow',
-      branchId: 'cbr-routed-remediation',
-      branchTurnId: 'turn-routed-1',
-      branchState: 'active',
-      gitBaseBranch: 'main',
-      gitWorkBranch: 'remediation/routed-browser-edited',
-      checkpointRef: 'artifact://checkpoint/run-tests',
-      turns: [
-        {
-          branchTurnId: 'turn-routed-1',
-          status: 'running',
-          createdStepExecutionId: 'repair:execution:1',
-          runtimeAgentRunId: 'agent-run-routed-1',
-          providerSessionId: 'provider-session-routed-1',
-          instructionRef: 'artifact://instructions/routed-1',
-          instructionDigest: 'sha256:instructions-routed-1',
-          sourceCheckpointRef: 'artifact://checkpoint/run-tests',
-          startedAt: '2026-08-12T00:06:30Z',
-          createdAt: '2026-08-12T00:06:20Z',
-          updatedAt: '2026-08-12T00:06:30Z',
-          outputArtifacts: { result: 'art_routed_turn_output' },
-          comparisonArtifacts: {},
-        },
-      ],
-    },
-  ],
-  approvalState: {
-    requestId: 'approval-routed-1',
-    actionKind: 'checkpoint_branch.create',
-    riskTier: 'medium',
-    decision: 'pending',
-    canDecide: false,
   },
   createdAt: '2026-08-12T00:06:00Z',
   updatedAt: '2026-08-12T00:07:00Z',
@@ -474,32 +439,23 @@ describe('routed remediation operator journey', () => {
       expect((screen.getByLabelText('Selected evidence') as HTMLInputElement).value).toContain('run-tests');
 
       const startingBranch = screen.getByLabelText('Starting branch') as HTMLInputElement;
-      const workBranch = screen.getByLabelText('Checkpoint work branch') as HTMLInputElement;
       startingBranch.focus();
       await userEvent.tab();
-      expect(document.activeElement).toBe(workBranch);
-      await userEvent.fill(workBranch, 'remediation/routed-browser-edited');
+      expect(document.activeElement).toBe(screen.getByLabelText('Checkpoint'));
       await userEvent.fill(
         screen.getByLabelText('Instructions'),
         'Repair the routed browser failure with bounded evidence.',
       );
-      expect((screen.getByLabelText('Action policy') as HTMLSelectElement).value)
-        .toBe('admin_healer_default');
-      expect(
-        within(screen.getByLabelText('Authority')).getByRole('option', {
-          name: 'Administrator automatic (disabled)',
-        }),
-      ).toBeDisabled();
-      expect(
-        screen.getByText(/Autonomous mutation remains disabled by the remediation authority policy/i),
-      ).toBeTruthy();
-      await userEvent.click(screen.getByText('Live remediation observations'));
-      expect(screen.getByText('Manual diagnosis')).toBeTruthy();
-      expect(screen.getAllByText('Unverified')).toHaveLength(2);
-      expect(screen.queryByText('Manual promotion')).toBeNull();
-      expect(screen.queryByText('Rollback')).toBeNull();
-      expect(screen.getByText(/Optional live observations do not authorize actions/)).toBeTruthy();
-      expect(screen.getByText(/warning: remediation_release_evidence_missing/)).toBeTruthy();
+      // The Omnigent run has no live-follow or typed-action delivery path, so
+      // Create explains observe-only diagnosis instead of offering those knobs.
+      // Even a positive optional release report adds no authority choice.
+      expect(within(editable).getByRole('status', { name: 'Remediation authority' }).textContent)
+        .toMatch(/Observe-only diagnosis.*cannot retry, cancel, or edit the target/s);
+      for (const label of ['Remediation mode', 'Authority', 'Action policy', 'Checkpoint work branch']) {
+        expect(screen.queryByLabelText(label)).toBeNull();
+      }
+      expect(screen.queryByRole('option', { name: /Administrator automatic/ })).toBeNull();
+      expect(screen.queryByText('Live remediation observations')).toBeNull();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });
@@ -515,8 +471,6 @@ describe('routed remediation operator journey', () => {
       expect(await screen.findByText('Remediation Draft', {}, { timeout: 10_000 })).toBeTruthy();
       expect((screen.getByLabelText('Instructions') as HTMLTextAreaElement).value)
         .toBe('Repair the routed browser failure with bounded evidence.');
-      expect((screen.getByLabelText('Checkpoint work branch') as HTMLInputElement).value)
-        .toBe('remediation/routed-browser-edited');
       expect((screen.getByLabelText('Publish Mode') as HTMLSelectElement).value).toBe('branch');
       const retryButton = screen.getByRole('button', { name: 'Start Workflow' });
       await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false), {
@@ -540,25 +494,26 @@ describe('routed remediation operator journey', () => {
                 workflowId: 'source-workflow',
                 runId: 'source-run',
               },
-              authorityMode: 'approval_gated',
-              actionPolicyRef: 'admin_healer_default',
-              checkpointBranchPolicy: {
-                gitWorkBranch: 'remediation/routed-browser-edited',
-              },
+              mode: 'snapshot',
+              authorityMode: 'observe_only',
             },
           },
         },
       });
+      const submittedRemediation = (
+        (createRequests[0]?.payload as Record<string, unknown>).task as Record<string, unknown>
+      ).remediation as Record<string, unknown>;
+      for (const inert of ['actionPolicyRef', 'approvalPolicy', 'lockPolicy', 'verificationPolicy', 'checkpointBranchPolicy']) {
+        expect(submittedRemediation).not.toHaveProperty(inert);
+      }
 
       expect(await screen.findByText('Created remediation workflow', {}, { timeout: 10_000 })).toBeTruthy();
       expect(await screen.findByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
       expect(screen.getAllByText('source-workflow').length).toBeGreaterThan(0);
       expect(screen.getByText('Authored remediation contract')).toBeTruthy();
-      const turnList = screen.getByRole('list', {
-        name: 'Checkpoint Branch turns for cbr-routed-remediation',
-      });
-      expect(within(turnList).getByText('turn-routed-1')).toBeTruthy();
-      expect(within(turnList).getByText('agent-run-routed-1')).toBeTruthy();
+      expect(screen.getByText(
+        'Observe-only remediation: no operator API actions are offered for this target, and the remediation run receives no action tools.',
+      )).toBeTruthy();
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
     }, 30_000);
   }
