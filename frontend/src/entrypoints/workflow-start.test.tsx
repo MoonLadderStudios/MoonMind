@@ -1803,12 +1803,15 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
-    fireEvent.click(await screen.findByText("Live remediation observations"));
-    expect(screen.getAllByText("Observed")).toHaveLength(2);
-    expect(screen.getByText(/Each action checks its own capability, policy, and approval/)).toBeTruthy();
-    expect((screen.getByRole("option", { name: "Administrator automatic (disabled)" }) as HTMLOptionElement).disabled).toBe(true);
-    expect(screen.getByText("moonmind.operator-remediation-telemetry/v1")).toBeTruthy();
-    expect(screen.getByText(/warning: autonomous_rollout_gate_closed/)).toBeTruthy();
+    // An observed manual-mutation release report does not turn the Omnigent
+    // diagnosis into a target-repair controller (MoonLadderStudios/MoonMind#5157).
+    expect(screen.queryByText("Live remediation observations")).toBeNull();
+    expect(screen.queryByText("Manual mutation")).toBeNull();
+    expect(screen.queryByRole("option", { name: /Administrator automatic/ })).toBeNull();
+    expect(screen.queryByLabelText("Authority")).toBeNull();
+    expect(screen.getByRole("status", { name: "Remediation authority" }).textContent).toMatch(
+      /Observe-only diagnosis.*cannot retry, cancel, or edit the target/s,
+    );
     const start = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(start);
@@ -1841,10 +1844,21 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           launchPolicyRef: "on-demand-v1",
         },
         task: {
-          remediation: draft.remediation,
+          // The draft predates #5157 and was never submitted, so it is sent as
+          // the observe-only diagnosis the form shows, without inert policies.
+          remediation: {
+            target: draft.remediation.target,
+            mode: "snapshot",
+            authorityMode: "observe_only",
+            evidencePolicy: draft.remediation.evidencePolicy,
+            trigger: { type: "manual" },
+          },
         },
       },
     });
+    expect(Object.keys(request.payload.task.remediation).sort()).toEqual([
+      "authorityMode", "evidencePolicy", "mode", "target", "trigger",
+    ]);
     // Retired (#4105): the imported draft's retrieval authoring is not
     // resubmitted.
     expect("rag" in request.payload).toBe(false);
@@ -20477,19 +20491,23 @@ describe("Task Create runtime command previews", () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
-    const remediationMode = screen.getByLabelText("Remediation mode");
-    const remediationAuthority = screen.getByLabelText("Authority");
-    const actionPolicy = screen.getByLabelText("Action policy");
-    fireEvent.change(remediationMode, { target: { value: "live_follow" } });
-    fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
+    // The launched agent has no live-follow or typed-action delivery path, so
+    // Create offers no follow mode, authority, action policy or action toggles.
+    for (const label of [
+      "Remediation mode",
+      "Authority",
+      "Action policy",
+      "Require approval for high-risk actions",
+      "Hold target mutation lock",
+      "Verify applied actions",
+      "Create branch for corrected inputs",
+      "Checkpoint work branch",
+    ]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+    expect(screen.queryByRole("option", { name: "Live follow" })).toBeNull();
     fireEvent.click(screen.getByLabelText("Diagnostics"));
 
-    expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
-    expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
-    expect((actionPolicy as HTMLSelectElement).value).toBe("admin_healer_default");
-    expect(within(actionPolicy).queryByRole("option", {
-      name: "operator_review_only",
-    })).toBeNull();
     expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(
@@ -20581,12 +20599,13 @@ describe("Task Create runtime command previews", () => {
     expect(
       screen.getByLabelText("Editable repair intent").textContent?.replace(/\s+/g, " "),
     ).toContain(
-      "Instructions, Harness/Provider Profile selections, policies, branches, and publication controls remain editable until submit.",
+      "Instructions, Harness/Provider Profile selections, evidence, branches, and publication controls remain editable until submit.",
     );
     expect((screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Pinned run") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
-    expect((screen.getByLabelText("Checkpoint work branch") as HTMLInputElement).value).toBe("repair/mm-3623");
+    expect((screen.getByLabelText("Checkpoint") as HTMLSelectElement).value).toBe("artifact://checkpoint/test");
+    expect(screen.queryByLabelText("Checkpoint work branch")).toBeNull();
     expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("pr");
     expect((screen.getByLabelText("Step 1 skill") as HTMLInputElement).value).toBe(
       "remediate-workflow",

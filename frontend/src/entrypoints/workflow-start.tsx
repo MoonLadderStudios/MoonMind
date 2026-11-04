@@ -60,7 +60,6 @@ import {
   type RemediationCreateDraft,
   type RemediationCreateDraftReadResult,
 } from "../lib/remediationCreateDraft";
-import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
 import {
   formatRuntimeLabel as formatRuntimeTargetLabel,
   backendOptionsForHarness,
@@ -681,28 +680,6 @@ interface OmnigentCodexCatalogReadiness {
   }>;
   gateReasons: OmnigentCatalogGateReason[];
   supportGateReasons: OmnigentCatalogGateReason[];
-  remediationRelease: {
-    policyVersion?: string;
-    matrixVersion?: string;
-    manualDiagnosisSupported?: boolean;
-    manualMutationSupported?: boolean;
-    autonomousRolloutAuthorized: boolean;
-    promotionAllowed?: boolean;
-    manualPromotionAllowed?: boolean;
-    rollbackRequired?: boolean;
-    generatedAt?: string | null;
-    expiresAt?: string | null;
-    telemetry?: {
-      schemaVersion?: string;
-      groups?: Record<string, unknown>;
-    };
-    alerts?: Array<{
-      code?: string;
-      severity?: string;
-      operatorAction?: string;
-    }>;
-    blockers: string[];
-  };
 }
 
 interface OmnigentExecutionReadinessV3 {
@@ -12171,8 +12148,14 @@ function WorkflowStartPageContent({
             >
               <legend>Editable repair intent</legend>
               <p className="small">
-                Instructions, Harness/Provider Profile selections, policies,
+                Instructions, Harness/Provider Profile selections, evidence,
                 branches, and publication controls remain editable until submit.
+              </p>
+              <p className="small" role="status" aria-label="Remediation authority">
+                Observe-only diagnosis: the remediation reads the pinned
+                evidence placed in its workspace and changes only its own
+                repository. It cannot retry, cancel, or edit the target; those
+                controls stay with you.
               </p>
             <div className="grid-2">
               <label>
@@ -12197,132 +12180,6 @@ function WorkflowStartPageContent({
                     } : current);
                   }}
                 />
-              </label>
-              <label>
-                Checkpoint work branch
-                <input
-                  value={remediationDraft.workBranch || ""}
-                  placeholder="Generated when left blank"
-                  onChange={(event) => {
-                    const workBranch = event.target.value;
-                    setRemediationDraft((current) => {
-                      if (!current) return current;
-                      const {
-                        gitWorkBranch: _previousWorkBranch,
-                        ...checkpointBranchPolicy
-                      } = current.remediation.checkpointBranchPolicy || {};
-                      return {
-                        ...current,
-                        workBranch,
-                        remediation: {
-                          ...current.remediation,
-                          checkpointBranchPolicy: {
-                            ...checkpointBranchPolicy,
-                            ...(workBranch ? { gitWorkBranch: workBranch } : {}),
-                          },
-                        },
-                      };
-                    });
-                  }}
-                />
-              </label>
-              <label>
-                Remediation mode
-                <select
-                  value={remediationDraft.remediation.mode}
-                  onChange={(event) => {
-                    const mode = event.target.value as RemediationCreateDraft["remediation"]["mode"];
-                    setRemediationDraft((current) => current ? {
-                      ...current,
-                      remediation: { ...current.remediation, mode },
-                    } : current);
-                  }}
-                >
-                  <option value="snapshot">Snapshot</option>
-                  <option value="live_follow">Live follow</option>
-                  <option value="snapshot_then_follow">Snapshot then follow</option>
-                </select>
-              </label>
-              <label>
-                Authority
-                <select
-                  value={remediationDraft.remediation.authorityMode}
-                  onChange={(event) => {
-                    const authorityMode = event.target.value as RemediationCreateDraft["remediation"]["authorityMode"];
-                    setRemediationDraft((current) => current ? {
-                      ...current,
-                      remediation: { ...current.remediation, authorityMode },
-                    } : current);
-                  }}
-                >
-                  <option value="observe_only">Observe only</option>
-                  <option value="approval_gated">Approval gated</option>
-                  <option
-                    value="admin_auto"
-                    disabled
-                  >
-                    Administrator automatic (disabled)
-                  </option>
-                </select>
-              </label>
-              <p className="small" role="status">
-                Autonomous mutation remains disabled by the remediation authority policy.
-              </p>
-              {omnigentCatalogQuery.data?.remediationRelease ? (
-                <details className="small" data-testid="remediation-release-status">
-                  <summary>Live remediation observations</summary>
-                  <p>Optional live observations do not authorize actions or require rollback. Each action checks its own capability, policy, and approval.</p>
-                  <dl>
-                    <dt>Manual diagnosis</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.manualDiagnosisSupported
-                        ? "Observed"
-                        : "Unverified"}
-                    </dd>
-                    <dt>Manual mutation</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.manualMutationSupported
-                        ? "Observed"
-                        : "Unverified"}
-                    </dd>
-                    <dt>Evidence expiry</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.expiresAt || "No qualifying evidence"}
-                    </dd>
-                    <dt>Telemetry</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.telemetry?.schemaVersion
-                        || "Unavailable"}
-                    </dd>
-                  </dl>
-                  {(omnigentCatalogQuery.data.remediationRelease.alerts || []).length > 0 ? (
-                    <ul aria-label="Remediation release alerts">
-                      {(omnigentCatalogQuery.data.remediationRelease.alerts || []).map((alert) => (
-                        <li key={alert.code || alert.operatorAction}>
-                          {alert.severity || "warning"}: {alert.code || "release_gate_alert"}
-                          {alert.operatorAction ? ` — ${alert.operatorAction}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </details>
-              ) : null}
-              <label>
-                Action policy
-                <select
-                  value={remediationDraft.remediation.actionPolicyRef || ""}
-                  onChange={(event) => {
-                    const actionPolicyRef = event.target.value;
-                    setRemediationDraft((current) => current ? {
-                      ...current,
-                      remediation: { ...current.remediation, actionPolicyRef },
-                    } : current);
-                  }}
-                >
-                  <option value={DEFAULT_REMEDIATION_ACTION_POLICY}>
-                    Administrator healer default
-                  </option>
-                </select>
               </label>
               <label>
                 Checkpoint
@@ -12391,81 +12248,6 @@ function WorkflowStartPageContent({
                   {label}
                 </label>
               ))}
-            </div>
-            <div className="grid-2" aria-label="Remediation action controls">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={remediationDraft.remediation.approvalPolicy?.requiredForHighRisk !== false}
-                  onChange={(event) => setRemediationDraft((current) => current ? {
-                    ...current,
-                    remediation: {
-                      ...current.remediation,
-                      approvalPolicy: {
-                        ...current.remediation.approvalPolicy,
-                        requiredForHighRisk: event.target.checked,
-                      },
-                    },
-                  } : current)}
-                />
-                Require approval for high-risk actions
-              </label>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={remediationDraft.remediation.lockPolicy?.targetMutationLock !== false}
-                  onChange={(event) => setRemediationDraft((current) => current ? {
-                    ...current,
-                    remediation: {
-                      ...current.remediation,
-                      lockPolicy: {
-                        ...current.remediation.lockPolicy,
-                        targetMutationLock: event.target.checked,
-                      },
-                    },
-                  } : current)}
-                />
-                Hold target mutation lock
-              </label>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={remediationDraft.remediation.verificationPolicy?.verifyAppliedActions !== false}
-                  onChange={(event) => setRemediationDraft((current) => current ? {
-                    ...current,
-                    remediation: {
-                      ...current.remediation,
-                      verificationPolicy: {
-                        ...current.remediation.verificationPolicy,
-                        verifyAppliedActions: event.target.checked,
-                      },
-                    },
-                  } : current)}
-                />
-                Verify applied actions
-              </label>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={remediationDraft.remediation.checkpointBranchPolicy?.runtimeContextPolicy === "fresh_agent_run"}
-                  onChange={(event) => setRemediationDraft((current) => {
-                    if (!current) return current;
-                    const { checkpointBranchPolicy: _disabledPolicy, ...remediation } = current.remediation;
-                    return {
-                      ...current,
-                      remediation: event.target.checked ? {
-                        ...remediation,
-                        checkpointBranchPolicy: {
-                          ...current.remediation.checkpointBranchPolicy,
-                          actionKind: "checkpoint_branch.create_from_remediation_context",
-                          runtimeContextPolicy: "fresh_agent_run",
-                        },
-                      } : remediation,
-                    };
-                  })}
-                />
-                Create branch for corrected inputs
-              </label>
             </div>
             </fieldset>
             {remediationTargetFreshnessWarning ? (

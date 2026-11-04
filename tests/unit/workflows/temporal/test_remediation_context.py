@@ -992,6 +992,112 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
         }
 
 @pytest.mark.asyncio
+async def test_normally_authored_remediation_context_grants_no_follow_or_action_policy(
+    tmp_path, mock_client_adapter
+):
+    """Normal Create authors observe-only diagnosis (MoonLadderStudios/MoonMind#5157).
+
+    Even for a live target whose Agent Run supports following, the context the
+    Omnigent agent receives reports no live observation and no action policy,
+    since the agent has no follow or typed-action tools.
+    """
+
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-run"),
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+        target = await execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Live target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.state = MoonMindWorkflowState.EXECUTING
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "agentRuns": [{"agentRunId": "tr_live", "liveFollowSupported": True}],
+            },
+        }
+        await session.commit()
+
+        # The exact remediation object buildRemediationCreateDraft authors.
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Diagnose the failure.",
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "runId": "target-run",
+                            "agentRunIds": ["tr_live"],
+                        },
+                        "mode": "snapshot",
+                        "authorityMode": "observe_only",
+                        "evidencePolicy": {
+                            "includeStepLedger": True,
+                            "includeDiagnostics": True,
+                            "includeRecovery": True,
+                            "includeIncident": True,
+                            "includeCheckpointBranches": True,
+                            "includeAdapterRefs": True,
+                            "tailLines": 2000,
+                        },
+                        "trigger": {"type": "manual"},
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert (link.mode, link.authority_mode) == ("snapshot", "observe_only")
+        assert link.context_artifact_ref
+
+        result = await RemediationContextBuilder(
+            session=session,
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            ),
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        live_follow = result.payload["liveFollow"]
+        assert live_follow["status"] == "unsupported"
+        assert live_follow["supported"] is False
+        assert live_follow["reason"] == (
+            "remediation mode does not request live observation"
+        )
+        policies = result.payload["policies"]
+        assert policies["authorityMode"] == "observe_only"
+        assert policies["actionPolicyRef"] is None
+        assert policies["approvalPolicy"] is None
+        assert policies["lockPolicy"] is None
+
+
+@pytest.mark.asyncio
 async def test_remediation_context_builder_matches_selected_step_by_full_identity(
     tmp_path, mock_client_adapter
 ):
