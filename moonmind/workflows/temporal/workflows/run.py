@@ -874,6 +874,10 @@ RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
 RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
     "run-omnigent-execution-plan-binding-authority-v1"
 )
+RUN_OMNIGENT_STEP_INPUT_PROVENANCE_PATCH = "run-omnigent-step-input-provenance-v1"
+RUN_OMNIGENT_VERIFIER_EQUIVALENT_CHECKPOINT_PATCH = (
+    "run-omnigent-verifier-equivalent-checkpoint-v1"
+)
 RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH = "run-omnigent-step-execution-plans-v1"
 RUN_OMNIGENT_REMEDIATION_STEP_PLANS_PATCH = "run-omnigent-remediation-step-plans-v1"
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
@@ -5828,6 +5832,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 refs[str(boundary)] = ref
         return refs
 
+    def _step_execution_input_provenance(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> dict[str, Any]:
+        provenance = {
+            "task_input_snapshot_ref": self._input_ref,
+            "plan_ref": self._plan_ref,
+        }
+        # The admitted launch supplies all three refs. Older projections have
+        # no plan digest and retain their recorded checkpoint contract. Reading
+        # the cache here must not evaluate an attempt's launch patch early.
+        context = self._step_execution_context_projections.get((logical_step_id, attempt))
+        if isinstance(context, Mapping) and context.get("planDigest") is not None:
+            for field, key in (
+                ("task_input_snapshot_ref", "taskInputSnapshotRef"),
+                ("plan_ref", "planRef"),
+                ("plan_digest", "planDigest"),
+            ):
+                provenance[field] = context[key]
+        return provenance
+
     def _step_execution_context_kwargs(
         self,
         logical_step_id: str,
@@ -5862,8 +5889,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and value is not None
         }
         return {
-            "task_input_snapshot_ref": self._input_ref,
-            "plan_ref": self._plan_ref,
+            **self._step_execution_input_provenance(logical_step_id, attempt=attempt),
             "workspace_policy": str(workspace_policy) if workspace_policy else None,
             "workspace_baseline": workspace_baseline,
             "checkpoint_refs": self._step_execution_checkpoint_refs(logical_step_id),
@@ -7315,8 +7341,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and saved.get("sourceChildStepExecutionId") == build_step_execution_id(identity)
         ):
             return saved["checkpointRef"]
+        provenance = self._step_execution_input_provenance(
+            logical_step_id, attempt=identity.execution_ordinal,
+        )
         task_input_snapshot_ref = (
-            self._input_ref
+            provenance["task_input_snapshot_ref"]
             or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
         )
         reuse_enabled = self._unchanged_checkpoint_reuse_enabled()
@@ -7358,8 +7387,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             task_input_snapshot_ref=task_input_snapshot_ref,
             workspace=capture["workspace"],
             created_at=updated_at,
-            plan_ref=self._plan_ref
+            plan_ref=provenance["plan_ref"]
             or f"temporal://{identity.workflow_id}/{identity.run_id}/plan",
+            plan_digest=provenance.get("plan_digest"),
             prepared_input_refs=self._prepared_artifact_refs,
             step_outputs=step_outputs
             or self._step_execution_compact_output_refs(logical_step_id),
@@ -7391,6 +7421,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ).strip()
             checkpoint_manifest_ref = str(workspace.get("manifestRef") or "").strip()
             workspace_archive_ref = str(workspace.get("archiveRef") or "").strip()
+            checkpoint_id = str(result.get("checkpointId") or "")
+            boundary_suffix = f":checkpoint:{boundary}"
+            source_step_id = (
+                checkpoint_id.removesuffix(boundary_suffix)
+                if checkpoint_id.endswith(boundary_suffix) else ""
+            )
             evidence_by_boundary = (
                 self._step_checkpoint_workspace_evidence_by_boundary.setdefault(
                     logical_step_id,
@@ -7404,6 +7440,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "workspaceIdentityDigest": workspace_identity_digest,
                 "checkpointManifestRef": checkpoint_manifest_ref,
                 "workspaceArchiveRef": workspace_archive_ref,
+                **({
+                    "archiveDigest": str(workspace.get("archiveDigest") or ""),
+                    "taskInputSnapshotRef": task_input_snapshot_ref,
+                    "sourceStepExecutionId": source_step_id,
+                } if boundary == "before_publication" else {}),
                 **({"baseCommit": workspace["baseCommit"]} if workspace.get("baseCommit")
                    and self._patched_or_false_outside_workflow(RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH) else {}),
             }
@@ -7498,6 +7539,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "workspaceIdentityDigest": workspace["workspaceIdentityDigest"],
             "checkpointManifestRef": workspace["manifestRef"],
             "workspaceArchiveRef": workspace["archiveRef"],
+            "archiveDigest": workspace.get("archiveDigest") or "",
+            "taskInputSnapshotRef": checkpoint.task_input_snapshot_ref,
+            "sourceStepExecutionId": build_step_execution_id(checkpoint.source),
             "sourceChildStepExecutionId": identity.step_execution_id,
             **({"baseCommit": workspace["baseCommit"]} if workspace.get("baseCommit") else {}),
         }
@@ -8243,6 +8287,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self,
         *,
         node: Mapping[str, Any],
+        request: AgentExecutionRequest | None = None,
     ) -> str | None:
         """Return the candidate archive consumed by the authored verifier."""
 
@@ -8265,7 +8310,57 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
             str(node.get("id") or "")
         )
-        return candidate[1]["checkpointRef"] if candidate is not None else None
+        if candidate is None:
+            return None
+        selected_ref = candidate[1]["checkpointRef"]
+        if request is None:
+            return selected_ref
+        requested_ref = request.workspace_spec.get("workspaceCheckpointRestoreRef")
+        if not self._workflow_patch_enabled(
+            RUN_OMNIGENT_VERIFIER_EQUIVALENT_CHECKPOINT_PATCH
+        ):
+            return requested_ref
+        # An interrupted verifier's own save can be newer than the candidate.
+        if requested_ref != selected_ref:
+            return requested_ref
+        binding = request.omnigent_execution_plan
+        if binding is None:
+            return selected_ref
+        evidence = self._step_checkpoint_workspace_evidence_by_boundary[candidate[0]]
+        publication = evidence.get("before_publication") or {}
+        saved = evidence.get("after_execution") or {}
+
+        def same_ref(left: Any, right: Any) -> bool:
+            return isinstance(left, str) and isinstance(right, str) and (
+                left.removeprefix("artifact:").removeprefix("//")
+                == right.removeprefix("artifact:").removeprefix("//")
+            )
+
+        digest = saved.get("archiveDigest")
+        source = saved.get("sourceStepExecutionId")
+        if (
+            same_ref(selected_ref, publication.get("checkpointRef"))
+            and not same_ref(
+                publication.get("taskInputSnapshotRef"), binding.task_input_snapshot_ref
+            )
+            and same_ref(
+                saved.get("taskInputSnapshotRef"), binding.task_input_snapshot_ref
+            )
+            and isinstance(digest, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+            and publication.get("archiveDigest") == digest
+            and source
+            and publication.get("sourceStepExecutionId") == source
+            and saved.get("sourceChildStepExecutionId") == source
+        ):
+            # Older publication wrappers could name the authored workflow input.
+            # Reuse only the adopted child descriptor for the identical archive,
+            # including Git/index state, without rewriting either saved artifact.
+            return (
+                self._bounded_story_loop_artifact_ref(saved.get("checkpointRef"))
+                or selected_ref
+            )
+        return selected_ref
 
     def _omnigent_publication_checkpoint_restore_ref(
         self,
@@ -13879,6 +13974,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     trusted_remediation_checkpoint_restore_ref
                                 ),
                             )
+                            verifier_restore_ref = (
+                                self._initial_omnigent_verification_checkpoint_restore_ref(
+                                    node=node,
+                                    request=request,
+                                )
+                            )
+                            if (
+                                verifier_restore_ref is not None
+                                and verifier_restore_ref != request.workspace_spec.get(
+                                    "workspaceCheckpointRestoreRef"
+                                )
+                            ):
+                                request = request.model_copy(
+                                    update={
+                                        "workspace_spec": {
+                                            **request.workspace_spec,
+                                            "workspaceCheckpointRestoreRef": verifier_restore_ref,
+                                        },
+                                    }
+                                )
                             agent_request_for_context = request
                             if (
                                 node_id == self._recovery_failed_step_id
@@ -24094,6 +24209,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace=context_workspace,
             policy_refs=context_policy_refs,
         )
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+            and self._workflow_patch_enabled(
+                f"{RUN_OMNIGENT_STEP_INPUT_PROVENANCE_PATCH}:{node_id}:{execution_ordinal}"
+            )
+        ):
+            binding = OmnigentExecutionPlanBinding.model_validate(
+                parameters["omnigentExecutionPlan"]
+            )
+            # Admission, including any logical-step selection above, owns the
+            # input snapshot. The authored workflow artifact is a different input.
+            context_kwargs.update(
+                task_input_snapshot_ref=binding.task_input_snapshot_ref,
+                plan_ref=binding.plan_artifact_ref,
+                plan_digest=binding.plan_digest,
+            )
         branch_turn_payload = None
         branch_projection = None
         branch_artifact_manifest = None
