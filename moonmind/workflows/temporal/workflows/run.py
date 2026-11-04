@@ -14283,6 +14283,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             finally:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
+                            request = self._restore_replayed_agent_step_identity(
+                                request,
+                                child_result,
+                                child_workflow_id=child_workflow_id,
+                            )
+                            agent_request_for_context = request
                             self._record_shared_runtime_context(request, child_result)
                             child_saved_checkpoint = (request, child_result)
                             execution_result = await self._hydrate_acceptance_result(
@@ -17997,6 +18003,73 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "step_execution": step.model_copy(
                     update={"runtime_session_context": reference}
                 )
+            }
+        )
+
+    def _restore_replayed_agent_step_identity(
+        self,
+        request: AgentExecutionRequest,
+        result: Any,
+        *,
+        child_workflow_id: str,
+    ) -> AgentExecutionRequest:
+        """Retain a completed child's identity across a Temporal reset replay."""
+        step = request.step_execution
+        if step is None or not self._workflow_is_replaying():
+            return request
+        info = workflow.info()
+        metadata = (
+            result.get("metadata")
+            if isinstance(result, Mapping)
+            else getattr(result, "metadata", None)
+        )
+        if not isinstance(metadata, Mapping):
+            return request
+        parent_run = metadata.get("parentRunId")
+        child_run = metadata.get("childRunId")
+        context_value = metadata.get("runtimeSessionContext")
+        if (
+            step.workflow_id != info.workflow_id
+            or step.run_id != info.run_id
+            or not isinstance(parent_run, str)
+            or not parent_run.strip()
+            or parent_run == step.run_id
+            or metadata.get("parentWorkflowId") != step.workflow_id
+            or metadata.get("parentTemporalRunId") != parent_run
+            or metadata.get("childWorkflowId") != child_workflow_id
+            or not isinstance(child_run, str)
+            or not child_run.strip()
+            or not isinstance(context_value, Mapping)
+        ):
+            return request
+        try:
+            context = RuntimeSessionContextReference.model_validate(context_value)
+        except ValidationError:
+            return request
+        identity = StepExecutionIdentityModel(
+            workflowId=step.workflow_id,
+            runId=parent_run,
+            logicalStepId=step.logical_step_id,
+            executionOrdinal=step.execution_ordinal,
+        )
+        if (
+            context.workflow_id != identity.workflow_id
+            or context.run_id != identity.run_id
+            or context.step_execution_id != build_step_execution_id(identity)
+            or context.runtime_binding_ref != metadata.get("runtimeBindingRef")
+        ):
+            return request
+        # AgentRun replaces provider ancestry metadata. The result of this exact
+        # recorded child command proves the old attempt, without changing the
+        # identity of new work launched after the replay boundary.
+        return request.model_copy(
+            update={
+                "step_execution": step.model_copy(
+                    update={
+                        "run_id": identity.run_id,
+                        "step_execution_id": build_step_execution_id(identity),
+                    }
+                ),
             }
         )
 
