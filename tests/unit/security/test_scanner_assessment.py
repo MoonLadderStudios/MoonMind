@@ -219,6 +219,55 @@ def test_game_math_violations_are_findings_and_fixes_are_comparable_absence():
     assert result["findings"][0]["state"] == "absent_comparable"
 
 
+@pytest.mark.parametrize("model", [False, True])
+def test_theory_or_model_does_not_clear_implementation_findings(model):
+    prior = game_math(
+        settlements=[
+            RoundRecord(strategy="play", outcome="tails", total="1"),
+            RoundRecord(strategy="play", outcome="unknown", total="0"),
+        ],
+        simulation=SimulationRequest(source="records"),
+        records=[RoundRecord(strategy="play", outcome="heads", total="2")] * 50_000,
+    )
+    baseline = compare_observations(observe_game(prior), None, now=NOW)
+    current = game_math(
+        **(
+            {"simulation": SimulationRequest(source="model", samples=100_000, seed=7)}
+            if model
+            else {}
+        )
+    )
+    result = compare_observations(observe_game(current), baseline, now=NOW)
+    assert {row["finding"]["ruleId"] for row in result["findings"]} == {
+        "settlement",
+        "outcome-support",
+        "simulated-rtp",
+    }
+    assert all(row["state"] != "absent_comparable" for row in result["findings"])
+
+
+def test_recorded_run_can_clear_a_retested_implementation_rtp_finding():
+    heads = RoundRecord(strategy="play", outcome="heads", total="2")
+    tails = RoundRecord(strategy="play", outcome="tails", total="0")
+    baseline = compare_observations(
+        observe_game(
+            game_math(
+                simulation=SimulationRequest(source="records"),
+                records=[heads] * 50_000,
+            )
+        ),
+        None,
+        now=NOW,
+    )
+    current = game_math(
+        simulation=SimulationRequest(source="records"),
+        records=[heads, tails] * 50_000,
+    )
+    assert current.covered
+    result = compare_observations(observe_game(current), baseline, now=NOW)
+    assert [row["state"] for row in result["findings"]] == ["absent_comparable"]
+
+
 @pytest.mark.parametrize("stopped", [False, True])
 def test_imprecise_or_stopped_game_math_stays_partial_coverage(stopped):
     summary = game_math(

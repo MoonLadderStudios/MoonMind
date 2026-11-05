@@ -30,12 +30,12 @@ from moonmind.security.cloud_assessments import CloudAssessmentSummary
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
-from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
 )
 from moonmind.security.repository_scanners import ScannerSummary
+from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
@@ -480,7 +480,7 @@ def _game_math_observation(
     """
     if summary.game_ref not in request.scope.assets:
         raise ValueError("game outside admitted assessment scope")
-    rules = {row.rule for row in summary.violations}
+    rules = {row.rule for row in summary.violations if row.rule != "simulated-rtp"}
     if any(row.declared_rtp is not None for row in summary.theoretical):
         rules.add("declared-rtp")
     if any(row.declared_immediate_bust is not None for row in summary.theoretical):
@@ -488,8 +488,35 @@ def _game_math_observation(
     simulation = summary.simulation
     if summary.settlement_cases or (simulation and simulation.source == "records"):
         rules |= {"settlement", "outcome-support"}
+    coverage = [
+        Coverage(
+            source="game-math",
+            tool="game-math",
+            assets=[summary.game_ref],
+            rule_ids=sorted(rules),
+            config_ref=content_key(["game-math", summary.spec_digest]),
+            status="complete" if summary.covered else "partial",
+        )
+    ]
     if simulation is not None:
-        rules.add("simulated-rtp")
+        coverage.append(
+            Coverage(
+                source="game-math",
+                tool="game-math",
+                assets=[summary.game_ref],
+                rule_ids=["simulated-rtp"],
+                # A model run cannot establish absence of an implementation's
+                # distribution defect, even under the same specification.
+                config_ref=content_key(
+                    [
+                        "game-math",
+                        summary.spec_digest,
+                        simulation.source,
+                    ]
+                ),
+                status="complete" if summary.covered else "partial",
+            )
+        )
     return Observation(
         scope=request.scope,
         observed_at=created_at,
@@ -505,19 +532,7 @@ def _game_math_observation(
             )
             for row in summary.violations
         ],
-        coverage=[
-            Coverage(
-                source="game-math",
-                tool="game-math",
-                assets=[summary.game_ref],
-                rule_ids=sorted(rules),
-                all_rules=summary.covered,
-                # Absence is comparable only under the same specification,
-                # which carries its precision criteria.
-                config_ref=content_key(["game-math", summary.spec_digest]),
-                status="complete" if summary.covered else "partial",
-            )
-        ],
+        coverage=coverage,
         provenance={
             "gameMathSummary": ref,
             "gameMathSpec": summary.spec_digest,

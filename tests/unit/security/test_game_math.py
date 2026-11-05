@@ -513,6 +513,134 @@ def test_undercovered_paying_event_blocks_equivalence_despite_a_narrow_interval(
     assert row.decision == "equivalent"
 
 
+@pytest.mark.parametrize("source", ["model", "records"])
+def test_rare_bonus_draws_use_the_joint_parent_probability(source):
+    # The feature triggers 1/10 of the time, then pays a bonus with chance 1/100.
+    # Its joint probability is 1/1000, like the equivalent flat outcome table.
+    game = table(
+        {"id": "steady", "probability": "9/10", "multiplier": "1"},
+        {
+            "id": "feature",
+            "probability": "1/10",
+            "multiplier": "1",
+            "bonus": {
+                "draws": 1,
+                "outcomes": [
+                    {"probability": "99/100", "multiplier": "0"},
+                    {"probability": "1/100", "multiplier": "1"},
+                ],
+            },
+        },
+    )
+    request = SimulationRequest(
+        source=source,
+        **({"samples": 5_000, "seed": 11} if source == "model" else {}),
+    )
+    records = (
+        [record(outcome="steady", total="1")] * 4_500
+        + [record(outcome="feature", bonus=["0"], total="1")] * 495
+        + [record(outcome="feature", bonus=["1"], total="2")] * 5
+    )
+    result = assess_game_math(
+        spec(game, *one_bet()), simulation=request, records=records
+    )
+    (row,) = result.simulation.results
+    rare = [
+        event for event in row.rare_events if event.probability == Fraction(1, 1000)
+    ]
+    assert len(rare) == 1
+    assert rare[0].expected == 5 and not rare[0].covered
+    if source == "records":
+        assert rare[0].observed == 5
+    assert row.half_width < 0.02
+    assert row.decision == "insufficient_precision"
+    assert not result.covered
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_recorded_runs_retain_every_unobserved_strategy(partial):
+    wagers = [{"id": "bet", "stake": "1"}]
+    strategies = [{"id": name, "bets": ["bet"]} for name in ("play", "other")]
+    records = [record(outcome="heads", total="2")] * 10 if partial else []
+    result = assess_game_math(
+        spec(COIN, wagers, strategies),
+        simulation=SimulationRequest(source="records"),
+        records=records,
+    )
+    rows = {row.strategy: row for row in result.simulation.results}
+    assert set(rows) == {"play", "other"}
+    assert rows["other"].samples == 0 and rows["other"].mean is None
+    assert rows["other"].decision == "incomplete"
+    assert (result.status, result.outcome) == ("partial", "incomplete")
+    assert result.simulation.status == "partial" and not result.covered
+
+
+@pytest.mark.parametrize("source", ["model", "records"])
+@pytest.mark.parametrize("at_start", [True, False])
+@pytest.mark.parametrize("reason", ["cancelled", "time_budget_exhausted"])
+def test_short_runs_observe_stop_before_sampling_and_before_finalizing(
+    source, at_start, reason
+):
+    calls = count()
+    kwargs = (
+        {"should_stop": lambda: next(calls) >= (0 if at_start else 1)}
+        if reason == "cancelled"
+        else {"clock": lambda: 0 if next(calls) < (1 if at_start else 2) else 2}
+    )
+    result = assess_game_math(
+        spec(COIN, *one_bet()),
+        simulation=SimulationRequest(
+            source=source,
+            maxSeconds=1,
+            **({"samples": 4, "seed": 1} if source == "model" else {}),
+        ),
+        records=[record(outcome="heads", total="2")] * 4,
+        **kwargs,
+    )
+    (row,) = result.simulation.results
+    assert row.samples == (0 if at_start else 4)
+    assert result.simulation.stop_reason == reason
+    assert row.decision == "incomplete"
+    assert (result.status, result.outcome) == ("partial", "incomplete")
+    assert not result.covered
+
+
+def test_settlement_caches_remain_bounded_for_distinct_bonus_awards(monkeypatch):
+    import random
+
+    from moonmind.security import game_math
+
+    monkeypatch.setattr(game_math, "MAX_CACHED_SETTLEMENTS", 16, raising=False)
+    values = [str(2**n) for n in range(64)]
+    game = table(
+        {
+            "id": "feature",
+            "probability": "1",
+            "multiplier": "0",
+            "bonus": {
+                "draws": 16,
+                "outcomes": [
+                    {"probability": "1/64", "multiplier": value} for value in values
+                ],
+            },
+        }
+    )
+    specification = spec(game, *one_bet())
+    sampler = game_math._Sampler(specification, random.Random(7))
+    rounds = game_math._Rounds(specification)
+    rng = random.Random(8)
+    for _ in range(128):
+        sampler.settle("play", sampler.draw())
+        bonus = [rng.choice(values) for _ in range(16)]
+        total = sum(map(int, bonus))
+        _, settled = rounds.expected(
+            record(outcome="feature", bonus=bonus, total=str(total))
+        )
+        assert settled.total == total
+    assert len(sampler.settled["play"]) <= 16
+    assert len(rounds.cache) <= 16
+
+
 def test_low_sample_run_is_insufficient_precision():
     result = assess_game_math(
         spec(COIN, *one_bet()),
