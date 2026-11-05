@@ -148,7 +148,7 @@ The Omnigent Bridge separately retains raw and normalized event journals, snapsh
 
 A failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` run offers `canRetryFromStep` unless a parent workflow owns it or submission is disabled (`temporal_submit_disabled`). `POST /api/executions/{workflowId}/retry-from-step` takes `idempotencyKey`, an optional `stepId` (default: the earliest failed step), and an optional `sourceRunId` that must still be the latest run unless that run is this request's own accepted retry. It returns `202` with the new `runId`; refusals are `409` with `detail.code = "retry_from_step_unavailable"` and a `reason`. Earlier steps are replayed rather than re-executed, and the run keeps its original input.
 
-Retry does not accept edited instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators use edit/rerun flows for those behaviors. Admission rules live in [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step).
+If execution succeeded and checkpoint finalization failed, retry resumes at the verified failed capture task, preserving the completed result. Missing or mismatched capture evidence returns `finalization_boundary_unavailable`. Retry does not edit instructions, attachments, runtime/model settings, dependencies, or publishing; those changes use edit/rerun. Admission rules live in [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step).
 
 ## 4.2 Workflow Chat behavior
 
