@@ -1,6 +1,7 @@
 """Retry a failed run from a step through the API against a real Temporal server."""
 
 import asyncio
+import json
 from datetime import timedelta
 from uuid import uuid4
 
@@ -28,14 +29,20 @@ from api_service.db.models import (
     TemporalExecutionRecord,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.temporal_models import StepExecutionIdentityModel
+from moonmind.schemas.temporal_activity_models import ArtifactReadInput
 from moonmind.workflows.temporal import github_issue_claim_lease as claim_leases
 from moonmind.workflows.temporal import retry_from_step, story_output_tools
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from moonmind.workflows.temporal.retry_from_step import STEP_ORDER_MEMO_KEY
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 
@@ -46,12 +53,18 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 TASK_QUEUE = "retry-from-step-test"
 STEPS = ("step-1", "step-2", "step-3", "step-4")
 STEP_CALLS: list[str] = []
+STEP_RUN_IDS: dict[str, list[str]] = {}
 FAILING_STEP: dict[str, str | None] = {"step": "step-3"}
+CHILD_SAVES: dict[str, bytes] = {}
+CHILD_SAVE_CALLS: list[StepExecutionIdentityModel] = []
+CAPTURE_CALLS: list[str] = []
+FAILING_CAPTURE: dict[str, str | None] = {"step": None}
 
 
 @activity.defn(name="retry_probe.run_step")
 async def run_step(step_id: str) -> str:
     STEP_CALLS.append(step_id)
+    STEP_RUN_IDS.setdefault(step_id, []).append(activity.info().workflow_run_id)
     if step_id == FAILING_STEP["step"]:
         raise ApplicationError(f"{step_id} failed", non_retryable=True)
     return f"{step_id} ok"
@@ -107,7 +120,180 @@ class StepWorkflow:
                 row["status"] = "failed"
                 raise ApplicationError(f"{row['logicalStepId']} failed") from exc
             row["status"] = "completed"
+            await self.after_step(row["logicalStepId"])
         return results
+
+    async def after_step(self, step_id: str) -> None:
+        pass
+
+
+@activity.defn(name="workspace.capture_checkpoint")
+async def capture_checkpoint(request: dict) -> str:
+    step_id = request["identity"]["logicalStepId"]
+    CAPTURE_CALLS.append(step_id)
+    if step_id == FAILING_CAPTURE["step"]:
+        raise ApplicationError("checkpoint upload failed", non_retryable=True)
+    return "artifact://checkpoint-" + step_id
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class FinalizationWorkflow(StepWorkflow):
+    @workflow.run
+    async def run(self) -> list[str]:
+        return await super().run()
+
+    async def after_step(self, step_id: str) -> None:
+        row = next(row for row in self._rows if row["logicalStepId"] == step_id)
+        row.update(
+            executionOrdinal=1,
+            executionOutcome={
+                "status": "succeeded",
+                "recordedAt": workflow.now().isoformat(),
+            },
+        )
+        try:
+            await workflow.execute_activity(
+                capture_checkpoint,
+                {
+                    "identity": {"logicalStepId": step_id, "executionOrdinal": 1},
+                    "boundary": "before_publication",
+                },
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+        except ActivityError as exc:
+            row["finalizationOutcome"] = {
+                "status": "failed",
+                "phase": "before_publication_checkpoint",
+                "criticality": "required",
+                "updatedAt": workflow.now().isoformat(),
+            }
+            raise ApplicationError("step completed but finalization failed") from exc
+        row["finalizationOutcome"] = {
+            "status": "succeeded",
+            "phase": "before_publication_checkpoint",
+            "criticality": "required",
+            "updatedAt": workflow.now().isoformat(),
+        }
+
+
+@activity.defn(name="retry_probe.child_save")
+async def child_save(identity: StepExecutionIdentityModel) -> dict:
+    CHILD_SAVE_CALLS.append(identity)
+    step_execution_id = (
+        f"{identity.workflow_id}:{identity.run_id}:"
+        f"{identity.logical_step_id}:execution:{identity.execution_ordinal}"
+    )
+    runtime_binding_ref = "omnigent-runtime-binding:sha256:" + "f" * 64
+    workspace = {
+        "kind": "worktree_archive", "baseCommit": "a" * 40,
+        "archiveRef": "artifact://archive", "archiveDigest": "sha256:" + "b" * 64,
+        "manifestRef": "artifact://manifest", "manifestDigest": "sha256:" + "c" * 64,
+        "workspaceDigest": "sha256:" + "d" * 64,
+        "workspaceIdentityDigest": "sha256:" + "e" * 64,
+    }
+    reference = f"artifact://{identity.workflow_id}/child-save"
+    CHILD_SAVES[reference] = json.dumps(build_step_checkpoint_payload(
+        identity=identity, boundary="after_execution",
+        task_input_snapshot_ref="artifact://input", plan_ref="artifact://plan", workspace=workspace,
+        created_at=activity.info().scheduled_time,
+    )).encode()
+    return {
+        "runId": identity.run_id,
+        "recordedStepExecution": identity.model_dump(by_alias=True, mode="json"),
+        "result": AgentRunResult(summary="Saved child work", metadata={
+            "workPreserved": True,
+            "parentWorkflowId": identity.workflow_id,
+            "parentTemporalRunId": identity.run_id,
+            "parentRunId": identity.run_id,
+            "childWorkflowId": f"{identity.workflow_id}:saved-step-child",
+            "childRunId": f"child-run:{identity.run_id}",
+            "runtimeBindingRef": runtime_binding_ref,
+            "runtimeSessionContext": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "stepExecutionId": step_execution_id,
+                "runtimeBindingRef": runtime_binding_ref,
+                "epoch": step_execution_id,
+            },
+            "savedWorkspaceCheckpoint": {**workspace, "checkpointRef": reference},
+        }).model_dump(by_alias=True, mode="json"),
+    }
+
+
+@activity.defn(name="artifact.read")
+async def read_child_save(request: ArtifactReadInput) -> bytes:
+    return CHILD_SAVES[request.artifact_ref]
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class SharedCheckpointWorkflow(StepWorkflow):
+    """Replay the production save-adoption boundary before the failed step."""
+
+    @workflow.run
+    async def run(self) -> list[str]:
+        info = workflow.info()
+        self._checkpoint_owner = MoonMindUserWorkflow()
+        self._save = await workflow.execute_activity(
+            child_save,
+            StepExecutionIdentityModel(
+                workflowId=info.workflow_id, runId=info.run_id,
+                logicalStepId="step-1", executionOrdinal=1,
+            ),
+            schedule_to_close_timeout=timedelta(seconds=30),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        # Production records this identity in its policy-compile Activity.
+        self._checkpoint_owner._resilience_policy_run_id = self._save["runId"]
+        self._checkpoint_owner._initialize_step_ledger(
+            ordered_nodes=[{"id": "step-1", "inputs": {"title": "Saved work"}}],
+            dependency_map={"step-1": []}, updated_at=workflow.now(),
+        )
+        return await super().run()
+
+    async def after_step(self, step_id: str) -> None:
+        info = workflow.info()
+        owner = self._checkpoint_owner
+        if step_id != "step-1":
+            fresh = owner._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "omnigent"}}, node_id=step_id,
+                tool_name="omnigent", workflow_parameters={},
+            )
+            assert fresh.step_execution.run_id == info.run_id
+            assert fresh.step_execution.step_execution_id == (
+                f"{info.workflow_id}:{info.run_id}:{step_id}:execution:1"
+            )
+            return
+        owner._mark_step_running(step_id, updated_at=workflow.now(), summary="Saved work")
+        request = AgentExecutionRequest(
+            agentKind="external", agentId="omnigent", correlationId=info.workflow_id,
+            idempotencyKey="recorded-child",
+            stepExecution={
+                "workflowId": info.workflow_id, "runId": info.run_id,
+                "logicalStepId": step_id, "executionOrdinal": 1,
+                "stepExecutionId": f"{info.workflow_id}:{info.run_id}:{step_id}:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        )
+        request = owner._restore_replayed_agent_step_identity(
+            request, self._save["result"],
+            child_workflow_id=f"{info.workflow_id}:saved-step-child",
+        )
+        owner._record_shared_runtime_context(request, self._save["result"])
+        recorded = StepExecutionIdentityModel.model_validate(
+            self._save["recordedStepExecution"]
+        )
+        assert request.step_execution.run_id == recorded.run_id
+        assert owner._shared_runtime_context.run_id == recorded.run_id
+        assert (
+            owner._shared_runtime_context.step_execution_id
+            == request.step_execution.step_execution_id
+        )
+        assert await owner._adopt_shared_child_saved_checkpoint(
+            step_id, request, self._save["result"],
+        )
+        assert await owner._record_canonical_step_checkpoint(
+            step_id, boundary="after_execution", updated_at=workflow.now(),
+        ) == f"artifact://{info.workflow_id}/child-save"
 
 
 @workflow.defn(name="MoonMind.UserWorkflow")
@@ -117,6 +303,24 @@ class ChangedWorkflow(StepWorkflow):
     @workflow.run
     async def run(self) -> list[str]:
         await workflow.sleep(timedelta(seconds=1))
+        return await super().run()
+
+
+@activity.defn(name="retry_probe.record_run_id")
+async def record_run_id(run_id: str) -> str:
+    return run_id
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class ResetIdentitySensitiveWorkflow(StepWorkflow):
+    @workflow.run
+    async def run(self) -> list[str]:
+        recorded = await workflow.execute_activity(
+            record_run_id, workflow.info().run_id,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        if recorded != workflow.info().run_id:
+            workflow.upsert_memo({"unexpected_reset_command": True})
         return await super().run()
 
 
@@ -152,13 +356,21 @@ def _app(service, session, env, user) -> FastAPI:
 
 @pytest.mark.usefixtures("deployment_without_recorded_connections")
 @pytest.mark.parametrize("expired_claim", [False, True])
+@pytest.mark.parametrize(
+    "workflow_class", [StepWorkflow, SharedCheckpointWorkflow, FinalizationWorkflow]
+)
 async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
-    tmp_path, monkeypatch, journey, expired_claim
+    tmp_path, monkeypatch, journey, expired_claim, workflow_class,
 ):
     STEP_CALLS.clear()
-    FAILING_STEP["step"] = "step-3"
+    STEP_RUN_IDS.clear()
+    CHILD_SAVE_CALLS.clear()
+    CAPTURE_CALLS.clear()
+    finalization_only = workflow_class is FinalizationWorkflow
+    FAILING_STEP["step"] = None if finalization_only else "step-3"
+    FAILING_CAPTURE["step"] = "step-3" if finalization_only else None
     # The service replays the kept history on the installed workflow classes.
-    monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [StepWorkflow])
+    monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [workflow_class])
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/executions.db")
     try:
         async with engine.begin() as connection:
@@ -205,15 +417,18 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )
             app = _app(service, session, env, user)
-            async with Worker(
-                env.client,
-                task_queue=TASK_QUEUE,
-                workflows=[StepWorkflow],
-                activities=[run_step],
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=TASK_QUEUE,
+                    workflows=[workflow_class],
+                    activities=[run_step, child_save, capture_checkpoint],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(env.client, task_queue=ARTIFACTS_TASK_QUEUE, activities=[read_child_save]),
             ):
                 handle = await env.client.start_workflow(
-                    StepWorkflow.run,
+                    workflow_class.run,
                     id=workflow_id,
                     task_queue=TASK_QUEUE,
                     search_attributes=TypedSearchAttributes(
@@ -235,8 +450,12 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     await handle.result()
                 failed_run_id = (await handle.describe()).run_id
                 assert STEP_CALLS == ["step-1", "step-2", "step-3"]
+                if workflow_class is SharedCheckpointWorkflow:
+                    assert len(CHILD_SAVE_CALLS) == 1
+                    assert CHILD_SAVE_CALLS[0].run_id == failed_run_id
 
                 FAILING_STEP["step"] = None
+                FAILING_CAPTURE["step"] = None
                 STEP_CALLS.clear()
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app), base_url="http://test"
@@ -276,7 +495,27 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                         ]
                     # Earlier steps came from history; only the failed step and
                     # its successors ran again.
-                    assert STEP_CALLS == ["step-3", "step-4"]
+                    assert STEP_CALLS == (
+                        ["step-4"] if finalization_only else ["step-3", "step-4"]
+                    )
+                    assert STEP_RUN_IDS == {
+                        "step-1": [failed_run_id],
+                        "step-2": [failed_run_id],
+                        "step-3": [failed_run_id]
+                        if finalization_only
+                        else [failed_run_id, new_run_id],
+                        "step-4": [new_run_id],
+                    }
+                    if workflow_class is SharedCheckpointWorkflow:
+                        assert len(CHILD_SAVE_CALLS) == 1
+                    if finalization_only:
+                        assert CAPTURE_CALLS == [
+                            "step-1",
+                            "step-2",
+                            "step-3",
+                            "step-3",
+                            "step-4",
+                        ]
                     assert (
                         await retried.describe()
                     ).status == WorkflowExecutionStatus.COMPLETED
@@ -331,7 +570,7 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     assert detail.json()["runId"] == new_run_id
 
                 replay = await Replayer(
-                    workflows=[StepWorkflow],
+                    workflows=[workflow_class],
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ).replay_workflow(
@@ -342,13 +581,17 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
         await engine.dispose()
 
 
+@pytest.mark.parametrize("source_class,installed_class", [
+    (StepWorkflow, ChangedWorkflow),
+    (ResetIdentitySensitiveWorkflow, ResetIdentitySensitiveWorkflow),
+])
 async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_history(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_class, installed_class,
 ):
     STEP_CALLS.clear()
     FAILING_STEP["step"] = "step-2"
 
-    monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [ChangedWorkflow])
+    monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [installed_class])
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/executions.db")
     try:
         async with engine.begin() as connection:
@@ -370,12 +613,12 @@ async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_histo
             async with Worker(
                 env.client,
                 task_queue=TASK_QUEUE,
-                workflows=[StepWorkflow],
-                activities=[run_step],
+                workflows=[source_class],
+                activities=[run_step, record_run_id],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
                 handle = await env.client.start_workflow(
-                    StepWorkflow.run,
+                    source_class.run,
                     id=workflow_id,
                     task_queue=TASK_QUEUE,
                     search_attributes=TypedSearchAttributes(

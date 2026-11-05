@@ -48,7 +48,7 @@ The workflow derives the runtime capability snapshot from its selected runtime b
 
 ### 2.3 Durable capture and reads
 
-Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`, `artifact://art_...`) to the durable URI form of Omnigent checkpoint identities, preserve captured bytes, and compute digests from those bytes. Malformed or unavailable capture keeps a negative recovery-capability projection.
+Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`, `artifact://art_...`) to durable checkpoint identities and digest captured bytes. Restore verifies the admitted snapshot's digest and its workflow-input pointer. Inline authored or scheduled inputs have no separate artifact: their canonical `temporal://<workflow>/<source-run>/task-input` URI names the saved producer run, including after a failed-step reset. Current metadata cannot replace either identity. Malformed or unavailable evidence keeps recovery unavailable.
 
 New checkpoint and workspace artifacts link to the actual Activity's workflow and run, and reads carry that trusted scope through normal artifact authorization, so caller-supplied identities cannot select another workflow or run. Checkpoint discovery reads the owning run's step ledger and rejects a ledger from another execution. That live read is best-effort: if Temporal history is unavailable it falls back to checkpoints already persisted in the memo, parameters, or finish summary, while a mismatched or malformed ledger remains an error. These adapters never repair historical evidence; recovery still requires its original input, plan, integrity, capability, side-effect, and cleanup evidence.
 
@@ -109,7 +109,7 @@ A manifest or checkpoint whose ID does not match its identity fields is rejected
 
 ### 5.2 Cross-run lineage
 
-Retry from a step creates no cross-run lineage: the reset run keeps the workflow identity, replays the steps before the retried one, and allocates new run-scoped identities for the steps that run again. The v1 manifest keeps its `lineage` and `recoverySource` fields so stored manifests still validate, but new executions leave them empty.
+Retry from a step keeps the workflow identity and replays completed steps before the retried one. Their child results retain the recorded parent binding for runtime-context validation and checkpoint reuse; steps that run again receive new run-scoped identities. This creates no cross-run lineage. The v1 manifest retains `lineage` and `recoverySource` for stored evidence; new executions leave them empty.
 
 ### 5.3 Idempotency keys
 

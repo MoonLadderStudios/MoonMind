@@ -14,7 +14,7 @@ import os.path
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from re import sub
 from typing import Any
@@ -32,6 +32,11 @@ from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.provider_failures import (
+    ProviderFailureEvent,
+    classify_provider_failure,
+    provider_failure_event_from_metadata,
+)
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
@@ -532,6 +537,47 @@ async def ensure_verified_execution_plan_dependencies(
     )
 
 
+async def read_frozen_task_input_snapshot(
+    service,
+    *,
+    snapshot_ref: str,
+    snapshot_digest: str,
+    access: ArtifactAccessContext,
+):
+    """Read a plan-admitted snapshot, checking stored and actual byte digests.
+
+    The caller supplies references from verified immutable plan authority,
+    never a replacement chosen from mutable runtime parameters.
+    """
+    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
+
+    try:
+        snapshot_artifact, body = await service.read(
+            artifact_id=snapshot_id, access=access._with_verified_inputs((snapshot_id,))
+        )
+    except TemporalArtifactError as exc:
+        raise OmnigentArtifactError(
+            f"frozen task-input snapshot cannot be read: {exc}"
+        ) from exc
+    expected_digest = snapshot_digest.removeprefix("sha256:")
+    if snapshot_artifact.sha256 != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
+    if (
+        str(getattr(snapshot_artifact.status, "value", snapshot_artifact.status))
+        != "complete"
+    ):
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
+
+        raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
+    if hashlib.sha256(body).hexdigest() != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
+
+
 async def _frozen_planning_input_refs(
     repository,
     service,
@@ -562,33 +608,10 @@ async def _frozen_planning_input_refs(
     else:
         snapshot_ref = authority.taskInputSnapshotRef
         snapshot_digest = authority.taskInputSnapshotDigest
-    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
-    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
-
-    try:
-        snapshot_artifact, body = await service.read(
-            artifact_id=snapshot_id, access=access._with_verified_inputs((snapshot_id,))
-        )
-    except TemporalArtifactError as exc:
-        raise OmnigentArtifactError(
-            f"frozen task-input snapshot cannot be read: {exc}"
-        ) from exc
-    expected_digest = snapshot_digest.removeprefix("sha256:")
-    if snapshot_artifact.sha256 != expected_digest:
-        raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
-    if (
-        str(getattr(snapshot_artifact.status, "value", snapshot_artifact.status))
-        != "complete"
-    ):
-        from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
-
-        raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
-    if hashlib.sha256(body).hexdigest() != expected_digest:
-        raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
-    try:
-        frozen = json.loads(body)
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
+    frozen = await read_frozen_task_input_snapshot(
+        service, snapshot_ref=snapshot_ref, snapshot_digest=snapshot_digest,
+        access=access,
+    )
     source = frozen.get("source") if isinstance(frozen, dict) else None
     if not isinstance(source, dict):
         if planning_parameters is not None:
@@ -1726,6 +1749,43 @@ def _optional_resource_harvest_failed(manifest: dict[str, Any]) -> bool:
     )
 
 
+def _snapshot_provider_failure(
+    snapshot: Mapping[str, Any],
+) -> ProviderFailureEvent | None:
+    """Normalize the owned terminal error, preserving structured provider facts."""
+    source = snapshot.get("providerFailure")
+    event = provider_failure_event_from_metadata(source)
+    if event is None:
+        task_error = snapshot.get("last_task_error")
+        if not isinstance(task_error, Mapping):
+            return None
+        source = dict(task_error)
+        if "providerErrorCode" not in source and "provider_error_code" not in source:
+            source["providerErrorCode"] = source.get("code")
+        event = provider_failure_event_from_metadata(source)
+        if event is None or (
+            event.provider_error_class is None
+            and event.retry_recommendation is None
+            and event.observation == "confirmed"
+            and event.retry_disposition == "unknown"
+        ):
+            classification = classify_provider_failure(source.get("message"))
+            if classification is not None:
+                source["providerErrorClass"] = classification.provider_error_class
+                event = provider_failure_event_from_metadata(source)
+    if (
+        event is not None
+        and event.retry_disposition == "unknown"
+        and event.observation == "confirmed"
+        and "retryDisposition" not in source
+        and "retry_disposition" not in source
+    ):
+        # A classifier default is not an explicit provider retry policy. Keep
+        # the result's ordinary failure-class fallback through durable recovery.
+        event = replace(event, retry_disposition=None)
+    return event
+
+
 def build_omnigent_result(
     *,
     request: AgentExecutionRequest,
@@ -1770,6 +1830,7 @@ def build_omnigent_result(
         else failure_class_for_terminal_status(terminal_status)
     )
     retry_recommendation = None
+    provider_failure = final_snapshot.get("providerFailure")
     task_error = final_snapshot.get("last_task_error")
     if terminal_status == "failed" and isinstance(task_error, dict):
         failure_summary = failure_summary or task_error.get("message")
@@ -1786,6 +1847,21 @@ def build_omnigent_result(
                 OmnigentFailureReason.AUTH_FAILURE
             )
             retry_recommendation = "reauthenticate"
+        if failure_reason is None:
+            event = _snapshot_provider_failure(final_snapshot)
+            if event is not None:
+                provider_failure = event.to_metadata()
+                provider_error_code = provider_error_code or event.provider_error_code
+                retry_recommendation = (
+                    retry_recommendation or event.retry_recommendation
+                )
+                if event.provider_error_class in {
+                    "auth",
+                    "credential_scope",
+                    "rate_limit",
+                    "capacity",
+                }:
+                    failure_class = "integration_error"
 
     # A classified failure must never be summarized with the provider's
     # success snapshot text (for example a full-evidence harvest escalation on
@@ -1890,11 +1966,13 @@ def build_omnigent_result(
             else (
                 "failed"
                 if terminal_status in {"completed", "failed", "timed_out"}
-                else "cancelled" if terminal_status == "canceled" else "unknown"
+                else "cancelled"
+                if terminal_status == "canceled"
+                else "unknown"
             )
         ),
         publicationState=final_snapshot.get("publicationState", "unknown"),
-        providerFailure=final_snapshot.get("providerFailure"),
+        providerFailure=provider_failure,
         observation=(
             "unavailable"
             if terminal_status in {"delivery_unknown", "unknown"}
@@ -1952,7 +2030,7 @@ def build_omnigent_terminal_refs(
         terminal_status == "completed"
         and capture_bundle.resource_harvest_failure_class is not None
     )
-    return {
+    terminal_refs = {
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
@@ -1969,12 +2047,16 @@ def build_omnigent_terminal_refs(
             or final_snapshot.get("failureCode")
         ),
         "summary": (
-            "Required Omnigent resource evidence was missing after session "
-            "completion"
+            "Required Omnigent resource evidence was missing after session completion"
             if required_evidence_failed
             else summary
         ),
     }
+    if terminal_status == "failed":
+        event = _snapshot_provider_failure(final_snapshot)
+        if event is not None:
+            terminal_refs["providerFailure"] = event.to_metadata()
+    return terminal_refs
 
 
 def _assert_no_provider_native_refs(refs: list[str]) -> None:

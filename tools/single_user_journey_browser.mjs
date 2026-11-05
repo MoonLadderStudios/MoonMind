@@ -103,12 +103,15 @@ try {
     await visit("/settings", () =>
       page.getByRole("heading", { name: "Providers & Secrets", exact: true }).waitFor({ state: "visible" }),
     );
-    const catalogResponse = page.waitForResponse((response) =>
-      new URL(response.url()).pathname === "/api/v1/settings/catalog" && response.ok(),
-    );
     await visit("/settings/instance", async () => {
       await page.getByRole("heading", { name: "Instance", exact: true }).waitFor({ state: "visible" });
-      const catalog = await (await catalogResponse).json();
+      // A page response can lose its Chromium body during document navigation.
+      // Read expected data through the same browser context, then check the UI.
+      const catalogResponse = await page.request.get(base + "/api/v1/settings/catalog");
+      if (!catalogResponse.ok()) {
+        throw new Error(`GET settings catalog returned ${catalogResponse.status()}`);
+      }
+      const catalog = await catalogResponse.json();
       const descriptors = Object.values(catalog.categories || {}).flat();
       if (!descriptors.length) throw new Error("Instance settings catalog is empty");
       await page.getByText(descriptors[0].title, { exact: true }).first().waitFor({ state: "visible" });

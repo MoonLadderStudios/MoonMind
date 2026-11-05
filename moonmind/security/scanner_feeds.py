@@ -287,6 +287,8 @@ def load_snapshot(
     if path.is_symlink() or not path.is_dir():
         raise FeedSnapshotError("feed_snapshot_unavailable")
     identity = _identity(path)
+    if identity is None:
+        raise FeedSnapshotError("feed_snapshot_unavailable")
     try:
         raw = _metadata(path / MANIFEST)
     except FeedSnapshotError:

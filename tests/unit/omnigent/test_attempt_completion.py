@@ -613,6 +613,162 @@ async def test_transient_remote_publication_failure_waits_out_the_outage(monkeyp
     assert stored["publication_failure:0"]["transient"] is True
 
 
+_GITHUB_PUSH_OUTAGE = (
+    "repository publication command failed: remote: Internal Server Error\n"
+    "To https://github.com/MoonLadderStudios/Tactics.git\n"
+    " ! [remote rejected]     moonmind-job-a5d73997 -> moonmind-job-a5d73997 "
+    "(Internal Server Error)\n"
+    "error: failed to push some refs to "
+    "'https://github.com/MoonLadderStudios/Tactics.git'"
+)
+
+
+@pytest.mark.asyncio
+async def test_git_hosting_outage_longer_than_minutes_still_publishes(monkeypatch):
+    """Saved work outlasts a git hosting incident instead of failing in minutes.
+
+    Reproduces mm:a81dd46f-...-2026-11-04T08:00:00Z: after 90 minutes of agent
+    work, three pushes over five minutes all got ``remote: Internal Server
+    Error`` during a GitHub Git Operations incident, and the step failed as
+    do_not_retry with hours of its execution allowance left.
+    """
+
+    import asyncio
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+    from moonmind.omnigent.workspace_publication import (
+        publication_failure_is_transient,
+    )
+
+    sleeps: list[float] = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    assert publication_failure_is_transient(_GITHUB_PUSH_OUTAGE)
+    store = InMemoryStableRuntimeBindingStore()
+    request = _finish_request(idempotency_key="publication-long-outage")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "d" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {
+        "checkpointRef": "artifact://saved-checkpoint",
+        "archiveRef": "artifact://saved",
+    }
+    await sink.record_phase("saved", saved)
+    attempts: list[int] = []
+
+    async def publish(bound, result):
+        attempts.append(1)
+        if len(attempts) <= 6:
+            raise HarnessPlatformError(
+                _GITHUB_PUSH_OUTAGE,
+                code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                transient=True,
+            )
+        return result.model_copy(update={"summary": "remote verified"})
+
+    realizer = _finish_realizer(store, publish=publish)
+    finished = await realizer._finish_owned_execution(
+        request, sink, AgentRunResult(summary="verified compute")
+    )
+
+    assert len(attempts) == 7
+    assert finished.failure_class is None
+    assert finished.summary == "remote verified"
+    # The wait covers a long incident yet polls often enough to see recovery.
+    assert sum(sleeps) >= 45 * 60
+    assert sleeps == sorted(sleeps)
+    assert max(sleeps) <= 10 * 60
+
+
+@pytest.mark.asyncio
+async def test_unending_git_hosting_outage_wait_is_bounded(monkeypatch):
+    """A remote that never recovers still reports the saved work unpublished.
+
+    A replacement worker that lost the final receipt reuses the recorded
+    schedule instead of starting another outage window.
+    """
+
+    import asyncio
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    sleeps: list[float] = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+
+    class ReceiptLosingStore(InMemoryStableRuntimeBindingStore):
+        lose_publication_receipt = True
+
+        async def update(self, binding_id, **kwargs):
+            phases = (kwargs.get("updates") or {}).get("phaseResults") or {}
+            if "publication" in phases and self.lose_publication_receipt:
+                self.lose_publication_receipt = False
+                raise ConnectionError("database lost before the receipt committed")
+            return await super().update(binding_id, **kwargs)
+
+    store = ReceiptLosingStore()
+    request = _finish_request(idempotency_key="publication-unending-outage")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "f" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {
+        "checkpointRef": "artifact://saved-checkpoint",
+        "archiveRef": "artifact://saved",
+    }
+    await sink.record_phase("saved", saved)
+    attempts: list[int] = []
+
+    async def publish(bound, result):
+        attempts.append(1)
+        raise HarnessPlatformError(
+            _GITHUB_PUSH_OUTAGE,
+            code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+            transient=True,
+        )
+
+    realizer = _finish_realizer(store, publish=publish)
+    with pytest.raises(ConnectionError):
+        await realizer._finish_owned_execution(
+            request, sink, AgentRunResult(summary="verified compute")
+        )
+    published = len(attempts)
+    assert published == len(sleeps) + 1
+    assert 60 * 60 <= sum(sleeps) <= 2 * 60 * 60
+
+    resumed = await realizer._finish_owned_execution(
+        request,
+        RuntimeBindingSessionAuthoritySink(store, await store.get(binding.bindingId)),
+        AgentRunResult(summary="verified compute"),
+    )
+
+    assert len(attempts) == published
+    assert resumed.failure_class == "integration_error"
+    assert resumed.provider_error_code == "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"
+    assert resumed.retry_recommendation == "do_not_retry"
+    assert resumed.summary.startswith(
+        "Agent work is saved; repository publication exhausted its retry budget"
+    )
+    assert "Internal Server Error" in resumed.summary
+    assert resumed.metadata["unfinishedPhase"] == "publication"
+    assert resumed.metadata["workPreserved"] is True
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert AgentRunResult.model_validate(stored["publication"]) == resumed
+
+
 @pytest.mark.asyncio
 async def test_publication_resumes_remaining_budget_after_lost_receipt(monkeypatch):
     """#4016: only the unfinished publication phase retries.

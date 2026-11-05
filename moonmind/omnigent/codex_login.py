@@ -1,11 +1,7 @@
 """Read Codex readiness/defaults and record proven enrollment expiry."""
 
-import logging
-from datetime import UTC, datetime
-
+from moonmind.omnigent.oauth_login import record_ended_oauth_login
 from moonmind.workflows.provider_failures import provider_auth_failure_markers
-
-logger = logging.getLogger(__name__)
 
 # Run as ``python3 -c <probe> <codex home>``. Print only a verdict, never
 # token material. An already-expired token minted without a lifetime proves
@@ -171,71 +167,8 @@ async def record_ended_codex_login(
     *,
     reason: str = "codex_login_session_ended",
 ) -> None:
-    """Disable only the enrollment whose mounted login was proven unusable.
+    """Disable only the Codex enrollment whose mounted login was proven unusable."""
 
-    Reuse OAuth validation's Settings and routing state. Lock the profile while
-    checking its generation so an old host cannot invalidate a reconnect.
-    Recording failure must not replace the original authentication failure.
-    """
-    try:
-        from sqlalchemy import select
-
-        from api_service.db.base import async_session_maker
-        from api_service.db.models import (
-            ManagedAgentProviderProfile,
-            ProviderCredentialSource,
-            ProviderProfileAuthState,
-            RuntimeMaterializationMode,
-        )
-        from api_service.services.provider_profile_service import (
-            apply_oauth_validation_failure,
-            get_first_party_oauth_profile,
-            sync_provider_profile_manager,
-        )
-
-        async with async_session_maker() as session:
-            profile = (
-                await session.execute(
-                    select(ManagedAgentProviderProfile)
-                    .where(
-                        ManagedAgentProviderProfile.profile_id == profile_id,
-                        ManagedAgentProviderProfile.credential_generation
-                        == credential_generation,
-                        ManagedAgentProviderProfile.runtime_id == "codex_cli",
-                        ManagedAgentProviderProfile.provider_id == "openai",
-                        ManagedAgentProviderProfile.credential_source
-                        == ProviderCredentialSource.OAUTH_VOLUME,
-                        ManagedAgentProviderProfile.runtime_materialization_mode
-                        == RuntimeMaterializationMode.OAUTH_HOME,
-                        ManagedAgentProviderProfile.auth_state
-                        == ProviderProfileAuthState.CONNECTED,
-                        ManagedAgentProviderProfile.enabled.is_(True),
-                        ManagedAgentProviderProfile.disabled_reason.is_(None),
-                    )
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if profile is None:
-                return
-            apply_oauth_validation_failure(
-                profile,
-                mapping=get_first_party_oauth_profile(
-                    profile.runtime_id, profile.provider_id
-                ),
-                reason=reason,
-                failed_at=datetime.now(UTC),
-            )
-            await session.commit()
-            await sync_provider_profile_manager(
-                session=session, runtime_id=profile.runtime_id
-            )
-    except Exception as exc:
-        # Database/provider errors can contain credentials or SQL parameters.
-        # Retain only generation and exception type, never credential-derived
-        # identifiers or exception text.
-        logger.warning(
-            "Could not record ended Codex login: "
-            "credential_generation=%s error_type=%s",
-            credential_generation,
-            type(exc).__name__,
-        )
+    await record_ended_oauth_login(
+        profile_id, credential_generation, runtime_id="codex_cli", reason=reason
+    )

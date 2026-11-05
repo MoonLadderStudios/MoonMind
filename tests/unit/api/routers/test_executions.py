@@ -6388,6 +6388,13 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    normal_create_remediation = {
+        "target": {"workflowId": "mm:target-workflow", "runId": "target-run"},
+        "mode": "snapshot",
+        "authorityMode": "observe_only",
+        "evidencePolicy": {"includeStepLedger": True, "tailLines": 2000},
+        "trigger": {"type": "manual"},
+    }
 
     response = test_client.post(
         "/api/executions",
@@ -6398,12 +6405,8 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
                 "workflow": {
                     "instructions": "Investigate the failed run.",
                     "runtime": {"mode": "codex"},
-                    "remediation": {
-                        "target": {"workflowId": "mm:target-workflow"},
-                        "mode": "snapshot_then_follow",
-                        "authorityMode": "observe_only",
-                        "trigger": {"type": "manual"},
-                    },
+                    # What normal Create submits (MoonLadderStudios/MoonMind#5157).
+                    "remediation": normal_create_remediation,
                 },
             },
         },
@@ -6412,12 +6415,10 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
     assert response.status_code == 201
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
-    assert kwargs["initial_parameters"]["workflow"]["remediation"] == {
-        "target": {"workflowId": "mm:target-workflow"},
-        "mode": "snapshot_then_follow",
-        "authorityMode": "observe_only",
-        "trigger": {"type": "manual"},
-    }
+    assert (
+        kwargs["initial_parameters"]["workflow"]["remediation"]
+        == normal_create_remediation
+    )
 
 def test_create_task_shaped_execution_preserves_malformed_remediation_for_service_validation(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

@@ -87,25 +87,16 @@ describe('remediationCreateDraft', () => {
           workflowId: 'mm:target',
           runId: 'run-target',
         },
-        mode: 'snapshot_then_follow',
-        authorityMode: 'approval_gated',
-        actionPolicyRef: 'admin_healer_default',
-        approvalPolicy: {
-          requiredForHighRisk: true,
-        },
-        lockPolicy: {
-          targetMutationLock: true,
-        },
-        verificationPolicy: {
-          verifyAppliedActions: true,
-        },
-        checkpointBranchPolicy: {
-          actionKind: 'checkpoint_branch.create_from_remediation_context',
-          runtimeContextPolicy: 'fresh_agent_run',
-        },
+        // The Omnigent run diagnoses from delivered evidence: no live follow,
+        // typed-action policy, or checkpoint-branch action is authored.
+        mode: 'snapshot',
+        authorityMode: 'observe_only',
         trigger: { type: 'manual' },
       },
     });
+    expect(Object.keys(draft.remediation).sort()).toEqual([
+      'authorityMode', 'evidencePolicy', 'mode', 'target', 'trigger',
+    ]);
     expect(draft.target.stepSelectors?.[0]).toMatchObject({
       checkpointRef: 'artifact://checkpoint/failed-step',
     });
@@ -231,7 +222,7 @@ describe('remediationCreateDraft', () => {
     expect(inspectRemediationCreateDraft(draftId).status).toBe('valid');
   });
 
-  it('prepopulates source/work branches and Omnigent launch identity without retrieval state', () => {
+  it('prepopulates the source branch and Omnigent launch identity without retrieval or work-branch state', () => {
     const draft = buildRemediationCreateDraft({
       workflowId: 'mm:target',
       runId: 'run-target',
@@ -259,15 +250,59 @@ describe('remediationCreateDraft', () => {
 
     expect(draft.branch).toBe('main');
     expect(draft.startingBranch).toBe('main');
-    expect(draft.workBranch).toBe('repair/mm-3623');
+    // No consumer reads an authored checkpoint work branch after admission.
+    expect('workBranch' in draft).toBe(false);
     expect(draft.executionProfileRef).toBe('execution-profile:codex-default');
     expect(draft.launchPolicyRef).toBe('launch-policy:remediation-v3');
     // Retired (#4105): remediation drafts carry no retrieval authoring.
     expect('contextRetrieval' in draft).toBe(false);
     expect(JSON.stringify(draft)).not.toContain('"rag"');
-    expect(draft.remediation.checkpointBranchPolicy).toMatchObject({
-      gitWorkBranch: 'repair/mm-3623',
-    });
+    expect('checkpointBranchPolicy' in draft.remediation).toBe(false);
+  });
+
+  it('reloads an unsubmitted draft from before #5157 as the observe-only diagnosis Create now shows', () => {
+    const current = buildRemediationCreateDraft({ workflowId: 'mm:target', runId: 'run-target' });
+    const legacy = {
+      ...current,
+      remediation: {
+        ...current.remediation,
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        actionPolicyRef: 'admin_healer_default',
+        approvalPolicy: { requiredForHighRisk: true },
+        lockPolicy: { targetMutationLock: true },
+        verificationPolicy: { verifyAppliedActions: true },
+        checkpointBranchPolicy: {
+          actionKind: 'checkpoint_branch.create_from_remediation_context',
+          runtimeContextPolicy: 'fresh_agent_run',
+          gitWorkBranch: 'repair/legacy',
+        },
+      },
+    };
+    window.sessionStorage.setItem('moonmind.remediation-create-draft.legacy', JSON.stringify(legacy));
+
+    const result = inspectRemediationCreateDraft('legacy');
+
+    expect(result.status).toBe('valid');
+    expect(result.draft?.remediation).toEqual(current.remediation);
+    expect(result.draft?.target).toEqual(current.target);
+  });
+
+  it('replays a pre-#5157 submission unchanged after a lost acknowledgment', () => {
+    const draft = authoredDraft();
+    draft.remediation = {
+      ...draft.remediation,
+      mode: 'snapshot_then_follow',
+      authorityMode: 'approval_gated',
+      actionPolicyRef: 'admin_healer_default',
+      approvalPolicy: { requiredForHighRisk: true },
+    };
+    (draft.authoring!.request.payload as { task: Record<string, unknown> }).task.remediation = draft.remediation;
+    const draftId = storeRemediationCreateDraft(draft);
+
+    // The original request may already be admitted, so it is resubmitted as
+    // authored for idempotent reconciliation instead of being rewritten.
+    expect(readRemediationCreateDraft(draftId)).toEqual(draft);
   });
 
   it('distinguishes missing, malformed, expired, and cross-tab draft failures', () => {

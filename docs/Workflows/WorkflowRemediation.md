@@ -3,7 +3,7 @@
 **Document class:** Canonical declarative system / feature design.
 **Status:** Normative for the journey described here.
 **Owners:** MoonMind Platform and dashboard.
-**Updated:** 2026-11-01
+**Updated:** 2026-11-04
 
 ## 1. Purpose
 
@@ -31,7 +31,9 @@ A remediation can recommend retrying the failed step after its fix lands. **Cont
 
 ## 4. Creating a remediation
 
-On Overview, Steps and Artifacts, eligible workflows offer **Remediate** in **Workflow actions**. It opens editable Create with the pinned target workflow and run, repository, branch, Runtime, Profile, publication (`pr` with a repository, otherwise save-only), the `remediate-workflow` skill and instructions. Opening it starts no run; submission retains ordinary admission and authority checks. The tab-scoped draft preserves the authored submission for reload and lost-acknowledgment reconciliation until creation, discard or its original two-hour expiry. Missing, altered, cross-tab or expired drafts are refused rather than partially submitted.
+On Overview, Steps and Artifacts, eligible workflows offer **Remediate** in **Workflow actions**. It opens editable Create with the pinned target workflow and run, repository, branch, evidence selection, Runtime, Profile, publication (`pr` with a repository, otherwise save-only), the `remediate-workflow` skill and instructions. Opening it starts no run; submission retains ordinary admission and authority checks. The tab-scoped draft preserves the authored submission for reload and lost-acknowledgment reconciliation until creation, discard or its original two-hour expiry. Missing, altered, cross-tab or expired drafts are refused rather than partially submitted.
+
+Create authors and explains an observe-only snapshot. The run can neither follow live logs nor request target actions, so Create offers no follow mode, authority, action policy, or action toggles. An older unsubmitted draft reloads as this diagnosis; an attempted submission replays unchanged.
 
 Choose the repository for the fix you want: the target's repository to repair the target's work, or `MoonLadderStudios/MoonMind` to change MoonMind so the failure does not recur. One remediation works in one repository.
 
@@ -40,13 +42,13 @@ Submission is ordinary `POST /api/executions` with a `workflow.remediation` obje
 ```json
 {
   "target": {"workflowId": "mm:target", "runId": "target-run"},
-  "mode": "snapshot_then_follow",
+  "mode": "snapshot",
   "authorityMode": "observe_only",
   "trigger": {"type": "manual"}
 }
 ```
 
-`POST /api/executions/{workflowId}/remediation` is a convenience route through the same admission. Admission rejects a target that is missing or not a workflow id, the remediation itself, a target that is not a `MoonMind.UserWorkflow` or is itself a remediation, a `runId` other than the target's current run, step selectors or AgentRun ids that do not belong to the target, unsupported modes or policies, and `admin_auto` authority, which stays closed.
+`POST /api/executions/{workflowId}/remediation` is a convenience route through the same admission. Admission rejects a target that is missing or not a workflow id, the remediation itself, a target that is not a `MoonMind.UserWorkflow` or is itself a remediation, a `runId` other than the target's current run, step selectors or AgentRun ids that do not belong to the target, unsupported modes or policies, and `admin_auto` authority, which stays closed. The modes are `snapshot` and `snapshot_then_follow`; only the operator follow API can follow a live target.
 
 ## 5. Remediation context
 
@@ -55,7 +57,7 @@ Admission builds `reports/remediation_context.json` before the remediation start
 - `target`: workflow id, pinned run, title, summary, and state;
 - `failureEvidence`: from the target's finish summary, its `failure`, `failureSummary`, `finishOutcome`, `lastStep`, `operatorSummary`, `publish`, and manifest summaries; its `authoredWork` (repository, instructions, and steps); its step ledger as `steps`, with each step's status, summary, and last error; and `documents` embedding the recovery manifest, incident reconstruction, and failed-step diagnostics;
 - `failureEvidence.unavailable`: evidence that could not be read or embedded, with the reason;
-- the selected steps, evidence references, live-follow availability, and the policies the remediation was admitted with.
+- the selected steps, evidence references, live-follow availability for the operator follow API, and the policies the remediation was admitted with.
 
 The context is bounded (64 KB per embedded document, 4,000 characters per string, 60 steps) and redacted. A failed step-ledger query or artifact read is recorded as unavailable evidence; it does not fail the remediation. The target's evidence is read with the target workflow's artifact scope, since its lifecycle manifests are owned by its workflow principal.
 
@@ -78,14 +80,14 @@ The remediation's result is its own: its publication (for example a pull request
 
 ## 8. Authority and safety
 
-- `observe_only` allows diagnosis and repository work without typed remediation actions. `approval_gated` allows typed actions only with a recorded operator approval. `admin_auto` is closed until a separately authorized implementation exists; no draft, schedule, model response, or test enables it.
+- `observe_only`, which Create authors, allows diagnosis and repository work without typed remediation actions. `approval_gated`, authored only through the API, lets an operator request typed actions, each needing a recorded approval; the remediation run gets no tools. `admin_auto` is closed until a separately authorized implementation exists; no draft, schedule, model response, or test enables it.
 - Evidence is redacted before it enters the context, and remediation artifacts are restricted. A remediation receives no raw host shell, Docker socket, SQL, storage keys, or secret reads.
 - A remediation never retries, cancels, or edits its target, and a link never widens what the remediation may read or change.
 
 ## 9. Typed actions, approvals, and verification
 
-MoonMind also keeps typed remediation operations: an action registry (`remediation_actions.py`), evidence tools served as MCP tools (`remediation_tools.py`), persisted operator approvals bound to exact intent and single use, exclusive target mutation locks, post-action verification bound to the exact result (`remediation_verification.py`), and lifecycle artifacts written by `RemediationLifecyclePublisher`. Omnigent remediation agents do not receive MoonMind MCP tools, so these operations are not part of the Omnigent journey above; the dashboard's approval endpoints still decide recorded requests.
+MoonMind also keeps typed remediation operations: an action registry (`remediation_actions.py`), evidence tools served as MCP tools (`remediation_tools.py`), persisted operator approvals bound to exact intent and single use, exclusive target mutation locks, post-action verification bound to the exact result (`remediation_verification.py`), and lifecycle artifacts written by `RemediationLifecyclePublisher`. Omnigent remediation agents do not receive MoonMind MCP tools, so these operations are not part of the Omnigent journey above; the dashboard's approval endpoints still decide recorded requests. Workflow Detail labels requestable kinds **Operator API actions**, offered only for links with an action policy.
 
 ## 10. Acceptance
 
-Tests exercise admission for API-created and schedule-started targets, the context's embedded evidence and bounds, the context's delivery into the Omnigent request, and the Create draft's skill and repository defaults. Documentation changes are reviewed, not unit-tested.
+Tests exercise admission for API-created and schedule-started targets, the context's embedded evidence and bounds, the context's delivery into the Omnigent request, observe-only Detail → Create → submit with the draft's skill and repository defaults, and the operator-API action projection. Documentation changes are reviewed, not unit-tested.

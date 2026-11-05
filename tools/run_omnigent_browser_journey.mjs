@@ -195,10 +195,6 @@ const remediationAuthority = (
 const remediationPublishMode = (
   process.env.MOONMIND_OMNIGENT_REMEDIATION_PUBLISH_MODE || "branch"
 ).trim();
-const remediationWorkBranch = (
-  process.env.MOONMIND_OMNIGENT_REMEDIATION_WORK_BRANCH ||
-  `remediation/operator-matrix-${row.replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}`
-).trim();
 const isRemediation = Boolean(remediationTargetId);
 const autonomousGateRow = row === "remediation.autonomous.rollout-gate-closed";
 const prohibitedAuthorityMarkers = {
@@ -296,13 +292,10 @@ try {
   const branchInput = page.getByLabel(isRemediation ? "Starting branch" : "Branch");
   if (await branchInput.count()) await branchInput.fill(branch);
   if (isRemediation) {
-    await page.getByLabel("Checkpoint work branch").fill(remediationWorkBranch);
-    await page.getByLabel("Remediation mode").selectOption("snapshot_then_follow");
     if (autonomousGateRow) {
-      const autonomousOption = page.getByLabel("Authority").locator(
-        'option[value="admin_auto"]'
-      );
-      if (!(await autonomousOption.isDisabled())) {
+      // Normal Create authors only observe-only remediation; no authority,
+      // including admin_auto, is selectable (MoonLadderStudios/MoonMind#5157).
+      if (await page.locator('option[value="admin_auto"]:not([disabled])').count()) {
         throw new Error("admin_auto was selectable while the autonomous release gate is closed");
       }
       if (requests.length) {
@@ -327,7 +320,11 @@ try {
       }));
       process.exit(0);
     }
-    await page.getByLabel("Authority").selectOption(remediationAuthority);
+    if (remediationAuthority !== "observe_only") {
+      throw new Error(
+        `normal Create authors only observe_only remediation; ${remediationAuthority} has no normal-Create journey`
+      );
+    }
     await page.getByLabel("Hard override model").fill(remediationModel);
     await page.getByText("Context retrieval (RAG)", { exact: true }).click();
     await page.getByLabel(
@@ -387,7 +384,6 @@ try {
     intent?.task?.remediation?.target?.workflowId !== remediationTargetId ||
     intent?.task?.remediation?.target?.runId !== remediationTargetRunId ||
     intent?.task?.remediation?.authorityMode !== remediationAuthority ||
-    intent?.task?.remediation?.checkpointBranchPolicy?.gitWorkBranch !== remediationWorkBranch ||
     intent?.repository?.branch?.name !== branch ||
     intent?.publishMode !== remediationPublishMode ||
     !intent?.followUpRetrieval
@@ -483,7 +479,6 @@ try {
       model: isRemediation ? remediationModel : null,
       authorityMode: isRemediation ? remediationAuthority : null,
       branch,
-      workBranch: isRemediation ? remediationWorkBranch : null,
       publishMode: isRemediation ? remediationPublishMode : null,
       retrieval: isRemediation ? "balanced_follow_up" : null,
     },

@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import tarfile
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,78 @@ def _repo(path: Path) -> tuple[Path, str]:
         ["git", "rev-parse", "HEAD"], cwd=path, text=True
     ).strip()
     return path, commit
+
+
+def test_history_baseline_cost_does_not_scale_with_remote_branch_count(
+    tmp_path, monkeypatch
+):
+    """Clones with thousands of origin branches must stay within the budget."""
+    from moonmind.workflows.temporal.runtime import checkpoint_history
+
+    workspace, base = _repo(tmp_path / "source")
+    git = partial(subprocess.run, cwd=workspace, check=True, capture_output=True)
+    (workspace / "tracked.txt").write_text("published\n")
+    git(["git", "commit", "-qam", "published"])
+    published = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip()
+    git(["git", "update-ref", "refs/remotes/origin/main", published])
+    git(["git", "update-ref", "refs/remotes/origin/old", base])
+    (workspace / "tracked.txt").write_text("unpublished\n")
+    git(["git", "commit", "-qam", "unpublished"])
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip()
+    original_popen = checkpoint_history.subprocess.Popen
+    calls: list[list[str]] = []
+
+    def count(command, *args, **kwargs):
+        calls.append(command)
+        return original_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_history.subprocess, "Popen", count)
+
+    def capture():
+        calls.clear()
+        _, evidence = checkpoint_history.capture_git_history(workspace, head)
+        assert evidence["baselineCommit"] == published
+        return len(calls)
+
+    few = capture()
+    # Distinct stale branch tips, as in a real long-lived clone.
+    git(
+        ["git", "fast-import", "--quiet"],
+        input="".join(
+            f"commit refs/remotes/origin/branch-{index}\n"
+            "committer Test <test@example.com> 0 +0000\n"
+            f"data {len(str(index))}\n{index}\nfrom {base}\n\n"
+            for index in range(200)
+        ).encode(),
+    )
+    assert capture() == few
+
+
+def test_history_git_failures_distinguish_budget_from_git_errors(tmp_path, monkeypatch):
+    import time
+
+    from moonmind.workflows.temporal.runtime import checkpoint_history
+
+    workspace, _ = _repo(tmp_path / "source")
+    with pytest.raises(ValueError, match="git merge-base exited with status 128"):
+        checkpoint_history._git(workspace, ["merge-base", "HEAD", "missing"])
+
+    original_popen = checkpoint_history.subprocess.Popen
+    monkeypatch.setattr(
+        checkpoint_history.subprocess,
+        "Popen",
+        lambda _command, **kwargs: original_popen(["sleep", "30"], **kwargs),
+    )
+    with pytest.raises(
+        ValueError, match="exhausted its capture budget during git rev-list"
+    ):
+        checkpoint_history._git(
+            workspace, ["rev-list", "HEAD"], deadline=time.monotonic() + 0.2
+        )
 
 
 def test_index_capture_scans_binary_index_bytes_before_export(tmp_path):

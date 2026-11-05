@@ -3,6 +3,7 @@
 # ruff: noqa: F811 -- imported pytest fixture
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,10 +14,17 @@ from temporalio.testing import ActivityEnvironment
 
 from moonmind.workflows.temporal import github_issue_claim_recovery as recovery
 from moonmind.workflows.temporal import story_output_tools as tools
+from moonmind.workflows.temporal.activities import (
+    github_issue_finalization_activities as finalization,
+)
+from moonmind.workflows.temporal.activities import (
+    github_issue_reconciliation_activities as reconciliation,
+)
 from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
 from moonmind.workflows.temporal.github_issue_attempts import (
     compute_effective_retry,
     parse_attempt_comment,
+    render_attempt_comment,
 )
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
@@ -33,6 +41,138 @@ assert _JOURNEY_FIXTURE is journey
 async def history_events(events):
     for event in events:
         yield event
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_unavailable", [False, True])
+@pytest.mark.parametrize(
+    "blocker", [None, "operator_hold", "live_successor", "unreadable_pr"]
+)
+async def test_portable_reconciler_finishes_interrupted_no_work_release(
+    journey, monkeypatch, tmp_path, runtime_unavailable, blocker
+):
+    """The local producer and independent GitHub consumer agree on no work.
+
+    A successful comment write followed by an unapplied label removal must
+    converge without turning a deployment launch failure into an operator hold.
+    """
+    state, service, sessions = journey
+    owner = "default/interrupted-no-work-release"
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED"
+    store = IssueClaimStore(sessions)
+    kwargs = dict(
+        repository="example/repo",
+        issue_number=3970,
+        execution_event="failed",
+        writer_evidence={
+            "writersStopped": True,
+            "stopMethod": "runtime_quiescence",
+            "stopEvidence": "Closed Temporal owner; no agent runtime started",
+        },
+        mutation_evidence={
+            "pushOutcome": "verified_absent",
+            "prOutcome": "verified_absent",
+            "mergeOutcome": "verified_absent",
+        },
+        preservation_evidence={
+            "saveMethod": "explicit_no_work",
+            "trustworthyNoWork": True,
+        },
+        disposition_evidence={
+            "trustworthyNoWork": True,
+            "freshRetryAllowed": True,
+            "runtimeUnavailable": runtime_unavailable,
+        },
+        service=service,
+        claim_store=store,
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            service, "remove_issue_label", AsyncMock(return_value={"ok": True})
+        )
+        first = await finalization.finalize_failed_attempt(
+            **kwargs, claim_receipt=await store.get(owner)
+        )
+    assert first["reasonCode"] == "mutation_incomplete"
+    assert first["ownershipEnded"] and not first["released"]
+    proposed = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert proposed.outcome == (
+        "runtime_unavailable" if runtime_unavailable else "no_work"
+    )
+
+    if blocker == "operator_hold":
+        state["comments"][0]["body"] = render_attempt_comment(
+            replace(
+                proposed,
+                operator_hold=True,
+                operator_hold_reason="Operator paused recovery",
+            )
+        )
+    elif blocker == "live_successor":
+        state["comments"].append(
+            {
+                **state["comments"][0],
+                "id": 2,
+                "body": render_attempt_comment(
+                    replace(
+                        proposed,
+                        attempt_id="att-live-successor",
+                        workflow_id="default/successor",
+                        activity="active",
+                        writers_stopped=False,
+                        outcome="in_progress",
+                        pending_disposition="",
+                        predecessor_attempt_id=proposed.attempt_id,
+                        predecessor_comment_id=str(state["comments"][0]["id"]),
+                    )
+                ),
+            }
+        )
+    elif blocker == "unreadable_pr":
+        state["comments"][0]["body"] = render_attempt_comment(
+            replace(
+                proposed,
+                pr_url="https://github.com/example/repo/pull/99",
+                pr_head="a" * 40,
+            )
+        )
+    attempt_body = state["comments"][0]["body"]
+
+    repaired = await reconciliation.reconcile_github_issue_handoffs(
+        repository="example/repo",
+        issue_numbers=[3970],
+        state_dir=str(tmp_path / "portable"),
+        service=service,
+    )
+    assert state["comments"][0]["body"] == attempt_body
+    if blocker:
+        assert (
+            repaired["results"][0]["action"] != "complete_interrupted_transition"
+        ), repaired
+        assert "status: in-progress" in state["labels"]
+        assert not (await store.get(owner)).released
+        return
+    assert (
+        repaired["results"][0]["action"] == "complete_interrupted_transition"
+    ), repaired
+    assert state["labels"] == []
+    assert len(state["comments"]) == 1
+    # The portable consumer only repairs labels; the controlling owner still
+    # confirms and publishes its own terminal comment from the immutable plan.
+    assert not (await store.get(owner)).released
+    finished = await finalization.finalize_failed_attempt(
+        **kwargs, claim_receipt=await store.get(owner)
+    )
+    assert finished["released"] and (await store.get(owner)).released
+    released = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert released.activity == "released"
+    assert released.cooldown_until == proposed.cooldown_until
+    assert released.retry_remaining == proposed.retry_remaining
 
 
 @pytest.mark.asyncio

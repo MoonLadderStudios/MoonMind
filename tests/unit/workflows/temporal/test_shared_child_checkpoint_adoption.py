@@ -169,6 +169,27 @@ async def test_child_save_must_match_its_canonical_workspace(saved_child, field,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("binding", [
+    {},
+    {"parentWorkflowId": "foreign", "parentRunId": "run-1"},
+    {"parentWorkflowId": "wf-run-1", "parentRunId": "run-1", "parentTemporalRunId": "conflict"},
+])
+async def test_reset_replay_requires_consistent_recorded_parent_authority(
+    saved_child, monkeypatch, binding,
+):
+    owner, request, result, _, _ = saved_child
+    monkeypatch.setattr(owner, "_workflow_is_replaying", lambda: True)
+    result.metadata.update(binding)
+    request.step_execution = request.step_execution.model_copy(update={
+        "run_id": "reset-run",
+        "step_execution_id": "wf-run-1:reset-run:work:execution:1",
+    })
+    with pytest.raises(ValueError, match="differs from its Step Execution"):
+        await owner._adopt_shared_child_saved_checkpoint("work", request, result)
+    assert not owner._step_checkpoint_refs
+
+
+@pytest.mark.asyncio
 async def test_artifact_failure_preserves_the_confirmed_primary_outcome(saved_child, monkeypatch):
     owner, request, result, _, _ = saved_child
     owner._step_workspace_capture_inputs["work"] = {"criticality": "recoverability_only"}
@@ -208,3 +229,53 @@ async def test_after_execution_save_is_not_relabelled_as_before_publication(save
     monkeypatch.setattr(owner, "_capture_canonical_step_checkpoint_workspace", capture)
     assert await owner._record_canonical_step_checkpoint("work", boundary="before_publication", updated_at=module.workflow.now()) is None
     assert captures == ["before_publication"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replaying", [True, False])
+@pytest.mark.parametrize("recorded_run_id", ["run-1", "first-reset-run"])
+async def test_reset_replay_keeps_the_recorded_child_save_identity(
+    saved_child, monkeypatch, replaying, recorded_run_id,
+):
+    owner, request, result, descriptor, _ = saved_child
+    owner._resilience_policy_run_id = "run-1"
+    descriptor["source"]["runId"] = recorded_run_id
+    descriptor["checkpointId"] = descriptor["checkpointId"].replace(":run-1:", f":{recorded_run_id}:")
+    result.metadata.update(
+        parentWorkflowId="wf-run-1", parentTemporalRunId=recorded_run_id,
+        parentRunId=recorded_run_id,
+    )
+    monkeypatch.setattr(owner, "_workflow_is_replaying", lambda: replaying)
+    info = module.workflow.info()
+    info.run_id = "reset-run"
+    request.step_execution = request.step_execution.model_copy(update={
+        "run_id": "reset-run",
+        "step_execution_id": "wf-run-1:reset-run:work:execution:1",
+    })
+
+    if not replaying:
+        with pytest.raises(ValueError, match="differs from its Step Execution"):
+            await owner._adopt_shared_child_saved_checkpoint("work", request, result)
+        assert not owner._step_checkpoint_refs
+        return
+
+    assert await owner._adopt_shared_child_saved_checkpoint("work", request, result)
+    assert descriptor["source"]["runId"] == recorded_run_id
+    assert owner._step_checkpoint_workspace_evidence_by_boundary["work"][
+        "after_execution"
+    ]["sourceChildStepExecutionId"] == f"wf-run-1:{recorded_run_id}:work:execution:1"
+
+    async def no_recapture(*args, **kwargs):
+        raise AssertionError("the recorded child worker no longer exists")
+
+    monkeypatch.setattr(owner, "_capture_canonical_step_checkpoint_workspace", no_recapture)
+    assert await owner._record_canonical_step_checkpoint(
+        "work", boundary="after_execution", updated_at=module.workflow.now(),
+    ) == "artifact://accepted/root"
+
+    # Reset replay can only recover the run recorded by the child,
+    # never a different workflow, step, attempt, or arbitrary prior run.
+    descriptor["source"]["runId"] = "foreign-run"
+    descriptor["checkpointId"] = descriptor["checkpointId"].replace(f":{recorded_run_id}:", ":foreign-run:")
+    with pytest.raises(ValueError, match="differs from its Step Execution"):
+        await owner._adopt_shared_child_saved_checkpoint("work", request, result)

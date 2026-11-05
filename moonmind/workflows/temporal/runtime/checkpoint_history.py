@@ -112,7 +112,13 @@ def _git(
             stdout=subprocess.PIPE,
             stderr=errors,
         )
-        timer = threading.Timer(remaining, process.kill)
+        expired = threading.Event()
+
+        def expire():
+            expired.set()
+            process.kill()
+
+        timer = threading.Timer(remaining, expire)
         timer.start()
         try:
             while chunk := process.stdout.read(1024 * 1024):
@@ -122,9 +128,14 @@ def _git(
             status = process.wait()
             if status == 1 and allow_unrelated:
                 return b""
+            # Name only the subcommand: stderr may quote repository content.
+            if expired.is_set():
+                raise ValueError(
+                    f"checkpoint Git history exhausted its capture budget during git {arguments[0]}"
+                )
             if status:
                 raise ValueError(
-                    "checkpoint Git history could not be verified within its execution budget"
+                    f"checkpoint Git history could not be verified: git {arguments[0]} exited with status {status}"
                 )
             output.seek(0)
             return output.read()
@@ -148,34 +159,43 @@ def capture_git_history(
     Existing origin objects remain an explicit restore dependency. No unrelated
     branch, credential configuration, reflog, or repository hooks are exported.
     A repository without an origin baseline gets a bounded self-contained HEAD.
+    An empty boundary walk selects an already published HEAD without more traversal.
     """
     workspace = workspace.resolve()
     git = partial(_git, workspace, deadline=time.monotonic() + 120)
     if git(["rev-parse", "HEAD"]).decode().strip() != head:
         raise ValueError("checkpoint HEAD changed before history capture")
-    refs = (
-        git(
-            ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin"],
-            limit=1024 * 1024,
-        )
-        .decode()
-        .splitlines()
-    )
     baseline = None
-    for ref in dict.fromkeys(refs):
-        ancestor = (
-            git(["merge-base", head, ref], limit=4096, allow_unrelated=True)
+    if git(["for-each-ref", "--count=1", "refs/remotes/origin"], limit=4096):
+        # One walk regardless of branch count: per-ref merge-base calls made
+        # clones with thousands of origin branches exhaust the capture budget.
+        # Boundary commits are HEAD ancestors already published to origin.
+        unpublished = (
+            git(
+                ["rev-list", "--boundary", head, "--not", "--remotes=origin"],
+                limit=4 * 1024 * 1024,
+            )
             .decode()
-            .strip()
+            .splitlines()
         )
-        if not ancestor:
-            continue
-        if (
-            baseline is None
-            or git(["merge-base", baseline, ancestor], limit=4096).decode().strip()
-            == baseline
-        ):
-            baseline = ancestor
+        if not unpublished:
+            baseline = head
+        for line in unpublished:
+            if not line.startswith("-"):
+                continue
+            ancestor = line[1:]
+            if (
+                baseline is None
+                or git(
+                    ["merge-base", baseline, ancestor],
+                    limit=4096,
+                    allow_unrelated=True,
+                )
+                .decode()
+                .strip()
+                == baseline
+            ):
+                baseline = ancestor
     evidence = {
         "headCommit": head,
         "baselineCommit": baseline,

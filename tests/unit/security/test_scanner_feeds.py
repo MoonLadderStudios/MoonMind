@@ -590,6 +590,33 @@ def test_retired_then_republished_snapshot_reads_as_absence(
     assert feeds.load_snapshot(root, snapshot.snapshot_id) == snapshot
 
 
+@pytest.mark.parametrize("verify", [False, True])
+def test_retired_before_initial_identity_capture_reads_as_absence(
+    tmp_path, monkeypatch, verify
+):
+    root = tmp_path / "feeds"
+    snapshot = publish(root, seed="retired")
+    current = publish(root, seed="current")
+    published = root / "snapshots" / snapshot.snapshot_id
+    real_identity = feeds._identity
+    retired = []
+
+    def retire_before_identity(path):
+        if path == published and not retired:
+            # The directory check succeeded, but retention runs before the
+            # reader can capture the identity of that published directory.
+            retired.append(path)
+            feeds.prune(root, keep=1)
+        return real_identity(path)
+
+    monkeypatch.setattr(feeds, "_identity", retire_before_identity)
+    with pytest.raises(feeds.FeedSnapshotError) as error:
+        feeds.load_snapshot(root, snapshot.snapshot_id, verify=verify)
+    assert retired and not published.exists()
+    assert error.value.code == "feed_snapshot_unavailable"
+    assert feeds.current_snapshot(root) == current
+
+
 # ----------------------------------------------------- imported archives
 
 

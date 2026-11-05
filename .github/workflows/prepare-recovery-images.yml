@@ -25,6 +25,7 @@ jobs:
       - name: Initialize pinned Omnigent verifier source
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Verify the pinned recovery runtime source
         id: recovery-source
@@ -85,6 +86,25 @@ jobs:
             127.0.0.1:5000/moonmind-test-omnigent-host)"
           echo "server=$server" >> "$GITHUB_OUTPUT"
           echo "host=$host" >> "$GITHUB_OUTPUT"
+      - name: Release temporary recovery build storage
+        timeout-minutes: 3
+        shell: bash
+        env:
+          RECOVERY_BUILDER: ${{ steps.buildx.outputs.name }}
+          RECOVERY_BUILDER_DRIVER: ${{ steps.buildx.outputs.driver }}
+        run: |
+          set -euo pipefail
+          test -n "$RECOVERY_BUILDER"
+          test "$RECOVERY_BUILDER" != default
+          test "$RECOVERY_BUILDER_DRIVER" = docker-container
+          df -h "$RUNNER_TEMP" /var/lib/docker
+          # Both runtimes are loaded in Docker now. Release duplicate registry
+          # blobs and this job's build cache before Docker stages its export.
+          docker rm -fv moonmind-test-recovery-registry
+          docker buildx prune --builder "$RECOVERY_BUILDER" --all --force
+          docker image inspect moonmind-test-omnigent-server:candidate \
+            moonmind-test-omnigent-host:candidate >/dev/null
+          df -h "$RUNNER_TEMP" /var/lib/docker
       - name: Archive the prepared recovery runtimes
         timeout-minutes: 5
         run: |

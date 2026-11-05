@@ -23,7 +23,7 @@ from api_service.services import provider_profile_service
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
-from moonmind.omnigent import codex_login
+from moonmind.omnigent import codex_login, oauth_login
 
 
 @pytest.mark.parametrize(
@@ -346,21 +346,35 @@ async def test_missing_profile_is_not_recreated(enrolled_profile):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code"])
 async def test_state_write_failure_is_observable_without_secret_text(
-    monkeypatch, caplog
+    monkeypatch, caplog, runtime_id
 ):
     def unavailable():
         raise RuntimeError("private credential sentinel")
 
     monkeypatch.setattr(base, "async_session_maker", unavailable)
-    await codex_login.record_ended_codex_login("private-profile-sentinel", 4)
-    assert "Could not record ended Codex login" in caplog.text
+
+    async def record(profile_id):
+        if runtime_id == "codex_cli":
+            await codex_login.record_ended_codex_login(profile_id, 4)
+        else:
+            await oauth_login.record_ended_oauth_login(
+                profile_id, 4, runtime_id=runtime_id, reason="private-reason-sentinel"
+            )
+
+    await record("private-profile-sentinel")
+    assert "Could not record ended OAuth login" in caplog.text
     assert "credential_generation=4" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "private-profile-sentinel" not in caplog.text
     assert "private credential sentinel" not in caplog.text
+    assert "private-reason-sentinel" not in caplog.text
+    assert runtime_id not in caplog.text
+    assert caplog.records[-1].args == (4, "RuntimeError")
+    assert caplog.records[-1].exc_info is None
     first_diagnostic = caplog.records[-1].getMessage()
-    await codex_login.record_ended_codex_login("another-private-profile", 4)
+    await record("another-private-profile")
     assert caplog.records[-1].getMessage() == first_diagnostic
 
 
