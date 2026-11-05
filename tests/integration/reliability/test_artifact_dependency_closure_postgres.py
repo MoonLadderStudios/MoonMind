@@ -541,6 +541,8 @@ async def test_legacy_ownerless_first_page_does_not_starve_owned_root(tmp_path, 
         assert not await service._repository.has_saved_definition_reference(
             orphan_child
         )
+        orphan = await service._repository.get_artifact(orphan_child)
+        assert orphan.status.value == "deleted"
         assert await service._repository.list_links(ownerless) == []
         warnings = [
             record
@@ -755,3 +757,106 @@ async def test_retained_assessment_roots_backfill_across_page_restart(
                 request["inventoryRef"],
                 request["feedRef"],
             }
+
+
+@pytest.mark.parametrize("restart", [False, True])
+async def test_assessment_backfill_preserves_unvisited_evidence_during_sweep(
+    tmp_path, monkeypatch, restart, control_plane_postgres_server_url
+):
+    """Expiry must not delete evidence before its retained root is visited."""
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db.models import (
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+    from moonmind.workflows.skills import security_assessment
+    from tests.integration.security.test_recurring_assessments import inputs, invoke
+
+    monkeypatch.setenv("MOONMIND_TEST_POSTGRES_URL", control_plane_postgres_server_url)
+
+    async def pre_seal_producer(self, root, dependencies):
+        return None
+
+    monkeypatch.setattr(
+        security_assessment.AssessmentExecution, "seal", pre_seal_producer
+    )
+    store = LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with isolated_postgres(list(Base.metadata.sorted_tables)) as sessions:
+        async with sessions() as session:
+            service = _service(session, store, standalone=True)
+            comparisons = {}
+            now = datetime.now(UTC)
+            for key in ("first", "second"):
+                request, _, _ = await inputs(service)
+                result = await invoke(service, request, key=key)
+                evidence = {request["inventoryRef"], request["feedRef"]}
+                comparisons[result["comparisonRef"]] = evidence
+                await service.pin(
+                    artifact_id=result["comparisonRef"],
+                    principal="operator",
+                    reason="audit",
+                )
+                for ref in evidence:
+                    row = await service._repository.get_artifact(ref)
+                    row.expires_at = now + timedelta(minutes=15)
+            unrelated = await _put(service, b"unrelated expired bytes")
+            unrelated.expires_at = now + timedelta(minutes=20)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    namespace="default",
+                    workflow_id="assessment",
+                    run_id="run",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    owner_id="operator",
+                    state=MoonMindWorkflowState.COMPLETED,
+                    entry="run",
+                )
+            )
+            await session.commit()
+            sweep_now = now + timedelta(minutes=30)
+            page = await service.sweep_lifecycle(
+                principal="service:sweeper", now=sweep_now, limit=1
+            )
+            assert not page.drained
+            statuses = await _statuses(sessions)
+            evidence = set().union(*comparisons.values())
+            assert {ref: statuses[ref] for ref in evidence} == {
+                ref: "complete" for ref in evidence
+            }
+            if not restart:
+                await service.drain_lifecycle(
+                    principal="service:sweeper",
+                    now=sweep_now,
+                    limit=1,
+                    time_budget=timedelta(seconds=10),
+                )
+        # A new service resumes from committed seals, without an in-memory cursor.
+        async with sessions() as session:
+            service = _service(session, store, standalone=True)
+            if restart:
+                await service.drain_lifecycle(
+                    principal="service:sweeper",
+                    now=sweep_now,
+                    limit=1,
+                    time_budget=timedelta(seconds=10),
+                )
+            for root, cited in comparisons.items():
+                proof = await service._repository.get_verified_dependencies(root)
+                assert proof is not None
+                assert cited <= {entry.artifact_id for entry in proof}
+            statuses = await _statuses(sessions)
+            assert all(statuses[ref] == "complete" for ref in evidence)
+            assert statuses[unrelated.artifact_id] == "deleted"
+            for root in comparisons:
+                await service.unpin(artifact_id=root, principal="operator")
+        await _age(sessions)
+        async with sessions() as session:
+            await _service(session, store, standalone=True).drain_lifecycle(
+                principal="service:sweeper",
+                limit=1,
+                time_budget=timedelta(seconds=10),
+            )
+        statuses = await _statuses(sessions)
+        assert all(statuses[ref] == "deleted" for ref in evidence)

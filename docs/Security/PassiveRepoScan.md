@@ -256,6 +256,8 @@ producer's authority: a scan when its inputs reproduce the recorded work
 identity, a comparison when its scan and any baseline are sealed. Already
 expired evidence is not certified; its root stays unsealed and observable, and
 is unavailable as a baseline.
+Cleanup visits all backfill pages before expiring evidence, so a later retained
+root can still seal it; committed seals survive a restart between pages.
 GitHub alert scans, scans reused from a baseline, comparisons built on them and
 report text stay unsealed and follow their own retention.
 

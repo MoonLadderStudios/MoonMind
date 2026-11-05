@@ -781,7 +781,9 @@ reclaimable through the existing lifecycle and ordered artifact/alias locks.
 
 Before expiry selection, bounded lifecycle pages backfill retained saved-work roots
 from their original manifests, and finished assessment roots from their own schemas,
-using producer-run links. Failed seals roll back and remain observable. Until a
+using producer-run links. Expiry waits until all backfill pages have been visited;
+committed seals preserve progress across restarts. Failed seals roll back and
+remain observable without preventing cleanup after that scan. Until a
 saved-work root seals, only already-linked artifacts from that exact
 namespace/workflow/original run receive temporary protection while the root is
 live. This guard creates no grants and ends when the root is sealed or retired.
