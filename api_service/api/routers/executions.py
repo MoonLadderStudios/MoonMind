@@ -18822,7 +18822,7 @@ async def resolve_workflow_chat_binding(
     # Authorize against the Workflow first (OmnigentBridge.md §16 rule 1); an
     # unknown/deleted/unauthorized Workflow fails here without revealing whether
     # any provider session exists.
-    await _get_owned_execution(
+    record = await _get_owned_execution(
         service=service,
         workflow_id=canonical_workflow_id,
         user=user,
@@ -18838,7 +18838,8 @@ async def resolve_workflow_chat_binding(
     store = OmnigentBridgeSessionStore(async_session_maker)
     try:
         resolution = await store.resolve_chat_binding(
-            workflow_id=canonical_workflow_id
+            workflow_id=canonical_workflow_id,
+            preferred_run_id=record.run_id,
         )
     except BridgeChatBindingAmbiguousError as exc:
         raise HTTPException(
