@@ -6353,6 +6353,19 @@ class TemporalArtifactService:
         pending_saved_dependencies = await self._backfill_retained_dependencies(
             now=sweep_now, limit=page_size, on_progress=on_progress
         )
+        if pending_saved_dependencies and self._saved_dependency_page_advanced:
+            # Later pages may cite expired evidence without a dependency guard.
+            # Visit them before expiry can make their seals unrecoverable. A
+            # failed root advances the cursor, so it cannot stall cleanup forever.
+            logger.info("Artifact expiry deferred while retained roots are backfilled")
+            await self._finish_mutation()
+            return LifecycleSweepSummary(
+                run_id=lifecycle_run_id,
+                expired_candidate_count=0,
+                soft_deleted_count=0,
+                hard_deleted_count=0,
+                drained=False,
+            )
         pruned = await self._repository.prune_expired_use_claims(now=sweep_now)
         expired = await self._repository.list_expired_artifacts(
             now=sweep_now, limit=page_size
