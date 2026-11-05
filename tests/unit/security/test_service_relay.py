@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 from unittest.mock import AsyncMock
 
@@ -317,6 +318,39 @@ def test_cli_failure_never_echoes_configuration(tmp_path, capsys):
     path = tmp_path / "config.json"
     path.write_text('{"secret": "do-not-echo", "targetHost": "private.internal"}')
     assert main(["--config", str(path), "--check"]) == 1
+    assert (
+        capsys.readouterr().out == "service relay configuration or readiness failed\n"
+    )
+
+
+def test_cli_accepts_deployment_environment_configuration(monkeypatch):
+    from moonmind.security import service_relay
+
+    expected = config()
+    monkeypatch.setenv(
+        "MOONMIND_SERVICE_RELAY_CONFIG", json.dumps(expected.to_mapping())
+    )
+    observed = []
+
+    async def run(configuration, health_socket):
+        observed.append(configuration)
+
+    monkeypatch.setattr(service_relay, "_run", run)
+    assert service_relay.main(["--config-env", "MOONMIND_SERVICE_RELAY_CONFIG"]) == 0
+    assert observed == [expected]
+
+
+@pytest.mark.parametrize("value", [None, "{}", "x" * 4097])
+def test_cli_invalid_environment_configuration_is_bounded_and_redacted(
+    monkeypatch, capsys, value
+):
+    from moonmind.security import service_relay
+
+    if value is None:
+        monkeypatch.delenv("MOONMIND_SERVICE_RELAY_CONFIG", raising=False)
+    else:
+        monkeypatch.setenv("MOONMIND_SERVICE_RELAY_CONFIG", value)
+    assert service_relay.main(["--config-env", "MOONMIND_SERVICE_RELAY_CONFIG"]) == 1
     assert (
         capsys.readouterr().out == "service relay configuration or readiness failed\n"
     )

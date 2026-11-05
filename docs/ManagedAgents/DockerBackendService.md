@@ -752,33 +752,26 @@ failure class, and bounded remediation guidance.
 
 ### 15.3 Generic managed-session jobs
 
-Other portable Skills submit a workload-only JSON spec:
+Skills inherit [installed runtime resources](RuntimeResources.md) and submit
+workload specs:
 
 ```bash
 moonmind container run --spec /path/to/job.json --request-id stable-phase-id
 ```
 
-The CLI replaces any supplied workspace locator with the admitted
-managed-runtime identity and injects workflow, session, run, step, and
-idempotency correlation. The spec may name an approved `imageSourceRef`,
-`cacheRef` values, and `inputAttachments` but cannot choose endpoints, host
-paths, raw volume names, or registry credentials.
+The CLI supplies admitted workspace identity and execution correlation. Specs
+select approved image/cache references and attachments; endpoints, host paths,
+raw volume names, and registry credentials remain deployment-owned.
 
-The validated runtime profile decides workload capability:
-`workloadMode=container-jobs` enables the scoped endpoint, `no-docker`
-advertises no container tools, and `kubernetes-job` fails before launch unless a
-Kubernetes backend is configured. Workflow text and runtime environment
-overrides cannot elevate that decision.
+Validated runtime profiles select workload capability. `container-jobs` enables
+the scoped endpoint; `no-docker` omits container tools. `kubernetes-job` requires
+a configured backend. Workflow text and environment overrides cannot elevate
+the profile's decision.
 
-The `tactics-unreal` source selects the deployment-approved Unreal image.
-`pullPolicy=if-missing` provisions a cold image through coalesced acquisition;
-`never` requires prewarming. Compose declares `unreal-ccache`, `unreal-ubt`,
-and writable `unreal-ddc` at `/home/ue4/.cache/UnrealEngine/Common/DerivedDataCache`.
-Their volumes use configured base names plus the admitted owner's identity,
-preserving caches across that owner's jobs without sharing writable state
-with another principal. An explicit cache declaration replaces these defaults.
-The portable `tactics-test` Skill uses `moonmind container run` in managed
-sessions and direct Docker outside MoonMind.
+The `tactics-unreal` source uses the approved Unreal image. Compose supplies
+`unreal-ccache`, `unreal-ubt`, and writable `unreal-ddc`. Owner-scoped volumes
+persist across jobs; explicit cache declarations replace the defaults. The
+`tactics-test` Skill uses managed Container Jobs and standalone Docker.
 
 ---
 

@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import signal
 import socket
 from collections.abc import Mapping
@@ -25,7 +26,7 @@ IMPLEMENTATION_DIGEST = (
 
 
 def _integer(value: object, low: int, high: int) -> int:
-    if type(value) is not int or not low <= value <= high:
+    if type(value) is not int or not low <= value <= high:  # noqa: E721 - Reject bool limits.
         raise ValueError("service relay integer is outside its allowed range")
     return value
 
@@ -418,13 +419,18 @@ async def _run(config, health_socket):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", type=Path)
+    source.add_argument("--config-env")
     parser.add_argument("--health-socket", type=Path, default=_DEFAULT_HEALTH)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     try:
-        with args.config.open("rb") as source:
-            encoded = source.read(4097)
+        if args.config_env:
+            encoded = os.environ.get(args.config_env, "").encode()
+        else:
+            with args.config.open("rb") as source:
+                encoded = source.read(4097)
         if len(encoded) > 4096:
             raise ValueError("service relay configuration is oversized")
         config = RelayConfig.from_mapping(json.loads(encoded))

@@ -37,6 +37,7 @@ services:
       # in-container listen address is not proof of safe loopback.
       - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
+      - MOONMIND_RUNTIME_RESOURCES_FILE=${MOONMIND_RUNTIME_RESOURCES_FILE:-}
       - PYTHONPATH=/app
       - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
       - MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}
@@ -183,7 +184,10 @@ services:
     env_file:
       - path: .env
         required: false
+      - path: ${MOONMIND_RUNTIME_RESOURCES_DIRECTORY:-./deploy/runtime-resources}/activation.env
+        required: false
     volumes:
+      - ${MOONMIND_RUNTIME_RESOURCES_DIRECTORY:-./deploy/runtime-resources}:/run/moonmind/runtime-resources:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
       # Durable release-support evidence for the deployed commit, materialized by
@@ -687,6 +691,7 @@ services:
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - MOONMIND_RUNTIME_RESOURCES_FILE=${MOONMIND_RUNTIME_RESOURCES_FILE:-}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
@@ -827,7 +832,10 @@ services:
     env_file:
       - path: .env
         required: false
+      - path: ${MOONMIND_RUNTIME_RESOURCES_DIRECTORY:-./deploy/runtime-resources}/activation.env
+        required: false
     volumes:
+      - ${MOONMIND_RUNTIME_RESOURCES_DIRECTORY:-./deploy/runtime-resources}:/run/moonmind/runtime-resources:ro
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
       # Managed Skills run here. The standalone deployment controller's
