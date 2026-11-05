@@ -829,6 +829,7 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     )
     assert child_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
 
+
 @pytest.mark.parametrize(
     ("attempt_titles_enabled", "expected_title"),
     [
@@ -837,10 +838,12 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     ],
 )
 @pytest.mark.asyncio
-async def test_merge_automation_resolver_child_uses_try_cancel(
+@pytest.mark.parametrize("drain_enabled", [False, True])
+async def test_merge_automation_resolver_child_cancellation_policy(
     monkeypatch: pytest.MonkeyPatch,
     attempt_titles_enabled: bool,
     expected_title: str,
+    drain_enabled: bool,
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
     child_kwargs: dict[str, Any] = {}
@@ -855,6 +858,18 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
                 merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
             },
         )
+
+    previous_patched = merge_automation_module.workflow.patched
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: (
+            drain_enabled
+            if name
+            == merge_automation_module.MERGE_AUTOMATION_RESOLVER_CANCELLATION_DRAIN_PATCH
+            else previous_patched(name)
+        ),
+    )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -911,7 +926,11 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     result = await workflow.run(_payload())
 
     assert result["status"] == "merged"
-    assert child_kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+    assert child_kwargs["cancellation_type"] == (
+        ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+        if drain_enabled
+        else ChildWorkflowCancellationType.TRY_CANCEL
+    )
     search_attributes = child_kwargs["search_attributes"]
     assert search_attributes["mm_owner_type"] == ["user"]
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
@@ -923,6 +942,7 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
         "targetRuntime": "codex",
         "targetSkill": "pr-resolver",
     }
+
 
 def test_merge_automation_child_memo_truncates_runtime_and_skill_visibility() -> None:
     resolver_request = {
@@ -1790,11 +1810,25 @@ async def test_merge_automation_does_not_run_post_merge_jira_for_non_success_dis
     assert result["status"] == "failed"
     assert "postMergeJira" not in result
 
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drain_enabled", [False, True])
 async def test_merge_automation_cancellation_while_resolver_active_sets_canceled_status(
     monkeypatch: pytest.MonkeyPatch,
+    drain_enabled: bool,
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
+    previous_patched = merge_automation_module.workflow.patched
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: (
+            drain_enabled
+            if name
+            == merge_automation_module.MERGE_AUTOMATION_RESOLVER_CANCELLATION_DRAIN_PATCH
+            else previous_patched(name)
+        ),
+    )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1819,7 +1853,11 @@ async def test_merge_automation_cancellation_while_resolver_active_sets_canceled
         **kwargs: Any,
     ) -> dict[str, Any]:
         assert workflow_type == "MoonMind.UserWorkflow"
-        assert kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+        assert kwargs["cancellation_type"] == (
+            ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+            if drain_enabled
+            else ChildWorkflowCancellationType.TRY_CANCEL
+        )
         raise CancelledError("resolver child canceled")
 
     monkeypatch.setattr(
@@ -1852,6 +1890,7 @@ async def test_merge_automation_cancellation_while_resolver_active_sets_canceled
         result["summary"]
         == "Merge automation canceled while resolver child was active."
     )
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
