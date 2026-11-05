@@ -50,6 +50,8 @@ from moonmind.security.assessments import Contract, Text, content_key
 MAX_SUPPORT = 100_000
 MAX_VIOLATIONS = 256
 MAX_SETTLEMENT_CASES = 4096
+#: Retain hot settlements without growing with the number of sampled awards.
+MAX_CACHED_SETTLEMENTS = 4096
 ESTIMATOR = "mean-return-per-unit-stake"
 #: Maurer and Pontil (2009), two-sided; valid for returns bounded in [0, B].
 INTERVAL_METHOD = "empirical-bernstein"
@@ -765,7 +767,8 @@ class _Rounds:
                 and set(record.bonus) <= allowed
                 else None
             )
-        self.cache[key] = (case, settled)
+        if len(self.cache) < MAX_CACHED_SETTLEMENTS:
+            self.cache[key] = (case, settled)
         return case, settled
 
     def check(self, record: RoundRecord, violations: _Violations) -> None:
@@ -850,6 +853,24 @@ class _Run:
                     for row in game.outcomes
                     if _max_award(row) > 0
                 ]
+                for row in game.outcomes:
+                    if row.bonus is None:
+                        continue
+                    probabilities: dict[Fraction, Fraction] = {}
+                    for bonus in row.bonus.outcomes:
+                        if bonus.multiplier > 0:
+                            probabilities[bonus.multiplier] = (
+                                probabilities.get(bonus.multiplier, Fraction(0))
+                                + bonus.probability
+                            )
+                    self.events[strategy.id].extend(
+                        (
+                            f"bonus:{row.id}:{draw}:{award}",
+                            row.probability * probability,
+                        )
+                        for draw in range(row.bonus.draws)
+                        for award, probability in probabilities.items()
+                    )
         self.counts = {row.id: {} for row in spec.strategies}
 
     def add(self, strategy: str, value: float, events: Iterable[str]) -> None:
@@ -885,7 +906,7 @@ class _Run:
                 for name, probability in self.events[strategy.id]
             ]
             covered = all(event.covered for event in events)
-            if stopped:
+            if stopped or not estimate.n:
                 decision = "incomplete"
             elif target is None:
                 decision = "not_compared"
@@ -981,11 +1002,16 @@ class _Sampler:
             return index if self.cap is None else min(index, self.cap)
         index = self._pick(self.cumulative)
         award = game.outcomes[index].multiplier
+        events = [f"outcome:{game.outcomes[index].id}"]
         if index in self.bonus:
             bonus, cumulative = self.bonus[index]
-            for _ in range(bonus.draws):
-                award += bonus.outcomes[self._pick(cumulative)].multiplier
-        return index, award
+            values = [
+                bonus.outcomes[self._pick(cumulative)].multiplier
+                for _ in range(bonus.draws)
+            ]
+            award += sum(values, Fraction(0))
+            events.extend(_bonus_events(game.outcomes[index].id, values))
+        return index, award, events
 
     def settle(self, strategy: str, draw) -> tuple[float, list[str]]:
         spec, game = self.spec, self.spec.game
@@ -993,21 +1019,31 @@ class _Sampler:
             limits = self.thresholds[strategy]
             paying = tuple(draw >= limit for limit in limits)
             key = paying
-            if key not in self.settled[strategy]:
+            cache = self.settled[strategy]
+            if key in cache:
+                value = cache[key]
+            else:
                 bets = self.bets[strategy]
                 raws = [w.target if pays else 0 for w, pays in zip(bets, paying)]
                 total = _settle(spec, bets, raws).total
-                self.settled[strategy][key] = float(total) / self.staked[strategy]
+                value = float(total) / self.staked[strategy]
+                if len(cache) < MAX_CACHED_SETTLEMENTS:
+                    cache[key] = value
             events = [
                 f"pays:{w.id}" for w, pays in zip(self.bets[strategy], paying) if pays
             ]
-            return self.settled[strategy][key], events
-        index, award = draw
-        if award not in self.settled[strategy]:
+            return value, events
+        _, award, events = draw
+        cache = self.settled[strategy]
+        if award in cache:
+            value = cache[award]
+        else:
             bets = self.bets[strategy]
             total = _settle(spec, bets, [award] * len(bets)).total
-            self.settled[strategy][award] = float(total) / self.staked[strategy]
-        return self.settled[strategy][award], [f"outcome:{game.outcomes[index].id}"]
+            value = float(total) / self.staked[strategy]
+            if len(cache) < MAX_CACHED_SETTLEMENTS:
+                cache[award] = value
+        return value, events
 
 
 def _cumulative(probabilities: Iterable[Fraction]) -> list[float]:
@@ -1016,6 +1052,14 @@ def _cumulative(probabilities: Iterable[Fraction]) -> list[float]:
         total += probability
         rows.append(float(total))
     return rows
+
+
+def _bonus_events(outcome: str, values: Iterable[Fraction]) -> list[str]:
+    return [
+        f"bonus:{outcome}:{draw}:{value}"
+        for draw, value in enumerate(values)
+        if value > 0
+    ]
 
 
 def _record_events(spec: GameMathSpec, record: RoundRecord) -> list[str]:
@@ -1027,7 +1071,7 @@ def _record_events(spec: GameMathSpec, record: RoundRecord) -> list[str]:
             for w in spec.bets(strategy)
             if record.multiplier >= game.threshold(w.target)
         ]
-    return [f"outcome:{record.outcome}"]
+    return [f"outcome:{record.outcome}", *_bonus_events(record.outcome, record.bonus)]
 
 
 def assess_game_math(
@@ -1080,7 +1124,7 @@ def assess_game_math(
         if simulation.source == "model":
             sampler = _Sampler(spec, random.Random(simulation.seed))
             for index in range(simulation.samples):
-                if index and index % _CHECK_EVERY == 0 and (stop_reason := stop()):
+                if index % _CHECK_EVERY == 0 and (stop_reason := stop()):
                     break
                 draw = sampler.draw()
                 for strategy in spec.strategies:
@@ -1092,7 +1136,7 @@ def assess_game_math(
                 for row in spec.strategies
             }
             for index, row in enumerate(records or ()):
-                if index and index % _CHECK_EVERY == 0 and (stop_reason := stop()):
+                if index % _CHECK_EVERY == 0 and (stop_reason := stop()):
                     break
                 try:
                     if row is None:
@@ -1106,9 +1150,9 @@ def assess_game_math(
                     float(row.total / staked[row.strategy]),
                     _record_events(spec, row),
                 )
+        stop_reason = stop_reason or stop()
         results = run.results(stop_reason is not None)
-        if simulation.source == "records":
-            results = [row for row in results if row.samples]
+        missing_samples = any(row.samples == 0 for row in results)
         for row in results:
             if row.decision == "different":
                 violations.add(
@@ -1125,7 +1169,11 @@ def assess_game_math(
             generator=GENERATOR if simulation.source == "model" else None,
             seed=simulation.seed,
             requested_samples=simulation.samples,
-            status="partial" if stop_reason or unusable_records else "complete",
+            status=(
+                "partial"
+                if stop_reason or unusable_records or missing_samples
+                else "complete"
+            ),
             stop_reason=stop_reason,
             unusable_records=unusable_records,
             results=results,
@@ -1135,6 +1183,8 @@ def assess_game_math(
         elif stop_reason:
             limitations.append(stop_reason)
         unusable += unusable_records
+        if simulation.source == "records" and missing_samples:
+            limitations.append("unobserved_strategies")
         if any(row.rare_event_coverage == "incomplete" for row in results):
             limitations.append("rare_events_undercovered")
     decided = {

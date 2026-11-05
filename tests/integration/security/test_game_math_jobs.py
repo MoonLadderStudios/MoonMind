@@ -356,8 +356,13 @@ async def test_cancelled_profile_job_keeps_partial_evidence(
     result = json.loads(job.published[ref])
     assert result["simulation"]["stopReason"] == "cancelled"
     assert (result["status"], result["outcome"]) == ("partial", "incomplete")
+    assert {row["strategy"] for row in result["simulation"]["results"]} == {
+        row["id"] for row in SPEC["strategies"]
+    }
+    # SIGTERM can arrive before the first sample. Every strategy still has a
+    # retained row, and neither zero samples nor saved progress imply agreement.
     assert all(
-        0 < row["samples"] < 100_000_000 and row["decision"] == "incomplete"
+        0 <= row["samples"] < 100_000_000 and row["decision"] == "incomplete"
         for row in result["simulation"]["results"]
     )
     # Exact theory computed before the stop is kept beside the partial run.

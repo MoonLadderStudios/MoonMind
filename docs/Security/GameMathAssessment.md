@@ -54,7 +54,7 @@ A model `maxMultiplier` and a settlement `multiplierCap` are different implement
 | `incomplete` | The run was cancelled or exhausted its time budget. |
 | `not_compared` | Theory is intractable and nothing was declared. |
 
-Each simulated row records the sample count, estimator, interval method, confidence, bounds, tolerance, target and its source, and each paying event's probability, expected count, and observed count.
+Each simulated row records the sample count, estimator, interval method, confidence, bounds, tolerance, target and its source, and paying-event probabilities and counts. Each paying bonus draw uses its joint parent/draw probability. Unobserved strategies retain zero-sample rows and make recorded evidence partial. Settlement caches have fixed bounds.
 
 ## Result
 
@@ -62,7 +62,7 @@ Each simulated row records the sample count, estimator, interval method, confide
 
 A stopped run, unusable records, an intractable strategy without a decided simulation, or truncated violations make the status `partial`. Partial evidence keeps its observations but cannot report a consistent outcome. The contract refuses a document that claims consistency over partial or imprecise evidence, so `security.assess` cannot promote one.
 
-`security.assess` maps violations to `game-math` findings on `gameRef`. Coverage is complete only when every check reached `equivalent` or `different`. A finding's absence is comparable only between results for the same specification digest.
+`security.assess` maps violations to `game-math` findings on `gameRef`. Coverage names only performed checks and requires decided simulations. Comparable absence requires the same specification; theoretical or model evidence cannot clear untested implementation findings.
 
 ## Running as a job
 
