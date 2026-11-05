@@ -121,7 +121,7 @@ Closed Temporal executions do not process ordinary updates. Terminal rerun is th
 
 ### 7A.1 Meaning
 
-Retry from a step re-executes a failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` run from the start of a chosen step. MoonMind resets the run's Temporal history to the workflow task that started that step. Temporal replays the earlier history on the installed workflow code, so completed steps, their recorded results, and their confirmed effects are kept rather than repeated. The chosen step and every step after it run again, with the run's original task-input snapshot and admitted Omnigent execution plan. The failed run stays in Temporal history and the reset run becomes the workflow's current run.
+Retry from a step continues a failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` under the same workflow identity and original inputs. Normally it resets Temporal history to the chosen step's start; earlier steps replay and later steps run again. When primary execution succeeded and its checkpoint failed, it instead retries the recorded capture task, retaining the completed execution and result. The capture must match the logical step, execution ordinal, and checkpoint boundary; an unavailable boundary is refused rather than repeating completed work. The failed run stays in history and the reset run becomes current.
 
 Retry is distinct from rerun (a fresh execution of the authored input), Continue-As-New (history rollover), Pause/Resume, and same-session continuation. It never changes instructions, inputs, or execution choices; those need an edited rerun or a Checkpoint Branch.
 
