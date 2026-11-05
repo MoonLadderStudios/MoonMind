@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 import pytest
 from temporalio import workflow
+from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_run_progress import (
     AGENT_RUN_PROGRESS_PATCH_ID,
@@ -1040,7 +1041,7 @@ async def test_resume_drains_latest_progress_only_after_acknowledgement(
 
     monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
     if failed_first:
-        with pytest.raises(RuntimeError, match="Failed to forward Resume"):
+        with pytest.raises(ApplicationError, match="Failed to forward Resume"):
             await parent.resume()
         assert parent._paused is True
         assert parent._waiting_reason == "Paused by user"
@@ -1112,7 +1113,7 @@ async def test_failed_pause_applies_progress_after_unpaused_rollback(monkeypatch
         return False
 
     monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
-    with pytest.raises(RuntimeError, match="Failed to forward Pause"):
+    with pytest.raises(ApplicationError, match="Failed to forward Pause"):
         await parent.pause()
     assert parent._paused is False
     assert parent._state == STATE_EXECUTING
