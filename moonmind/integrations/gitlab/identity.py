@@ -26,9 +26,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.integrations.gitlab.errors import GitLabIdentityError
 
-# ``group/subgroup/.../project`` segments: letters, digits, and the GitLab
-# path characters ``-_.``. Numeric-only paths are project IDs, not names.
-_PROJECT_PATH_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+$")
+#: ``group/subgroup/.../project`` segments: letters, digits, and the GitLab
+#: path characters ``-_.``. Numeric-only paths are project IDs, not names.
+GITLAB_PROJECT_PATH_PATTERN = r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+$"
+_PROJECT_PATH_RE = re.compile(GITLAB_PROJECT_PATH_PATTERN)
 _NUMERIC_ID_RE = re.compile(r"^[1-9][0-9]*$")
 
 
@@ -138,6 +139,37 @@ def _reject_internal_endpoint(normalized: str, *, action: str) -> None:
         )
 
 
+def gitlab_instance_endpoint(endpoint: object, *, action: str | None = None) -> str:
+    """Normalize one GitLab instance endpoint (fail-closed).
+
+    It must be an HTTPS URL of a public host, without embedded credentials,
+    query, fragment, or whitespace, and is normalized with the canonical
+    repository-contract comparison. Internal/loopback/link-local endpoints are
+    never usable.
+    """
+
+    raw_endpoint = str(endpoint or "").strip()
+    if not raw_endpoint:
+        raise GitLabIdentityError("GitLab endpoint is required", action=action)
+    try:
+        parts = urlsplit(
+            raw_endpoint if "://" in raw_endpoint else f"https://{raw_endpoint}"
+        )
+        normalized = _normalize_endpoint(raw_endpoint)
+    except ValueError as exc:
+        raise GitLabIdentityError(
+            "GitLab endpoint is not a usable instance", action=action
+        ) from exc
+    if any(ch.isspace() for ch in raw_endpoint) or parts.query or parts.fragment:
+        raise GitLabIdentityError(
+            "GitLab endpoint is not a usable instance", action=action
+        )
+    if urlsplit(normalized).scheme != "https":
+        raise GitLabIdentityError("GitLab endpoint must use https", action=action)
+    _reject_internal_endpoint(normalized, action=action)
+    return normalized
+
+
 def resolve_gitlab_identity(
     *,
     endpoint: str,
@@ -150,24 +182,11 @@ def resolve_gitlab_identity(
 ) -> GitLabMRRef:
     """Bind one MR IID to one admitted GitLab instance (fail-closed).
 
-    The endpoint is normalized with the canonical repository-contract
-    comparison, then required to match an admitted allowlist entry exactly.
-    Internal/loopback/link-local endpoints are never admitted.
+    The endpoint must be a usable instance (``gitlab_instance_endpoint``) that
+    exactly matches an admitted allowlist entry.
     """
 
-    raw_endpoint = str(endpoint or "").strip()
-    if not raw_endpoint:
-        raise GitLabIdentityError("GitLab endpoint is required", action=action)
-    try:
-        normalized = _normalize_endpoint(raw_endpoint)
-    except ValueError as exc:
-        raise GitLabIdentityError(
-            "GitLab endpoint is not a usable instance", action=action
-        ) from exc
-    if urlsplit(normalized).scheme != "https":
-        raise GitLabIdentityError(
-            "GitLab endpoint must use https", action=action
-        )
+    normalized = gitlab_instance_endpoint(endpoint, action=action)
     admitted: set[str] = set()
     for candidate in admitted_endpoints:
         try:
@@ -178,7 +197,6 @@ def resolve_gitlab_identity(
         raise GitLabIdentityError(
             "GitLab instance is not admitted for this connection", action=action
         )
-    _reject_internal_endpoint(normalized, action=action)
 
     project_path, project_id = _parse_project(project)
     identity = GitLabProjectIdentity(

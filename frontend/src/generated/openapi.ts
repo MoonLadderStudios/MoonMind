@@ -1339,6 +1339,9 @@ export interface paths {
         /**
          * Assign a repository to a connection
          * @description Assign only a repository this connection itself can read.
+         *
+         *     A generic Git connection is a GitLab instance: it assigns
+         *     ``group/subgroup/project`` paths verified through the GitLab API.
          */
         post: operations["set_repository_assignment_api_v1_repository_connections__connection_id__assignments_post"];
         delete?: never;
@@ -10312,6 +10315,9 @@ export interface components {
         /**
          * PatConnectionCreateRequest
          * @description Create a named PAT connection; the token becomes a Managed Secret.
+         *
+         *     GitHub is the default and always uses github.com. ``generic_git`` records
+         *     a token connection to the GitLab instance named by ``endpointRef``.
          */
         PatConnectionCreateRequest: {
             /** Requestid */
@@ -10327,6 +10333,14 @@ export interface components {
             token: string;
             /** Allowedoperations */
             allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[];
+            /**
+             * Hostingservice
+             * @default github
+             * @enum {string}
+             */
+            hostingService: "github" | "generic_git";
+            /** Endpointref */
+            endpointRef?: string | null;
         };
         /**
          * PinArtifactRequest

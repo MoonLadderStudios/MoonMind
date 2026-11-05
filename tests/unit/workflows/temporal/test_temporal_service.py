@@ -697,12 +697,17 @@ async def test_input_update_preserves_admitted_publication_identity(
                     "schemaVersion": "v1",
                     "identity": {"name": "forged", "email": "forged@example.invalid"},
                 },
+                # Repository connection admissions are recorded at submission.
+                "repositoryToolAdmissions": [
+                    {"connectionRef": "gitlab-main", "principalRef": "forged"}
+                ],
                 "foo": "updated",
             },
             idempotency_key="identity-update",
         )
         refreshed = await service.describe_execution(created.workflow_id)
         assert refreshed.parameters["_publicationGitIdentity"] == identity
+        assert "repositoryToolAdmissions" not in refreshed.parameters
         assert refreshed.parameters["foo"] == "updated"
         dispatched = mock_client_adapter.update_workflow.await_args.args[2]
         assert dispatched["parameters_patch"] == {"foo": "updated"}

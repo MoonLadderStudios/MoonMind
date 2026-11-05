@@ -832,3 +832,240 @@ async def test_app_repository_assignment_uses_its_bound_read_credential(
     assert requests == []
     current = await harness.client.get("/api/v1/repository-connections/app-connection")
     assert len(current.json()["assignments"]) == 1
+
+
+# -- GitLab token connections ------------------------------------------------
+
+GITLAB = "https://gitlab.example.com"
+TOKEN_GITLAB = "glpat-" + "G" * 20
+GITLAB_PROJECT_PATH = b"/api/v4/projects/group%2Fsubgroup%2Fproject"
+
+
+def _gitlab_body(**overrides) -> dict:
+    body = {
+        "requestId": "req-gitlab",
+        "connectionId": "work-gitlab",
+        "displayName": "Work GitLab",
+        "token": TOKEN_GITLAB,
+        "hostingService": "generic_git",
+        "endpointRef": GITLAB,
+        "allowedOperations": ["read", "review_request"],
+    }
+    body.update(overrides)
+    return body
+
+
+def _gitlab_instance(harness, monkeypatch, handler) -> None:
+    """Route GitLab clients to ``handler`` and secret reads to the harness DB."""
+
+    monkeypatch.setattr(
+        "moonmind.auth.resolvers.db_resolver.async_session_maker", harness.maker
+    )
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+
+
+async def test_gitlab_pat_connection_records_its_instance_and_refuses_unsafe_endpoints(
+    harness,
+):
+    client = harness.client
+    for endpoint in (
+        None,
+        "http://gitlab.example.com",
+        "https://10.0.0.5",
+        "https://localhost",
+        "https://user:secret@gitlab.example.com",
+        "https://gitlab.example.com?x=1",
+        "https://gitlab example.com",
+    ):
+        refused = await client.post(
+            "/api/v1/repository-connections/pat",
+            json=_gitlab_body(endpointRef=endpoint),
+        )
+        assert refused.status_code == 422, (endpoint, refused.text)
+    # A GitHub token connection keeps its fixed GitHub endpoint.
+    github_endpoint = await client.post(
+        "/api/v1/repository-connections/pat",
+        json={
+            **_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+            "endpointRef": GITLAB,
+        },
+    )
+    assert github_endpoint.status_code == 422
+    assert await _count(harness.maker, RepositoryConnectionRecord) == 0
+    assert await _count(harness.maker, ManagedSecret) == 0
+
+    created = await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_gitlab_body(endpointRef=f"{GITLAB}/"),
+    )
+    assert created.status_code == 201, created.text
+    assert TOKEN_GITLAB not in created.text
+    body = created.json()
+    assert body["hostingService"] == "generic_git"
+    assert body["endpoint"] == GITLAB
+    assert body["credentialKind"] == "personal_access_token"
+    assert body["allowedOperations"] == ["read", "review_request"]
+    async with harness.maker() as session:
+        record = (
+            await session.execute(
+                select(RepositoryConnectionRecord).where(
+                    RepositoryConnectionRecord.connection_id == "work-gitlab"
+                )
+            )
+        ).scalar_one()
+        assert record.provider == "git"
+        assert record.credential_config["source"] == "secret_ref"
+        secret = (
+            await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug
+                    == record.credential_config["credentialRef"]["key"]
+                )
+            )
+        ).scalar_one()
+        assert secret.ciphertext == TOKEN_GITLAB
+
+    github = await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    assert github.status_code == 201, github.text
+    assert github.json()["hostingService"] == "github"
+    assert github.json()["endpoint"] == "https://github.com"
+
+
+async def test_gitlab_assignment_verifies_a_subgroup_project_with_its_own_token(
+    harness, monkeypatch
+):
+    client = harness.client
+    created = await client.post(
+        "/api/v1/repository-connections/pat", json=_gitlab_body()
+    )
+    assert created.status_code == 201, created.text
+    requests: list[httpx.Request] = []
+
+    def _gitlab(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["PRIVATE-TOKEN"] == TOKEN_GITLAB
+        if request.url.raw_path == GITLAB_PROJECT_PATH:
+            return httpx.Response(
+                200, json={"id": 314, "path_with_namespace": "group/subgroup/project"}
+            )
+        return httpx.Response(404, json={"message": "404 Project Not Found"})
+
+    _gitlab_instance(harness, monkeypatch, _gitlab)
+    assigned = await client.post(
+        "/api/v1/repository-connections/work-gitlab/assignments",
+        json={
+            "requestId": "req-assign",
+            "repository": "group/subgroup/project",
+            "operations": ["read", "review_request"],
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    _assert_no_secret_material(assigned.text)
+    assert TOKEN_GITLAB not in assigned.text
+    assert assigned.json()["assignments"] == [
+        {
+            "repository": "group/subgroup/project",
+            "providerRepoId": "314",
+            "operations": ["read", "review_request"],
+            "revision": 1,
+            "verified": True,
+        }
+    ]
+    assert [(r.method, str(r.url.host)) for r in requests] == [
+        ("GET", "gitlab.example.com")
+    ]
+
+    hidden = await client.post(
+        "/api/v1/repository-connections/work-gitlab/assignments",
+        json={"requestId": "req-hidden", "repository": "group/hidden"},
+    )
+    assert hidden.status_code == 422
+    assert "group/hidden" in hidden.json()["detail"]
+    assert await _count(harness.maker, RepositoryConnectionAssignment) == 1
+
+    # GitHub connections still take only the owner/name form.
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    nested = await client.post(
+        "/api/v1/repository-connections/personal-github/assignments",
+        json={"requestId": "req-nested", "repository": "group/subgroup/project"},
+    )
+    assert nested.status_code == 422
+    assert nested.json()["detail"] == "Use the owner/name form."
+
+
+@pytest.mark.parametrize(
+    ("status_code", "headers", "expected"),
+    [
+        (302, {"location": "https://gitlab-other.example.com/api/v4/projects/1"}, 422),
+        (401, {}, 422),
+        (503, {}, 503),
+    ],
+)
+async def test_gitlab_assignment_failures_store_nothing_and_stay_on_the_instance(
+    harness, monkeypatch, status_code, headers, expected
+):
+    client = harness.client
+    await client.post("/api/v1/repository-connections/pat", json=_gitlab_body())
+    hosts: list[str] = []
+
+    def _gitlab(request: httpx.Request) -> httpx.Response:
+        hosts.append(str(request.url.host))
+        return httpx.Response(status_code, headers=headers, json={"message": "x"})
+
+    _gitlab_instance(harness, monkeypatch, _gitlab)
+    failed = await client.post(
+        "/api/v1/repository-connections/work-gitlab/assignments",
+        json={"requestId": "req-assign", "repository": "group/subgroup/project"},
+    )
+    assert failed.status_code == expected, failed.text
+    assert TOKEN_GITLAB not in failed.text
+    assert hosts and set(hosts) == {"gitlab.example.com"}
+    assert await _count(harness.maker, RepositoryConnectionAssignment) == 0
+
+
+async def test_gitlab_project_is_never_a_routed_github_repository(harness, monkeypatch):
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    client = harness.client
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    await client.post("/api/v1/repository-connections/pat", json=_gitlab_body())
+
+    async def _observe(connection, repository):
+        return {"id": "101", "fullName": "acme/widgets"}
+
+    monkeypatch.setattr(router_module, "observe_github_repository", _observe)
+    _gitlab_instance(
+        harness,
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, json={"id": 7, "path_with_namespace": "acme/widgets"}
+        ),
+    )
+    for connection_id in ("personal-github", "work-gitlab"):
+        assigned = await client.post(
+            f"/api/v1/repository-connections/{connection_id}/assignments",
+            json={"requestId": f"req-{connection_id}", "repository": "acme/widgets"},
+        )
+        assert assigned.status_code == 200, assigned.text
+
+    async with harness.maker() as session:
+        candidates = await RepositoryConnectionService(session).launch_candidates(
+            "acme/widgets",
+            principal_ref="principal:operator",
+            principal_scope=("system", None),
+        )
+    assert [candidate.connection.id for candidate in candidates] == ["personal-github"]

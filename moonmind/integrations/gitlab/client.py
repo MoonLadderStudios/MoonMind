@@ -35,9 +35,15 @@ _MAX_REDIRECTS = 3
 #: (adapter operation ledger) reconciles before any repeat.
 _SAFE_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-#: Actions that require a bound ``write`` operation. Everything else is a
-#: read under the connection policy.
-_WRITE_ACTIONS = frozenset({"post_note", "post_inline_comment", "merge"})
+#: Merge-request writes and the admitted repository operation each requires,
+#: matching the GitHub pull-request mapping: comments are merge-request
+#: collaboration (``review_request``), not contents ``write``. Everything else
+#: is a read under the connection policy.
+_WRITE_OPERATIONS = {
+    "post_note": "review_request",
+    "post_inline_comment": "review_request",
+    "merge": "merge_request",
+}
 
 
 def _normalize_bound_endpoint(value: str) -> str:
@@ -50,7 +56,10 @@ def _normalize_bound_endpoint(value: str) -> str:
 
 def _required_operation_for(action: str | None) -> str:
     name = str(action or "").strip().lower()
-    if name in _WRITE_ACTIONS or name.startswith(("post_", "write", "merge")):
+    if name in _WRITE_OPERATIONS:
+        return _WRITE_OPERATIONS[name]
+    if name.startswith(("post_", "write", "merge")):
+        # An unlisted mutation never passes as a read.
         return "write"
     return "read"
 
@@ -173,8 +182,8 @@ def connection_from_bound_credential(
     The credential stays bound to its acquisition: the requested endpoint
     must match ``acquired.binding.endpoint`` (normalized comparison) and the
     requested action must be covered by ``acquired.binding.operations``
-    (``post_note`` requires ``write``). Validation happens before credential
-    material is touched.
+    (``post_note`` requires ``review_request``). Validation happens before
+    credential material is touched.
     """
 
     binding = getattr(acquired, "binding", None)
@@ -279,10 +288,24 @@ class GitLabClient:
         last_error: GitLabToolError | None = None
         current_path = path
         redirects = 0
+        safe_method = str(method or "").upper() in _SAFE_RETRY_METHODS
         for attempt in range(1, attempts + 1):
-            response = await self._client.request(
-                method, current_path, params=params, json=json_body
-            )
+            try:
+                response = await self._client.request(
+                    method, current_path, params=params, json=json_body
+                )
+            except httpx.TransportError as exc:
+                # A timed-out mutation may have landed: surface it as transient
+                # (never repeated here) so the adapter reconciles first.
+                last_error = GitLabToolError(
+                    "GitLab is unreachable.",
+                    code="gitlab_transient",
+                    status_code=503,
+                    action=action,
+                )
+                if safe_method and attempt < attempts:
+                    continue
+                raise last_error from exc
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location", "")
                 target = httpx.URL(
@@ -313,7 +336,7 @@ class GitLabClient:
                     action=action,
                 )
             if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
-                if str(method or "").upper() not in _SAFE_RETRY_METHODS:
+                if not safe_method:
                     # A transient status on a mutation may mean the write
                     # landed and only the acknowledgment was lost: never
                     # repeat it here. Surface the transient failure so the
