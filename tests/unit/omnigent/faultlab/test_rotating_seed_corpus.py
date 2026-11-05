@@ -1,4 +1,4 @@
-"""Rotating seed-corpus policy and the main/schedule expanded sweep.
+"""Rotating seed-corpus policy and the scheduled/dispatched expanded sweep.
 
 Source issue: MoonLadderStudios/MoonMind#3709 (acceptance criterion 8).
 
@@ -13,13 +13,16 @@ Two things are proven here:
   date-rotated seed window against the production reconciler and the independent
   reference model, under explicit scenario-count and wall-time budgets. It is
   gated behind the rotating env vars so it is a no-op skip on every PR and runs
-  only in the scheduled/main CI job that sets them. Any violation writes a
+  only in the scheduled/dispatched CI job that sets them. Any violation writes a
   reproduction-complete, secret-safe diagnostic bundle (seed, minimized scenario,
-  decision journal, provider request log, safe refs) for upload.
+  decision journal, provider request log, safe refs) for upload, and every run
+  records its window and outcome (:mod:`tools.omnigent_faultlab.rotating_result`),
+  which that job requires.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -48,6 +51,13 @@ from tools.omnigent_faultlab.diagnostics import (
     write_diagnostic_bundle,
 )
 from tools.omnigent_faultlab.invariants import violations
+from tools.omnigent_faultlab.rotating_result import (
+    RESULT_FILENAME,
+    SweepResultError,
+    check_sweep_result,
+    main,
+    write_sweep_result,
+)
 
 # ---------------------------------------------------------------------------
 # Seed-range policy (hermetic; runs in required PR CI)
@@ -100,7 +110,113 @@ def test_malformed_budget_fails_fast(env):
 
 
 # ---------------------------------------------------------------------------
-# Expanded rotating sweep (gated to the scheduled/main CI job)
+# Recorded sweep result (hermetic; runs in required PR CI)
+# ---------------------------------------------------------------------------
+
+
+def _write(directory, **overrides):
+    values = {
+        "seeds": range(8000, 8500),
+        "ran": 500,
+        "last_seed": 8499,
+        "failing_seeds": [],
+        "bundles_written": 0,
+        "budget_seconds": 900.0,
+        "elapsed_seconds": 12.5,
+    }
+    values.update(overrides)
+    return write_sweep_result(directory, **values)
+
+
+def test_recorded_result_carries_window_progress_and_failures(tmp_path):
+    path = _write(
+        tmp_path,
+        ran=120,
+        last_seed=8119,
+        failing_seeds=list(range(8000, 8040)),
+        bundles_written=25,
+    )
+
+    assert path == tmp_path / RESULT_FILENAME
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record == {
+        "offset": 8000,
+        "count": 500,
+        "ran": 120,
+        "lastSeed": 8119,
+        "truncated": True,
+        "failures": 40,
+        "failingSeeds": list(range(8000, 8025)),
+        "bundlesWritten": 25,
+        "budgetSeconds": 900.0,
+        "elapsedSeconds": 12.5,
+        "error": None,
+        "status": "failed",
+    }
+
+
+def test_matching_passed_result_is_accepted_and_reports_truncation(tmp_path):
+    _write(tmp_path, ran=300, last_seed=8299)
+
+    record = check_sweep_result(tmp_path, offset=8000, count=500)
+
+    assert record["status"] == "passed"
+    assert record["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"seeds": range(0, 400)}, "window"),
+        ({"ran": 0, "last_seed": None}, "no seed"),
+        ({"failing_seeds": [8003]}, "8003"),
+        ({"ran": 4, "last_seed": 8003, "error": "RuntimeError"}, "RuntimeError"),
+    ],
+)
+def test_mismatched_empty_or_failing_result_is_rejected(tmp_path, overrides, message):
+    _write(tmp_path, **overrides)
+
+    with pytest.raises(SweepResultError, match=message):
+        check_sweep_result(tmp_path, offset=8000, count=500)
+
+
+def test_missing_result_means_the_sweep_did_not_run(tmp_path):
+    with pytest.raises(SweepResultError, match="did not record"):
+        check_sweep_result(tmp_path, offset=8000, count=500)
+
+
+def test_record_command_summarizes_a_passed_sweep(tmp_path, monkeypatch, capsys):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    _write(tmp_path)
+
+    assert main(["--dir", str(tmp_path), "--offset", "8000", "--count", "500"]) == 0
+
+    out = capsys.readouterr().out
+    assert "::notice title=Rotating fault-lab sweep::" in out
+    assert "window=8000..8500 ran=500 failures=0" in out
+    assert "8000..8500" in summary.read_text(encoding="utf-8")
+
+
+def test_record_command_fails_when_the_sweep_was_skipped(tmp_path, capsys):
+    assert main(["--dir", str(tmp_path), "--offset", "8000", "--count", "500"]) == 1
+    assert "::error title=Rotating fault-lab sweep::" in capsys.readouterr().out
+
+
+def test_sweep_records_the_window_it_executed(tmp_path, monkeypatch):
+    monkeypatch.setenv(ROTATING_ENABLED_ENV, "1")
+    monkeypatch.setenv(ROTATING_OFFSET_ENV, "5000")
+    monkeypatch.setenv(ROTATING_COUNT_ENV, "3")
+    monkeypatch.setenv(_DIAGNOSTICS_DIR_ENV, str(tmp_path))
+
+    test_rotating_seed_corpus_holds_all_invariants()
+
+    record = check_sweep_result(tmp_path, offset=5000, count=3)
+    assert (record["ran"], record["lastSeed"], record["truncated"]) == (3, 5002, False)
+
+
+# ---------------------------------------------------------------------------
+# Expanded rotating sweep (gated to the scheduled/dispatched CI job)
 # ---------------------------------------------------------------------------
 
 _TIME_BUDGET_ENV = "MOONMIND_FAULTLAB_TIME_BUDGET_SECONDS"
@@ -127,7 +243,7 @@ def _diagnostics_dir() -> Path:
 @pytest.mark.skipif(
     not rotating_enabled(),
     reason=(
-        "rotating seed sweep runs only on main/schedule "
+        "rotating seed sweep runs only on schedule/dispatch "
         f"(set {ROTATING_ENABLED_ENV}=1 with an offset/count window)"
     ),
 )
@@ -149,48 +265,76 @@ def test_rotating_seed_corpus_holds_all_invariants():
     started = time.monotonic()
 
     ran = 0
+    last_seed: int | None = None
     failures: list[str] = []
+    failing_seeds: list[int] = []
     bundles_written = 0
-    for seed in seeds:
-        if time.monotonic() - started > budget:
-            break
-        ran += 1
+    error: str | None = None
+    try:
+        for seed in seeds:
+            if time.monotonic() - started > budget:
+                break
+            ran += 1
+            last_seed = seed
 
-        plan = generate_plan(seed)
-        trace = run_plan(plan)
+            plan = generate_plan(seed)
+            trace = run_plan(plan)
 
-        found = violations(trace)
-        reference_violation = trace.reference_violation
-        duplicate_side_effects = trace.ledger.keys_with_multiple_side_effects()
-        # is_deterministic re-runs the plan; a nondeterministic scenario is itself
-        # a failure (no flaky-retry passes).
-        nondeterministic = not is_deterministic(plan)
+            found = violations(trace)
+            reference_violation = trace.reference_violation
+            duplicate_side_effects = trace.ledger.keys_with_multiple_side_effects()
+            # is_deterministic re-runs the plan; a nondeterministic scenario is itself
+            # a failure (no flaky-retry passes).
+            nondeterministic = not is_deterministic(plan)
 
-        if found or reference_violation or duplicate_side_effects or nondeterministic:
-            reasons = []
-            if found:
-                reasons.append(f"invariants={found}")
-            if reference_violation:
-                reasons.append(f"reference={reference_violation}")
-            if duplicate_side_effects:
-                reasons.append(f"duplicate_side_effects={duplicate_side_effects}")
-            if nondeterministic:
-                reasons.append("nondeterministic")
-            failures.append(f"seed={seed} {' '.join(reasons)}")
+            if (
+                found
+                or reference_violation
+                or duplicate_side_effects
+                or nondeterministic
+            ):
+                reasons = []
+                if found:
+                    reasons.append(f"invariants={found}")
+                if reference_violation:
+                    reasons.append(f"reference={reference_violation}")
+                if duplicate_side_effects:
+                    reasons.append(f"duplicate_side_effects={duplicate_side_effects}")
+                if nondeterministic:
+                    reasons.append("nondeterministic")
+                failures.append(f"seed={seed} {' '.join(reasons)}")
+                failing_seeds.append(seed)
 
-            if bundles_written < _MAX_BUNDLES:
-                # Minimize the failing plan so the stored fixture is small; fall
-                # back to the raw trace when only reference/determinism failed
-                # (the invariant oracle has nothing to minimize against).
-                try:
-                    minimized_trace = run_plan(minimize_plan(plan))
-                except ValueError:
-                    minimized_trace = trace
-                bundle = build_diagnostic_bundle(
-                    minimized_trace, source_ref=f"rotating-seed-{seed}"
-                )
-                write_diagnostic_bundle(bundle, diagnostics_dir)
-                bundles_written += 1
+                if bundles_written < _MAX_BUNDLES:
+                    # Minimize the failing plan so the stored fixture is small; fall
+                    # back to the raw trace when only reference/determinism failed
+                    # (the invariant oracle has nothing to minimize against).
+                    try:
+                        minimized_trace = run_plan(minimize_plan(plan))
+                    except ValueError:
+                        minimized_trace = trace
+                    bundle = build_diagnostic_bundle(
+                        minimized_trace, source_ref=f"rotating-seed-{seed}"
+                    )
+                    write_diagnostic_bundle(bundle, diagnostics_dir)
+                    bundles_written += 1
+    except Exception as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        # Recorded on success too: the job requires this record, so a skipped
+        # sweep or one that covered another window cannot pass.
+        write_sweep_result(
+            diagnostics_dir,
+            seeds=seeds,
+            ran=ran,
+            last_seed=last_seed,
+            failing_seeds=failing_seeds,
+            bundles_written=bundles_written,
+            budget_seconds=budget,
+            elapsed_seconds=time.monotonic() - started,
+            error=error,
+        )
 
     print(
         f"rotating sweep: window={seeds.start}..{seeds.stop} ran={ran} "
