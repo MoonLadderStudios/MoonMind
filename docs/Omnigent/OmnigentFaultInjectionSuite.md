@@ -130,19 +130,26 @@ replay corpus.
   `tests/integration/reliability/test_omnigent_fault_corpus.py` runs the fixed
   declarative corpus and a fixed deterministic seed corpus. Fully hermetic — no
   network, credentials, Docker, or Temporal server.
-- **Rotating seed coverage** (main/schedule): the `omnigent-fault-rotating-seeds`
+- **Rotating seed coverage** (exploratory): the `omnigent-fault-rotating-seeds`
   job in `.github/workflows/pytest-unit-tests.yml` runs
   `tests/unit/omnigent/faultlab/test_rotating_seed_corpus.py` over a larger,
-  date-rotated seed window on `schedule`, `main` pushes, and `workflow_dispatch`
-  only — never as a required PR gate. The window is selected by namespaced env
-  vars (`MOONMIND_FAULTLAB_ROTATING_SEEDS`, `MOONMIND_FAULTLAB_SEED_OFFSET`,
-  `MOONMIND_FAULTLAB_SEED_COUNT`) resolved by
+  date-rotated seed window only on a scheduled or directly dispatched run of
+  that workflow. It never runs inside a `workflow_call`, so PR CI, `ci-required`,
+  release source checks, artifact qualification and publication do not wait
+  on it; the fixed corpora above stay the required deterministic gate. The
+  window is selected by namespaced env vars (`MOONMIND_FAULTLAB_ROTATING_SEEDS`,
+  `MOONMIND_FAULTLAB_SEED_OFFSET`, `MOONMIND_FAULTLAB_SEED_COUNT`) resolved by
   `tools/omnigent_faultlab/ci_seeds.py`; with those vars unset every consumer
   falls back to the fixed PR corpus. The sweep is bounded by an explicit
   scenario-count window and a wall-time budget
   (`MOONMIND_FAULTLAB_TIME_BUDGET_SECONDS`), and every failure writes a
   reproduction-complete, secret-safe diagnostic bundle to
-  `MOONMIND_FAULTLAB_DIAGNOSTICS_DIR` for upload.
+  `MOONMIND_FAULTLAB_DIAGNOSTICS_DIR` for upload. Every run also records its
+  window, executed count, last seed, budget truncation and failing seeds in
+  `rotating-sweep-result.json` beside those bundles
+  (`tools/omnigent_faultlab/rotating_result.py`), which the job echoes to its
+  step summary and a notice. The job fails when that record is missing or covers
+  another window, so a skipped sweep cannot pass.
 - **Repository/concurrency, Temporal, API/browser, and exact-image layers**
   consume the same scenarios and provider ledger through the boundary-neutral
   projection in `tools/omnigent_faultlab/projection.py` (`project_run`), which

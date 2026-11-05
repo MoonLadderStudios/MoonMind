@@ -661,6 +661,55 @@ def test_deterministic_conformance_is_selection_gated() -> None:
     assert "omnigent_conformance" in workflow["jobs"]["select-test-suites"]["outputs"]
 
 
+def test_rotating_seed_sweep_runs_only_on_direct_schedule_or_dispatch() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["omnigent-fault-rotating-seeds"]
+    condition = " ".join(job["if"].split())
+
+    # A workflow_call reports its caller's event, so only an empty
+    # verification phase distinguishes a direct schedule/dispatch run.
+    assert "inputs.verification_phase == ''" in condition
+    assert "github.event_name == 'schedule'" in condition
+    assert "github.event_name == 'workflow_dispatch'" in condition
+    assert "push" not in condition
+    call_inputs = _workflow_triggers(workflow)["workflow_call"]["inputs"]
+    assert call_inputs["verification_phase"]["default"]
+    callers = [
+        caller_job
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+        for caller_job in yaml.safe_load(path.read_text(encoding="utf-8"))[
+            "jobs"
+        ].values()
+        if caller_job.get("uses") == "./.github/workflows/pytest-unit-tests.yml"
+    ]
+    assert len(callers) >= 3
+    for caller_job in callers:
+        assert caller_job.get("with", {}).get("verification_phase", "full")
+
+    # Exploratory: nothing required, receipted or published waits on it.
+    for name, other in workflow["jobs"].items():
+        needs = other.get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        assert "omnigent-fault-rotating-seeds" not in needs, name
+
+
+def test_rotating_seed_sweep_fails_without_a_matching_recorded_result() -> None:
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["omnigent-fault-rotating-seeds"]["steps"]
+    names = [step.get("name") for step in steps]
+    sweep = names.index("Run rotating fault-lab seed corpus")
+    record = names.index("Record rotating sweep result")
+    assert sweep < record < names.index("Upload rotating fault-lab diagnostics")
+
+    record_step = steps[record]
+    assert record_step["if"] == "${{ !cancelled() }}"
+    assert "python -m tools.omnigent_faultlab.rotating_result" in record_step["run"]
+    assert record_step["env"]["SEED_OFFSET"] == "${{ steps.window.outputs.offset }}"
+    assert record_step["env"]["SEED_COUNT"] == "${{ steps.window.outputs.count }}"
+    diagnostics = steps[sweep]["env"]["MOONMIND_FAULTLAB_DIAGNOSTICS_DIR"]
+    assert f"--dir {diagnostics}" in record_step["run"]
+
+
 def test_image_building_jobs_share_a_layer_cache() -> None:
     jobs = _load_workflow()["jobs"]
     integration_steps = jobs["integration-hermetic"]["steps"]

@@ -4,15 +4,16 @@ Source issue: MoonLadderStudios/MoonMind#3709 (acceptance criterion 8).
 
 Required PR CI runs a fixed, deterministic bounded seed corpus so every pull
 request pays the same predictable budget. A larger, *rotating* seed corpus runs
-on main/schedule over a date-rotated window, so the generated interleaving space
-keeps expanding beyond the fixed PR budget without slowing required PR CI.
+on scheduled or dispatched CI over a date-rotated window, so the generated
+interleaving space keeps expanding beyond the fixed PR budget without slowing
+required PR CI.
 
 The rotating window is selected by explicit, namespaced environment variables
-that are set only in the scheduled/main CI context. When they are absent — every
-pull request, every local run, every ad-hoc invocation — :func:`resolve_seed_corpus`
-falls back to the fixed PR corpus. The default path (no env) therefore exercises
-exactly the required-PR behavior; the rotating path is a pure superset selected by
-explicit opt-in, never a hidden mode switch.
+that are set only in that scheduled/dispatched CI context. When they are absent —
+every pull request, every local run, every ad-hoc invocation —
+:func:`resolve_seed_corpus` falls back to the fixed PR corpus. The default path
+(no env) therefore exercises exactly the required-PR behavior; the rotating path
+is a pure superset selected by explicit opt-in, never a hidden mode switch.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from collections.abc import Mapping
 #: Fixed bounded corpus size that always runs in required PR CI.
 PR_CI_SEED_COUNT = 400
 
-#: Namespaced env vars that select the rotating window (set only on main/schedule).
+#: Namespaced env vars selecting the rotating window (set only on schedule/dispatch).
 ROTATING_ENABLED_ENV = "MOONMIND_FAULTLAB_ROTATING_SEEDS"
 ROTATING_OFFSET_ENV = "MOONMIND_FAULTLAB_SEED_OFFSET"
 ROTATING_COUNT_ENV = "MOONMIND_FAULTLAB_SEED_COUNT"
