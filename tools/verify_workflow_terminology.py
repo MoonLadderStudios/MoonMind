@@ -171,6 +171,17 @@ RUNTIME_RULES = (
         message="Spell MoonSpec consistently in public copy.",
     ),
     Rule(
+        name="task-lifecycle-event",
+        paths=(
+            "api_service",
+            "moonmind",
+        ),
+        pattern=re.compile(
+            r"\btask\.(?:created|updated|completed|failed|canceled|rerun_requested)\b"
+        ),
+        message="Use workflow_execution.* lifecycle event names.",
+    ),
+    Rule(
         name="legacy-recurring-workflow-contract",
         paths=(
             "api_service",

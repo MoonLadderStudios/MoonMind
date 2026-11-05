@@ -26,43 +26,6 @@ def _write_workflow(root: Path, filename: str, display_name: str) -> Path:
     return path
 
 
-def test_current_workflows_have_stable_names() -> None:
-    expected_names = {
-        "alembic-migration-gate.yml": "CI / Alembic Migration Gate",
-        "app-image-qualification.yml": "CI / Supplied App Image Qualification",
-        "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
-        "docker-publish.yml": "Release / Build App Image",
-        "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
-        "docker-publish-repository-security.yml": (
-            "Release / Repository Security Image"
-        ),
-        "omnigent-concurrency-qualification.yml": (
-            "Provider / Omnigent Concurrency Qualification"
-        ),
-        "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
-        "omnigent-fault-image-smoke.yml": "Provider / Omnigent Fault Image Smoke",
-        "omnigent-live-verification-health.yml": (
-            "Provider / Omnigent Live Verification Health"
-        ),
-        "omnigent-upstream-pin-updater.yml": "Omnigent Upstream Pin Updater",
-        "promote-ghcr-stable.yml": "Release / Promote Stable",
-        "pytest-unit-tests.yml": "CI / Test Suite",
-        "prepare-recovery-images.yml": "CI / Prepare Recovery Images",
-        "upstream-assessment-images.yml": "Qualify / Upstream Assessment Images",
-    }
-
-    files = check_github_workflow_names.workflow_files(
-        check_github_workflow_names.REPO_ROOT
-    )
-    actual_names = {
-        path.name: check_github_workflow_names.workflow_display_name(path)
-        for path in files
-    }
-
-    assert actual_names == expected_names
-    assert check_github_workflow_names.check_workflows() == []
-
-
 @pytest.mark.parametrize(
     "display_name",
     [

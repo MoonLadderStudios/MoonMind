@@ -71,12 +71,20 @@ def _qualification_context(
     source="success",
     migration="success",
     source_receipt="success",
+    qualified_image=CANDIDATE,
 ):
     jobs = _workflow("docker-publish.yml")["jobs"]
     context = {}
     for name, job in jobs.items():
         if job.get("uses") == "./.github/workflows/pytest-unit-tests.yml":
-            context[name] = {"result": source}
+            context[name] = {
+                "result": source,
+                "outputs": {
+                    "qualified_image": qualified_image,
+                    "source_receipt_artifact": "source-verification-1-1",
+                    "source_receipt_digest": "sha256:" + "d" * 64,
+                },
+            }
         elif job.get("uses") == "./.github/workflows/alembic-migration-gate.yml":
             context[name] = {"result": migration}
         elif name == "verify-source-receipt":
@@ -101,6 +109,7 @@ def _run_writer(
     ref="refs/heads/main",
     main_head="candidate-commit",
     candidate=CANDIDATE,
+    qualified_image=None,
     step=None,
 ):
     writer = step if step is not None else _writer()[2]
@@ -109,6 +118,7 @@ def _run_writer(
         source=source,
         migration=migration,
         source_receipt=source_receipt,
+        qualified_image=candidate if qualified_image is None else qualified_image,
     )
     for value in needs.values():
         if "image_ref" in value.get("outputs", {}):
@@ -229,6 +239,25 @@ def test_mutable_missing_or_foreign_candidate_is_not_published(tmp_path, candida
     assert result.returncode != 0
     assert channel == PREVIOUS
     assert not _channel_updates(commands)
+
+
+@pytest.mark.parametrize("qualified_image", ["", PREVIOUS, IMAGE + ":fixture-version"])
+def test_publication_requires_the_image_that_artifact_qualification_consumed(
+    tmp_path, qualified_image
+):
+    result, channel, commands = _run_writer(tmp_path, qualified_image=qualified_image)
+    assert result.returncode != 0
+    assert channel == PREVIOUS
+    assert not _channel_updates(commands)
+
+
+def test_publication_summary_keeps_source_and_image_provenance(tmp_path):
+    result, channel, _ = _run_writer(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert channel == CANDIDATE
+    summary = (tmp_path / "summary").read_text()
+    for value in (CANDIDATE, "source-verification-1-1", "sha256:" + "d" * 64):
+        assert value in summary
 
 
 def test_default_writer_depends_on_existing_source_migration_and_image_owners():
@@ -645,8 +674,9 @@ def test_release_source_checks_start_before_assembly_and_only_once():
     assert "source-checks" not in _ancestors(config["jobs"], "qualify")
     assert "prepare-recovery-images" in _ancestors(config["jobs"], "qualify")
     assert "assemble" not in _ancestors(config["jobs"], "prepare-recovery-images")
-    proof = config["jobs"]["verify-source-receipt"]
-    assert {"source-checks", "qualify", "assemble"} <= set(proof["needs"])
+    # The receipt is verified as soon as the source phase hands it off, in
+    # parallel with artifact qualification instead of after it.
+    assert _ancestors(config["jobs"], "verify-source-receipt") == {"source-checks"}
     assert "verify-source-receipt" in _ancestors(config["jobs"], _writer()[0])
     test_events = _workflow("pytest-unit-tests.yml")
     events = test_events.get("on", test_events.get(True))
@@ -700,3 +730,64 @@ def test_explicit_release_reruns_cannot_cancel_current_publication():
         group, cancels = values("older-run", **arguments)
         assert group != current_group
         assert not cancels
+
+
+def _timing_jobs(jobs: dict) -> set[str]:
+    return {
+        name
+        for name, job in jobs.items()
+        if any(
+            "fetch_public_job_timings" in step.get("run", "")
+            for step in job.get("steps", [])
+        )
+    }
+
+
+def _condition(expression: str, context: dict) -> bool:
+    """Evaluate the `&&`-joined status checks and comparisons of job conditions."""
+    match = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", expression.strip(), re.S)
+    accepted = True
+    for term in (match[1] if match else expression).split("&&"):
+        term = term.strip()
+        if term == "always()":
+            continue
+        comparison = re.fullmatch(r"([\w.]+)\s*(==|!=)\s*'([^']*)'", term)
+        assert comparison, f"Unsupported job condition: {term}"
+        value = context
+        for key in comparison[1].split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        accepted &= (value == comparison[3]) == (comparison[2] == "==")
+    return accepted
+
+
+def test_timing_reports_stay_advisory_and_outside_publication():
+    release = _workflow("docker-publish.yml")["jobs"]
+    suite = _workflow("pytest-unit-tests.yml")["jobs"]
+    writer = _writer()[0]
+    path = _ancestors(release, writer) | {writer}
+    assert len(_timing_jobs(release)) == 1
+    assert not _timing_jobs(release) & path
+    assert not _timing_jobs(suite) & _ancestors(suite, "ci-required")
+    # Reusable calls share the release run ID, so the release report already
+    # covers their jobs; their own timing jobs must not run on that path.
+    calls = [
+        name
+        for name in path
+        if release[name].get("uses", "").endswith("/pytest-unit-tests.yml")
+    ]
+    assert len(calls) == 2
+    for name in calls:
+        inputs = {"verification_phase": release[name]["with"]["verification_phase"]}
+        for timing in _timing_jobs(suite):
+            assert not _condition(suite[timing]["if"], {"inputs": inputs}), name
+    # Standalone pull request, merge queue, schedule and manual runs keep one.
+    for inputs in ({}, {"verification_phase": "full"}):
+        assert [
+            name
+            for name in _timing_jobs(suite)
+            if _condition(suite[name]["if"], {"inputs": inputs})
+        ] == ["ci-timings"]
+    # A failed, canceled or unavailable timing report never fails a run.
+    for jobs in (release, suite):
+        for timing in _timing_jobs(jobs):
+            assert jobs[timing]["continue-on-error"] is True

@@ -2,7 +2,7 @@
 
 Status: Normative
 Owners: MoonMind Platform
-Last updated: 2026-09-08
+Last updated: 2026-11-05
 
 This document is the canonical cross-domain matrix for MoonMind status tokens. It names the owner, value set, storage/API surface, and conversion boundary for each status domain so downstream cleanup can make domain-specific changes without treating similarly named tokens as interchangeable.
 
@@ -16,19 +16,6 @@ This document is the canonical cross-domain matrix for MoonMind status tokens. I
 | Step ledger status | `MoonMind.UserWorkflow` step ledger and dashboard | `pending`, `ready`, `executing`, `awaiting_external`, `reviewing`, `completed`, `failed`, `skipped`, `canceled` | Workflow query such as `GetStepLedger`; API step rows `status`; docs/Temporal/StepLedgerAndProgressModel.md | This domain describes operator-facing plan-step progress. It is not interchangeable with workflow lifecycle state or provider normalized status. |
 | Step execution artifact status | Step-execution artifact manifest contract | `pending`, `preparing`, `executing`, `running`, `checking`, `completed`, `succeeded`, `failed`, `blocked`, `canceled`, `superseded` | Step execution artifact content type `application/vnd.moonmind.step-execution+json;version=1`; schemas `moonmind.schemas.step_execution_models.StepExecutionStatus` and `moonmind.schemas.temporal_models.StepExecutionStatus` | This domain describes durable step-execution evidence artifacts. Convert to step ledger status only at an explicit workflow/API projection boundary. |
 | Provider normalized status | External provider adapters | Portable base: `queued`, `running`, `completed`, `failed`, `canceled`, `unknown`; provider extensions must be adapter-owned | Adapter result field `normalizedStatus` / internal `normalized_status`; provider monitoring payloads and artifacts | Provider-native tokens such as `in-progress` belong at provider boundaries and are normalized by the adapter. Do not promote provider-native spelling into workflow lifecycle or step ledger domains. Unrecognized tokens never become a fabricated `queued`/`running` or terminal success. A provider pull-request URL is evidence exposed as `externalUrl`/`pullRequestUrl` metadata and never promotes `running` to `completed`; provider progress is not verified AgentRun success. Historical `provider_status="pending"` spellings retain their `queued` meaning. |
-
-## Audit Actions
-
-The non-destructive status-token audit uses these action values:
-
-| Action | Meaning |
-| --- | --- |
-| `keep_canonical` | Token is already canonical for its guessed domain and should remain in that domain. |
-| `move_to_provider_boundary` | Token belongs to provider adapter normalization or provider evidence, not core workflow or step status. |
-| `move_to_legacy_alias_map` | Token should be isolated in an explicit compatibility or legacy alias map when compatibility is required. |
-| `rename_domain_specific` | Token is meaningful but too generic or cross-domain; rename or qualify it to the owning domain before behavior changes. |
-| `delete_unused` | Token appears unused or stale after evidence review and can be removed in a later destructive cleanup story. |
-| `historical_migration_only` | Token is valid only in migrations, archived evidence, or historical compatibility notes. |
 
 ## Formatting Standard
 
@@ -44,24 +31,6 @@ UI labels use human-readable sentence or title case, for example `Awaiting exter
 
 CSS classes use kebab-case, for example `status-awaiting-external` and `status-no-commit`.
 
-## Status Token Audit Command
+## Enforcement
 
-Run the inventory in report mode:
-
-```bash
-python tools/audit_status_tokens.py
-```
-
-The report emits these columns:
-
-```text
-token,guessed_domain,files,canonicality,action
-```
-
-Run the CI enforcement mode:
-
-```bash
-python tools/audit_status_tokens.py --fail-on-unknown
-```
-
-The enforcement mode still emits the CSV inventory, then exits nonzero when a scanned token is unclassified or assigned to the unknown domain. Historical migration files may still contain legacy values such as `no_changes`; active code should route legacy handling through compatibility helpers.
+Required CI runs `tools/status_domain_audit.py`, which rejects unknown, generic, or archived-authority status tokens in status-domain code. Historical migration files may still contain legacy values such as `no_changes`; active code should route legacy handling through compatibility helpers.
