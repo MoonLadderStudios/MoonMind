@@ -153,7 +153,6 @@ from tests.helpers.execution_api import (
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
 
-
 def _compiled_plan_result(
     *,
     binding: OmnigentExecutionPlanBinding,
@@ -19902,7 +19901,9 @@ class _FakeChatBindingStore:
         self._resolution = resolution
         self._error = error
 
-    async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+    async def resolve_chat_binding(
+        self, *, workflow_id, run_id=None, preferred_run_id=None
+    ):
         if self._error is not None:
             raise self._error
         return self._resolution
@@ -19929,6 +19930,47 @@ def _use_default_latest_server_image(monkeypatch) -> None:
     monkeypatch.setenv(
         "OMNIGENT_IMAGE_REF", "ghcr.io/omnigent-ai/omnigent-server:latest"
     )
+
+
+def test_chat_binding_prefers_the_authorized_current_run(monkeypatch) -> None:
+    app, service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    current_run = service.describe_execution.return_value.run_id
+    assert current_run
+    observed = {}
+
+    class RecordingStore:
+        async def resolve_chat_binding(
+            self, *, workflow_id, run_id=None, preferred_run_id=None
+        ):
+            observed.update(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                preferred_run_id=preferred_run_id,
+            )
+            return ChatBindingResolution(
+                state="unavailable",
+                read_only=True,
+                chat_binding_id=None,
+                workflow_id=workflow_id,
+                run_id=current_run,
+                step_execution_id=None,
+                logical_step_id=None,
+                capabilities={},
+                unavailable_reason="no_session",
+            )
+
+    monkeypatch.setattr(
+        executions_module,
+        "OmnigentBridgeSessionStore",
+        lambda *_a, **_k: RecordingStore(),
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    assert observed["workflow_id"] == "mm:wf-1"
+    assert observed["preferred_run_id"] == current_run
 
 
 def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
