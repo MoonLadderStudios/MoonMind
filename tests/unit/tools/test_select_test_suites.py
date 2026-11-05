@@ -918,13 +918,10 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     assert 'elif [[ "$result" != "skipped" ]]; then' in workflow
     assert "was not selected but ended with result=" in workflow
     # Always-required gates (selector itself, preflight invariants including
-    # shard ownership, frontend and generated-contract aggregators) fail on
-    # any non-success.
+    # shard ownership) fail on any non-success.
     assert '"select-test-suites"' in workflow
     assert '"preflight-policy"' in workflow
-    assert '"test-frontend"' in workflow
-    assert '"check-generated-contracts"' in workflow
-    # Every selected backend gate is aggregated through require_selected.
+    # Every selected gate is aggregated through require_selected.
     # The four primary backend suites share one native matrix aggregate
     # (MoonLadderStudios/MoonMind#4377); per-row completion is never inferred
     # from last-writer matrix outputs.
@@ -934,6 +931,9 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
+        "frontend-static",
+        "frontend-browser",
+        "run-generated-contracts",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
     for removed in ("reliability-journey-checkpoint-resume",):
@@ -972,7 +972,7 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     # a failing gate report success.
     assert 'if [[ "$failures" -gt 0 ]]; then' in workflow
     tail = workflow.split('if [[ "$failures" -gt 0 ]]; then')[-1]
-    assert "exit 1" in tail.split("All required backend checks passed.")[0]
+    assert "exit 1" in tail.split("All required checks passed.")[0]
     # No `failures=0` reset may appear after the first require_selected call.
     first_call = workflow.index('require_selected "backend-matrix"')
     assert "failures=0" not in workflow[first_call:]
