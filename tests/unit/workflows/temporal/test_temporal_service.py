@@ -6221,6 +6221,69 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
         mock_client_adapter.update_workflow.assert_not_called()
         mock_client_adapter.cancel_workflow.assert_awaited_once_with(workflow_id)
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["Pause", "Resume"])
+@pytest.mark.parametrize("orphaned", [False, True])
+async def test_lifecycle_control_of_projection_only_execution(
+    tmp_path, mock_client_adapter, action, orphaned
+):
+    async with temporal_db(tmp_path) as session:
+        workflow_id = "resolver:projection-only-control"
+        projection = TemporalExecutionRecord(
+            workflow_id=workflow_id,
+            run_id=str(uuid4()),
+            namespace="default",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=str(uuid4()),
+            owner_type=TemporalExecutionOwnerType.USER,
+            entry="user_workflow",
+            state=MoonMindWorkflowState.AWAITING_SLOT,
+            parameters={},
+            memo={},
+            search_attributes={},
+            artifact_refs=[],
+            paused=action == "Resume",
+            awaiting_external=True,
+            waiting_reason=(
+                "operator_paused" if action == "Resume" else "provider_profile_slot"
+            ),
+            source_mode=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
+            sync_state=(
+                TemporalExecutionProjectionSyncState.ORPHANED
+                if orphaned
+                else TemporalExecutionProjectionSyncState.FRESH
+            ),
+        )
+        session.add(projection)
+        await session.commit()
+        assert await session.get(TemporalExecutionCanonicalRecord, workflow_id) is None
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        if orphaned:
+            with pytest.raises(TemporalExecutionNotFoundError):
+                await service.signal_execution(
+                    workflow_id=workflow_id,
+                    signal_name=action,
+                    payload={},
+                    payload_artifact_ref=None,
+                )
+            mock_client_adapter.update_workflow.assert_not_awaited()
+            return
+        controlled = await service.signal_execution(
+            workflow_id=workflow_id,
+            signal_name=action,
+            payload={},
+            payload_artifact_ref=None,
+        )
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            workflow_id, action
+        )
+        assert controlled.paused is (action == "Pause")
+        assert controlled.memo["intervention_audit"][-1]["action"] == action.lower()
+        assert await session.get(TemporalExecutionCanonicalRecord, workflow_id) is None
+
+
 @pytest.mark.asyncio
 async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
     tmp_path, mock_client_adapter
@@ -6271,6 +6334,7 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
             )
 
         mock_client_adapter.cancel_workflow.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_session(
