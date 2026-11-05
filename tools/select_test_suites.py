@@ -43,6 +43,7 @@ OUTPUT_KEYS = (
     "ownership_full",
     "reliability_journey",
     "exact_artifact",
+    "host_recovery",
     "omnigent_conformance",
     "full_backend",
     "frontend_static",
@@ -607,6 +608,9 @@ class SuiteSelection:
     ownership_full: bool = False
     reliability_journey: bool = False
     exact_artifact: bool = False
+    # Host recovery exercises the same candidate as exact_artifact, but its
+    # prepared recovery runtimes make it a separately scheduled owner.
+    host_recovery: bool = False
     omnigent_conformance: bool = False
     full_backend: bool = False
     frontend_static: bool = False
@@ -765,6 +769,7 @@ def _full_backend_selection() -> SuiteSelection:
         ownership_full=True,
         reliability_journey=True,
         exact_artifact=True,
+        host_recovery=True,
         omnigent_conformance=True,
         full_backend=True,
     )
@@ -986,6 +991,7 @@ def select_suites(
     lanes = _integration_lanes(paths, selection)
     return replace(
         selection,
+        host_recovery=selection.exact_artifact,
         integration_ci=bool(lanes),
         ownership_full=selection.omnigent_conformance
         or any(_needs_full_ownership(path) for path in paths),
@@ -1000,16 +1006,20 @@ def for_phase(selection: SuiteSelection, phase: str) -> SuiteSelection:
     """Partition owners, never treat a skipped owner as a successful receipt."""
     if phase == "full":
         return selection
-    if phase not in {"source", "artifact"}:
+    image_phases = {
+        "artifact": {
+            "exact_artifact",
+            *("integration_" + lane.replace("-", "_") for lane in JOURNEY_LANES),
+        },
+        "recovery": {"host_recovery"},
+    }
+    if phase == "source":
+        owned = set(selection.__dict__).difference(*image_phases.values())
+    elif phase in image_phases:
+        owned = image_phases[phase]
+    else:
         raise ValueError(f"Unknown verification phase: {phase}")
-    artifact_keys = {
-        "exact_artifact",
-        *("integration_" + lane.replace("-", "_") for lane in JOURNEY_LANES),
-    }
-    values = {
-        key: value and ((key in artifact_keys) == (phase == "artifact"))
-        for key, value in selection.__dict__.items()
-    }
+    values = {key: value and key in owned for key, value in selection.__dict__.items()}
     values["integration_ci"] = any(
         values["integration_" + lane.replace("-", "_")] for lane in INTEGRATION_LANES
     )

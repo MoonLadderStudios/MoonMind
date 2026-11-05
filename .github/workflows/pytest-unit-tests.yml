@@ -20,7 +20,7 @@ on:
         type: string
         default: ''
       verification_phase:
-        description: 'Owners to execute: full, source, or artifact'
+        description: 'Owners to execute: full, source, artifact, or recovery'
         required: false
         type: string
         default: full
@@ -40,8 +40,8 @@ on:
         description: Selection the source receipt admitted
         value: ${{ jobs.source-receipt.outputs.selection }}
       qualified_image:
-        description: Immutable application image the installed journeys consumed
-        value: ${{ jobs.prepare-app-image.outputs.image_ref }}
+        description: Immutable application image this phase's consumer pulled and validated
+        value: ${{ jobs.omnigent-exact-artifact.outputs.qualified_image || jobs.omnigent-host-recovery.outputs.qualified_image }}
   schedule:
     - cron: "17 9 * * *"
 
@@ -63,6 +63,7 @@ jobs:
       integration_ci: ${{ steps.select.outputs.integration_ci }}
       reliability_journey: ${{ steps.select.outputs.reliability_journey }}
       exact_artifact: ${{ steps.select.outputs.exact_artifact }}
+      host_recovery: ${{ steps.select.outputs.host_recovery }}
       omnigent_conformance: ${{ steps.select.outputs.omnigent_conformance }}
       full_backend: ${{ steps.select.outputs.full_backend }}
       frontend_static: ${{ steps.select.outputs.frontend_static }}
@@ -107,8 +108,8 @@ jobs:
           MOONMIND_CI_PHASE: ${{ inputs.verification_phase || 'full' }}
         run: |
           set -euo pipefail
-          if [[ "$MOONMIND_CI_PHASE" == "artifact" && -z "$QUALIFICATION_IMAGE" ]]; then
-            echo "::error::Artifact verification requires its immutable application image"
+          if [[ ( "$MOONMIND_CI_PHASE" == "artifact" || "$MOONMIND_CI_PHASE" == "recovery" ) && -z "$QUALIFICATION_IMAGE" ]]; then
+            echo "::error::Image verification requires its immutable application image"
             exit 1
           fi
           if [[ -n "$QUALIFICATION_ARCHIVE" && -z "$QUALIFICATION_IMAGE" ]]; then
@@ -131,7 +132,7 @@ jobs:
           # resolution path as test selection
           # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
           # conservative and runs the generated-contract check.
-          if [[ "${{ inputs.verification_phase }}" == "artifact" ]]; then
+          if [[ "${{ inputs.verification_phase }}" == "artifact" || "${{ inputs.verification_phase }}" == "recovery" ]]; then
             echo "generated_contracts=false" >> "$GITHUB_OUTPUT"
           elif [[ "${{ inputs.verification_phase }}" == "source" || "${{ steps.changed-files.outputs.resolution }}" != "known" ]]; then
             echo "generated_contracts=true" >> "$GITHUB_OUTPUT"
@@ -276,7 +277,7 @@ jobs:
             artifacts/slow-test-paths.txt
           if-no-files-found: error
           retention-days: 7
-    if: inputs.verification_phase != 'artifact'
+    if: inputs.verification_phase != 'artifact' && inputs.verification_phase != 'recovery'
     outputs:
       artifact: ${{ steps.ownership-artifact.outputs.artifact }}
       attempt: ${{ steps.ownership-artifact.outputs.attempt }}
@@ -1007,16 +1008,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Initialize pinned Omnigent source
         run: git submodule update --init --depth 1 -- omnigent
-        if: inputs.candidate_image == ''
       - name: Install the OCI fixture transport
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
-        if: inputs.candidate_image == ''
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        if: inputs.candidate_image == ''
       - name: Build one disposable application archive
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -1031,23 +1029,13 @@ jobs:
           # Release builds own the reusable platform cache. PR consumers share
           # this archive instead of exporting source-heavy layers per branch.
           cache-from: type=gha,scope=build-linux-amd64
-        if: inputs.candidate_image == ''
       - name: Identify the archived manifest
         id: identity
         run: |
           set -euo pipefail
-          if [[ -n "$SUPPLIED_IMAGE" ]]; then
-            [[ "$SUPPLIED_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
-            echo "image_ref=$SUPPLIED_IMAGE" >> "$GITHUB_OUTPUT"
-            echo "artifact_name=$SUPPLIED_ARCHIVE" >> "$GITHUB_OUTPUT"
-          else
-            python3 tools/ci/release_image_fixture.py describe --archive "$RUNNER_TEMP/candidate.tar" > "$RUNNER_TEMP/candidate-description.json"
-            jq -er '"image_ref=" + .image' "$RUNNER_TEMP/candidate-description.json" >> "$GITHUB_OUTPUT"
-            echo "artifact_name=app-image-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          SUPPLIED_IMAGE: ${{ inputs.candidate_image }}
-          SUPPLIED_ARCHIVE: ${{ inputs.candidate_oci_artifact }}
+          python3 tools/ci/release_image_fixture.py describe --archive "$RUNNER_TEMP/candidate.tar" > "$RUNNER_TEMP/candidate-description.json"
+          jq -er '"image_ref=" + .image' "$RUNNER_TEMP/candidate-description.json" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=app-image-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - name: Upload the identical archive for every consumer
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1057,10 +1045,9 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-
-        if: inputs.candidate_image == ''
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.exact_artifact == 'true' || needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true'
+    # A caller-supplied immutable image goes straight to its consumers.
+    if: inputs.candidate_image == '' && (needs.select-test-suites.outputs.exact_artifact == 'true' || needs.select-test-suites.outputs.host_recovery == 'true' || needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true')
   integration-hermetic:
     # Each integration boundary runs as its own row: the hermetic Compose
     # suite and the three disposable default-install journeys. Run serially
@@ -1245,7 +1232,10 @@ jobs:
     needs:
       - select-test-suites
       - prepare-app-image
-    if: needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true'
+    if: "!cancelled() && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true')"
+    env:
+      CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
+      CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1272,7 +1262,7 @@ jobs:
         timeout-minutes: 2
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login to the release artifact registry
-        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
+        if: env.CANDIDATE_IMAGE != '' && env.CANDIDATE_ARCHIVE == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -1280,23 +1270,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
+          name: ${{ env.CANDIDATE_ARCHIVE }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
         run: |
           python3 tools/ci/release_image_fixture.py restore \
@@ -1305,10 +1294,8 @@ jobs:
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
       - name: Pull the release artifact for installed journeys
-        if: needs.prepare-app-image.outputs.image_ref != ''
+        if: env.CANDIDATE_IMAGE != ''
         timeout-minutes: 5
-        env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
@@ -1370,7 +1357,7 @@ jobs:
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20
         env:
-          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh
@@ -1383,7 +1370,7 @@ jobs:
         if: matrix.suite == 'upgrade-journey'
         timeout-minutes: 25
         env:
-          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
@@ -1398,7 +1385,7 @@ jobs:
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 10
         env:
-          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
@@ -1414,7 +1401,7 @@ jobs:
         timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
-          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           journal_test_env="$(mktemp -d /tmp/moonmind-journal-tests.XXXXXX)"
@@ -1428,7 +1415,7 @@ jobs:
             tests/integration/host_update/test_controller_handoff.py \
             tests/integration/host_update/test_controller_compose_journeys.py -q
       - name: Stop the job-owned OCI fixture registry
-        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
+        if: always() && env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
@@ -1489,14 +1476,19 @@ jobs:
 
   prepare-recovery-images:
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.exact_artifact == 'true' && inputs.recovery_images_artifact == ''
+    if: needs.select-test-suites.outputs.host_recovery == 'true' && inputs.recovery_images_artifact == ''
     uses: ./.github/workflows/prepare-recovery-images.yml
   omnigent-host-recovery:
     needs:
       - select-test-suites
       - prepare-app-image
       - prepare-recovery-images
-    if: "!cancelled() && needs.select-test-suites.outputs.exact_artifact == 'true' && needs.prepare-app-image.result == 'success' && (inputs.recovery_images_artifact != '' || needs.prepare-recovery-images.result == 'success')"
+    if: "!cancelled() && needs.select-test-suites.outputs.host_recovery == 'true' && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (inputs.recovery_images_artifact != '' || needs.prepare-recovery-images.result == 'success')"
+    env:
+      CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
+      CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
+    outputs:
+      qualified_image: ${{ steps.candidate.outputs.image }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1520,7 +1512,7 @@ jobs:
           python -m pip install --upgrade uv
           uv pip install --system PyYAML
       - name: Login to the release artifact registry
-        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
+        if: env.CANDIDATE_IMAGE != '' && env.CANDIDATE_ARCHIVE == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -1528,23 +1520,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
+          name: ${{ env.CANDIDATE_ARCHIVE }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           python3 tools/ci/release_image_fixture.py restore \
@@ -1554,20 +1545,20 @@ jobs:
             --owner "$FIXTURE_OWNER"
           rm -f "$RUNNER_TEMP/release-image-fixture/candidate.tar"
       - name: Pull the exact release artifact
-        if: needs.prepare-app-image.outputs.image_ref != ''
+        id: candidate
+        if: env.CANDIDATE_IMAGE != ''
         timeout-minutes: 5
-        env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
           docker pull "$CANDIDATE_IMAGE"
           test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$MOONMIND_CI_REVISION"
+          echo "image=$CANDIDATE_IMAGE" >> "$GITHUB_OUTPUT"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
         env:
-          RELEASE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
+          RELEASE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1597,54 +1588,40 @@ jobs:
           df -h "$RUNNER_TEMP" /var/lib/docker || true
           docker system df || true
       - name: Download prepared recovery images
-        # A cold ~3 GB transfer can exceed three minutes. Keep acquisition
+        # A cold multi-GB transfer can exceed three minutes. Keep acquisition
         # bounded independently of the unchanged recovery execution deadline.
         timeout-minutes: 8
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
           path: ${{ runner.temp }}/recovery-images
-      - name: Verify and load the exact prepared runtimes
-        timeout-minutes: 5
-        run: |
-          python3 tools/ci/release_image_fixture.py restore-recovery \
-            --archive "$RUNNER_TEMP/recovery-images/images.tar.gz" --state "$RUNNER_TEMP/recovery-images/identity.json" \
-            --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-            --artifact "$RECOVERY_ARTIFACT"
-          rm -f "$RUNNER_TEMP/recovery-images/images.tar.gz"
-          df -h "$RUNNER_TEMP" /var/lib/docker || true
+      - name: Serve and verify the exact prepared runtimes
+        id: recovery-images
+        timeout-minutes: 8
+        shell: bash
         env:
           RECOVERY_ARTIFACT: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
-      - name: Resolve job-local immutable recovery artifacts
-        id: recovery-images
-        shell: bash
         run: |
           set -euo pipefail
-          # A local registry gives the canonical host launcher its real
-          # repository@sha256 identity. Nothing is published off this runner;
-          # 127.0.0.1 works without changing daemon trust/configuration.
+          # Serve the prepared registry storage read-only so the canonical host
+          # launcher keeps its real repository@sha256 identity without a load
+          # and re-push. Nothing is published off this runner; 127.0.0.1 works
+          # without changing daemon trust/configuration. The storage digest and
+          # source/run/attempt binding are checked before anything is pulled.
           docker run -d --name moonmind-test-recovery-registry \
+            -v "$RUNNER_TEMP/recovery-images/registry:/var/lib/registry:ro" \
             -p 127.0.0.1:5000:5000 registry:3.0.0
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
             if [[ "$attempt" = 30 ]]; then exit 1; fi
             sleep 1
           done
-          pin_local_image() {
-            local source="$1" repository="$2"
-            docker tag "$source" "$repository:candidate"
-            docker push "$repository:candidate" >&2
-            docker image inspect "$repository:candidate" \
-              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-              | grep -E "^${repository}@sha256:[0-9a-f]{64}$"
-          }
-          server="$(pin_local_image moonmind-test-omnigent-server:candidate \
-            127.0.0.1:5000/moonmind-test-omnigent-server)"
-          host="$(pin_local_image moonmind-test-omnigent-host:candidate \
-            127.0.0.1:5000/moonmind-test-omnigent-host)"
-          echo "server=$server" >> "$GITHUB_OUTPUT"
-          echo "host=$host" >> "$GITHUB_OUTPUT"
+          python3 tools/ci/release_image_fixture.py restore-recovery \
+            --registry "$RUNNER_TEMP/recovery-images/registry" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --artifact "$RECOVERY_ARTIFACT" >> "$GITHUB_OUTPUT"
+          df -h "$RUNNER_TEMP" /var/lib/docker || true
           mkdir -p "$RUNNER_TEMP/moonmind-test-recovery-dependencies"
           # Pure-Python test tooling is mounted separately into the unchanged
           # candidate image; no production package/source is installed over it.
@@ -1667,7 +1644,7 @@ jobs:
         if: always()
         run: docker rm -fv moonmind-test-recovery-registry || true
       - name: Stop the job-owned OCI fixture registry
-        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
+        if: always() && env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
@@ -1711,7 +1688,12 @@ jobs:
     needs:
       - select-test-suites
       - prepare-app-image
-    if: needs.select-test-suites.outputs.exact_artifact == 'true'
+    if: "!cancelled() && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && needs.select-test-suites.outputs.exact_artifact == 'true'"
+    env:
+      CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
+      CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
+    outputs:
+      qualified_image: ${{ steps.candidate.outputs.image }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1778,7 +1760,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login to the release artifact registry
-        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
+        if: env.CANDIDATE_IMAGE != '' && env.CANDIDATE_ARCHIVE == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -1786,23 +1768,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
+          name: ${{ env.CANDIDATE_ARCHIVE }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: needs.prepare-app-image.outputs.artifact_name != ''
+        if: env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 3
         env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           python3 tools/ci/release_image_fixture.py restore \
@@ -1811,20 +1792,20 @@ jobs:
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
       - name: Pull the exact release artifact
-        if: needs.prepare-app-image.outputs.image_ref != ''
+        id: candidate
+        if: env.CANDIDATE_IMAGE != ''
         timeout-minutes: 5
-        env:
-          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
           docker pull "$CANDIDATE_IMAGE"
           test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$MOONMIND_CI_REVISION"
+          echo "image=$CANDIDATE_IMAGE" >> "$GITHUB_OUTPUT"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
         env:
-          RELEASE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
+          RELEASE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1928,7 +1909,7 @@ jobs:
             --compatibility-manifest compatibility-manifest.json \
             --output-dir artifacts/omnigent-exact-artifact
       - name: Stop the job-owned OCI fixture registry
-        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
+        if: always() && env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
@@ -2089,7 +2070,7 @@ jobs:
               keys = (
                   "unit_fast", "unit_slow", "api_component", "temporal_boundary",
                   "integration_ci", "reliability_journey", "exact_artifact",
-                  "omnigent_conformance", "full_backend", "frontend_static",
+                  "host_recovery", "omnigent_conformance", "full_backend", "frontend_static",
                   "frontend_browser_chromium", "frontend_browser_firefox",
                   "full_frontend", "ownership_full", "integration_hermetic",
                   "integration_fresh_journey", "integration_upgrade_journey",
@@ -2104,7 +2085,7 @@ jobs:
                   "full_backend": (
                       "unit_fast", "unit_slow", "api_component", "temporal_boundary",
                       "integration_ci", "reliability_journey", "exact_artifact",
-                      "omnigent_conformance", "ownership_full", "integration_hermetic",
+                      "host_recovery", "omnigent_conformance", "ownership_full", "integration_hermetic",
                       "integration_fresh_journey", "integration_upgrade_journey",
                       "integration_controller_journey",
                   ),
@@ -2194,7 +2175,7 @@ jobs:
           # and selected exclusive shard ownership. It has no job gate, so it is
           # aggregated unconditionally; gating shard ownership on full_backend
           # tripped a success-but-unselected failure on every targeted PR.
-          if [[ "${{ inputs.verification_phase }}" == "artifact" ]]; then
+          if [[ "${{ inputs.verification_phase }}" == "artifact" || "${{ inputs.verification_phase }}" == "recovery" ]]; then
             require_selected "preflight-policy" "false" "${{ needs.preflight-policy.result }}"
           else
             require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
@@ -2222,13 +2203,15 @@ jobs:
           installed_selected="false"
           if [[ "${{ needs.select-test-suites.outputs.integration_fresh_journey }}" == "true" || "${{ needs.select-test-suites.outputs.integration_upgrade_journey }}" == "true" || "${{ needs.select-test-suites.outputs.integration_controller_journey }}" == "true" ]]; then installed_selected="true"; fi
           require_selected "integration-hermetic" "${{ needs.select-test-suites.outputs.integration_hermetic }}" "${{ needs.integration-hermetic.result }}"
+          # A caller-supplied image needs no producer; its consumers report.
           image_selected="$installed_selected"
-          if [[ "${{ needs.select-test-suites.outputs.exact_artifact }}" == "true" ]]; then image_selected="true"; fi
+          if [[ "${{ needs.select-test-suites.outputs.exact_artifact }}" == "true" || "${{ needs.select-test-suites.outputs.host_recovery }}" == "true" ]]; then image_selected="true"; fi
+          if [[ -n "${{ inputs.candidate_image }}" ]]; then image_selected="false"; fi
           require_selected "prepare-app-image" "$image_selected" "${{ needs.prepare-app-image.result }}"
           require_selected "integration-ci" \
             "$installed_selected" \
             "${{ needs.integration-ci.result }}"
-          require_selected "omnigent-host-recovery" "${{ needs.select-test-suites.outputs.exact_artifact }}" "${{ needs.omnigent-host-recovery.result }}"
+          require_selected "omnigent-host-recovery" "${{ needs.select-test-suites.outputs.host_recovery }}" "${{ needs.omnigent-host-recovery.result }}"
           require_selected "omnigent-exact-artifact" \
             "${{ needs.select-test-suites.outputs.exact_artifact }}" \
             "${{ needs.omnigent-exact-artifact.result }}"
@@ -2433,7 +2416,7 @@ jobs:
     needs:
       - ci-required
       - source-receipt
-    if: always() && inputs.verification_phase != 'source' && inputs.verification_phase != 'artifact'
+    if: always() && inputs.verification_phase != 'source' && inputs.verification_phase != 'artifact' && inputs.verification_phase != 'recovery'
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
