@@ -61,11 +61,56 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
 
-#: Waits between the three publication attempts. A git hosting outage is
-#: partial and lasts minutes, so a remote-side failure waits it out before the
-#: saved work is reported unpublished; other failures keep the short schedule.
+#: Waits between publication attempts. Other failures retry twice, quickly. A
+#: failure the publisher classifies as a git hosting outage keeps retrying with
+#: growing back-off until its waits would pass the window: GitHub Git incidents
+#: have lasted 70 to 105 minutes, so a few minutes reported saved work
+#: unpublished mid-outage. The step's execution allowance still bounds each wait.
 _PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
-_TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
+_TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240, 600)
+_TRANSIENT_PUBLICATION_WINDOW_SECONDS = 2 * 60 * 60
+
+
+def _publication_retry_delay(attempt: int, *, transient: bool) -> float | None:
+    """Return the wait after failed ``attempt``, or ``None`` once exhausted.
+
+    The schedule depends only on the attempt index, so a replacement worker
+    continues the recorded schedule instead of opening another window.
+    """
+
+    if not transient:
+        delays = _PUBLICATION_RETRY_DELAYS_SECONDS
+        return delays[attempt] if attempt < len(delays) else None
+    delays = _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
+    waits = [delays[min(index, len(delays) - 1)] for index in range(attempt + 1)]
+    return waits[-1] if sum(waits) <= _TRANSIENT_PUBLICATION_WINDOW_SECONDS else None
+
+
+def _publication_exhausted(
+    result: AgentRunResult, failure: dict[str, Any], *, saved: Any
+) -> AgentRunResult:
+    summary = "Agent work is saved; repository publication exhausted its retry budget"
+    return result.model_copy(
+        update={
+            "failure_class": "integration_error",
+            "provider_error_code": failure["code"],
+            "failure_id": failure["code"],
+            "retry_recommendation": "do_not_retry",
+            "retry_disposition": "no_retry",
+            "objective_outcome": "failed",
+            "summary": (
+                f"{summary}: {failure['message']}"
+                if failure.get("message")
+                else f"{summary}."
+            ),
+            "metadata": {
+                **(result.metadata or {}),
+                "unfinishedPhase": "publication",
+                "workPreserved": bool(saved),
+            },
+        }
+    )
+
 
 #: Waits before re-running an unacknowledged host stop that would otherwise
 #: license a successor Step Execution beside a possibly running predecessor.
@@ -1528,8 +1573,21 @@ class GenericOmnigentHostRealizer:
             ).strip().lower()
             # Only retry this unfinished boundary. The publisher reconciles
             # remote branch/PR state and verifies the exact head on every call.
-            for attempt in range(3):
-                if f"publication_failure:{attempt}" in (sink.binding.phaseResults or {}):
+            attempt = 0
+            while True:
+                recorded = (sink.binding.phaseResults or {}).get(
+                    f"publication_failure:{attempt}"
+                )
+                if recorded is not None:
+                    if (
+                        _publication_retry_delay(
+                            attempt, transient=bool(recorded.get("transient"))
+                        )
+                        is None
+                    ):
+                        result = _publication_exhausted(result, recorded, saved=saved)
+                        break
+                    attempt += 1
                     continue
                 publication_started = False
                 try:
@@ -1576,13 +1634,24 @@ class GenericOmnigentHostRealizer:
                         raise
                     message = redact_sensitive_text(str(exc))[:1024]
                     transient = exc.transient
-                    await sink.record_phase(
-                        f"publication_failure:{attempt}",
-                        {"code": str(exc.code), "message": message, "transient": transient},
+                    failure = {
+                        "code": str(exc.code),
+                        "message": message,
+                        "transient": transient,
+                    }
+                    await sink.record_phase(f"publication_failure:{attempt}", failure)
+                    delay = (
+                        None
+                        if context is not None and not transient
+                        else _publication_retry_delay(attempt, transient=transient)
                     )
                     logger.warning(
-                        "Repository publication attempt %s/3 failed (transient=%s): %s",
-                        attempt + 1, transient, message,
+                        "Repository publication attempt %s failed "
+                        "(transient=%s, retry_in_seconds=%s): %s",
+                        attempt + 1,
+                        transient,
+                        delay,
+                        message,
                     )
                     if context is not None and not transient:
                         result = result.model_copy(
@@ -1596,44 +1665,16 @@ class GenericOmnigentHostRealizer:
                             }
                         )
                         break
-                    if attempt < 2:
-                        delays = (
-                            _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
-                            if transient
-                            else _PUBLICATION_RETRY_DELAYS_SECONDS
+                    if delay is None:
+                        result = _publication_exhausted(result, failure, saved=saved)
+                        break
+                    if context is not None:
+                        delay = min(
+                            delay,
+                            context.remaining_seconds(datetime.now(timezone.utc)),
                         )
-                        delay = delays[attempt]
-                        if context is not None:
-                            delay = min(
-                                delay,
-                                context.remaining_seconds(datetime.now(timezone.utc)),
-                            )
-                        await asyncio.sleep(delay)
-            else:
-                last_failure = (sink.binding.phaseResults or {})[
-                    "publication_failure:2"
-                ]
-                summary = "Agent work is saved; repository publication exhausted its retry budget"
-                result = result.model_copy(
-                    update={
-                        "failure_class": "integration_error",
-                        "provider_error_code": last_failure["code"],
-                        "failure_id": last_failure["code"],
-                        "retry_recommendation": "do_not_retry",
-                        "retry_disposition": "no_retry",
-                        "objective_outcome": "failed",
-                        "summary": (
-                            f"{summary}: {last_failure['message']}"
-                            if last_failure.get("message")
-                            else f"{summary}."
-                        ),
-                        "metadata": {
-                            **(result.metadata or {}),
-                            "unfinishedPhase": "publication",
-                            "workPreserved": bool(saved),
-                        },
-                    }
-                )
+                    await asyncio.sleep(delay)
+                    attempt += 1
         # Persist the same canonical envelope returned live, including failures
         # added during finalization, so a resumed read cannot reinterpret it.
         result = AgentRunResult.model_validate(result.model_dump(mode="json", by_alias=True))

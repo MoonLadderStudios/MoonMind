@@ -246,10 +246,10 @@ original blockers, without mandatory matrix rows, a catalog inventory, promotion
 authority, critical rollback instructions, or a rollback requirement. Missing,
 expired, malformed, or unavailable optional reports do not disable admission.
 Only independently derived telemetry and thresholds are published; caller
-summaries are never substitute proof. Create labels these as live observations,
-and keeps autonomous mutation disabled even if a report claims authorization.
-`TemporalExecutionService` owns that separately closed authority; it does not
-read the optional matrix to authorize `admin_auto`.
+summaries are never substitute proof. Create does not show them, because
+normal Remediate authors only observe-only diagnosis, and no report enables
+autonomous mutation. `TemporalExecutionService` owns that separately closed
+authority; it does not read the optional matrix to authorize `admin_auto`.
 
 The retained `operator-remediation-support-matrix/v1` contract below applies to
 **explicit strict live certification**, including the existing
@@ -258,7 +258,9 @@ The retained `operator-remediation-support-matrix/v1` contract below applies to
 all v1 requirements and fail-closed verdicts. This compatibility reader protects
 retained reports and deliberately selected strict certification; it is not the
 default PR or runtime acceptance policy. The following required-row and browser
-rules describe that strict scope only. No existing report bytes, digests, or
+rules describe that strict scope only. Normal Create authors only `observe_only`
+remediation, so rows that require another authority mode have no normal-Create
+journey and stay unqualified. No existing report bytes, digests, or
 results are rewritten, and no live support is inferred from hermetic tests.
 
 `REMEDIATION_ROW_CATALOG` is the machine-readable required-row inventory. Each

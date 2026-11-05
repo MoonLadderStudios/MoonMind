@@ -1,14 +1,11 @@
 import { readModelSelection } from "./modelSelection";
-import {
-  buildRemediationRuntimeRequestFields,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
-} from './workflowActions';
+import { buildRemediationRuntimeRequestFields } from './workflowActions';
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DRAFT_PRESENCE_PREFIX = 'moonmind.remediation-create-draft-presence.';
 const MAX_REMEDIATION_STEP_SELECTORS = 25;
+/** Only action policy a draft stored before #5157 can carry. */
+const LEGACY_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
 export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 /** Skill that reads the remediation context MoonMind places in the workspace. */
 export const REMEDIATION_SKILL_ID = 'remediate-workflow';
@@ -37,8 +34,6 @@ export type RemediationCreateDraft = {
   branch?: string;
   /** Explicit alias shown in the remediation authoring summary. */
   startingBranch?: string;
-  /** Isolated Checkpoint Branch work branch, distinct from the source branch. */
-  workBranch?: string;
   publishMode?: string;
   executionProfileRef?: string;
   launchPolicyRef?: string;
@@ -78,6 +73,12 @@ export type RemediationCreateDraft = {
       stepSelectors?: Array<Record<string, unknown>>;
       agentRunIds?: string[];
     };
+    /**
+     * New drafts author an observe-only snapshot: the Omnigent run receives
+     * delivered evidence but no live-follow or typed-action tools. Other values
+     * and the optional policies only appear in submissions retained from before
+     * MoonLadderStudios/MoonMind#5157, replayed unchanged for idempotency.
+     */
     mode: 'snapshot' | 'live_follow' | 'snapshot_then_follow';
     authorityMode: 'observe_only' | 'approval_gated' | 'admin_auto';
     actionPolicyRef?: string;
@@ -126,32 +127,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function remediationMode(value: unknown): RemediationCreateDraft['remediation']['mode'] {
-  const normalized = cleanText(value);
-  if (
-    normalized === 'snapshot' ||
-    normalized === 'live_follow' ||
-    normalized === 'snapshot_then_follow'
-  ) {
-    return normalized;
-  }
-  return DEFAULT_REMEDIATION_MODE;
-}
-
-function remediationAuthorityMode(
-  value: unknown,
-): RemediationCreateDraft['remediation']['authorityMode'] {
-  const normalized = cleanText(value);
-  if (
-    normalized === 'observe_only' ||
-    normalized === 'approval_gated' ||
-    normalized === 'admin_auto'
-  ) {
-    return normalized;
-  }
-  return DEFAULT_REMEDIATION_AUTHORITY;
 }
 
 function storageKey(draftId: string): string {
@@ -208,12 +183,20 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
     .slice(0, MAX_REMEDIATION_STEP_SELECTORS);
 }
 
+/**
+ * What normal Remediate authors: the Omnigent run diagnoses from evidence
+ * delivered into its workspace and works in its own repository. It receives no
+ * live-follow or typed-action tools, so no follow mode or action policy is
+ * offered (MoonLadderStudios/MoonMind#5157).
+ */
+const OBSERVE_ONLY_DIAGNOSIS = {
+  mode: 'snapshot',
+  authorityMode: 'observe_only',
+} as const;
+
 export function buildRemediationCreateDraft(
   execution: RemediationDraftExecution,
   options: {
-    mode?: RemediationCreateDraft['remediation']['mode'] | string;
-    authorityMode?: RemediationCreateDraft['remediation']['authorityMode'] | string;
-    actionPolicyRef?: string;
     runId?: string;
     instructions?: string;
   } = {},
@@ -275,10 +258,6 @@ export function buildRemediationCreateDraft(
   );
   const gitParameters = asRecord(workflowParameters.git || inputParameters.git);
   const omnigentParameters = asRecord(inputParameters.omnigent);
-  const remediationParameters = asRecord(workflowParameters.remediation);
-  const checkpointBranchPolicy = asRecord(
-    remediationParameters.checkpointBranchPolicy,
-  );
   const startingBranch = cleanText(
     gitParameters.startingBranch ||
       workflowParameters.startingBranch ||
@@ -287,11 +266,6 @@ export function buildRemediationCreateDraft(
       gitParameters.branch ||
       workflowParameters.branch ||
       inputParameters.branch,
-  );
-  const workBranch = cleanText(
-    checkpointBranchPolicy.gitWorkBranch ||
-      gitParameters.workBranch ||
-      inputParameters.gitWorkBranch,
   );
   const executionProfileRef = cleanText(
     omnigentParameters.executionTargetRef || runtime.executionProfileRef,
@@ -315,7 +289,6 @@ export function buildRemediationCreateDraft(
     },
     repository,
     ...(startingBranch ? { branch: startingBranch, startingBranch } : {}),
-    ...(workBranch ? { workBranch } : {}),
     publishMode: repository ? 'pr' : 'none',
     ...(executionProfileRef ? { executionProfileRef } : {}),
     ...(launchPolicyRef ? { launchPolicyRef } : {}),
@@ -341,9 +314,7 @@ export function buildRemediationCreateDraft(
     skill: REMEDIATION_SKILL_ID,
     remediation: {
       target: remediationTarget,
-      mode: remediationMode(options.mode),
-      authorityMode: remediationAuthorityMode(options.authorityMode),
-      actionPolicyRef: cleanText(options.actionPolicyRef || DEFAULT_REMEDIATION_ACTION_POLICY),
+      ...OBSERVE_ONLY_DIAGNOSIS,
       evidencePolicy: {
         includeStepLedger: true,
         includeDiagnostics: true,
@@ -353,24 +324,26 @@ export function buildRemediationCreateDraft(
         includeAdapterRefs: true,
         tailLines: 2000,
       },
-      approvalPolicy: {
-        requiredForHighRisk: true,
-      },
-      lockPolicy: {
-        targetMutationLock: true,
-      },
-      verificationPolicy: {
-        verifyAppliedActions: true,
-      },
-      checkpointBranchPolicy: {
-        actionKind: 'checkpoint_branch.create_from_remediation_context',
-        runtimeContextPolicy: 'fresh_agent_run',
-        workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
-        ...(workBranch ? { gitWorkBranch: workBranch } : {}),
-      },
       trigger: { type: 'manual' },
     },
   };
+}
+
+/**
+ * A draft opened before #5157 but not yet submitted would otherwise carry
+ * authority Create no longer shows. Reload it as the observe-only diagnosis
+ * the form presents, keeping its pinned target and evidence choices.
+ */
+function withObserveOnlyAuthoring(draft: RemediationCreateDraft): RemediationCreateDraft {
+  const {
+    actionPolicyRef: _actionPolicyRef,
+    approvalPolicy: _approvalPolicy,
+    lockPolicy: _lockPolicy,
+    verificationPolicy: _verificationPolicy,
+    checkpointBranchPolicy: _checkpointBranchPolicy,
+    ...remediation
+  } = draft.remediation;
+  return { ...draft, remediation: { ...remediation, ...OBSERVE_ONLY_DIAGNOSIS } };
 }
 
 export function storeRemediationCreateDraft(draft: RemediationCreateDraft): string {
@@ -483,7 +456,6 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     agentRunIdsAreValid(remediationTarget.agentRunIds) &&
     optionalTextIsValid(draft.branch) &&
     optionalTextIsValid(draft.startingBranch) &&
-    optionalTextIsValid(draft.workBranch) &&
     optionalTextIsValid(draft.publishMode) &&
     optionalTextIsValid(draft.executionProfileRef) &&
     optionalTextIsValid(draft.launchPolicyRef) &&
@@ -491,7 +463,7 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     authoringIsValid(draft.authoring, remediation) &&
     (
       remediation.actionPolicyRef === undefined ||
-      remediation.actionPolicyRef === DEFAULT_REMEDIATION_ACTION_POLICY
+      remediation.actionPolicyRef === LEGACY_REMEDIATION_ACTION_POLICY
     ) &&
     optionalRecordIsValid(draft.runtime) &&
     optionalRecordIsValid(draft.agentProfile) &&
@@ -564,7 +536,8 @@ export function inspectRemediationCreateDraft(
       clearRemediationCreateDraft(normalized);
       return { status: 'expired', draft: null };
     }
-    return { status: 'valid', draft: parsed };
+    // A retained submission may already be admitted; replay it as authored.
+    return { status: 'valid', draft: parsed.authoring ? parsed : withObserveOnlyAuthoring(parsed) };
   } catch {
     return { status: 'malformed', draft: null };
   }

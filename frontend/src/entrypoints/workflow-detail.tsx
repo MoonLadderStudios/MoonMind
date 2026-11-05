@@ -66,9 +66,6 @@ import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../com
 import {
   buildWorkflowActionMenuItems,
   selectPrimaryWorkflowActions,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
   describeWorkflowActionDisabledReason,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
@@ -7652,7 +7649,7 @@ function RemediationCapabilityMatrix({
   return (
     <details>
       <summary>
-        Action diagnostics ({rows.filter((row) => row.requestable).length} available / {rows.length} catalog)
+        Operator API action diagnostics ({rows.filter((row) => row.requestable).length} available / {rows.length} catalog)
       </summary>
       <ul className="td-remediation-list">
         {rows.map((row) => (
@@ -8226,7 +8223,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
-                  <Card label="Available Actions">{remediationListValue(
+                  <Card label="Operator API actions">{remediationListValue(
                     item.actionCapabilities.filter((row) => row.requestable).map((row) =>
                       `${remediationActionLabel(row.actionKind)}${row.targetSelectorRequired ? ' (select a session)' : ''}`,
                     ),
@@ -8238,13 +8235,20 @@ function RemediationRelationshipsPanel({
                     <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
                   ) : null}
                 </div>
-                {(!item.actionCapabilities.some((row) => row.requestable)) ? (
+                {item.actionCapabilities.some((row) => row.requestable) ? (
+                  <p className="small">
+                    Operator API actions are requested through the remediation
+                    operator API, not by the remediation run, which receives no
+                    action tools. Each request still checks its capability,
+                    policy, and approval.
+                  </p>
+                ) : (
                   <p className="notice subtle">
                     {item.authorityMode === 'observe_only'
-                      ? 'Observe-only authority: no mutating actions are offered for this target.'
-                      : 'No actions are currently offered; policy or backend readiness has bounded the action surface.'}
+                      ? 'Observe-only remediation: no operator API actions are offered for this target, and the remediation run receives no action tools.'
+                      : 'No operator API actions are currently offered; policy or backend readiness has bounded them.'}
                   </p>
-                ) : null}
+                )}
                 <RemediationCapabilityMatrix rows={item.actionCapabilities} />
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
@@ -9059,11 +9063,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [chatOptimisticMessages, setChatOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
-  const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
-  const [remediationAuthority, setRemediationAuthority] = useState(DEFAULT_REMEDIATION_AUTHORITY);
-  const [remediationActionPolicy, setRemediationActionPolicy] = useState(
-    DEFAULT_REMEDIATION_ACTION_POLICY,
-  );
   const [selectedRetryStepId, setSelectedRetryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [continuationMaxAttempts, setContinuationMaxAttempts] = useState(1);
@@ -9549,9 +9548,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         throw new Error('Workflow detail is required before remediation can be drafted.');
       }
       const draft = buildRemediationCreateDraft(execution, {
-        mode: remediationMode,
-        authorityMode: remediationAuthority,
-        actionPolicyRef: remediationActionPolicy,
         runId: latestRunId || runId,
       });
       const draftId = storeRemediationCreateDraft(draft);
@@ -11165,39 +11161,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <div className="stack td-remediation-create-preview">
                 <h4>Remediation create preview</h4>
                 <div className="grid-2">
-                  <label>
-                    Remediation mode
-                    <select
-                      value={remediationMode}
-                      onChange={(event) => setRemediationMode(event.target.value)}
-                    >
-                      <option value="snapshot_then_follow">Snapshot then follow</option>
-                      <option value="snapshot">Snapshot only</option>
-                      <option value="live_follow">Live follow</option>
-                    </select>
-                  </label>
-                  <label>
-                    Remediation authority
-                    <select
-                      value={remediationAuthority}
-                      onChange={(event) => setRemediationAuthority(event.target.value)}
-                    >
-                      <option value="approval_gated">Approval-gated admin remediation</option>
-                      <option value="observe_only">Troubleshooting only</option>
-                      <option value="admin_auto" disabled>
-                        Administrator automatic (disabled)
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    Remediation action policy
-                    <input
-                      value={remediationActionPolicy}
-                      onChange={(event) => setRemediationActionPolicy(event.target.value)}
-                    />
-                  </label>
                   <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
                 </div>
+                <p className="small">
+                  Remediate opens Create for an observe-only diagnosis: the
+                  remediation reads this run's evidence in its workspace and works
+                  in its own repository. Retrying, canceling, or editing this
+                  workflow stays with you.
+                </p>
                 <p className="small">
                   Evidence preview: step ledger, diagnostics, and 2000 log lines.
                 </p>

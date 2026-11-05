@@ -11,6 +11,7 @@ provider's reply to a request through :func:`latest_review_reply`.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -521,6 +522,15 @@ _CODEX_COMPLETED_STATUS_RE = re.compile(
 )
 
 
+def _unique_review_state_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Ambiguous Codex review state")
+        result[key] = value
+    return result
+
+
 def _provider_bot(provider: AutomatedReviewProvider, user: object) -> bool:
     login = user.get("login") if isinstance(user, Mapping) else user
     if isinstance(user, Mapping) and user.get("type") not in {None, "Bot"}:
@@ -626,6 +636,32 @@ def latest_automatic_review_summary(
         for line in _PROVIDER_FOOTER_RE.sub("", body).splitlines()
         if line.strip()
     ]
+    state_commit = None
+    if len(lines) == 7:
+        state_line = re.fullmatch(r"<!-- codex-review-state:v1 (.+) -->", lines[1])
+        if state_line is None:
+            return None
+        try:
+            state = json.loads(
+                state_line.group(1), object_pairs_hook=_unique_review_state_object
+            )
+        except ValueError:
+            return None
+        review = state.get("code_review") if isinstance(state, dict) else None
+        if (
+            not isinstance(review, dict)
+            or review.get("status") != "completed"
+            or review.get("has_any_findings") is not False
+            or review.get("has_unresolved_findings") is not False
+        ):
+            return None
+        state_commit = review.get("commit_sha")
+        if not isinstance(state_commit, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{40}", state_commit
+        ):
+            return None
+        state_commit = state_commit.lower()
+        lines.pop(1)
     expected = [
         _CODEX_SUMMARY_MARKER,
         "## Codex Review Summary",
@@ -644,6 +680,10 @@ def latest_automatic_review_summary(
     commit = re.fullmatch(r"`([0-9a-fA-F]{7,40})`", cells[2])
     if status is None or commit is None:
         return None
+    if state_commit is not None and not state_commit.startswith(
+        commit.group(1).lower()
+    ):
+        return None
     completed = _timestamp(status.group(1))
     if completed is None or _timestamp(status.group(2)) != completed:
         return None
@@ -658,7 +698,12 @@ def latest_automatic_review_summary(
     if completed < _comment_time(comment) or after_update:
         return None
     return AutomaticReviewSummary(
-        comment, repository, pr_number, commit.group(1).lower(), completed, updated
+        comment,
+        repository,
+        pr_number,
+        state_commit or commit.group(1).lower(),
+        completed,
+        updated,
     )
 
 

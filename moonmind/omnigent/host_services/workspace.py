@@ -533,7 +533,9 @@ class OmnigentWorkspaceMaterializer:
             raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint descriptor exceeds its bound")
         _, payload = await self._remediation_artifacts.read(artifact_id=artifact_id, access=access)
         if source.artifact_digest and "sha256:" + hashlib.sha256(payload).hexdigest() != source.artifact_digest:
-            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint descriptor digest differs")
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint descriptor digest differs"
+            )
         checkpoint = StepExecutionCheckpointModel.model_validate_json(payload)
 
         def same_ref(ref):
@@ -544,13 +546,83 @@ class OmnigentWorkspaceMaterializer:
         if (
             checkpoint.source.workflow_id != identity.workflow_id
             or checkpoint.boundary not in {"after_execution", "before_publication"}
-            or same_ref(checkpoint.task_input_snapshot_ref) != same_ref(plan.payload.authority.taskInputSnapshotRef)
-            or context is not None and context.step_execution_id != source_step
+            or context is not None
+            and context.step_execution_id != source_step
         ):
-            raise CheckpointRestoreError("CHECKPOINT_SOURCE_IDENTITY_MISMATCH", "saved step input differs from the admitted execution context")
+            raise CheckpointRestoreError(
+                "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                "saved step input differs from the admitted execution context",
+            )
+        authority = plan.payload.authority
+        if same_ref(checkpoint.task_input_snapshot_ref) != same_ref(
+            authority.taskInputSnapshotRef
+        ):
+            # The product snapshot wraps a scheduled/authored workflow input;
+            # canonical Step checkpoints name that inner input. Resolve the
+            # immutable, digest-verified link rather than current metadata or
+            # treating the two different artifact identities as interchangeable.
+            from moonmind.omnigent.bridge_artifacts import (
+                read_frozen_task_input_snapshot,
+            )
+
+            digest = getattr(authority, "taskInputSnapshotDigest", None)
+            if not digest:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                    "admitted input snapshot has no digest",
+                )
+            frozen = await read_frozen_task_input_snapshot(
+                self._remediation_artifacts,
+                snapshot_ref=authority.taskInputSnapshotRef,
+                snapshot_digest=digest,
+                access=access,
+            )
+            origin = frozen.get("source") if isinstance(frozen, dict) else None
+            if (
+                isinstance(origin, dict)
+                and origin.get("kind") == "schedule"
+                and not str(origin.get("definitionId") or "").strip()
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                    "schedule snapshot lacks definition authority",
+                )
+            target = (
+                frozen.get("target" if origin.get("kind") == "schedule" else "draft")
+                if isinstance(origin, dict)
+                else None
+            )
+            workflow_input = (
+                target.get("inputArtifactRef") if isinstance(target, dict) else None
+            )
+            # Inline workflow input lives in this admitted snapshot rather than
+            # a separate artifact. Its checkpoint URI names the producer run,
+            # which remains the input owner after a failed-step reset.
+            inline_input = (
+                isinstance(origin, dict)
+                and origin.get("kind") in {"create", "schedule"}
+                and isinstance(target, dict)
+                and workflow_input is None
+                and checkpoint.task_input_snapshot_ref
+                == (
+                    f"temporal://{checkpoint.source.workflow_id}/"
+                    f"{checkpoint.source.run_id}/task-input"
+                )
+            )
+            if not inline_input and (
+                not isinstance(workflow_input, str)
+                or same_ref(workflow_input)
+                != same_ref(checkpoint.task_input_snapshot_ref)
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                    "saved step input is not bound by the admitted snapshot",
+                )
         return checkpoint
 
-    async def _restore_step_input_checkpoint(self, checkpoint, source, request, plan, remediation):
+    async def _restore_step_input_checkpoint(
+        self, checkpoint, source, request, plan, remediation
+    ):
         """Use the checkpoint owner's Git/history/index restore, not tar overlay."""
         from moonmind.omnigent.workspace_intent import authored_repository_source
         from moonmind.workflows.executions.repository_contract import (

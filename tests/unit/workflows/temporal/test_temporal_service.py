@@ -3291,6 +3291,59 @@ async def test_create_execution_rejects_tampered_remediation_step_selector(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_live_follow_mode_without_a_delivery_path(
+    tmp_path, mock_client_adapter
+):
+    """``live_follow`` reached neither the Omnigent agent nor the operator follow API.
+
+    MoonLadderStudios/MoonMind#5157: a mode that implies live observation with
+    no delivery path is refused rather than admitted as an inert choice.
+    """
+
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=(
+                "Unsupported workflow.remediation.mode 'live_follow'. "
+                "Supported values: snapshot, snapshot_then_follow."
+            ),
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Live-follow remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "mode": "live_follow",
+                            "authorityMode": "observe_only",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_rejects_tampered_remediation_mode_and_work_branch(
     tmp_path, mock_client_adapter
 ):

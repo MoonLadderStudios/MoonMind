@@ -3468,6 +3468,9 @@ async def run_omnigent_execution(
                     terminal_snapshot_override["providerErrorCode"] = (
                         durable_terminal_refs.get("failureCode")
                     )
+                    terminal_snapshot_override["providerFailure"] = (
+                        durable_terminal_refs.get("providerFailure")
+                    )
                 external_state["terminalReconciliation"] = {
                     "source": "durable_bridge_terminal",
                     "status": durable_terminal_status,

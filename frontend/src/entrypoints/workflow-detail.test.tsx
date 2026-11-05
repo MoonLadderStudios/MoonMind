@@ -5477,9 +5477,8 @@ describe('Workflow Detail Entrypoint', () => {
       skill: 'remediate-workflow',
       target: { workflowId: 'test-123', runId: '01-run' },
       remediation: {
-        mode: 'snapshot_then_follow',
-        authorityMode: 'approval_gated',
-        actionPolicyRef: 'admin_healer_default',
+        mode: 'snapshot',
+        authorityMode: 'observe_only',
         target: { workflowId: 'test-123', runId: '01-run' },
       },
     });
@@ -7205,8 +7204,8 @@ describe('Workflow Detail Entrypoint', () => {
           profileId: 'claude_anthropic',
         },
         remediation: {
-          mode: 'snapshot_then_follow',
-          authorityMode: 'approval_gated',
+          mode: 'snapshot',
+          authorityMode: 'observe_only',
           target: { runId: '01-run' },
           evidencePolicy: {
             includeStepLedger: true,
@@ -7223,7 +7222,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
-  it('lets operators choose remediation mode, authority, and action policy before submission', async () => {
+  it('previews an observe-only remediation without follow, authority, or action-policy choices', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-create-choices/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-create-choices',
@@ -7270,21 +7269,16 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByText('Remediation create preview')).toBeTruthy();
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
-    expect((
-      within(screen.getByLabelText('Remediation authority')).getByRole('option', {
-        name: 'Administrator automatic (disabled)',
-      }) as HTMLOptionElement
-    ).disabled).toBe(true);
+    expect(screen.getByText(/observe-only diagnosis/i).textContent).toMatch(
+      /Retrying, canceling, or editing this workflow stays with you/,
+    );
+    // The launched agent has neither live-follow nor typed-action tools.
+    expect(screen.queryByLabelText('Remediation mode')).toBeNull();
+    expect(screen.queryByLabelText('Remediation authority')).toBeNull();
+    expect(screen.queryByLabelText('Remediation action policy')).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Live follow' })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Approval-gated/ })).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('Remediation mode'), {
-      target: { value: 'snapshot' },
-    });
-    fireEvent.change(screen.getByLabelText('Remediation authority'), {
-      target: { value: 'observe_only' },
-    });
-    fireEvent.change(screen.getByLabelText('Remediation action policy'), {
-      target: { value: 'troubleshooting_only' },
-    });
     const menu = await openWorkflowActionsMenu('Remediate');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
@@ -7300,7 +7294,6 @@ describe('Workflow Detail Entrypoint', () => {
         remediation: {
           mode: 'snapshot',
           authorityMode: 'observe_only',
-          actionPolicyRef: 'troubleshooting_only',
           target: { runId: '01-run' },
           evidencePolicy: {
             includeStepLedger: true,
@@ -7309,6 +7302,10 @@ describe('Workflow Detail Entrypoint', () => {
           },
         },
       });
+    const storedRemediation = JSON.parse(String(window.sessionStorage.getItem(String(draftKey)))).remediation;
+    for (const inert of ['actionPolicyRef', 'approvalPolicy', 'lockPolicy', 'verificationPolicy', 'checkpointBranchPolicy']) {
+      expect(storedRemediation).not.toHaveProperty(inert);
+    }
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) =>
@@ -7571,11 +7568,15 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('mm:target-rich')).toBeTruthy();
     expect(screen.getByText('collect-context, repair-runtime')).toBeTruthy();
     expect(screen.getByText('awaiting_external')).toBeTruthy();
-    const available = screen.getByText('Available Actions:').parentElement!;
+    // Historical approval-gated links keep their requestable actions, scoped to
+    // the operator API rather than presented as the remediation run's authority.
+    expect(screen.queryByText('Available Actions:')).toBeNull();
+    const available = screen.getByText('Operator API actions:').parentElement!;
     expect(within(available).getByText(/Cancel session \(select a session\)/)).toBeTruthy();
     expect(within(available).getByText(/Pause workflow/)).toBeTruthy();
     expect(within(available).queryByText('host.restart')).toBeNull();
-    const diagnostics = screen.getByText(/Action diagnostics/).closest('details')!;
+    expect(screen.getByText(/not by the remediation run, which receives no action tools/)).toBeTruthy();
+    const diagnostics = screen.getByText(/Operator API action diagnostics/).closest('details')!;
     expect(within(diagnostics).getByText('host.restart')).toBeTruthy();
     expect(within(diagnostics).getByText(/authoritative_verifier_unavailable/)).toBeTruthy();
     expect(screen.getByText(/Unavailable: runtime_stderr, provider_snapshot/)).toBeTruthy();
@@ -7586,6 +7587,75 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('conflict')).toBeTruthy();
     expect(screen.getAllByText('test-remediation-rich').length).toBeGreaterThan(0);
     expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
+  });
+
+  it('projects a normally authored observe-only remediation without operator API actions', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-rich/artifacts?source=temporal');
+    const mockExecution = {
+      taskId: 'test-remediation-rich',
+      workflowId: 'test-remediation-rich',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Observe-only remediation task',
+      summary: 'Diagnosing the pinned failure.',
+      status: 'running',
+      state: 'running',
+      rawState: 'running',
+      temporalStatus: 'running',
+      createdAt: '2026-04-22T00:00:00Z',
+      updatedAt: '2026-04-22T00:00:01Z',
+      actions: {},
+    };
+    const observeOnly = richOutboundRemediationLink({
+      mode: 'snapshot',
+      authorityMode: 'observe_only',
+      status: 'executing',
+      activeLockScope: null,
+      activeLockHolder: null,
+      latestActionSummary: null,
+      resolution: null,
+      allowedActions: [],
+      evidenceDegraded: false,
+      unavailableEvidenceClasses: [],
+      liveObservation: null,
+      lockOutcome: null,
+      approvalState: null,
+    });
+    observeOnly.actionCapabilities = observeOnly.actionCapabilities.map((row) => ({
+      ...row,
+      requestable: false,
+      approvalBackendReady: false,
+      blockedReasons: ['target_policy_denied'],
+    }));
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-remediation-rich/remediations?direction=inbound')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
+      }
+      if (url.includes('/executions/test-remediation-rich/remediations?direction=outbound')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'outbound', items: [observeOnly] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
+    const available = screen.getByText('Operator API actions:').parentElement!;
+    expect(available.textContent).toContain('—');
+    expect(screen.getByText(
+      'Observe-only remediation: no operator API actions are offered for this target, and the remediation run receives no action tools.',
+    )).toBeTruthy();
+    expect(screen.queryByText(/not by the remediation run, which receives no action tools/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve remediation action' })).toBeNull();
+    expect(screen.queryByText('Live follow is unavailable; durable remediation artifacts remain authoritative.')).toBeNull();
   });
 
   it('keeps remediation panels accessible and contained in dashboard CSS', async () => {
