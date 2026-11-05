@@ -9,13 +9,22 @@ from moonmind.security.assessments import (
     Finding,
     compare_observations,
 )
+from moonmind.security.game_math import (
+    GameMathSpec,
+    RoundRecord,
+    SimulationRequest,
+    assess_game_math,
+)
 from moonmind.security.repository_scanners import (
     NativeResult,
     RepositoryScan,
     ScannerExecution,
     ScannerSummary,
 )
-from moonmind.workflows.skills.security_assessment import _scanner_observation
+from moonmind.workflows.skills.security_assessment import (
+    _game_math_observation,
+    _scanner_observation,
+)
 
 NOW = datetime(2026, 10, 26, tzinfo=UTC)
 
@@ -144,3 +153,133 @@ def test_combined_scanner_findings_are_bounded_and_keep_retained_evidence():
         "art_worktree",
     }
     assert "combined_finding_bound_exceeded" in observation.provenance.values()
+
+
+GAME = "game:coin"
+BUDGET = {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60}
+
+
+def game_math(**kwargs):
+    coin = GameMathSpec.model_validate(
+        {
+            "gameRef": GAME,
+            "provenance": {
+                "sourceRef": "par:coin",
+                "contentDigest": "sha256:" + "c" * 64,
+                "approvalRef": "filing-1",
+            },
+            "game": {
+                "kind": "outcome-table",
+                "outcomes": [
+                    {"id": "heads", "probability": "1/2", "multiplier": "2"},
+                    {"id": "tails", "probability": "1/2", "multiplier": "0"},
+                ],
+            },
+            "wagers": [{"id": "bet", "stake": "1"}],
+            "strategies": [{"id": "play", "bets": ["bet"]}],
+            "settlement": {"quantum": "0.01", "rounding": "floor"},
+            "declared": [{"strategy": "play", "rtp": "1"}],
+            "criteria": {"tolerance": "1/50", "confidence": "99/100"},
+        }
+    )
+    return assess_game_math(coin, **kwargs)
+
+
+def observe_game(summary, assets=(GAME,)):
+    request = AssessmentRequest(
+        scope={"assets": list(assets)},
+        tools=["retained-report"],
+        reportRefs=["art_game"],
+        credentialRefs=[],
+        networkRefs=[],
+        budget=BUDGET,
+    )
+    return _game_math_observation(request, summary, "art_game", NOW)
+
+
+def test_game_math_violations_are_findings_and_fixes_are_comparable_absence():
+    overpaid = game_math(
+        settlements=[RoundRecord(strategy="play", outcome="tails", total="1")]
+    )
+    observation = observe_game(overpaid)
+    (finding,) = observation.findings
+    assert (finding.source, finding.rule_id, finding.asset) == (
+        "game-math",
+        "settlement",
+        GAME,
+    )
+    assert finding.evidence_refs == ["art_game"]
+    assert observation.coverage[0].status == "complete"
+    assert observation.provenance["gameMathApproval"] == "filing-1"
+    baseline = compare_observations(observation, None, now=NOW)
+    fixed = game_math(
+        settlements=[RoundRecord(strategy="play", outcome="tails", total="0")]
+    )
+    result = compare_observations(observe_game(fixed), baseline, now=NOW)
+    assert result["findings"][0]["state"] == "absent_comparable"
+
+
+@pytest.mark.parametrize("model", [False, True])
+def test_theory_or_model_does_not_clear_implementation_findings(model):
+    prior = game_math(
+        settlements=[
+            RoundRecord(strategy="play", outcome="tails", total="1"),
+            RoundRecord(strategy="play", outcome="unknown", total="0"),
+        ],
+        simulation=SimulationRequest(source="records"),
+        records=[RoundRecord(strategy="play", outcome="heads", total="2")] * 50_000,
+    )
+    baseline = compare_observations(observe_game(prior), None, now=NOW)
+    current = game_math(
+        **(
+            {"simulation": SimulationRequest(source="model", samples=100_000, seed=7)}
+            if model
+            else {}
+        )
+    )
+    result = compare_observations(observe_game(current), baseline, now=NOW)
+    assert {row["finding"]["ruleId"] for row in result["findings"]} == {
+        "settlement",
+        "outcome-support",
+        "simulated-rtp",
+    }
+    assert all(row["state"] != "absent_comparable" for row in result["findings"])
+
+
+def test_recorded_run_can_clear_a_retested_implementation_rtp_finding():
+    heads = RoundRecord(strategy="play", outcome="heads", total="2")
+    tails = RoundRecord(strategy="play", outcome="tails", total="0")
+    baseline = compare_observations(
+        observe_game(
+            game_math(
+                simulation=SimulationRequest(source="records"),
+                records=[heads] * 50_000,
+            )
+        ),
+        None,
+        now=NOW,
+    )
+    current = game_math(
+        simulation=SimulationRequest(source="records"),
+        records=[heads, tails] * 50_000,
+    )
+    assert current.covered
+    result = compare_observations(observe_game(current), baseline, now=NOW)
+    assert [row["state"] for row in result["findings"]] == ["absent_comparable"]
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_imprecise_or_stopped_game_math_stays_partial_coverage(stopped):
+    summary = game_math(
+        simulation=SimulationRequest(
+            source="model", samples=50 if not stopped else 10**6, seed=1
+        ),
+        should_stop=lambda: stopped,
+    )
+    coverage = observe_game(summary).coverage[0]
+    assert coverage.status == "partial" and not coverage.all_rules
+
+
+def test_game_outside_admitted_scope_is_refused():
+    with pytest.raises(ValueError, match="outside admitted"):
+        observe_game(game_math(), assets=["app.py"])
