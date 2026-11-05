@@ -148,13 +148,20 @@ class _GitLab:
             # The note lands even when its acknowledgment is lost.
             self.notes.insert(0, note)
             return httpx.Response(self.post_status, json=note)
-        if path == MR_PATH:
+        addressed, mr, route = project.partition(f"/merge_requests/{MR_IID}")
+        # A numeric ID addresses that project wherever its path now leads.
+        project_id = (
+            int(addressed) if addressed.isdigit() else self.projects.get(addressed)
+        )
+        if not mr or project_id is None:
+            return httpx.Response(404, json={"message": "not found"})
+        if route == "":
             return httpx.Response(
                 200,
                 json={
                     "id": 42,
                     "iid": MR_IID,
-                    "project_id": 99,
+                    "project_id": project_id,
                     "title": "Small slice",
                     "state": "opened",
                     "source_branch": "feature",
@@ -165,13 +172,13 @@ class _GitLab:
                     "web_url": f"{ENDPOINT}/{PROJECT}/-/merge_requests/7",
                 },
             )
-        if path == f"{MR_PATH}/discussions":
+        if route == "/discussions":
             return httpx.Response(200, json=[{"id": "d1", "notes": []}])
-        if path == f"{MR_PATH}/approvals":
+        if route == "/approvals":
             return httpx.Response(200, json={"approved": False})
-        if path == f"{MR_PATH}/pipelines":
+        if route == "/pipelines":
             return httpx.Response(200, json=[{"id": 5, "status": "success"}])
-        if path == f"{MR_PATH}/notes":
+        if route == "/notes":
             page = int(request.url.params.get("page", "1"))
             start = (page - 1) * self.per_page
             headers = {"X-Next-Page": str(page + 1)} if page < self.note_pages else {}
@@ -189,7 +196,7 @@ def _tool(gitlab: _GitLab, secrets: _Secrets, *, connection=None, load=None):
         loaded.append((connection_ref, repository, workflow_id))
         if load is not None:
             return await load(connection_ref, repository)
-        return connection, "principal:admitted"
+        return connection, "principal:admitted", None
 
     tool = GitLabMergeRequestTool(
         load_connection=_load,
@@ -492,6 +499,30 @@ async def test_unassigned_project_fails_observably_before_secrets(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project", "admitted_id"), [("99", "100"), (PROJECT, "not-a-project-id")]
+)
+async def test_mismatched_admitted_project_id_fails_before_secrets(
+    tmp_path, project, admitted_id
+):
+    async def _admitted(_ref, _repo):
+        return _recorded_connection(), "principal:admitted", admitted_id
+
+    gitlab, secrets = _GitLab(), _Secrets()
+    async with temporal_db(tmp_path) as session:
+        result = await _dispatch(
+            _tool(gitlab, secrets, load=_admitted),
+            _inputs(project=project, read=["mr"]),
+            _service(session, tmp_path),
+        )
+
+    assert result.status == "FAILED"
+    assert result.outputs["error"]["code"] == "gitlab_identity_rejected"
+    assert secrets.reads == []
+    assert gitlab.requests == []
+
+
+@pytest.mark.asyncio
 async def test_cross_instance_redirect_and_expired_credential_are_bounded(tmp_path):
     def _redirect(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "https://evil.example/x"})
@@ -503,7 +534,7 @@ async def test_cross_instance_redirect_and_expired_credential_are_bounded(tmp_pa
         service = _service(session, tmp_path)
         tool = GitLabMergeRequestTool(
             load_connection=lambda _ref, _repo, **_run: _async(
-                (_recorded_connection(), "principal:admitted")
+                (_recorded_connection(), "principal:admitted", None)
             ),
             resolve_secret=_Secrets(),
             http_transport=httpx.MockTransport(
@@ -572,7 +603,7 @@ async def test_partial_status_is_reported_incomplete(tmp_path):
 
     tool = GitLabMergeRequestTool(
         load_connection=lambda _ref, _repo, **_run: _async(
-            (_recorded_connection(), "principal:admitted")
+            (_recorded_connection(), "principal:admitted", None)
         ),
         resolve_secret=_Secrets(),
         http_transport=httpx.MockTransport(_paged_pipelines),
@@ -1317,11 +1348,11 @@ async def test_run_activity_refuses_authority_its_admission_does_not_carry(
     reads, requests = len(served.secret_reads), len(served.gitlab.requests)
 
     # Read-only assignment: the admitted note cannot be posted.
-    _record, (read_only, _records_) = await _run_step(
+    _, (read_only, _records_) = await _run_step(
         served, tmp_path, _inputs(note={"body": "Summary"})
     )
     # Another instance than the admitted connection's.
-    _record, (other, _records_) = await _run_step(
+    _, (other, _records_) = await _run_step(
         served,
         tmp_path,
         _inputs(endpoint="https://gitlab-other.example.com", read=["mr"]),
@@ -1386,6 +1417,31 @@ async def test_connection_changes_after_admission_refuse_the_run(
     assert len(served.secret_reads) == reads
     assert len(served.gitlab.requests) == requests
     assert [r["outcome"] for r in records] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_run_addresses_the_admitted_project_after_its_path_is_reused(
+    served, tmp_path
+):
+    await _enroll_and_assign(served.client, [(PROJECT, ("read", "review_request"))])
+    inputs = _inputs(note={"body": "Summary"})
+    submitted = await _submit(served.client, inputs)
+    assert submitted.status_code == 201, submitted.text
+    record = await _recorded_run(served.maker, submitted.json()["workflowId"])
+    # The admitted project moved away and a new project took its path.
+    served.gitlab.projects[PROJECT] = 199
+    requests = len(served.gitlab.requests)
+
+    result, _records_ = await _execute_for(record, tmp_path, inputs)
+
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["note"]["deliveryState"] == "delivered"
+    run_requests = served.gitlab.requests[requests:]
+    assert {r.method for r in run_requests} == {"GET", "POST"}
+    assert all(
+        r.url.raw_path.startswith(b"/api/v4/projects/99/merge_requests/7")
+        for r in run_requests
+    )
 
 
 @pytest.mark.asyncio
