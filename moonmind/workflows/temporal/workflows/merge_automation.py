@@ -10,7 +10,11 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import SearchAttributeKey, SearchAttributePair
-from temporalio.exceptions import ApplicationError, CancelledError
+from temporalio.exceptions import (
+    ApplicationError,
+    CancelledError,
+    is_cancelled_exception,
+)
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
@@ -83,6 +87,9 @@ ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
 MAX_PUBLISHED_ARTIFACT_REFS = 20
 MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
     "merge-automation-workflow-child-task-queue-v2"
+)
+MERGE_AUTOMATION_RESOLVER_CANCELLATION_DRAIN_PATCH = (
+    "merge-automation-resolver-cancellation-drain-v1"
 )
 MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH = (
     "merge-automation-resolver-parent-gate-id-v1"
@@ -2728,7 +2735,15 @@ class MoonMindMergeAutomationWorkflow:
                     "id": resolver_workflow_id,
                     "task_queue": self._workflow_child_task_queue(),
                     "search_attributes": self._resolver_search_attributes(),
-                    "cancellation_type": ChildWorkflowCancellationType.TRY_CANCEL,
+                    # The resolver owns runtime stop, saved work and release.
+                    # Returning early lets parent-close terminate that cleanup.
+                    "cancellation_type": (
+                        ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+                        if workflow.patched(
+                            MERGE_AUTOMATION_RESOLVER_CANCELLATION_DRAIN_PATCH
+                        )
+                        else ChildWorkflowCancellationType.TRY_CANCEL
+                    ),
                     "static_summary": "Resolving pull request for merge automation",
                     "static_details": f"Resolve {self._input.pull_request.url}",
                 }
@@ -2749,18 +2764,27 @@ class MoonMindMergeAutomationWorkflow:
                 try:
                     resolver_result = await workflow.execute_child_workflow(
                         "MoonMind.UserWorkflow",
-                        admit_user_workflow_input("MoonMind.UserWorkflow", resolver_request),
+                        admit_user_workflow_input(
+                            "MoonMind.UserWorkflow", resolver_request
+                        ),
                         **child_kwargs,
                     )
-                except CancelledError:
-                    self._status = STATE_CANCELED
-                    self._summary = (
-                        "Merge automation canceled while resolver child was active."
-                    )
-                    await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
-                    self._publish_visibility()
-                    return await self._finish()
                 except Exception as exc:
+                    if isinstance(exc, CancelledError) or (
+                        workflow.patched(
+                            MERGE_AUTOMATION_RESOLVER_CANCELLATION_DRAIN_PATCH
+                        )
+                        and is_cancelled_exception(exc)
+                    ):
+                        self._status = STATE_CANCELED
+                        self._summary = (
+                            "Merge automation canceled while resolver child was active."
+                        )
+                        await self._write_resolver_attempt(
+                            workflow_id=resolver_workflow_id
+                        )
+                        self._publish_visibility()
+                        return await self._finish()
                     await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
                     recovery, recovered = await self._recover_after_resolver_issue()
                     if recovered is not None:
