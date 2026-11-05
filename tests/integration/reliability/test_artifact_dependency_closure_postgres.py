@@ -573,9 +573,11 @@ async def test_pinned_assessment_comparison_retains_evidence_across_sessions(
 ):
     """Issue #5155: a committed pin outlives independent expiry until released."""
     from tests.integration.security.test_recurring_assessments import (
+        decision,
         inputs,
         invoke,
         put,
+        read,
     )
 
     store = LocalTemporalArtifactStore(tmp_path / "bytes")
@@ -585,9 +587,14 @@ async def test_pinned_assessment_comparison_retains_evidence_across_sessions(
             request, inventory, _ = await inputs(service)
             first = await invoke(service, request)
             first_inventory = request["inventoryRef"]
+            finding_id = (await read(service, first["comparisonRef"]))["findings"][0][
+                "findingId"
+            ]
+            retest = await put(service, {"retest": "passed"})
             request.update(
                 inventoryRef=await put(service, inventory),
                 baselineRef=first["comparisonRef"],
+                decisionsRef=await put(service, [decision(finding_id, [retest])]),
             )
             second = await invoke(service, request)
             root = second["comparisonRef"]
@@ -598,6 +605,8 @@ async def test_pinned_assessment_comparison_retains_evidence_across_sessions(
             request["feedRef"],
             second["scanRef"],
             first["comparisonRef"],
+            request["decisionsRef"],
+            retest,
         }
         await _age(sessions)
         async with sessions() as cleanup:

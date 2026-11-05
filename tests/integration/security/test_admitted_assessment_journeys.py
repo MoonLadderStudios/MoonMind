@@ -8,7 +8,9 @@ enforcement and Container Job admission all run. The worker launches the
 persisted (capability-stamped) spec, a deterministic stand-in plays the scanner
 at its binary boundary, and the workflow's publish -> remove -> cleanup order
 releases job storage. Native report bytes must stay readable through the
-artifact owner afterwards. Web and cloud jobs use an assessment-scoped
+artifact owner afterwards, and a pinned ``security.assess`` report over the
+published summary keeps them past their own expiry until it is released.
+Web and cloud jobs use an assessment-scoped
 capability; repository and image jobs are not assessment-scope job kinds, so
 they use the session's unscoped capability.
 """
@@ -58,6 +60,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactTransactionOwnership,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
@@ -233,6 +236,45 @@ async def assert_retained(environment, refs, published):
         assert json.loads(body)
 
 
+async def assert_assessment_retains(environment, summary_ref, native_refs, assets):
+    """A pinned report over the summary keeps its native reports past expiry."""
+    service = environment.service
+    outputs = await recurring.invoke(
+        service,
+        {
+            "scope": {"assets": assets},
+            "tools": ["retained-report"],
+            "reportRefs": [summary_ref],
+            "credentialRefs": [],
+            "networkRefs": [],
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
+        },
+        key="retained-native-reports",
+    )
+    assert not outputs["diagnostics"]
+    report = recurring.report_ref(outputs)
+    retained = {summary_ref, *native_refs}
+    assert retained <= await recurring.required(service, report)
+    await service.pin(artifact_id=report, principal="operator", reason="audit")
+    await recurring.age_everything(environment)
+    for ref in sorted(retained):
+        with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+            await service.soft_delete(artifact_id=ref, principal="operator")
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in retained:
+        assert await recurring.status(environment, ref) == "complete"
+
+    await service.unpin(artifact_id=report, principal="operator")
+    await recurring.age_everything(environment)
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in retained | {report}:
+        assert await recurring.status(environment, ref) == "deleted"
+
+
 def publisher(environment, published):
     async def publish(request, name, payload):
         principal = owner_artifact_principal(request.owner)
@@ -329,6 +371,17 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     await finish(backend, request, tmp_path)
     await assert_retained(environment, summary["nativeRefs"].values(), published)
     assert all(repo.MARKER.encode() not in body for body in published.values())
+    summary_ref = next(
+        ref for ref, body in published.items() if b'"repository-scanner/v1"' in body
+    )
+    await assert_assessment_retains(
+        environment,
+        summary_ref,
+        summary["nativeRefs"].values(),
+        sorted(
+            {f["asset"] for row in summary["results"].values() for f in row["findings"]}
+        ),
+    )
 
 
 async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
@@ -412,6 +465,14 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
 
     await finish(backend, request, tmp_path)
     await assert_retained(environment, [summary["nativeRef"]], published)
+    await assert_assessment_retains(
+        environment,
+        next(
+            ref for ref, body in published.items() if b'"image-assessment/v1"' in body
+        ),
+        [summary["nativeRef"]],
+        [summary["subject"]["asset"]],
+    )
 
 
 class CliCloud(cloud.Harness):
@@ -448,6 +509,12 @@ async def test_cloud_assessment_cli_job_keeps_native_report_after_cleanup(
 
     await finish(seen["backend"], seen["request"], tmp_path)
     await assert_retained(environment, [native], retained)
+    await assert_assessment_retains(
+        environment,
+        cloud.artifact_names(harness, accepted)["summary"]["artifactRef"],
+        [native],
+        cloud.posture_review(None)["scope"]["assets"],
+    )
 
 
 class CliWeb(web.Harness):
@@ -487,3 +554,9 @@ async def test_web_assessment_cli_job_keeps_native_report_after_cleanup(
     await finish(harness.backend, harness.request, tmp_path)
     await assert_retained(environment, [native], retained)
     harness.assert_no_secret()
+    await assert_assessment_retains(
+        environment,
+        web.artifact_names(harness, accepted)["summary"]["artifactRef"],
+        [native],
+        [web.origin(app)],
+    )

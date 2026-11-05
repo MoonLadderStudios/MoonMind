@@ -235,18 +235,25 @@ Before a scan, comparison or summary is reused or published, the producer
 seals what it cites through the artifact
 [dependency owner](../Temporal/WorkflowArtifactSystemDesign.md#143-lifecycle-manager).
 A scan seals the input and native report bytes it read. A comparison seals its
-scan, its baseline's bytes, and earlier evidence it still cites whose digest
-the baseline's seal verified. A summary seals its comparison and evidence;
-review and review evidence are optional, so they never hold retention.
-Missing, unauthorized, corrupt or mismatched required evidence fails the seal,
-and a retry keeps an existing seal. While a root is pinned, unexpired or held
-by a saved schedule's input root, cleanup cannot remove what it seals;
-releasing the root returns that evidence to its own retention. The baseline
-edge keeps that comparison only, not its lineage, so recurring history does
-not accumulate. Lifecycle backfill seals finished roots published without a
-seal when their scan inputs reproduce the recorded work identity. GitHub alert
-scans, scans reused from a baseline and report text stay unsealed and follow
-their own retention.
+scan, its baseline's bytes, earlier evidence it still cites whose digest the
+baseline's seal verified, and its `decisionsRef` with the artifacts those
+decisions cite, which must be readable. Carried decisions keep their evidence
+through the baseline's seal.
+A summary seals its comparison and evidence; review and review evidence are
+optional, so they never hold retention. Missing, unauthorized, corrupt or
+mismatched required evidence fails the seal, and a retry keeps an existing
+seal. While a root is pinned, unexpired or held by a saved schedule's input
+root, cleanup cannot remove what it seals; releasing the root returns that
+evidence to its own retention. The baseline edge keeps that comparison only,
+not its lineage, so recurring history does not accumulate.
+
+A root published without a seal has unverified, not empty, history. Lifecycle
+backfill, or admitting it as a baseline, seals it from its own schema: a scan
+when its inputs reproduce the recorded work identity, a comparison when its
+scan and any baseline are sealed. Already expired evidence is not certified;
+its root stays unsealed and observable, and is unavailable as a baseline.
+GitHub alert scans, scans reused from a baseline, comparisons built on them and
+report text stay unsealed and follow their own retention.
 
 ### Imported GitHub alerts
 

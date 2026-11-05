@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
+    TemporalArtifactValidationError,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
 
@@ -620,19 +621,26 @@ class AssessmentExecution:
         scan_diagnostics = []
         if request.baseline_ref:
             try:
-                _, raw = await self.read(request.baseline_ref)
+                artifact, raw = await self.read(request.baseline_ref)
                 parsed = Comparison.model_validate_json(raw).model_dump(
                     mode="json", by_alias=True
                 )
                 # Admission consumes the baseline's seal rather than rediscovering
                 # its references; expired or corrupt bytes are not a baseline.
-                proof = await self.service.dependency_proof(
-                    root_artifact_id=request.baseline_ref, access=self.access
-                )
+                proof = await _proof(self.service, request.baseline_ref, self.access)
+                if proof is None:
+                    # An unsealed baseline gets lifecycle backfill's schema-aware
+                    # seal first. No seal is an unverified history, not an
+                    # empty one, so a baseline that cannot be sealed is
+                    # unavailable.
+                    await seal_retained_assessment_root(
+                        self.service, artifact=artifact, payload=raw, access=self.access
+                    )
+                    proof = await _proof(
+                        self.service, request.baseline_ref, self.access
+                    )
                 history = {
-                    entry.artifact_id: entry.sha256
-                    for entry in proof or ()
-                    if entry.required
+                    entry.artifact_id: entry.sha256 for entry in proof if entry.required
                 }
                 history[request.baseline_ref] = self.digests[request.baseline_ref]
                 baseline = parsed
@@ -640,6 +648,7 @@ class AssessmentExecution:
                 TemporalArtifactNotFoundError,
                 TemporalArtifactAuthorizationError,
                 TemporalArtifactStateError,
+                TemporalArtifactValidationError,
                 ValidationError,
                 ValueError,
             ) as exc:
@@ -655,6 +664,13 @@ class AssessmentExecution:
             decisions = [
                 TriageDecision.model_validate(item) for item in json.loads(raw)
             ]
+        # A supplied decision is admitted only with evidence readable now; the
+        # comparison seals these exact bytes. Carried decisions use history.
+        decision_evidence = list(
+            dict.fromkeys(ref for item in decisions for ref in item.evidence_refs)
+        )
+        for ref in decision_evidence:
+            await self.digest(ref)
         work_identity = {
             "scope": request.scope.model_dump(mode="json"),
             "tools": request.tools,
@@ -992,7 +1008,22 @@ class AssessmentExecution:
                     scan_ref, await self.digest(scan_ref), True, "security.scan"
                 ),
                 *_history_evidence(_comparison_citations(comparison), history),
+                *(
+                    ArtifactDependency(
+                        ref, self.digests[ref], True, "security.evidence"
+                    )
+                    for ref in decision_evidence
+                ),
             ]
+            if request.decisions_ref:
+                entries.append(
+                    ArtifactDependency(
+                        request.decisions_ref,
+                        self.digests[request.decisions_ref],
+                        True,
+                        "security.decisions",
+                    )
+                )
             if baseline is not None:
                 entries.append(
                     ArtifactDependency(
@@ -1191,14 +1222,18 @@ def _scan_citations(work: Mapping[str, Any]) -> set[str]:
     }
 
 
-def _comparison_citations(comparison: Mapping[str, Any]) -> set[str]:
+def _decision_citations(comparison: Mapping[str, Any]) -> set[str]:
     return {
-        ref for row in comparison["findings"] for ref in row["finding"]["evidenceRefs"]
-    } | {
         ref
         for row in comparison["decisions"]
         for ref in row["decision"]["evidenceRefs"]
     }
+
+
+def _comparison_citations(comparison: Mapping[str, Any]) -> set[str]:
+    return {
+        ref for row in comparison["findings"] for ref in row["finding"]["evidenceRefs"]
+    } | _decision_citations(comparison)
 
 
 def _history_evidence(
@@ -1221,7 +1256,8 @@ async def seal_retained_assessment_root(
     """Seal a scan or comparison root its producer published without a seal.
 
     Only exact identities are certified: a scan's inputs must reproduce its
-    recorded work identity, and a comparison requires its sealed scan. Any
+    recorded work identity, and a comparison requires its sealed scan, the
+    seal of any baseline it compared against and its decisions' evidence. Any
     other root stays unsealed; completed scanners are never replayed.
     """
     document = json.loads(payload)
@@ -1248,11 +1284,15 @@ async def seal_retained_assessment_root(
         ]
         history: dict[str, str] = {}
         if comparison.baseline_status == "available" and comparison.baseline_ref:
+            proof = await _proof(service, comparison.baseline_ref, access)
+            if proof is None:
+                # Its cited history is unverified; an immutable seal without
+                # it would certify an incomplete closure.
+                raise TemporalArtifactStateError(
+                    "Retained comparison baseline is unsealed"
+                )
             history = {
-                entry.artifact_id: entry.sha256
-                for entry in await _proof(service, comparison.baseline_ref, access)
-                or ()
-                if entry.required
+                entry.artifact_id: entry.sha256 for entry in proof if entry.required
             }
             history[comparison.baseline_ref] = await _current_digest(
                 service, comparison.baseline_ref, access
@@ -1266,6 +1306,17 @@ async def seal_retained_assessment_root(
                 )
             )
         entries += _history_evidence(_comparison_citations(document), history)
+        # Decision evidence no baseline verified was admitted by this
+        # comparison, so it is required exactly as its producer now seals it.
+        entries += [
+            ArtifactDependency(
+                ref,
+                await _current_digest(service, ref, access),
+                True,
+                "security.evidence",
+            )
+            for ref in sorted(_decision_citations(document) - history.keys())
+        ]
     await _record(service, artifact.artifact_id, entries, access)
 
 
