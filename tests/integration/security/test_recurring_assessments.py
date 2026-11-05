@@ -36,6 +36,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from tests.artifact_access import access_for_test
@@ -202,6 +203,65 @@ async def invoke(
 async def read(service, ref, *, principal="workflow:assessment"):
     _, raw = await service.read(artifact_id=ref, access=access_for_test(principal))
     return json.loads(raw)
+
+
+def report_ref(outputs):
+    return build_report_projection_summary(outputs["reportBundle"])[
+        "latest_report_ref"
+    ]["artifact_id"]
+
+
+async def required(service, root):
+    sealed = await service._repository.get_verified_dependencies(root)
+    return {entry.artifact_id for entry in sealed if entry.required}
+
+
+async def age_everything(environment):
+    """Pass every artifact's own expiry; pins and sealed live roots remain."""
+    from sqlalchemy import select
+
+    from api_service.db.models import TemporalArtifact
+
+    past = datetime.now(UTC) - timedelta(days=1)
+    for row in await environment.session.scalars(select(TemporalArtifact)):
+        row.expires_at = past
+    await environment.session.commit()
+
+
+async def status(environment, ref):
+    from api_service.db.models import TemporalArtifact
+
+    row = await environment.session.get(TemporalArtifact, ref, populate_existing=True)
+    return row.status.value
+
+
+async def forget_seals(environment):
+    """Return every root to its shape before producers sealed assessments."""
+    from sqlalchemy import delete, select
+
+    from api_service.db.models import TemporalArtifact, TemporalArtifactDependency
+
+    await environment.session.execute(delete(TemporalArtifactDependency))
+    for row in await environment.session.scalars(select(TemporalArtifact)):
+        row.dependency_request_sha256 = None
+        row.dependency_closure_version = None
+        row.dependency_closure_sha256 = None
+    await environment.session.commit()
+
+
+def decision(finding_id, evidence_refs):
+    return {
+        "findingId": finding_id,
+        "disposition": "fix_retest",
+        "reason": "Upgraded the package and reran the check",
+        "evidenceRefs": evidence_refs,
+        "author": "operator",
+        "source": "security-remediate",
+        "scope": SCOPE,
+        "reviewAt": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        "reviewConditions": ["feed or scope change"],
+        "retestOutcome": "passed",
+    }
 
 
 async def test_feed_update_reassesses_inventory_without_source_change(
@@ -414,6 +474,619 @@ async def test_lost_scan_save_acknowledgement_reconciles_before_repeating_work(
     recovered = await invoke(service, request)
     assert recovered["scanRef"] == accepted[0]
     assert recovered["publicationOutcome"] == "published"
+
+
+async def test_pinned_comparison_retains_cited_evidence_until_released(environment):
+    """Issue #5155: a retained comparison keeps exactly what it cites."""
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    runs = [await invoke(service, request)]
+    for _ in range(2):
+        request.update(
+            inventoryRef=await put(service, inventory),
+            baselineRef=runs[-1]["comparisonRef"],
+        )
+        runs.append(await invoke(service, request))
+    first, second, third = runs
+    pinned = third["comparisonRef"]
+    cited = set((await read(service, pinned))["findings"][0]["finding"]["evidenceRefs"])
+    assert len(cited) == 4  # Each run's inventory and the shared feed.
+    retained = cited | {third["scanRef"], second["comparisonRef"]}
+    # The baseline's bytes are necessary history; its own lineage is not.
+    released = {first["comparisonRef"], first["scanRef"], second["scanRef"]}
+    assert await required(service, pinned) == retained
+    await service.pin(artifact_id=pinned, principal="operator", reason="audit")
+    await age_everything(environment)
+    for ref in sorted(retained):
+        with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+            await service.soft_delete(artifact_id=ref, principal="operator")
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in retained:
+        assert await status(environment, ref) == "complete"
+        assert await read(service, ref)
+    for ref in released:
+        assert await status(environment, ref) == "deleted"
+
+    await service.unpin(artifact_id=pinned, principal="operator")
+    await age_everything(environment)
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in retained | {pinned}:
+        assert await status(environment, ref) == "deleted"
+
+
+async def test_pinned_report_retains_admitted_triage_and_its_evidence(environment):
+    """A comparison seals the decisions it admits; successors carry them."""
+    service = environment.service
+    request, _, _ = await inputs(service)
+    first = await invoke(service, request)
+    finding_id = (await read(service, first["comparisonRef"]))["findings"][0][
+        "findingId"
+    ]
+    retest = await put(service, {"retest": "passed"})
+    request.update(
+        decisionsRef=await put(service, [decision(finding_id, [retest])]),
+        baselineRef=first["comparisonRef"],
+    )
+    triaged = await invoke(service, request, key="triaged")
+    admitted = {request["decisionsRef"], retest}
+    report = report_ref(triaged)
+    assert admitted <= await required(service, triaged["comparisonRef"])
+    assert admitted <= await required(service, report)
+    request.pop("decisionsRef")
+    request["baselineRef"] = triaged["comparisonRef"]
+    carried = await invoke(service, request, key="carried")
+    assert (await read(service, carried["comparisonRef"]))["decisions"]
+    # The carried decision keeps its evidence through the baseline's seal; the
+    # decisions input belongs to the comparison that consumed it.
+    carried_seal = await required(service, carried["comparisonRef"])
+    assert retest in carried_seal
+    assert request["inventoryRef"] in carried_seal
+    assert (admitted - {retest}).isdisjoint(carried_seal)
+
+    await service.pin(artifact_id=report, principal="operator", reason="audit")
+    await age_everything(environment)
+    for ref in sorted(admitted):
+        with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+            await service.soft_delete(artifact_id=ref, principal="operator")
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in admitted:
+        assert await status(environment, ref) == "complete"
+        assert await read(service, ref)
+
+    await service.unpin(artifact_id=report, principal="operator")
+    await age_everything(environment)
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in admitted | {report}:
+        assert await status(environment, ref) == "deleted"
+
+
+@pytest.mark.parametrize("fault", ["missing", "denied", "corrupt"])
+async def test_unverifiable_decision_evidence_is_never_certified(environment, fault):
+    from temporalio.exceptions import ApplicationError
+
+    service = environment.service
+    request, _, _ = await inputs(service)
+    first = await invoke(service, request)
+    finding_id = (await read(service, first["comparisonRef"]))["findings"][0][
+        "findingId"
+    ]
+    if fault == "missing":
+        evidence = "art_missing_retest"
+    elif fault == "denied":
+        evidence = await put(service, {"retest": "passed"}, workflow_id="other")
+    else:
+        evidence = await put(service, {"retest": "passed"})
+        artifact, _ = await service.read(
+            artifact_id=evidence, access=access_for_test("workflow:assessment")
+        )
+        LocalTemporalArtifactStore(environment.storage_root).resolve_storage_key(
+            artifact.storage_key
+        ).write_bytes(b'{"retest": "failed"}')
+    request.update(
+        decisionsRef=await put(service, [decision(finding_id, [evidence])]),
+        baselineRef=first["comparisonRef"],
+    )
+    with pytest.raises(ApplicationError):
+        await invoke(service, request, run_id="triage")
+    for comparison in await service.list_for_execution(
+        namespace="default",
+        workflow_id="assessment",
+        run_id="triage",
+        link_type="security.comparison",
+        access=access_for_test("workflow:assessment"),
+    ):
+        assert (
+            await service._repository.get_verified_dependencies(comparison.artifact_id)
+            is None
+        )
+
+
+@pytest.mark.parametrize("legacy", ["sealable", "unverifiable"])
+async def test_unsealed_baseline_is_sealed_before_admission_or_unavailable(
+    environment, legacy
+):
+    """A baseline without a seal never stands in for verified-empty history."""
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    previous = await invoke(service, request)
+    legacy_inventory = request["inventoryRef"]
+    await forget_seals(environment)
+    if legacy == "unverifiable":
+        missing, _ = await service.read(
+            artifact_id=legacy_inventory,
+            access=access_for_test("workflow:assessment"),
+        )
+        LocalTemporalArtifactStore(environment.storage_root).delete(missing.storage_key)
+    request.update(
+        inventoryRef=await put(service, inventory),
+        baselineRef=previous["comparisonRef"],
+    )
+    successor = await invoke(service, request, key="successor")
+    pinned = successor["comparisonRef"]
+    sealed = await required(service, pinned)
+    baseline_seal = await service._repository.get_verified_dependencies(
+        previous["comparisonRef"]
+    )
+    if legacy == "unverifiable":
+        assert successor["baselineStatus"] == "unavailable"
+        assert successor["counts"]["observed_without_baseline"] == 1
+        assert any(row["boundary"] == "baseline" for row in successor["diagnostics"])
+        assert baseline_seal is None
+        assert previous["comparisonRef"] not in sealed
+        return
+    assert successor["baselineStatus"] == "available"
+    assert baseline_seal is not None
+    cited = set((await read(service, pinned))["findings"][0]["finding"]["evidenceRefs"])
+    assert legacy_inventory in cited
+    assert {legacy_inventory, previous["comparisonRef"]} <= sealed
+    await service.pin(artifact_id=pinned, principal="operator", reason="audit")
+    await age_everything(environment)
+    with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+        await service.soft_delete(artifact_id=legacy_inventory, principal="operator")
+    await service.sweep_lifecycle(principal="service:sweeper")
+    assert await status(environment, legacy_inventory) == "complete"
+
+
+@pytest.mark.parametrize("fault", ["corrupt", "deleted"])
+async def test_unverifiable_required_evidence_is_never_sealed(
+    environment, monkeypatch, fault
+):
+    from temporalio.exceptions import ApplicationError
+
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    target = request["inventoryRef"]
+    if fault == "corrupt":
+        artifact, _ = await service.read(
+            artifact_id=target, access=access_for_test("workflow:assessment")
+        )
+        inventory["components"][0]["version"] = "1.1"
+        LocalTemporalArtifactStore(environment.storage_root).resolve_storage_key(
+            artifact.storage_key
+        ).write_bytes(json.dumps(inventory).encode())
+    else:
+        seal = service.record_verified_dependencies
+
+        async def deleted_after_read(**kwargs):
+            await service.soft_delete(artifact_id=target, principal="operator")
+            return await seal(**kwargs)
+
+        monkeypatch.setattr(service, "record_verified_dependencies", deleted_after_read)
+    with pytest.raises(ApplicationError):
+        await invoke(service, request)
+    execution = {"namespace": "default", "workflow_id": "assessment", "run_id": "run"}
+    access = access_for_test("workflow:assessment")
+    (scan,) = await service.list_for_execution(
+        **execution, link_type="security.scan", access=access
+    )
+    assert await service._repository.get_verified_dependencies(scan.artifact_id) is None
+    assert not await service.list_for_execution(
+        **execution, link_type="security.comparison", access=access
+    )
+
+
+async def test_optional_review_evidence_stays_distinct_and_unavailable(environment):
+    from tests.unit.security.test_security_review import review_payload
+
+    service = environment.service
+    evidence = [await put(service, {"observation": index}) for index in range(2)]
+    review = review_payload()
+    review["interpretations"][0]["evidenceRefs"] = evidence
+    request = {
+        "scope": review["scope"],
+        "tools": [],
+        "reviewRef": await put(service, review),
+        "budget": {"baseSeconds": 30, "maxSeconds": 60, "progressStallSeconds": 30},
+        "credentialRefs": [],
+        "networkRefs": [],
+    }
+    missing = await invoke(
+        service,
+        {**request, "reviewRef": "art_missing_review"},
+        run_id="missing-review",
+    )
+    assert missing["reviewStatus"] == "unavailable"
+    assert missing["publicationOutcome"] == "published"
+    assert await required(service, report_ref(missing)) == {
+        missing["comparisonRef"],
+        missing["scanRef"],
+    }
+    assert "art_missing_review" not in {
+        entry.artifact_id
+        for entry in await service._repository.get_verified_dependencies(
+            report_ref(missing)
+        )
+    }
+
+    result = await invoke(service, request)
+    assert result["reviewStatus"] == "completed"
+    report = report_ref(result)
+    sealed = {
+        entry.artifact_id: entry.required
+        for entry in await service._repository.get_verified_dependencies(report)
+    }
+    assert sealed == {
+        result["comparisonRef"]: True,
+        result["scanRef"]: True,
+        request["reviewRef"]: False,
+        **{ref: False for ref in evidence},
+    }
+    await service.pin(artifact_id=report, principal="operator", reason="audit")
+    await age_everything(environment)
+    # Interpretation is optional: it never holds retention or blocks native facts.
+    for ref in evidence:
+        await service.soft_delete(artifact_id=ref, principal="operator")
+    with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+        await service.soft_delete(
+            artifact_id=result["comparisonRef"], principal="operator"
+        )
+    closure = await service.verified_dependencies(
+        root_artifact_id=report, access=access_for_test("workflow:assessment")
+    )
+    # Aged optional interpretation is reported unavailable, never retained.
+    assert set(closure.unavailable_optional) == {*evidence, request["reviewRef"]}
+
+
+async def test_lost_seal_acknowledgement_reuses_scan_and_original_outcome(
+    environment, monkeypatch
+):
+    from temporalio.exceptions import ApplicationError
+
+    service = environment.service
+    request, _, _ = await inputs(service)
+    seal = service.record_verified_dependencies
+    sealed = []
+
+    async def lost_ack(**kwargs):
+        result = await seal(**kwargs)
+        sealed.append(kwargs["root_artifact_id"])
+        if len(sealed) == 2:
+            raise ConnectionError("lost acknowledgement after durable seal")
+        return result
+
+    monkeypatch.setattr(service, "record_verified_dependencies", lost_ack)
+    with pytest.raises(ApplicationError, match="lost acknowledgement"):
+        await invoke(service, request)
+    scan_ref, comparison_ref = sealed
+    original = (
+        await service._repository.get_artifact(comparison_ref)
+    ).dependency_closure_sha256
+    assert original is not None
+    monkeypatch.setattr(service, "record_verified_dependencies", seal)
+
+    def repeat_forbidden(*_args):
+        raise AssertionError("completed scanner work was repeated")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        repeat_forbidden,
+    )
+    await environment.session.close()
+    async with environment.sessions() as restarted_session:
+        restarted = TemporalArtifactService(
+            TemporalArtifactRepository(restarted_session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        retried = await invoke(restarted, request)
+        assert [retried["scanRef"], retried["comparisonRef"]] == sealed
+        assert retried["scanOutcome"] == "completed"
+        assert retried["originalOutcomes"] == ["complete"]
+        assert retried["publicationOutcome"] == "published"
+        root = await restarted._repository.get_artifact(comparison_ref)
+        assert root.dependency_closure_sha256 == original
+        assert scan_ref in await required(restarted, report_ref(retried))
+
+
+async def test_saved_schedule_input_root_consumes_the_comparison_seal(environment):
+    """A schedule retaining a comparison keeps its evidence through that seal."""
+    from api_service.db.models import (
+        RecurringWorkflowDefinition,
+        RecurringWorkflowScheduleType,
+        RecurringWorkflowScopeType,
+    )
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    service = environment.service
+    request, _, _ = await inputs(service)
+    result = await invoke(service, request)
+    comparison = result["comparisonRef"]
+    target = {"inputArtifactRef": comparison}
+    definition_id = uuid4()
+    root = await RecurringWorkflowsService(
+        environment.session, artifact_service=service
+    )._retain_target_artifacts(
+        target,
+        definition_id=definition_id,
+        access=ArtifactAccessContext.for_operator(
+            OperatorAdmission(via="recurring-assessment-test")
+        ),
+    )
+    environment.session.add(
+        RecurringWorkflowDefinition(
+            id=definition_id,
+            name="Retained security baseline",
+            enabled=False,
+            schedule_type=RecurringWorkflowScheduleType.CRON,
+            cron="0 6 * * *",
+            timezone="UTC",
+            owner_user_id=None,
+            scope_type=RecurringWorkflowScopeType.PERSONAL,
+            target=target,
+            input_artifact_root_id=root,
+            policy={},
+        )
+    )
+    await environment.session.commit()
+    evidence = await required(service, comparison) | {comparison}
+    assert {request["inventoryRef"], request["feedRef"], result["scanRef"]} <= evidence
+    assert evidence <= await required(service, root)
+    await age_everything(environment)
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in evidence:
+        assert await status(environment, ref) == "complete"
+
+
+async def test_retained_unsealed_assessment_roots_get_bounded_disposition(
+    environment, monkeypatch
+):
+    """Legacy roots seal from their own schema, or stay explicitly unsealed."""
+    from api_service.db.models import (
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    first = await invoke(service, request)
+    first_inventory = request["inventoryRef"]
+    finding_id = (await read(service, first["comparisonRef"]))["findings"][0][
+        "findingId"
+    ]
+    retest = await put(service, {"retest": "passed"})
+    request.update(
+        inventoryRef=await put(service, inventory),
+        baselineRef=first["comparisonRef"],
+        decisionsRef=await put(service, [decision(finding_id, [retest])]),
+    )
+    second = await invoke(service, request)
+    lost_request, lost_inventory, _ = await inputs(service)
+    lost_input = lost_request["inventoryRef"]
+    lost = await invoke(service, lost_request, run_id="lost-run")
+    lost_request.update(
+        inventoryRef=await put(service, lost_inventory),
+        baselineRef=lost["comparisonRef"],
+    )
+    lost_successor = await invoke(
+        service, lost_request, run_id="lost-run", key="lost-successor"
+    )
+    await forget_seals(environment)
+    environment.session.add(
+        TemporalExecutionCanonicalRecord(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="run",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id="operator",
+            state=MoonMindWorkflowState.COMPLETED,
+            entry="run",
+        )
+    )
+    await environment.session.commit()
+    for result in (second, lost):
+        await service.pin(
+            artifact_id=result["comparisonRef"], principal="operator", reason="audit"
+        )
+    missing, _ = await service.read(
+        artifact_id=lost_input, access=access_for_test("workflow:assessment")
+    )
+    LocalTemporalArtifactStore(environment.storage_root).delete(missing.storage_key)
+
+    def replay_forbidden(*_args):
+        raise AssertionError("legacy disposition replayed a completed scan")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        replay_forbidden,
+    )
+    assert await service._backfill_retained_dependencies(
+        now=datetime.now(UTC), limit=100
+    )
+    assert await required(service, first["comparisonRef"]) == {
+        first["scanRef"],
+        first_inventory,
+        request["feedRef"],
+    }
+    # The older baseline sealed earlier in the same ordered page, so the later
+    # comparison also carries the first inventory and the triage evidence it
+    # cites. Its decisions input is not recorded, so it is not guessed.
+    assert await required(service, second["comparisonRef"]) == {
+        second["scanRef"],
+        request["inventoryRef"],
+        request["feedRef"],
+        first["comparisonRef"],
+        first_inventory,
+        retest,
+    }
+    # A comparison whose baseline stays unsealed keeps no incomplete seal, while
+    # its own scan still seals from its inputs.
+    assert await required(service, lost_successor["scanRef"]) == {
+        lost_request["inventoryRef"],
+        lost_request["feedRef"],
+    }
+    for ref in (
+        lost["scanRef"],
+        lost["comparisonRef"],
+        lost_successor["comparisonRef"],
+        report_ref(second),
+    ):
+        assert await service._repository.get_verified_dependencies(ref) is None
+
+
+async def attach(service, ref, workflow_id):
+    """Link an input the way an occurrence's inputAttachments admit it."""
+    await service.link_artifact(
+        artifact_id=ref,
+        principal="operator",
+        execution_ref={
+            "namespace": "default",
+            "workflow_id": workflow_id,
+            "run_id": "run",
+            "link_type": "input.security",
+        },
+    )
+
+
+async def record_finished(environment, *workflow_ids):
+    """Canonical records of finished producers, which backfill acts for."""
+    from api_service.db.models import (
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+
+    for workflow_id in workflow_ids:
+        environment.session.add(
+            TemporalExecutionCanonicalRecord(
+                namespace="default",
+                workflow_id=workflow_id,
+                run_id="run",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id="operator",
+                state=MoonMindWorkflowState.COMPLETED,
+                entry="run",
+            )
+        )
+    await environment.session.commit()
+
+
+@pytest.mark.parametrize(
+    ("change", "baseline"),
+    [
+        ("inventory", "sealed"),
+        ("feed", "sealed"),
+        ("feed", "legacy"),
+        ("inventory", "backfilled"),
+    ],
+)
+async def test_later_occurrence_in_another_workflow_seals_carried_history(
+    environment, change, baseline
+):
+    """Each schedule occurrence is a new workflow admitting only its attachments."""
+    service = environment.service
+    request, inventory, feed = await inputs(service)
+    first = await invoke(service, request)
+    earlier = request[f"{change}Ref"]
+    if baseline != "sealed":
+        await forget_seals(environment)
+    if baseline == "backfilled":
+        await record_finished(environment, "assessment")
+        await service._backfill_retained_dependencies(now=datetime.now(UTC), limit=100)
+        assert first["scanRef"] in await required(service, first["comparisonRef"])
+    replacement = inventory if change == "inventory" else {**feed, "revision": "feed-2"}
+    request.update(
+        {
+            f"{change}Ref": await put(
+                service, replacement, workflow_id="next-occurrence"
+            ),
+            "baselineRef": first["comparisonRef"],
+        }
+    )
+    for key in ("inventoryRef", "feedRef", "baselineRef"):
+        if request[key] != request[f"{change}Ref"]:
+            await attach(service, request[key], "next-occurrence")
+    successor = await invoke(service, request, workflow_id="next-occurrence")
+    assert successor["baselineStatus"] == "available"
+    assert successor["counts"]["still_observed"] == 1
+    pinned = successor["comparisonRef"]
+    comparison = await read(service, pinned, principal="workflow:next-occurrence")
+    assert earlier in comparison["findings"][0]["finding"]["evidenceRefs"]
+    assert {earlier, first["comparisonRef"]} <= await required(service, pinned)
+    # Sealing the carried history grants the later occurrence no read of it.
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await read(service, earlier, principal="workflow:next-occurrence")
+    await service.pin(artifact_id=pinned, principal="operator", reason="audit")
+    await age_everything(environment)
+    with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+        await service.soft_delete(artifact_id=earlier, principal="operator")
+    await service.sweep_lifecycle(principal="service:sweeper")
+    assert await status(environment, earlier) == "complete"
+    assert await read(service, earlier)
+
+
+async def test_backfill_seals_a_recurring_chain_across_workflows(environment):
+    """A legacy successor seals history its baseline's producer verified."""
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    first = await invoke(service, request)
+    earlier = request["inventoryRef"]
+    request.update(
+        inventoryRef=await put(service, inventory, workflow_id="next-occurrence"),
+        baselineRef=first["comparisonRef"],
+    )
+    for ref in (request["feedRef"], request["baselineRef"]):
+        await attach(service, ref, "next-occurrence")
+    successor = await invoke(service, request, workflow_id="next-occurrence")
+    await forget_seals(environment)
+    await record_finished(environment, "assessment", "next-occurrence")
+    await service._backfill_retained_dependencies(now=datetime.now(UTC), limit=100)
+    assert {
+        earlier,
+        successor["scanRef"],
+        first["comparisonRef"],
+    } <= await required(service, successor["comparisonRef"])
+
+
+async def test_decision_may_cite_non_artifact_evidence(environment):
+    """Only artifact evidence is read and sealed; other references stay text."""
+    service = environment.service
+    request, _, _ = await inputs(service)
+    first = await invoke(service, request)
+    finding_id = (await read(service, first["comparisonRef"]))["findings"][0][
+        "findingId"
+    ]
+    retest = await put(service, {"retest": "passed"})
+    ticket = "https://tracker.invalid/SEC-1"
+    request.update(
+        decisionsRef=await put(service, [decision(finding_id, [ticket, retest])]),
+        baselineRef=first["comparisonRef"],
+    )
+    triaged = await invoke(service, request, key="triaged")
+    # The scanner still reports the finding, so the passing retest needs review.
+    assert triaged["counts"]["review_required"] == 1
+    comparison = await read(service, triaged["comparisonRef"])
+    assert comparison["decisions"][0]["decision"]["evidenceRefs"] == [ticket, retest]
+    sealed = await required(service, triaged["comparisonRef"])
+    assert {request["decisionsRef"], retest} <= sealed
+    assert ticket not in sealed
+    # Lifecycle backfill applies the same contract to a legacy comparison.
+    await forget_seals(environment)
+    await record_finished(environment, "assessment")
+    await service._backfill_retained_dependencies(now=datetime.now(UTC), limit=100)
+    assert retest in await required(service, triaged["comparisonRef"])
 
 
 async def test_duplicate_feed_in_later_occurrence_reuses_admitted_baseline(
@@ -706,6 +1379,13 @@ async def test_occurrence_revalidates_current_authority_before_reusing_scan(
     service = environment.service
     request, _, _ = await inputs(service)
     first = await invoke(service, request)
+    # A live sealed comparison retains its input; after its retention passes,
+    # ordinary cleanup may remove the input and reuse must then revalidate.
+    with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
+        await service.soft_delete(
+            artifact_id=request["inventoryRef"], principal="operator"
+        )
+    await age_everything(environment)
     await service.soft_delete(artifact_id=request["inventoryRef"], principal="operator")
     with pytest.raises(Exception):
         await invoke(service, request)
@@ -767,7 +1447,14 @@ async def test_product_api_security_schedule_lifecycle(
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     user = OperatorAdmission(via="recurring-assessment-test")
     service = environment.service
-    request, _, _ = await inputs(service)
+    request, _, feed = await inputs(service)
+    # The schedule's baseline is a sealed comparison from an earlier feed.
+    baseline = await invoke(
+        service,
+        {**request, "feedRef": await put(service, {**feed, "rules": []})},
+        key="baseline",
+    )
+    request["baselineRef"] = baseline["comparisonRef"]
     app = FastAPI()
     app.include_router(routes.router)
 
@@ -797,7 +1484,8 @@ async def test_product_api_security_schedule_lifecycle(
                 "instructions": "Compare admitted security evidence",
                 "publish": {"mode": "none"},
                 "inputAttachments": [
-                    {"artifactId": request[key]} for key in ("inventoryRef", "feedRef")
+                    {"artifactId": request[key]}
+                    for key in ("inventoryRef", "feedRef", "baselineRef")
                 ],
                 "steps": [
                     {
@@ -919,6 +1607,11 @@ async def test_product_api_security_schedule_lifecycle(
                 run_id=action.first_execution_run_id,
             )
             assert result["publicationOutcome"] == "published"
+            # The occurrence admits the attached baseline through its seal.
+            assert result["baselineStatus"] == "available"
+            assert {request["baselineRef"], request["inventoryRef"]} <= await required(
+                service, result["comparisonRef"]
+            )
             assert (await read(service, result["comparisonRef"], principal="operator"))[
                 "counts"
             ]["new"] == 1
