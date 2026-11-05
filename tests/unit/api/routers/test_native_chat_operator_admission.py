@@ -324,7 +324,7 @@ async def test_actual_binding_discovery_uses_account_free_admission(chat, monkey
 
     service = SimpleNamespace(
         describe_execution=AsyncMock(
-            return_value=SimpleNamespace(owner_id="retained-human")
+            return_value=SimpleNamespace(owner_id="retained-human", run_id="run-1")
         )
     )
     resolution = ChatBindingResolution(
@@ -338,12 +338,11 @@ async def test_actual_binding_discovery_uses_account_free_admission(chat, monkey
         capabilities={"viewTranscript": True},
         unavailable_reason=None,
     )
+    resolver = AsyncMock(return_value=resolution)
     monkeypatch.setattr(
         executions,
         "OmnigentBridgeSessionStore",
-        lambda *_a: SimpleNamespace(
-            resolve_chat_binding=AsyncMock(return_value=resolution)
-        ),
+        lambda *_a: SimpleNamespace(resolve_chat_binding=resolver),
     )
     chat.app.include_router(executions.router)
     chat.app.dependency_overrides[executions._get_service] = lambda: service
@@ -353,6 +352,7 @@ async def test_actual_binding_discovery_uses_account_free_admission(chat, monkey
         response = await client.get("/api/executions/mm:w1/chat-binding")
         assert response.status_code == 200, response.text
         assert response.json()["chatBindingId"] == BINDING
+    resolver.assert_awaited_once_with(workflow_id="mm:w1", preferred_run_id="run-1")
 
 
 @pytest.mark.parametrize(
