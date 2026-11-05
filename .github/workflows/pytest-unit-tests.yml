@@ -1204,13 +1204,21 @@ jobs:
         # controller-journey, the journal transition test's phase, ps and log
         # evidence. Text is redacted before upload; if redaction errors, the
         # unredacted files are removed. A hard job kill or runner loss can
-        # still prevent collection and upload.
+        # still prevent collection and upload. The advisory timing digest
+        # (phase, worker and file timing from the receipts, plus runner
+        # CPU/memory) goes to this log and the step summary, which stay
+        # readable when artifact downloads do not; it never fails the row.
         if: always()
         timeout-minutes: 2
         run: |
           set -uo pipefail
           out=/tmp/pytest-integration-ci
           mkdir -p "$out"
+          timeout 20s python3 tools/ci/write_backend_matrix_summary.py digest \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            artifacts/integration-ci/main.receipt.json \
+            artifacts/integration-ci/storage-seed.receipt.json \
+            artifacts/integration-ci/storage-verify.receipt.json
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
           source_dirs=(artifacts/integration-ci)
           if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then

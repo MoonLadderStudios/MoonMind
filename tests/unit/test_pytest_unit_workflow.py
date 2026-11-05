@@ -294,6 +294,24 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting(cache_hit) 
     ) + 5 + 2 <= int(job["timeout-minutes"])
 
 
+def test_hermetic_job_reports_a_timing_digest_on_every_outcome() -> None:
+    job = _load_workflow()["jobs"]["integration-hermetic"]
+    collect = next(
+        step
+        for step in job["steps"]
+        if step["name"] == "Collect row-owned integration report and diagnostics"
+    )
+
+    # The digest reaches the job log and step summary, which stay readable
+    # when artifact downloads do not, without a step of its own or budget.
+    assert collect["if"] == "always()"
+    command = collect["run"]
+    assert "python3 tools/ci/write_backend_matrix_summary.py digest" in command
+    assert '--summary "$GITHUB_STEP_SUMMARY"' in command
+    for receipt in ("main", "storage-seed", "storage-verify"):
+        assert f"artifacts/integration-ci/{receipt}.receipt.json" in command
+
+
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     jobs = _load_workflow()["jobs"]
     assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
