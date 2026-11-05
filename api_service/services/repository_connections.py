@@ -1456,6 +1456,87 @@ class RepositoryConnectionService:
             operations=connection.allowed_operations,
         )
 
+    async def admit_selected_use(
+        self,
+        connection_ref: str,
+        repository: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> dict[str, Any]:
+        """Admit an explicitly selected connection for later use by one run.
+
+        The admitting principal must be allowed to use the active connection,
+        and the repository must have a verified recorded assignment. The
+        returned record names that principal and the assignment it verified,
+        so Activities acting for the run use exactly this admission instead of
+        their own execution-scoped principal.
+        """
+
+        connection = await self.get_connection(
+            connection_ref, principal_ref=principal_ref, principal_scope=principal_scope
+        )
+        if connection is None:
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED,
+                f"repository connection {connection_ref} is not recorded",
+            )
+        assignment = await self._recorded_launch_assignment(connection, repository)
+        scope_type, scope_ref = normalize_scope(*principal_scope)
+        return {
+            "connectionRef": connection.id,
+            "repository": repository,
+            "principalRef": principal_ref,
+            "scopeType": scope_type,
+            "scopeRef": scope_ref,
+            "providerRepoId": assignment.identity.provider_repo_id,
+            "assignmentRevision": assignment.revision,
+        }
+
+    async def admitted_selected_connection(
+        self, admission: Mapping[str, Any]
+    ) -> RepositoryConnection:
+        """Reload what ``admit_selected_use`` admitted, narrowed to its assignment.
+
+        The connection must still admit the recorded principal and be active,
+        and the assignment must be the one admitted: a retargeted or changed
+        assignment needs a new admission.
+        """
+
+        connection_ref = str(admission.get("connectionRef") or "")
+        repository = str(admission.get("repository") or "")
+        connection = await self.get_connection(
+            connection_ref,
+            principal_ref=str(admission.get("principalRef") or ""),
+            principal_scope=(
+                str(admission.get("scopeType") or ""),
+                admission.get("scopeRef"),
+            ),
+        )
+        if connection is None:
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED,
+                f"repository connection {connection_ref} is no longer recorded",
+            )
+        assignment = await self._recorded_launch_assignment(connection, repository)
+        if (assignment.identity.provider_repo_id or None) != (
+            admission.get("providerRepoId") or None
+        ) or assignment.revision != admission.get("assignmentRevision"):
+            raise RepositoryRouteError(
+                REPOSITORY_DENIED,
+                f"assignment of {repository} to {connection_ref} changed after "
+                "admission; submit the work again to re-admit it",
+            )
+        return connection.model_copy(
+            update={
+                "allowed_operations": tuple(
+                    operation
+                    for operation in connection.allowed_operations
+                    if operation in assignment.operations
+                )
+            }
+        )
+
     async def _is_unscoped_migrated_default(
         self, connection: RepositoryConnection
     ) -> bool:
@@ -1568,7 +1649,12 @@ class RepositoryConnectionService:
         )
         candidates = []
         for connection in connections:
-            if connection.lifecycle != "active":
+            # A GitLab project is used only through its selected connection,
+            # never routed by a GitHub-style repository name.
+            if (
+                connection.lifecycle != "active"
+                or connection.hosting_service == "generic_git"
+            ):
                 continue
             try:
                 assignment = await self._recorded_launch_assignment(connection, repository)
