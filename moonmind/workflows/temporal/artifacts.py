@@ -1490,6 +1490,8 @@ _LEGACY_SAVED_WORK_OUTPUT_LINKS = (
 # security.assess publishes these reusable roots; report text has no schema.
 _ASSESSMENT_PRODUCER = "security.assess"
 _ASSESSMENT_ROOT_LINKS = ("security.scan", "security.comparison")
+# The artifact identity form a dependency seal accepts.
+ARTIFACT_ID_PATTERN = re.compile(r"art_[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -1534,7 +1536,7 @@ def _normalized_dependencies(
         if (
             not isinstance(item, ArtifactDependency)
             or not isinstance(item.artifact_id, str)
-            or not re.fullmatch(r"art_[A-Za-z0-9_-]+", item.artifact_id)
+            or not ARTIFACT_ID_PATTERN.fullmatch(item.artifact_id)
             or not isinstance(item.role, str)
             or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,64}", item.role)
             or type(item.required) is not bool
@@ -6213,6 +6215,42 @@ class TemporalArtifactService:
         )
         await self._finish_mutation()
         return counts
+
+    async def seal_admitted_assessment_root(
+        self, *, root_artifact_id: str, access: ArtifactAccessContext
+    ) -> None:
+        """Give an unsealed assessment root that ``access`` admitted backfill's seal.
+
+        As in backfill, the seal runs under the producer execution the root's
+        own link records, so a later occurrence in another workflow can admit
+        it. The admitting execution gains no read of that producer's evidence.
+        """
+        from moonmind.workflows.skills.security_assessment import (
+            seal_retained_assessment_root,
+        )
+
+        artifact, payload = await self.read(artifact_id=root_artifact_id, access=access)
+        producer = next(
+            (
+                link.workflow_id
+                for link in reversed(await self._repository.list_links(root_artifact_id))
+                if link.link_type in _ASSESSMENT_ROOT_LINKS
+            ),
+            None,
+        )
+        if (
+            not producer
+            or (artifact.metadata_json or {}).get("producer") != _ASSESSMENT_PRODUCER
+        ):
+            raise TemporalArtifactStateError(
+                "Retained assessment root has no recorded producer execution"
+            )
+        await seal_retained_assessment_root(
+            self,
+            artifact=artifact,
+            payload=payload,
+            access=ArtifactAccessContext.for_execution(producer),
+        )
 
     async def _backfill_retained_dependencies(
         self, *, now, limit, on_progress=None
