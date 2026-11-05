@@ -3,7 +3,7 @@ on:
   workflow_call:
     outputs:
       artifact:
-        description: Prepared recovery runtime archive
+        description: Prepared recovery runtimes as job-local registry storage
         value: ${{ jobs.prepare.outputs.artifact }}
 permissions:
   contents: read
@@ -52,8 +52,11 @@ jobs:
           set -euo pipefail
           # A local registry gives the canonical host launcher its real
           # repository@sha256 identity. Nothing is published off this runner;
-          # 127.0.0.1 works without changing daemon trust/configuration.
-          docker run -d --name moonmind-test-recovery-registry \
+          # 127.0.0.1 works without changing daemon trust/configuration. Its
+          # compressed, layer-deduplicated storage is the uploaded transport.
+          mkdir -p "$RUNNER_TEMP/recovery-images/registry"
+          docker run -d --name moonmind-test-recovery-registry --user "$(id -u):$(id -g)" \
+            -v "$RUNNER_TEMP/recovery-images/registry:/var/lib/registry" \
             -p 127.0.0.1:5000:5000 registry:3.0.0
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
@@ -98,19 +101,18 @@ jobs:
           test "$RECOVERY_BUILDER" != default
           test "$RECOVERY_BUILDER_DRIVER" = docker-container
           df -h "$RUNNER_TEMP" /var/lib/docker
-          # Both runtimes are loaded in Docker now. Release duplicate registry
-          # blobs and this job's build cache before Docker stages its export.
+          # Both runtimes are pushed. Stop the registry so its transported
+          # storage is quiescent, and release this job's build cache.
           docker rm -fv moonmind-test-recovery-registry
           docker buildx prune --builder "$RECOVERY_BUILDER" --all --force
-          docker image inspect moonmind-test-omnigent-server:candidate \
-            moonmind-test-omnigent-host:candidate >/dev/null
+          docker image inspect 127.0.0.1:5000/moonmind-test-omnigent-server:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host:candidate >/dev/null
           df -h "$RUNNER_TEMP" /var/lib/docker
-      - name: Archive the prepared recovery runtimes
-        timeout-minutes: 5
+      - name: Record and measure the prepared recovery registry
+        timeout-minutes: 3
         run: |
-          mkdir -p "$RUNNER_TEMP/recovery-images"
           python3 tools/ci/release_image_fixture.py save-recovery \
-            --archive "$RUNNER_TEMP/recovery-images/images.tar.gz" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --registry "$RUNNER_TEMP/recovery-images/registry" --state "$RUNNER_TEMP/recovery-images/identity.json" \
             --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Upload prepared recovery images

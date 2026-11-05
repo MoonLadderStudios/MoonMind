@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import json
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -25,10 +23,13 @@ from tools.ci.source_verification import artifact_attempt
 REPOSITORY = "localhost:5001/moonmind-test-qualification"
 OWNER_LABEL = "moonmind.test.release-image-owner"
 NAME_PREFIX = "moonmind-test-release-registry-"
-RECOVERY_IMAGES = (
-    "moonmind-test-omnigent-server:candidate",
-    "moonmind-test-omnigent-host:candidate",
-)
+RECOVERY_REGISTRY = "127.0.0.1:5000"
+RECOVERY_IMAGES = {
+    "server": "moonmind-test-omnigent-server",
+    "host": "moonmind-test-omnigent-host",
+}
+RECOVERY_SCHEMA = "moonmind.recovery-images/v2"
+BLOB_ROOT = ("docker", "registry", "v2", "blobs", "sha256")
 
 
 class FixtureError(RuntimeError):
@@ -40,101 +41,196 @@ def _file_digest(path: Path) -> str:
         return "sha256:" + hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def _save_recovery_archive(archive: Path) -> int:
-    """Compress Docker's stream without retaining a second multi-GB raw copy."""
-    command = ["docker", "save", *RECOVERY_IMAGES]
-    with tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
-        raw_bytes = 0
-        try:
-            with gzip.open(archive, "wb", compresslevel=1) as output:
-                while chunk := process.stdout.read(1024 * 1024):
-                    raw_bytes += len(chunk)
-                    output.write(chunk)
-            returncode = process.wait()
-            if returncode:
-                errors.seek(0)
-                raise subprocess.CalledProcessError(
-                    returncode, command, stderr=errors.read(1024 * 1024)
-                )
-        except BaseException:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            archive.unlink(missing_ok=True)
-            raise
-        finally:
-            process.stdout.close()
-    return raw_bytes
+def _storage_files(root: Path) -> dict[str, tuple[str, int]]:
+    """Hash transported registry files; content-addressed blobs must match."""
+    files = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
+            raise FixtureError("Recovery registry storage has a non-regular entry")
+        if path.is_dir():
+            continue
+        relative = path.relative_to(root).parts
+        digest = _file_digest(path)
+        if relative[:5] == BLOB_ROOT and (
+            len(relative) != 8
+            or relative[7] != "data"
+            or relative[5] != relative[6][:2]
+            or digest != "sha256:" + relative[6]
+        ):
+            raise FixtureError("Recovery registry blob differs from its digest")
+        files["/".join(relative)] = (digest, path.stat().st_size)
+    return files
 
 
-def recovery_archive(
-    archive: Path,
-    state: Path,
-    *,
-    revision: str,
-    upstream: str,
-    run_id: str,
-    attempt: str,
-    restore_archive: bool = False,
-    artifact: str | None = None,
-) -> None:
-    """Transport prepared runtimes without rebuilding or trusting mutable tags."""
-    if artifact:
-        attempt = artifact_attempt(
-            artifact, prefix="recovery-images", run_id=run_id, current_attempt=attempt
-        )
-    identity = {
-        "revision": revision,
-        "upstream": upstream,
-        "runId": run_id,
-        "attempt": attempt,
-    }
+def _storage_digest(files: dict[str, tuple[str, int]]) -> str:
+    listing = "".join(f"{path}\0{digest}\n" for path, (digest, _) in files.items())
+    return "sha256:" + hashlib.sha256(listing.encode()).hexdigest()
+
+
+def _blob_path(digest: str) -> str:
+    hex_digest = digest.removeprefix("sha256:")
+    return "/".join((*BLOB_ROOT, hex_digest[:2], hex_digest, "data"))
+
+
+def _image_blobs(
+    root: Path, files: dict[str, tuple[str, int]], digest: str
+) -> dict[str, int]:
+    """Return the verified manifest closure one registry image needs."""
+    path = _blob_path(digest)
+    if path not in files:
+        raise FixtureError("Recovery registry storage lacks a referenced manifest")
+    manifest = json.loads((root / path).read_bytes())
+    blobs = {digest: files[path][1]}
+    for child in manifest.get("manifests", []):
+        blobs.update(_image_blobs(root, files, child["digest"]))
+    for descriptor in (manifest.get("config"), *manifest.get("layers", [])):
+        if descriptor:
+            blob = _blob_path(descriptor["digest"])
+            if blob not in files:
+                raise FixtureError("Recovery registry storage lacks a referenced blob")
+            blobs[descriptor["digest"]] = files[blob][1]
+    return blobs
+
+
+def _recovery_identity(
+    revision: str, upstream: str, run_id: str, attempt: str
+) -> dict[str, str]:
     if (
         not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (revision, upstream))
         or not run_id.isdecimal()
         or not attempt.isdecimal()
     ):
         raise FixtureError("Missing immutable recovery source/run identity")
-    if restore_archive:
-        payload = json.loads(state.read_text())
-        if (
-            payload.get("schema") != "moonmind.recovery-images/v1"
-            or any(payload.get(key) != value for key, value in identity.items())
-            or set(payload.get("images", {})) != set(RECOVERY_IMAGES)
-            or payload.get("archiveDigest") != _file_digest(archive)
-        ):
-            raise FixtureError(
-                "Recovery archive differs from the current source/run/attempt"
+    return {
+        "revision": revision,
+        "upstream": upstream,
+        "runId": run_id,
+        "attempt": attempt,
+    }
+
+
+def _inspect_recovery_image(
+    role: str, image: str, *, revision: str, upstream: str
+) -> dict:
+    inspected = json.loads(_run(["docker", "image", "inspect", image]).stdout)[0]
+    labels = inspected.get("Config", {}).get("Labels", {}) or {}
+    if (
+        not re.fullmatch(r"sha256:[0-9a-f]{64}", inspected.get("Id", ""))
+        or labels.get("org.opencontainers.image.revision") != upstream
+    ):
+        raise FixtureError("Recovery runtime lacks its pinned source identity")
+    if role == "host" and labels.get("moonmind.source.revision") != revision:
+        raise FixtureError("Recovery host overlay belongs to another source")
+    return inspected
+
+
+def save_recovery(
+    root: Path, state: Path, *, revision: str, upstream: str, run_id: str, attempt: str
+) -> None:
+    """Record the job-local registry storage that transports both runtimes.
+
+    Its blobs are already compressed and shared layers are stored once, so the
+    consumer serves them directly instead of loading and re-pushing an export.
+    """
+    identity = _recovery_identity(revision, upstream, run_id, attempt)
+    files = _storage_files(root)
+    images, blobs = {}, {}
+    for role, name in RECOVERY_IMAGES.items():
+        repository = f"{RECOVERY_REGISTRY}/{name}"
+        inspected = _inspect_recovery_image(
+            role, repository + ":candidate", revision=revision, upstream=upstream
+        )
+        refs = [
+            ref
+            for ref in inspected.get("RepoDigests", [])
+            if re.fullmatch(re.escape(repository) + r"@sha256:[0-9a-f]{64}", ref)
+        ]
+        if len(refs) != 1:
+            raise FixtureError("Recovery runtime is not pinned in its job registry")
+        blobs[role] = _image_blobs(root, files, refs[0].rsplit("@", 1)[1])
+        images[name] = {
+            "ref": refs[0],
+            "id": inspected["Id"],
+            "bytes": sum(blobs[role].values()),
+        }
+    required = blobs["server"] | blobs["host"]
+    measured = {
+        "storageBytes": sum(size for _, size in files.values()),
+        "requiredBytes": sum(required.values()),
+        "sharedBytes": sum(
+            required[blob] for blob in blobs["server"].keys() & blobs["host"]
+        ),
+    }
+    payload = {
+        "schema": RECOVERY_SCHEMA,
+        **identity,
+        "images": images,
+        "storageDigest": _storage_digest(files),
+        **measured,
+    }
+    state.write_text(json.dumps(payload, indent=2) + "\n")
+    print(
+        "::notice title=Recovery runtime bytes::"
+        f"server={images[RECOVERY_IMAGES['server']]['bytes']} "
+        f"host={images[RECOVERY_IMAGES['host']]['bytes']} "
+        f"shared={measured['sharedBytes']} required={measured['requiredBytes']} "
+        f"transported={measured['storageBytes']}"
+    )
+
+
+def restore_recovery(
+    root: Path,
+    state: Path,
+    *,
+    revision: str,
+    upstream: str,
+    run_id: str,
+    attempt: str,
+    artifact: str | None = None,
+) -> dict[str, str]:
+    """Verify transported storage, then pull the exact recorded runtimes.
+
+    The caller serves ``root`` read-only from this job's loopback registry.
+    """
+    if artifact:
+        attempt = artifact_attempt(
+            artifact, prefix="recovery-images", run_id=run_id, current_attempt=attempt
+        )
+    identity = _recovery_identity(revision, upstream, run_id, attempt)
+    payload = json.loads(state.read_text())
+    images = payload.get("images") if isinstance(payload, dict) else None
+    if (
+        not isinstance(images, dict)
+        or payload.get("schema") != RECOVERY_SCHEMA
+        or any(payload.get(key) != value for key, value in identity.items())
+        or set(images) != set(RECOVERY_IMAGES.values())
+        or any(
+            not isinstance(images[name], dict)
+            or re.fullmatch(
+                re.escape(f"{RECOVERY_REGISTRY}/{name}") + r"@sha256:[0-9a-f]{64}",
+                str(images[name].get("ref", "")),
             )
-        _run(["docker", "load", "--input", str(archive)])
-    else:
-        payload = {"schema": "moonmind.recovery-images/v1", **identity, "images": {}}
-    for image in RECOVERY_IMAGES:
-        inspected = json.loads(_run(["docker", "image", "inspect", image]).stdout)[0]
-        labels = inspected.get("Config", {}).get("Labels", {}) or {}
-        image_id = inspected["Id"]
-        if (
-            not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)
-            or labels.get("org.opencontainers.image.revision") != upstream
+            is None
+            for name in images
+        )
+        or payload.get("storageDigest") != _storage_digest(_storage_files(root))
+    ):
+        raise FixtureError("Recovery images differ from the current source/run/attempt")
+    refs = {}
+    for role, name in RECOVERY_IMAGES.items():
+        ref = images[name]["ref"]
+        _run(["docker", "pull", ref])
+        inspected = _inspect_recovery_image(
+            role, ref, revision=revision, upstream=upstream
+        )
+        if inspected["Id"] != images[name].get("id") or ref not in inspected.get(
+            "RepoDigests", []
         ):
-            raise FixtureError("Recovery runtime lacks its pinned source identity")
-        if (
-            image == RECOVERY_IMAGES[1]
-            and labels.get("moonmind.source.revision") != revision
-        ):
-            raise FixtureError("Recovery host overlay belongs to another source")
-        if restore_archive and payload["images"][image] != image_id:
             raise FixtureError(
                 "Restored recovery image content differs from its receipt"
             )
-        payload["images"][image] = image_id
-    if not restore_archive:
-        payload["uncompressedBytes"] = _save_recovery_archive(archive)
-        payload["archiveBytes"] = archive.stat().st_size
-        payload["compression"] = "gzip-level-1"
-        payload["archiveDigest"] = _file_digest(archive)
-        state.write_text(json.dumps(payload, indent=2) + "\n")
+        refs[role] = ref
+    return refs
 
 
 def _run(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
@@ -284,28 +380,38 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--owner", required=True)
     for action in ("save-recovery", "restore-recovery"):
         command = commands.add_parser(action)
-        for flag in ("archive", "state"):
+        for flag in ("registry", "state"):
             command.add_argument("--" + flag, type=Path, required=True)
         for flag in ("revision", "upstream", "run-id", "attempt"):
             command.add_argument("--" + flag, required=True)
-        command.add_argument("--artifact")
+    commands.choices["restore-recovery"].add_argument("--artifact")
     args = parser.parse_args(argv)
     try:
         if args.command == "describe":
             print(json.dumps(describe(args.archive)))
         elif args.command == "restore":
             restore(args.archive, args.image, args.state, args.owner)
-        elif args.command in {"save-recovery", "restore-recovery"}:
-            recovery_archive(
-                args.archive,
+        elif args.command == "save-recovery":
+            save_recovery(
+                args.registry,
                 args.state,
                 revision=args.revision,
                 upstream=args.upstream,
                 run_id=args.run_id,
                 attempt=args.attempt,
-                restore_archive=args.command == "restore-recovery",
+            )
+        elif args.command == "restore-recovery":
+            refs = restore_recovery(
+                args.registry,
+                args.state,
+                revision=args.revision,
+                upstream=args.upstream,
+                run_id=args.run_id,
+                attempt=args.attempt,
                 artifact=args.artifact,
             )
+            for role, ref in refs.items():
+                print(f"{role}={ref}")
         else:
             cleanup(args.state, args.owner)
     except (FixtureError, OSError, ValueError, subprocess.CalledProcessError) as error:
