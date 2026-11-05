@@ -61,7 +61,7 @@ full_frontend=true|false
 
 Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. The selector exempts six explicitly audited prose paths from the general Markdown fast-unit rule. Unlisted Markdown retains existing coverage, including executable examples and Skill contracts. Sensitive, mixed, unknown, and full-run changes keep their existing suite decisions; prose exemptions never override them. Cheap preflight policy checks run in every source/full verification. Artifact-only qualification requires the complete current source receipt instead of repeating those checks. Full ownership collection runs for changed collection inputs as described below.
 
-Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage. `test-frontend` aggregates selected frontend jobs even when intentional nonselection leaves both browser jobs skipped.
+Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage.
 
 ### Component Selection
 
@@ -276,7 +276,7 @@ Full execution does not switch fast-unit into a broad wrapper that duplicates sp
 
 For primary backend execution it consumes the matrix aggregate result, not the last matrix row's output. Failed, timed-out, canceled, or unexpectedly skipped selected work cannot pass. Explicit selector nonselection is allowed but is not execution evidence. A matrix with no selected Python work must not conceal an unsuccessful selector.
 
-`preflight-policy` remains the existing owner of repository policy checks and the other always-run static invariants (the MoonSpec projection drift gate and the shard-ownership verifier), not a reason to duplicate those checks in test rows or add tests for documentation phrasing. `test-frontend` and `check-generated-contracts` aggregate their selected jobs. The ownership verifier protects complete/disjoint selection.
+`preflight-policy` remains the existing owner of repository policy checks and the other always-run static invariants (the MoonSpec projection drift gate and the shard-ownership verifier), not a reason to rescan the repository in test rows or test documentation phrasing. The ownership verifier protects complete/disjoint selection.
 
 Branch-protection requirements remain `ci-required` for the aggregated suites, the standalone `migration-gate`, and applicable independent repository checks such as CodeQL. Do not rename public required contexts or change branch protection as a side effect of test optimization. Separate requirements for retired/renamed internal aggregators should be reconciled through their owning configuration, not worked around with fake checks.
 
@@ -316,7 +316,7 @@ During an authorized architecture removal, update obsolete test ownership, fixtu
 
 ### Source, Image And Evidence Ownership
 
-The release workflow starts reusable `source` verification alongside amd64/arm64 builds. Its `artifact` phase follows assembly and recovery preparation; final publication verifies the complete source receipt after both phases. Pull requests, scheduled checks and manual full runs use the same reusable workflow with both phases. Main pushes have one source-suite owner, including frontend and generated-contract checks; the image build compiles assets without rerunning those host checks. Compatible dependency updates are grouped to reduce simultaneous full-suite PRs; major updates retain independent review.
+The release workflow starts reusable `source` verification alongside amd64/arm64 builds. Its `artifact` phase follows assembly and recovery preparation. Receipt verification, bound to its bytes, attempt and selection, overlaps that phase; publication also requires the image it consumed. One advisory release timing report covers both phases. Pull requests, scheduled checks and manual full runs use the same reusable workflow with both phases. Main pushes have one source-suite owner, including frontend and generated-contract checks; the image build compiles assets without rerunning those host checks. Compatible dependency updates are grouped to reduce simultaneous full-suite PRs; major updates retain independent review.
 
 Every PR application-image consumer restores one shared OCI archive through `release_image_fixture.py`, verifies its immutable manifest and checks the image's source label. Forks need no registry publication permission. Release consumers pull the supplied assembled manifest. Recovery preparation overlaps source tests and app construction; server/host targets share one graph. A compressed stream avoids a second raw archive; consumers remove verified job-owned downloads after loading. Archive checks bind bytes, image IDs, source/gitlink and run/attempt. Same-session host replacement and interrupted-step recovery run separately from app/API/worker/browser probes, against that same application candidate.
 
