@@ -60,7 +60,7 @@ Each simulated row records the sample count, estimator, interval method, confide
 
 `game-math-assessment/v1` holds `theoretical`, `settlementCases`, `simulation`, `violations`, `status`, `outcome`, `certification: "not_performed"`, and `limitations`. The outcome is `violations`, `incomplete`, `insufficient_precision`, or `consistent`.
 
-A stopped run, unusable records, an intractable strategy without a decided simulation, or truncated violations make the status `partial`. Partial evidence keeps its observations but cannot report a consistent outcome. The contract refuses a document that claims consistency over partial or imprecise evidence, so `security.assess` cannot promote one.
+A stopped run, unusable records, an intractable strategy without a decided simulation, or truncated violations make the status `partial`. Partial evidence keeps its observations but cannot report a consistent outcome. The contract rechecks a retained document against its own fields. Each decision must follow from its interval and the specification's criteria, a stopped or unfinished run must be partial, and every `different` decision must carry its violation. `security.assess` therefore cannot promote a summary that contradicts its evidence.
 
 `security.assess` maps violations to `game-math` findings on `gameRef`. Coverage names only performed checks and requires decided simulations. Comparable absence requires the same specification; theoretical or model evidence cannot clear untested implementation findings.
 

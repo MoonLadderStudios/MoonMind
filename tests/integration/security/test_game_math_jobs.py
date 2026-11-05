@@ -375,3 +375,23 @@ async def test_cancelled_profile_job_keeps_partial_evidence(
     assert "simulation_cancelled" in reviewed["limitations"]
     assert outputs["coverageStatus"] == "stale_or_partial"
     assert outputs["counts"]["new"] == 0
+
+    # A retained copy that promotes the stopped run to confirmed RTP is refused
+    # at the reader instead of becoming complete coverage.
+    forged = {**result, "status": "complete", "outcome": "consistent"}
+    forged["simulation"] = {
+        **result["simulation"],
+        "status": "complete",
+        "results": [
+            {**row, "decision": "equivalent", "rareEventCoverage": "complete"}
+            for row in result["simulation"]["results"]
+        ],
+    }
+    outputs = await job.assess(
+        await recurring.put(environment.service, forged), "game-math-forged-review"
+    )
+    assert outputs["scannerSummaries"] == []
+    assert {"boundary": "retained-report", "error": "ValidationError"} in outputs[
+        "diagnostics"
+    ]
+    assert outputs["coverageStatus"] == "stale_or_partial"

@@ -1,8 +1,10 @@
 """Comparison and bounds for retained repository scanner evidence."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from moonmind.security.assessments import (
     AssessmentRequest,
@@ -10,6 +12,7 @@ from moonmind.security.assessments import (
     compare_observations,
 )
 from moonmind.security.game_math import (
+    GameMathAssessment,
     GameMathSpec,
     RoundRecord,
     SimulationRequest,
@@ -278,6 +281,26 @@ def test_imprecise_or_stopped_game_math_stays_partial_coverage(stopped):
     )
     coverage = observe_game(summary).coverage[0]
     assert coverage.status == "partial" and not coverage.all_rules
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_retained_game_math_cannot_promote_its_own_partial_evidence(stopped):
+    summary = game_math(
+        simulation=SimulationRequest(
+            source="model", samples=50 if not stopped else 10**6, seed=1
+        ),
+        should_stop=lambda: stopped,
+    )
+    # retained-report decodes the stored JSON with the summary contract.
+    payload = json.loads(summary.model_dump_json(by_alias=True))
+    retained = GameMathAssessment.model_validate(payload)
+    assert observe_game(retained).coverage[0].status == "partial"
+    payload.update(status="complete", outcome="consistent")
+    payload["simulation"]["status"] = "complete"
+    for row in payload["simulation"]["results"]:
+        row.update(decision="equivalent", rareEventCoverage="complete")
+    with pytest.raises(ValidationError):
+        GameMathAssessment.model_validate(payload)
 
 
 def test_game_outside_admitted_scope_is_refused():

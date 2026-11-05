@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from fractions import Fraction
+from functools import cache
 from itertools import count
 
 import pytest
@@ -70,6 +71,26 @@ DIE = table(
 JACKPOT = table(
     {"id": "jackpot", "probability": "1/1000", "multiplier": "960"},
     {"id": "miss", "probability": "999/1000", "multiplier": "0"},
+)
+# A 1-in-1000 double among even-money returns: RTP = 0.999 + 0.002.
+DOUBLE = table(
+    {"id": "steady", "probability": "999/1000", "multiplier": "1"},
+    {"id": "double", "probability": "1/1000", "multiplier": "2"},
+)
+# Twelve draws over ten widely spaced values exceed the enumeration bound.
+FEATURE = table(
+    {"id": "base", "probability": "99/100", "multiplier": "0"},
+    {
+        "id": "feature",
+        "probability": "1/100",
+        "multiplier": "0",
+        "bonus": {
+            "draws": 12,
+            "outcomes": [
+                {"probability": "1/10", "multiplier": str(10**k)} for k in range(10)
+            ],
+        },
+    },
 )
 
 
@@ -495,20 +516,17 @@ def test_sparse_tail_reports_insufficient_precision_despite_containing_target():
 
 
 def test_undercovered_paying_event_blocks_equivalence_despite_a_narrow_interval():
-    # A 1-in-1000 double among even-money returns: RTP = 0.999 + 0.002.
-    game = table(
-        {"id": "steady", "probability": "999/1000", "multiplier": "1"},
-        {"id": "double", "probability": "1/1000", "multiplier": "2"},
-    )
     run = SimulationRequest(source="model", samples=5_000, seed=11)
-    (row,) = assess_game_math(spec(game, *one_bet()), simulation=run).simulation.results
+    (row,) = assess_game_math(
+        spec(DOUBLE, *one_bet()), simulation=run
+    ).simulation.results
     assert row.target == Fraction(1001, 1000)
     assert row.half_width < 0.02 and row.low <= 1.001 <= row.high
     double = next(e for e in row.rare_events if e.event == "outcome:double")
     assert (double.expected, double.covered) == (5.0, False)
     assert row.decision == "insufficient_precision"
     # The event floor is part of the specification's criteria.
-    relaxed = spec(game, *one_bet(), criteria={**CRITERIA, "minExpectedEvents": 5})
+    relaxed = spec(DOUBLE, *one_bet(), criteria={**CRITERIA, "minExpectedEvents": 5})
     (row,) = assess_game_math(relaxed, simulation=run).simulation.results
     assert row.decision == "equivalent"
 
@@ -710,21 +728,7 @@ def test_time_budget_exhaustion_is_partial():
 
 
 def test_intractable_specification_needs_a_simulated_decision():
-    # Twelve draws over ten widely spaced values exceed the enumeration bound.
-    values = [str(10**k) for k in range(10)]
-    feature = table(
-        {"id": "base", "probability": "99/100", "multiplier": "0"},
-        {
-            "id": "feature",
-            "probability": "1/100",
-            "multiplier": "0",
-            "bonus": {
-                "draws": 12,
-                "outcomes": [{"probability": "1/10", "multiplier": v} for v in values],
-            },
-        },
-    )
-    alone = assess_game_math(spec(feature, *one_bet()))
+    alone = assess_game_math(spec(FEATURE, *one_bet()))
     (row,) = alone.theoretical
     assert (row.status, row.rtp) == ("intractable", None)
     assert (alone.status, alone.outcome) == ("partial", "incomplete")
@@ -745,6 +749,85 @@ def test_result_contract_refuses_contradictory_promotions():
         with pytest.raises(ValidationError):
             GameMathAssessment.model_validate({**raw, **change})
     assert set(raw) >= {"theoretical", "simulation", "violations", "criteria"}
+
+
+@cache
+def genuine(name):
+    """Evaluator results that the forgeries below start from."""
+    if name == "precise":
+        run = SimulationRequest(source="model", samples=100_000, seed=5199)
+        return assess_game_math(spec(COIN, *one_bet()), simulation=run)
+    if name == "low-sample":
+        run = SimulationRequest(source="model", samples=50, seed=1)
+        return assess_game_math(spec(COIN, *one_bet()), simulation=run)
+    if name == "undercovered":
+        run = SimulationRequest(source="model", samples=5_000, seed=11)
+        return assess_game_math(spec(DOUBLE, *one_bet()), simulation=run)
+    if name == "biased":
+        rows = [record(outcome="heads", total="2")] * 9_000 + [
+            record(outcome="tails", total="0")
+        ] * 11_000
+        run = SimulationRequest(source="records")
+        return assess_game_math(spec(COIN, *one_bet()), simulation=run, records=rows)
+    return assess_game_math(spec(FEATURE, *one_bet()))
+
+
+def promote(raw, **row):
+    raw.update(status="complete", outcome="consistent")
+    raw["simulation"]["results"][0].update(decision="equivalent", **row)
+
+
+def cover_every_event(raw):
+    promote(raw, rareEventCoverage="complete")
+    for event in raw["simulation"]["results"][0]["rareEvents"]:
+        event["covered"] = True
+
+
+def drop_simulated_finding(raw):
+    raw.update(violations=[], outcome="insufficient_precision")
+
+
+FORGERIES = {
+    # A cancelled run's interval proves nothing, whatever it shows.
+    "decided-after-cancel": (
+        "precise",
+        lambda raw: raw["simulation"].update(status="partial", stopReason="cancelled"),
+    ),
+    "complete-run-with-stop-reason": (
+        "precise",
+        lambda raw: raw["simulation"].update(stopReason="time_budget_exhausted"),
+    ),
+    "complete-over-unfinished-run": (
+        "precise",
+        lambda raw: raw["simulation"].update(status="partial", unusableRecords=1),
+    ),
+    "wide-interval-equivalent": ("low-sample", promote),
+    "tolerance-relaxed-after-evaluation": (
+        "low-sample",
+        lambda raw: promote(raw, tolerance="2"),
+    ),
+    "undercovered-equivalent": ("undercovered", promote),
+    "coverage-floor-ignored": ("undercovered", cover_every_event),
+    "different-without-its-finding": ("biased", drop_simulated_finding),
+    "intractable-without-decision": (
+        "intractable",
+        lambda raw: raw.update(status="complete", outcome="consistent"),
+    ),
+}
+
+
+@pytest.mark.parametrize("forgery", FORGERIES)
+def test_result_contract_refuses_summaries_contradicting_their_own_evidence(
+    forgery,
+):
+    source, edit = FORGERIES[forgery]
+    raw = json.loads(genuine(source).model_dump_json(by_alias=True))
+    # The evaluator's own result survives the retained JSON form unchanged.
+    retained = GameMathAssessment.model_validate(raw)
+    assert retained.model_dump() == genuine(source).model_dump()
+    edit(raw)
+    with pytest.raises(ValidationError):
+        GameMathAssessment.model_validate(raw)
 
 
 def test_cli_writes_partial_result_for_unusable_records(tmp_path):

@@ -401,6 +401,37 @@ Decision = Literal[
 ]
 
 
+def _decide(
+    samples: int,
+    target: Fraction | None,
+    tolerance: Fraction,
+    low: float,
+    high: float,
+    half_width: float | None,
+    covered: bool,
+) -> Decision:
+    """The decision a finished run's interval supports against its target.
+
+    The result contract rechecks retained decisions with the same rule.
+    """
+    if not samples:
+        return "incomplete"
+    if target is None:
+        return "not_compared"
+    if half_width is not None and (
+        high < target - tolerance or low > target + tolerance
+    ):
+        return "different"
+    if (
+        half_width is not None
+        and covered
+        and target - tolerance <= low
+        and high <= target + tolerance
+    ):
+        return "equivalent"
+    return "insufficient_precision"
+
+
 class Simulated(Contract):
     strategy: Ident
     samples: int
@@ -419,6 +450,24 @@ class Simulated(Contract):
     rare_event_coverage: Literal["complete", "incomplete"]
     decision: Decision
 
+    @model_validator(mode="after")
+    def _decided(self):
+        covered = all(event.covered for event in self.rare_events)
+        if self.rare_event_coverage != ("complete" if covered else "incomplete"):
+            raise ValueError("rare-event coverage must summarize its events")
+        # A stopped run is incomplete whatever its interval shows.
+        if self.decision != "incomplete" and self.decision != _decide(
+            self.samples,
+            self.target,
+            self.tolerance,
+            self.low,
+            self.high,
+            self.half_width,
+            covered,
+        ):
+            raise ValueError("a decision must follow from its own interval")
+        return self
+
 
 class Simulation(Contract):
     source: Literal["model", "records"]
@@ -429,6 +478,17 @@ class Simulation(Contract):
     stop_reason: Literal["cancelled", "time_budget_exhausted"] | None = None
     unusable_records: int = 0
     results: list[Simulated]
+
+    @model_validator(mode="after")
+    def _finished(self):
+        undecided = [row.decision == "incomplete" for row in self.results]
+        if self.stop_reason and not all(undecided):
+            raise ValueError("a stopped run decides nothing")
+        if self.status == "complete" and (
+            self.stop_reason or self.unusable_records or any(undecided)
+        ):
+            raise ValueError("a stopped or unfinished run is partial")
+        return self
 
 
 class Violation(Contract):
@@ -471,9 +531,36 @@ class GameMathAssessment(Contract):
 
     @model_validator(mode="after")
     def _consistent(self):
-        decisions = {
-            row.decision for row in (self.simulation.results if self.simulation else [])
-        }
+        rows = self.simulation.results if self.simulation else []
+        decisions = {row.decision for row in rows}
+        criteria = self.criteria
+        for row in rows:
+            if (row.tolerance, row.confidence) != (
+                criteria.tolerance,
+                criteria.confidence,
+            ) or any(
+                event.covered
+                != (row.samples * event.probability >= criteria.min_expected_events)
+                for event in row.rare_events
+            ):
+                raise ValueError("simulations are judged by the specified criteria")
+        if self.status == "complete":
+            decided = {
+                row.strategy
+                for row in rows
+                if row.decision in {"equivalent", "different"}
+            }
+            if (self.simulation and self.simulation.status == "partial") or any(
+                row.status == "intractable" and row.strategy not in decided
+                for row in self.theoretical
+            ):
+                raise ValueError(
+                    "complete evidence needs a finished run deciding each strategy"
+                )
+            if {row.strategy for row in rows if row.decision == "different"} != {
+                row.strategy for row in self.violations if row.rule == "simulated-rtp"
+            }:
+                raise ValueError("a different simulated RTP is a violation")
         if bool(self.violations) != (self.outcome == "violations"):
             raise ValueError("outcome must report violations exactly when found")
         if self.status == "partial" and self.outcome not in {
@@ -906,23 +993,13 @@ class _Run:
                 for name, probability in self.events[strategy.id]
             ]
             covered = all(event.covered for event in events)
-            if stopped or not estimate.n:
-                decision = "incomplete"
-            elif target is None:
-                decision = "not_compared"
-            elif half is not None and (
-                high < target - criteria.tolerance or low > target + criteria.tolerance
-            ):
-                decision = "different"
-            elif (
-                half is not None
-                and covered
-                and target - criteria.tolerance <= low
-                and high <= target + criteria.tolerance
-            ):
-                decision = "equivalent"
-            else:
-                decision = "insufficient_precision"
+            decision = (
+                "incomplete"
+                if stopped
+                else _decide(
+                    estimate.n, target, criteria.tolerance, low, high, half, covered
+                )
+            )
             rows.append(
                 Simulated(
                     strategy=strategy.id,
