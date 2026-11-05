@@ -195,6 +195,45 @@ async def test_flattening_preserves_optional_ancestry_and_frozen_closure(tmp_pat
         assert not any(item.required for item in result.dependencies)
 
 
+async def test_bytes_only_role_retains_cited_root_without_its_closure(tmp_path):
+    """A history edge keeps the cited root's bytes, not its whole lineage."""
+    store = module.LocalTemporalArtifactStore(tmp_path / "bytes")
+    access = module.ArtifactAccessContext.for_service("service:owner")
+    async with temporal_db(tmp_path) as maker, maker() as session:
+        root, previous, leaf = [
+            await seed(session, store, name) for name in [b"root", b"previous", b"leaf"]
+        ]
+        api = service(session, store)
+        await api.record_verified_dependencies(
+            root_artifact_id=previous.artifact_id,
+            dependencies=[module.ArtifactDependency(leaf.artifact_id, leaf.sha256)],
+            access=access,
+        )
+        result = await api.record_verified_dependencies(
+            root_artifact_id=root.artifact_id,
+            dependencies=[
+                module.ArtifactDependency(
+                    previous.artifact_id, previous.sha256, True, "history"
+                )
+            ],
+            access=access,
+            bytes_only_roles={"history"},
+        )
+        assert result.dependencies == (
+            module.ArtifactDependency(
+                previous.artifact_id, previous.sha256, True, "history"
+            ),
+        )
+        previous.expires_at = leaf.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+        with pytest.raises(module.TemporalArtifactStateError, match="retained"):
+            await api.soft_delete(
+                artifact_id=previous.artifact_id, principal="service:owner"
+            )
+        await api.soft_delete(artifact_id=leaf.artifact_id, principal="service:owner")
+        assert leaf.status is models.TemporalArtifactStatus.DELETED
+
+
 async def test_expired_unprotected_required_input_cannot_be_newly_admitted(tmp_path):
     store = module.LocalTemporalArtifactStore(tmp_path / "bytes")
     async with temporal_db(tmp_path) as maker, maker() as session:

@@ -270,6 +270,8 @@ class TriageDecision(Contract):
         "accepted_risk", "false_positive", "confirmed_vulnerability", "fix_retest"
     ]
     reason: Text
+    # Artifact ids (art_...) must be readable and are sealed with the comparison
+    # that admits them; other references, such as a tracker URL, stay text.
     evidence_refs: Evidence
     author: Text
     source: Text
