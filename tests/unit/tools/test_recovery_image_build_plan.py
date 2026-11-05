@@ -77,3 +77,66 @@ def test_only_first_automatic_main_attempt_exports_recovery_cache():
     )
     assert build["with"]["files"] == "tools/ci/recovery-images.hcl"
     assert build["with"]["source"] == "."
+
+
+def _steps(workflow: str, job: str) -> list[dict]:
+    loaded = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
+    return loaded["jobs"][job]["steps"]
+
+
+def _index(steps: list[dict], text: str) -> int:
+    matches = [
+        index
+        for index, step in enumerate(steps)
+        if text in step.get("run", "") or text == step.get("name")
+    ]
+    assert len(matches) == 1, text
+    return matches[0]
+
+
+def test_prepared_registry_storage_is_the_recovery_transport():
+    producer = _steps("prepare-recovery-images.yml", "prepare")
+    scripts = "\n".join(step.get("run", "") for step in producer)
+    # Compressed, layer-deduplicated registry blobs replace a gzip export.
+    assert "docker save" not in scripts and "images.tar" not in scripts
+    pushed = _index(producer, "pin_local_image() {")
+    assert (
+        '-v "$RUNNER_TEMP/recovery-images/registry:/var/lib/registry"'
+        in producer[pushed]["run"]
+    )
+    released = _index(producer, "Release temporary recovery build storage")
+    recorded = _index(producer, "release_image_fixture.py save-recovery")
+    uploaded = next(
+        index
+        for index, step in enumerate(producer)
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    # PR #5219's cleanup still stops the registry and prunes the job builder
+    # before the transported storage is recorded and uploaded.
+    assert "docker rm -fv moonmind-test-recovery-registry" in producer[released]["run"]
+    assert "docker buildx prune" in producer[released]["run"]
+    assert pushed < released < recorded < uploaded
+    assert (
+        '--registry "$RUNNER_TEMP/recovery-images/registry"'
+        in producer[recorded]["run"]
+    )
+    assert producer[uploaded]["with"]["path"] == "${{ runner.temp }}/recovery-images"
+    assert producer[uploaded]["with"]["compression-level"] == 0
+
+    consumer = _steps("pytest-unit-tests.yml", "omnigent-host-recovery")
+    scripts = "\n".join(step.get("run", "") for step in consumer)
+    assert "docker load" not in scripts and "docker push" not in scripts
+    served = _index(consumer, "release_image_fixture.py restore-recovery")
+    run = consumer[served]["run"]
+    assert consumer[served]["id"] == "recovery-images"
+    mount = '-v "$RUNNER_TEMP/recovery-images/registry:/var/lib/registry:ro"'
+    assert run.index(mount) < run.index("restore-recovery")
+    assert '>> "$GITHUB_OUTPUT"' in run.split("restore-recovery", 1)[1]
+    downloaded = next(
+        index
+        for index, step in enumerate(consumer)
+        if step.get("uses", "").startswith("actions/download-artifact@")
+        and step["with"]["path"] == "${{ runner.temp }}/recovery-images"
+    )
+    recovered = _index(consumer, "tools/ci/run_credential_free_host_recovery.py")
+    assert downloaded < served < recovered
