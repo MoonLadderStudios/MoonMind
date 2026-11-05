@@ -359,9 +359,9 @@ def test_journey_job_reserves_setup_execution_and_reporting(
 
     def selected(step: dict) -> bool:
         condition = step.get("if", "")
-        if "outputs.artifact_name != ''" in condition and image_source != "archive":
+        if "env.CANDIDATE_ARCHIVE != ''" in condition and image_source != "archive":
             return False
-        if "outputs.artifact_name == ''" in condition and image_source == "archive":
+        if "env.CANDIDATE_ARCHIVE == ''" in condition and image_source == "archive":
             return False
         return True
 
@@ -708,7 +708,9 @@ def test_shard_ownership_verifier_runs_for_collection_inputs() -> None:
 
     # Policy stays unconditional; changed collection inputs select the real
     # ownership verifier, including all four installed-plugin partitions.
-    assert job["if"] == "inputs.verification_phase != 'artifact'"
+    assert job["if"] == (
+        "inputs.verification_phase != 'artifact' && inputs.verification_phase != 'recovery'"
+    )
     verifier = next(
         step
         for step in job["steps"]
@@ -1336,7 +1338,7 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
     ]["run"]
 
 
-def _run_required_gate(tmp_path, *, outputs=None, results=None):
+def _run_required_gate(tmp_path, *, outputs=None, results=None, inputs=None):
     import os
     import re
     import subprocess
@@ -1364,7 +1366,7 @@ def _run_required_gate(tmp_path, *, outputs=None, results=None):
 
     def resolve(match):
         path = match.group(1).strip().split(".")
-        value = {"needs": needs, "inputs": {"verification_phase": "full"}}
+        value = {"needs": needs, "inputs": inputs or {"verification_phase": "full"}}
         for key in path:
             value = value.get(key, "")
         return str(value)
@@ -1470,7 +1472,7 @@ def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
             for job, key in (
                 ("unit-slow", "unit_slow"),
                 ("integration-hermetic", "integration_hermetic"),
-                ("omnigent-host-recovery", "exact_artifact"),
+                ("omnigent-host-recovery", "host_recovery"),
                 ("omnigent-exact-artifact", "exact_artifact"),
                 ("omnigent-deterministic-conformance", "omnigent_conformance"),
                 ("frontend-static", "frontend_static"),
@@ -1488,10 +1490,54 @@ def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
     )
     results["integration-ci"] = "success" if installed else "skipped"
     results["prepare-app-image"] = (
-        "success" if installed or outputs["exact_artifact"] == "true" else "skipped"
+        "success"
+        if installed or "true" in (outputs["exact_artifact"], outputs["host_recovery"])
+        else "skipped"
     )
     proc = _run_required_gate(tmp_path, outputs=outputs, results=results)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("phase", "owners"),
+    [
+        (
+            "artifact",
+            {
+                "omnigent-exact-artifact": "exact_artifact",
+                "integration-ci": "integration_fresh_journey",
+            },
+        ),
+        ("recovery", {"omnigent-host-recovery": "host_recovery"}),
+    ],
+)
+def test_required_gate_qualifies_a_supplied_image_without_a_pass_through(
+    tmp_path, phase, owners
+):
+    from tools.select_test_suites import for_phase
+
+    outputs = for_phase(select_suites([]), phase).as_outputs()
+    inputs = {
+        "verification_phase": phase,
+        "candidate_image": "ghcr.io/o/m@sha256:" + "a" * 64,
+    }
+    assert all(outputs[key] == "true" for key in owners.values())
+    results = {"select-test-suites": "success", "preflight-policy": "skipped"}
+    results.update({job: "success" for job in owners})
+
+    def gate(**changes):
+        return _run_required_gate(
+            tmp_path, outputs=outputs, results={**results, **changes}, inputs=inputs
+        )
+
+    proc = gate()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The supplied manifest is consumed directly; an extra producer run or a
+    # missing/failed consumer is still a required failure.
+    assert gate(**{"prepare-app-image": "success"}).returncode != 0
+    for job in owners:
+        for result in ("failure", "skipped", "cancelled"):
+            assert gate(**{job: result}).returncode != 0, (job, result)
 
 
 @pytest.mark.parametrize(
