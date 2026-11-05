@@ -33,8 +33,8 @@ from moonmind.integrations.gitlab.client import (
     GitLabClient,
     connection_from_bound_credential,
 )
-from moonmind.integrations.gitlab.errors import GitLabToolError
-from moonmind.integrations.gitlab.identity import resolve_gitlab_identity
+from moonmind.integrations.gitlab.errors import GitLabIdentityError, GitLabToolError
+from moonmind.integrations.gitlab.identity import GitLabMRRef, resolve_gitlab_identity
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 
 TOOL_NAME = "gitlab.merge_request"
@@ -47,8 +47,9 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 # Retryable acquisition failures: the credential store or issuer is down.
 _RETRYABLE_BOUND_CODES = frozenset({"BOUND_ISSUER_FAILED", "BOUND_UNAVAILABLE"})
 
-#: ``(connectionRef, project, workflow_id=...)`` -> ``(connection, principal)``.
-ConnectionLoader = Callable[..., Awaitable[tuple[Any, str]]]
+#: ``(connectionRef, project, workflow_id=...)`` ->
+#: ``(connection, principal, admitted providerRepoId or None)``.
+ConnectionLoader = Callable[..., Awaitable[tuple[Any, str, str | None]]]
 
 
 class GitLabNoteInput(BaseModel):
@@ -188,8 +189,9 @@ def selected_connections(parameters: Mapping[str, Any]) -> list[tuple[str, str]]
 
 async def _load_admitted_connection(
     connection_ref: str, project: str, *, workflow_id: str
-) -> tuple[Any, str]:
-    """The connection the run admitted for this project, and its admitting principal.
+) -> tuple[Any, str, str | None]:
+    """The connection the run admitted for this project, its admitting
+    principal, and the provider project ID the admission verified.
 
     The Activity acts as ``workflow:<id>``, which no operator connection
     admits, so it reads the run's recorded admission through the existing
@@ -229,7 +231,37 @@ async def _load_admitted_connection(
         connection = await RepositoryConnectionService(
             session
         ).admitted_selected_connection(admission)
-    return connection, str(admission["principalRef"])
+    return connection, str(admission["principalRef"]), admission.get("providerRepoId")
+
+
+def _bind_admitted_project(
+    identity: GitLabMRRef, provider_repo_id: str | None, *, action: str
+) -> GitLabMRRef:
+    """Address the admitted project by its GitLab ID, not its reusable path.
+
+    A moved or deleted project's path can name an unrelated project later;
+    its ID cannot, so reads and notes reach only the project admission verified.
+    """
+
+    if provider_repo_id is None:
+        return identity
+    raw = str(provider_repo_id).strip()
+    project = identity.project
+    if not (raw.isdigit() and int(raw) > 0) or project.project_id not in (
+        None,
+        int(raw),
+    ):
+        raise GitLabIdentityError(
+            "The admitted GitLab project does not match this request.",
+            action=action,
+        )
+    return identity.model_copy(
+        update={
+            "project": project.model_copy(
+                update={"project_path": None, "project_id": int(raw)}
+            )
+        }
+    )
 
 
 class _Outcome(Exception):
@@ -369,7 +401,11 @@ class _Attempt:
         request = self.request
         action = "post_note" if request.note is not None else "read_mr"
         try:
-            connection, admitted_principal = await self.tool._load_connection(
+            (
+                connection,
+                admitted_principal,
+                admitted_project_id,
+            ) = await self.tool._load_connection(
                 request.connection_ref,
                 request.project,
                 workflow_id=self.execution["workflow_id"],
@@ -391,6 +427,9 @@ class _Attempt:
                 mr_iid=request.mr_iid,
                 admitted_endpoints=admitted,
                 action=action,
+            )
+            identity = _bind_admitted_project(
+                identity, admitted_project_id, action=action
             )
             self.target["endpoint"] = identity.project.endpoint
             acquired = await acquire_bound_credential_for_connection(
