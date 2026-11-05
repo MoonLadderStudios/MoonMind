@@ -538,7 +538,7 @@ def test_independent_recovery_owner_remains_required_for_the_exact_candidate():
     assert "omnigent-exact-artifact" in workflow["jobs"]["ci-required"]["needs"]
     assert "omnigent-host-recovery" in workflow["jobs"]["ci-required"]["needs"]
     assert "prepare-app-image" in job["needs"]
-    assert "needs.select-test-suites.outputs.exact_artifact == 'true'" in job["if"]
+    assert "needs.select-test-suites.outputs.host_recovery == 'true'" in job["if"]
 
 
 @pytest.mark.parametrize("location", ["root", "before", "after"])
