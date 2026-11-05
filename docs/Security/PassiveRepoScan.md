@@ -213,6 +213,8 @@ current reports yield incomplete coverage while preserving earlier evidence.
 An optional `decisionsRef` contains a JSON array of triage decisions. Each
 decision names `findingId`, `disposition`, `reason`, `evidenceRefs`, `author`,
 `source`, `scope`, `reviewAt` and `reviewConditions`, with optional `expiresAt`.
+Artifact ids (`art_...`) in `evidenceRefs` must be readable; other references,
+such as a tracker URL, stay text.
 Dispositions are `accepted_risk`, `false_positive`, `confirmed_vulnerability`
 and `fix_retest`; only the latter requires `retestOutcome` (`passed`, `failed`
 or `inconclusive`). Due or expired decisions re-enter review, as do unrenewed
@@ -237,8 +239,9 @@ seals what it cites through the artifact
 A scan seals the input and native report bytes it read. A comparison seals its
 scan, its baseline's bytes, earlier evidence it still cites whose digest the
 baseline's seal verified, and its `decisionsRef` with the artifacts those
-decisions cite, which must be readable. Carried decisions keep their evidence
-through the baseline's seal.
+decisions cite. Carried decisions keep their evidence through the baseline's
+seal, which also lets an occurrence in a later workflow seal that history
+without gaining a read of it.
 A summary seals its comparison and evidence; review and review evidence are
 optional, so they never hold retention. Missing, unauthorized, corrupt or
 mismatched required evidence fails the seal, and a retry keeps an existing
@@ -248,10 +251,11 @@ evidence to its own retention. The baseline edge keeps that comparison only,
 not its lineage, so recurring history does not accumulate.
 
 A root published without a seal has unverified, not empty, history. Lifecycle
-backfill, or admitting it as a baseline, seals it from its own schema: a scan
-when its inputs reproduce the recorded work identity, a comparison when its
-scan and any baseline are sealed. Already expired evidence is not certified;
-its root stays unsealed and observable, and is unavailable as a baseline.
+backfill, or admitting it as a baseline, seals it from its own schema with its
+producer's authority: a scan when its inputs reproduce the recorded work
+identity, a comparison when its scan and any baseline are sealed. Already
+expired evidence is not certified; its root stays unsealed and observable, and
+is unavailable as a baseline.
 GitHub alert scans, scans reused from a baseline, comparisons built on them and
 report text stay unsealed and follow their own retention.
 

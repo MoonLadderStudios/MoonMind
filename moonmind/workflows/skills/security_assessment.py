@@ -38,6 +38,7 @@ from moonmind.security.repository_scanners import ScannerSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
+    ARTIFACT_ID_PATTERN,
     ArtifactAccessContext,
     ArtifactDependency,
     TemporalArtifactAuthorizationError,
@@ -504,6 +505,8 @@ class AssessmentExecution:
         }
         # Digests of the exact bytes this execution read or wrote.
         self.digests: dict[str, str] = {}
+        # Seals also verify history an admitted baseline's own seal verified.
+        self.seal_access = self.access
 
     async def read(self, ref: str) -> tuple[Any, bytes]:
         _check_cancelled()
@@ -528,7 +531,7 @@ class AssessmentExecution:
         corrupt or mismatched required evidence fails the seal.
         """
         if await _proof(self.service, root, self.access) is None:
-            await _record(self.service, root, await dependencies(), self.access)
+            await _record(self.service, root, await dependencies(), self.seal_access)
 
     async def _scan_dependencies(self, refs, work, history):
         return [
@@ -633,8 +636,8 @@ class AssessmentExecution:
                     # seal first. No seal is an unverified history, not an
                     # empty one, so a baseline that cannot be sealed is
                     # unavailable.
-                    await seal_retained_assessment_root(
-                        self.service, artifact=artifact, payload=raw, access=self.access
+                    await self.service.seal_admitted_assessment_root(
+                        root_artifact_id=request.baseline_ref, access=self.access
                     )
                     proof = await _proof(
                         self.service, request.baseline_ref, self.access
@@ -643,6 +646,10 @@ class AssessmentExecution:
                     entry.artifact_id: entry.sha256 for entry in proof if entry.required
                 }
                 history[request.baseline_ref] = self.digests[request.baseline_ref]
+                # This execution admitted the baseline, so its seal may verify
+                # the history that seal certified, which a later occurrence in
+                # another workflow cannot read. Ordinary reads stay unchanged.
+                self.seal_access = self.access._with_verified_inputs(history)
                 baseline = parsed
             except (
                 TemporalArtifactNotFoundError,
@@ -664,10 +671,13 @@ class AssessmentExecution:
             decisions = [
                 TriageDecision.model_validate(item) for item in json.loads(raw)
             ]
-        # A supplied decision is admitted only with evidence readable now; the
-        # comparison seals these exact bytes. Carried decisions use history.
+        # A supplied decision is admitted only with artifact evidence readable
+        # now; the comparison seals these exact bytes. Carried decisions use
+        # history.
         decision_evidence = list(
-            dict.fromkeys(ref for item in decisions for ref in item.evidence_refs)
+            dict.fromkeys(
+                _artifact_refs(ref for item in decisions for ref in item.evidence_refs)
+            )
         )
         for ref in decision_evidence:
             await self.digest(ref)
@@ -1222,12 +1232,19 @@ def _scan_citations(work: Mapping[str, Any]) -> set[str]:
     }
 
 
+def _artifact_refs(refs) -> list[str]:
+    """Decision evidence that names an artifact; other references stay text."""
+    return [ref for ref in refs if ARTIFACT_ID_PATTERN.fullmatch(ref)]
+
+
 def _decision_citations(comparison: Mapping[str, Any]) -> set[str]:
-    return {
-        ref
-        for row in comparison["decisions"]
-        for ref in row["decision"]["evidenceRefs"]
-    }
+    return set(
+        _artifact_refs(
+            ref
+            for row in comparison["decisions"]
+            for ref in row["decision"]["evidenceRefs"]
+        )
+    )
 
 
 def _comparison_citations(comparison: Mapping[str, Any]) -> set[str]:
@@ -1317,6 +1334,9 @@ async def seal_retained_assessment_root(
             )
             for ref in sorted(_decision_citations(document) - history.keys())
         ]
+        # History the baseline's seal verified may belong to an earlier
+        # occurrence's workflow; only this seal verifies it through that proof.
+        access = access._with_verified_inputs(history)
     await _record(service, artifact.artifact_id, entries, access)
 
 
