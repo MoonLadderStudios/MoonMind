@@ -2232,6 +2232,148 @@ async def test_resolve_chat_binding_rejects_ambiguous_active_sessions(store):
         await store.resolve_chat_binding(workflow_id="mm:wf-1")
 
 
+async def _seed_scoped_chat(store, *, key, run_id, snapshot_ref=None, **kwargs):
+    await _seed_chat_session(
+        store,
+        key=key,
+        workflow_id="mm:wf-1",
+        agent_run_id="agent-" + key,
+        **kwargs,
+    )
+    row = await store.get_existing(key)
+    async with store._session_factory() as session:
+        saved = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        saved.moonmind_run_id = run_id
+        if snapshot_ref:
+            saved.final_snapshot_ref = snapshot_ref
+        await session.commit()
+    return await store.get_existing(key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("can_send", [True, False])
+async def test_chat_binding_current_run_excludes_retained_active_run(store, can_send):
+    old = await _seed_scoped_chat(
+        store,
+        key="old",
+        run_id="old-run",
+        session_id="old-session",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+    )
+    current = await _seed_scoped_chat(
+        store,
+        key="current",
+        run_id="current-run",
+        session_id="current-session",
+        capabilities={"viewTranscript": True, "sendMessage": can_send},
+    )
+
+    resolution = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", preferred_run_id="current-run"
+    )
+
+    assert resolution.chat_binding_id == current.chat_binding_id
+    assert resolution.run_id == "current-run"
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.read_only is not can_send
+    assert resolution.capabilities["sendMessage"] is can_send
+    assert (await store.get_existing("old")).status == old.status
+
+
+@pytest.mark.asyncio
+async def test_chat_binding_current_run_keeps_same_run_ambiguity(store):
+    for key, run in [
+        ("old", "old-run"),
+        ("current-a", "current-run"),
+        ("current-b", "current-run"),
+    ]:
+        await _seed_scoped_chat(store, key=key, run_id=run, session_id="session-" + key)
+
+    with pytest.raises(BridgeChatBindingAmbiguousError):
+        await store.resolve_chat_binding(
+            workflow_id="mm:wf-1", preferred_run_id="current-run"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retained_run", [None, "retained-run"])
+async def test_chat_binding_current_run_keeps_retained_history_fallback(
+    store, retained_run
+):
+    retained = await _seed_scoped_chat(
+        store,
+        key="retained",
+        run_id=retained_run,
+        session_id="retained-session",
+        terminal_status="completed",
+        delete_session=True,
+        snapshot_ref="artifact:art_retained",
+    )
+
+    resolution = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", preferred_run_id="reset-run-without-chat"
+    )
+
+    assert resolution.state == CHAT_BINDING_STATE_ENDED
+    assert resolution.read_only is True
+    assert resolution.chat_binding_id == retained.chat_binding_id
+    strict = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", run_id="reset-run-without-chat"
+    )
+    assert strict.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert strict.unavailable_reason == "no_session"
+
+
+@pytest.mark.asyncio
+async def test_chat_binding_current_run_does_not_replace_unreadable_current_history(
+    store,
+):
+    await _seed_scoped_chat(
+        store,
+        key="old",
+        run_id="old-run",
+        session_id="old-session",
+        terminal_status="completed",
+        delete_session=True,
+        snapshot_ref="artifact:art_old",
+    )
+    await _seed_scoped_chat(
+        store,
+        key="current",
+        run_id="current-run",
+        session_id="current-session",
+        terminal_status="completed",
+        delete_session=True,
+    )
+
+    resolution = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", preferred_run_id="current-run"
+    )
+
+    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert resolution.unavailable_reason == "session_cleaned_up"
+    assert resolution.chat_binding_id is None
+
+
+@pytest.mark.asyncio
+async def test_chat_binding_current_run_starting_does_not_open_retained_live_chat(
+    store,
+):
+    await _seed_scoped_chat(
+        store, key="old", run_id="old-run", session_id="old-session"
+    )
+    await _seed_scoped_chat(store, key="current", run_id="current-run", session_id=None)
+
+    resolution = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", preferred_run_id="current-run"
+    )
+
+    assert resolution.state == CHAT_BINDING_STATE_STARTING
+    assert resolution.run_id == "current-run"
+    assert resolution.read_only is True
+    assert resolution.chat_binding_id is None
+
+
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_prefers_active_over_terminal(store):
     # A terminal session plus one active session -> the active one wins and is
