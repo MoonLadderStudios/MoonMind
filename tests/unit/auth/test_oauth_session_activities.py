@@ -23,6 +23,7 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.execution_profiles import seal_effective_launch_snapshot
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
@@ -216,7 +217,7 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "oas-revalidate-bound-host"
-    effective_launch = {"snapshotRef": "omnigent-launch:sha256:test"}
+    effective_launch = seal_effective_launch_snapshot({})
     binding = SimpleNamespace(
         host_launch_profile_ref="codex-on-demand@1",
         effective_launch_snapshot=effective_launch,
@@ -237,6 +238,9 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
         async def refresh_binding_generation(self, profile_id: str):
             assert profile_id == "codex_openai_oauth"
             return binding
+
+        async def get_host_lease(self, _lease_id: str):
+            return None
 
         async def create_or_get_host_lease(self, **kwargs):
             observed["lease_request"] = kwargs
@@ -476,6 +480,140 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("host_mode", ["static", "on-demand"])
+@pytest.mark.parametrize("corrupt_snapshot", [False, True])
+async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_id: str,
+    host_mode: str,
+    corrupt_snapshot: bool,
+) -> None:
+    from moonmind.omnigent.execution_profiles import (
+        compile_effective_launch,
+        validate_effective_launch_snapshot,
+    )
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    provider = "codex" if runtime_id == "codex_cli" else "claude"
+    profile_id = f"{provider}-oauth"
+    old_host = "ghcr.io/example/shared-host@sha256:" + "a" * 64
+    installed_host = "ghcr.io/example/shared-host@sha256:" + "b" * 64
+    old_server = "ghcr.io/example/server@sha256:" + "1" * 64
+    installed_server = "ghcr.io/example/server@sha256:" + "2" * 64
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+    )
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", old_host)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", old_server)
+    launch = compile_effective_launch(
+        profile_ref=f"omnigent-{provider}@1",
+        policy_ref=f"{provider}-{host_mode}@1",
+        provider_profile_id=profile_id,
+    )
+    if corrupt_snapshot:
+        launch["limits"] = {**launch["limits"], "cpuMillis": 1}
+    async with _oauth_activity_session_factory() as db:
+        db.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id=runtime_id,
+                provider_id="openai" if provider == "codex" else "anthropic",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref=f"{provider}_auth_volume",
+                volume_mount_path=f"/home/app/.{provider}",
+                credential_generation=7,
+            )
+        )
+        await db.commit()
+    repository = OmnigentOAuthHostRepository(_oauth_activity_session_factory)
+    binding = await repository.create_or_update_static_binding(
+        profile_id=profile_id,
+        endpoint_ref=launch["endpointRef"],
+        static_host_id="selected-static-host" if host_mode == "static" else None,
+        host_launch_profile_ref=(
+            launch["launchPolicyRef"] if host_mode == "on-demand" else None
+        ),
+        execution_profile_ref=launch["executionProfileRef"],
+        launch_policy_ref=launch["launchPolicyRef"],
+        effective_launch_snapshot=launch,
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _oauth_activity_session_factory
+    )
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_host)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", installed_server)
+    probes = []
+
+    class Runtime:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def validate_credential_mount(self, **kwargs):
+            probes.append(kwargs)
+            return {"validationMode": "credential_only"}
+
+        async def stop_host(self, **_kwargs):
+            return {"cleanupResult": "succeeded"}
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+    )
+    request = {
+        "session_id": "oas-installed-images",
+        "profile_id": profile_id,
+        "provider_lease_id": "provider-lease-installed-images",
+    }
+    if corrupt_snapshot:
+        with pytest.raises(OmnigentOAuthHostError, match="digest"):
+            await oauth_session_activities.oauth_session_revalidate_bound_host(request)
+        assert probes == []
+        assert await repository.list_active_host_leases_for_profile(profile_id) == []
+        return
+    result = await oauth_session_activities.oauth_session_revalidate_bound_host(request)
+
+    assert result["status"] == "ready"
+    selected = probes[0]["effective_launch"]
+    assert selected["hostImageRef"] == installed_host
+    assert selected["serverImageRef"] == installed_server
+    assert {
+        key: value
+        for key, value in selected.items()
+        if key not in {"hostImageRef", "serverImageRef", "snapshotRef"}
+    } == {
+        key: value
+        for key, value in launch.items()
+        if key not in {"hostImageRef", "serverImageRef", "snapshotRef"}
+    }
+    validate_effective_launch_snapshot(selected)
+    lease_id = probes[0]["host_lease"].lease_id
+    saved_lease = await repository.get_host_lease(lease_id)
+    assert saved_lease.status == "stopped"
+    assert saved_lease.effective_launch_snapshot == selected
+    assert await repository.refresh_binding_generation(profile_id) == binding
+    assert launch["hostImageRef"] == old_host
+    assert launch["serverImageRef"] == old_server
+
+    next_host = "ghcr.io/example/shared-host@sha256:" + "f" * 64
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", next_host)
+    # Redelivery preserves the recorded attempt; a new session selects the update.
+    retry = await oauth_session_activities.oauth_session_revalidate_bound_host(request)
+    assert retry["status"] == "ready"
+    assert probes[1]["host_lease"].lease_id == lease_id
+    assert probes[1]["effective_launch"] == selected
+    request = {**request, "session_id": "oas-next", "provider_lease_id": "lease-next"}
+    successor = await oauth_session_activities.oauth_session_revalidate_bound_host(request)
+    assert successor["status"] == "ready"
+    assert probes[2]["effective_launch"]["hostImageRef"] == next_host
+    assert (await repository.get_host_lease(lease_id)).effective_launch_snapshot == selected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("binding_shape", "host_mode"),
     [
@@ -504,10 +642,7 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
     legacy_binding = binding_shape != "new"
     endpoint_ref = "chosen-endpoint" if legacy_binding else "default"
     monkeypatch.setenv("OAUTH_TEST_SECRET", "private-environment-value")
-    launch = {
-        "snapshotRef": "omnigent-launch:sha256:first-enrollment",
-        "hostMode": host_mode,
-    }
+    launch = seal_effective_launch_snapshot({"hostMode": host_mode})
     binding = SimpleNamespace(
         host_launch_profile_ref="codex-on-demand@1",
         effective_launch_snapshot=launch,
@@ -551,6 +686,9 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         async def create_or_update_static_binding(self, **kwargs):
             observed["binding"] = kwargs
             return binding
+
+        async def get_host_lease(self, _lease_id: str):
+            return None
 
         async def create_or_get_host_lease(self, **_kwargs):
             return lease
