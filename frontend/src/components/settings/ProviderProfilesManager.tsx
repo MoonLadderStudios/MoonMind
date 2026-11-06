@@ -2972,6 +2972,34 @@ export function ProviderProfilesManager({
     setTierLiveMessage('Tier 1 created');
   };
 
+  // Existing profiles keep their saved tiers. The operator may explicitly
+  // adopt the backend family template, which replaces the whole draft array;
+  // saving persists it, and discarding the draft keeps the saved tiers.
+  const recommendedTierPolicy = isEditing ? tierCapabilities?.recommended_policy ?? null : null;
+  const recommendedTierPayload = (() => {
+    if (!recommendedTierPolicy) return null;
+    const next = tierDraftsFromPolicy(recommendedTierPolicy);
+    return JSON.stringify(buildProviderProfileTierPayload(next.tiers, next.defaultTierClientId));
+  })();
+  const currentTierPayload = (() => {
+    if (tierDrafts.length === 0) return null;
+    return JSON.stringify(buildProviderProfileTierPayload(tierDrafts, defaultTierClientId));
+  })();
+  const canAdoptFamilyDefaults = recommendedTierPayload !== null && recommendedTierPayload !== currentTierPayload;
+
+  const handleAdoptFamilyDefaults = () => {
+    if (!recommendedTierPolicy) return;
+    const next = tierDraftsFromPolicy(recommendedTierPolicy);
+    setTierDrafts(next.tiers);
+    setDefaultTierClientId(next.defaultTierClientId);
+    setTierUndo(null);
+    setIsTierRepair(false);
+    setInvalidSavedDefaultIndex(null);
+    setTierLiveMessage(
+      `Tiers replaced with ${next.tiers.length} automatic family tiers. Save to keep them.`,
+    );
+  };
+
   const handleDuplicateTier = (source: ProviderProfileTierDraft) => {
     const copy = duplicateTierDraft(source);
     setTierDrafts((current) => [...current, copy]);
@@ -5735,6 +5763,16 @@ export function ProviderProfilesManager({
               <Button variant="secondary" type="button" className="w-full text-sm" onClick={handleAddTier}>
                 <span aria-hidden="true">+ </span>Add tier
               </Button>
+            ) : null}
+            {canWriteProviderProfiles && canAdoptFamilyDefaults ? (
+              <div className="space-y-1">
+                <Button variant="secondary" type="button" className="w-full text-sm" onClick={handleAdoptFamilyDefaults} aria-describedby="adopt-family-defaults-help">
+                  Use automatic family defaults
+                </Button>
+                <p id="adopt-family-defaults-help" className="text-xs text-slate-500 dark:text-slate-400">
+                  Replaces every tier above with this provider&apos;s built-in family tiers, which follow the latest eligible release. Credentials and default-profile choices are unchanged.
+                </p>
+              </div>
             ) : null}
             {tierRemoveDialog ? (
               <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setTierRemoveDialog(null); } else { trapTabWithin(tierRemovePanelRef.current, e); } }}>

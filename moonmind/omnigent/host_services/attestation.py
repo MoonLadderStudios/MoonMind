@@ -211,30 +211,37 @@ async def _record_profile_catalog(
 
     if plan.payload.harnessId not in _PROFILE_CATALOG_HARNESSES:
         return
-    binding = (plan.payload.credentialBindings or {}).get("primary-model")
-    profile_ref = str(getattr(binding, "providerProfileRef", "") or "").strip()
-    if not profile_ref:
-        return
-    generation = next(
-        (
-            int(handle["credentialGeneration"])
-            for handle in credential_handles
-            if str(handle.get("providerProfileRef") or "") == profile_ref
-            and handle.get("credentialGeneration") is not None
-        ),
-        None,
-    )
-    from api_service.db.base import async_session_maker
-    from moonmind.provider_profiles.catalog_observations import (
-        record_profile_catalog_observation,
-    )
+    try:
+        bindings = getattr(plan.payload, "credentialBindings", None) or {}
+        binding = bindings.get("primary-model")
+        profile_ref = str(getattr(binding, "providerProfileRef", "") or "").strip()
+        if not profile_ref:
+            return
+        generation = next(
+            (
+                int(handle["credentialGeneration"])
+                for handle in credential_handles
+                if str(handle.get("providerProfileRef") or "") == profile_ref
+                and handle.get("credentialGeneration") is not None
+            ),
+            None,
+        )
+        from api_service.db.base import async_session_maker
+        from moonmind.provider_profiles.catalog_observations import (
+            record_profile_catalog_observation,
+        )
 
-    await record_profile_catalog_observation(
-        async_session_maker,
-        profile_id=profile_ref,
-        credential_generation=generation,
-        model_options=model_options,
-    )
+        await record_profile_catalog_observation(
+            async_session_maker,
+            profile_id=profile_ref,
+            credential_generation=generation,
+            model_options=model_options,
+        )
+    except Exception:  # noqa: BLE001 - an observation never decides the launch
+        logging.getLogger(__name__).warning(
+            "Failed to record the exact-host model catalog for the Provider Profile",
+            exc_info=True,
+        )
 
 
 def _codex_native_default_model(options: Any) -> str | None:

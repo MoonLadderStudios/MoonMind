@@ -92,6 +92,92 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
     cli.chmod(0o755)
 
 
+async def _pinned_profile_store(tmp_path, monkeypatch, *, harness_id, pin):
+    """Seed a durable Provider Profile whose Tier 2 pins ``pin``."""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db import base as db_base
+    from api_service.db.models import (
+        Base,
+        ManagedAgentProviderProfile,
+        ProviderCredentialSource,
+        RuntimeMaterializationMode,
+    )
+    from moonmind.provider_profiles.model_families import (
+        catalog_rows_from_evidence,
+        first_party_family_tier_template,
+        pinned_model_status,
+    )
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    runtime_id, provider_id, profile_id, served = {
+        "codex-native": (
+            "codex_cli",
+            "openai",
+            "codex_openai_oauth",
+            [{"id": "gpt-6.1-sol"}, {"id": "gpt-7-sol"}],
+        ),
+        "claude-native": (
+            "claude_code",
+            "anthropic",
+            "claude_anthropic_oauth",
+            [{"id": "opus", "model": "claude-opus-5-5"}],
+        ),
+    }[harness_id]
+    tiers, default_tier = first_party_family_tier_template(runtime_id, provider_id)
+    tiers = [dict(tier) for tier in tiers]
+    tiers[default_tier - 1].update(model_mode="pinned", model=pin)
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/profiles.db", future=True
+    )
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                credential_generation=2,
+                enabled=True,
+                model_tiers=tiers,
+                default_model_tier=default_tier,
+            )
+        )
+        await session.commit()
+    async with factory() as session:
+        saved = await session.get(ManagedAgentProviderProfile, profile_id)
+        saved_updated_at = saved.updated_at
+    monkeypatch.setattr(db_base, "async_session_maker", factory)
+
+    async def assert_pin_kept_with_unavailable_status():
+        async with factory() as session:
+            row = await session.get(ManagedAgentProviderProfile, profile_id)
+        # The refusal recorded the observed catalog, not a policy edit.
+        assert row.model_tiers == tiers
+        assert row.default_model_tier == default_tier
+        assert row.updated_at == saved_updated_at
+        rows = catalog_rows_from_evidence(row.model_catalog_evidence_json)
+        assert rows and pin not in {item["qualifiedId"] for item in rows}
+        assert pinned_model_status(pin, catalog_rows=rows) == "unavailable"
+        # New work still selects the saved pin and is refused the same way.
+        resolved = resolve_model_effort(
+            runtime_id=runtime_id, profile=row, require_launch_ready=False, env={}
+        )
+        assert (resolved.model, resolved.family_resolution_status) == (pin, "pinned")
+        await engine.dispose()
+
+    return SimpleNamespace(
+        profile_id=profile_id,
+        served_rows=served,
+        assert_pin_kept_with_unavailable_status=assert_pin_kept_with_unavailable_status,
+    )
+
+
 @pytest.mark.parametrize(
     ("fault", "harness_id"),
     list(
@@ -140,6 +226,9 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
         (fault, "opencode-native")
         for fault in ("vendor_release_changed", "vendor_runtime_missing")
     ]
+    # A Provider Profile pin the account no longer serves is refused, never
+    # replaced by another release or the provider default.
+    + [("pin_unlisted", harness) for harness in ("codex-native", "claude-native")]
     + [
         (fault, "codex-native")
         for fault in (
@@ -249,6 +338,23 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         selected_model = "opencode-go/gemini-4-argon"
         if fault == "model_corrected":
             selected_model += "-contributor"
+    pinned = None
+    if fault == "pin_unlisted":
+        selected_model = (
+            "gpt-6-sol" if harness_id == "codex-native" else "claude-opus-5"
+        )
+        pinned = await _pinned_profile_store(
+            tmp_path, monkeypatch, harness_id=harness_id, pin=selected_model
+        )
+        credential_handles = [
+            {"providerProfileRef": pinned.profile_id, "credentialGeneration": 2}
+        ]
+        # The host's own Claude probe agrees the pin is not served.
+        monkeypatch.setattr(
+            attestation.upstream_probes,
+            "claude_serves_model",
+            AsyncMock(return_value=False),
+        )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     candidate = workspace / "candidate.txt"
@@ -375,6 +481,8 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             "oauth_ended",
             "oauth_ended_during_refresh",
         } and (fault not in {"transient", "oauth_aged_transient"} or len(attempts) > 1)
+        if fault == "pin_unlisted":
+            return httpx.Response(200, json={"models": pinned.served_rows})
         return httpx.Response(
             200,
             json={
@@ -421,6 +529,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 "probe_exhausted",
                 "model_mismatch",
                 "model_mismatch_probe_error",
+                "pin_unlisted",
             }:
                 assert (tmp_path / "generic-host-model-options.json").exists()
             return {"containerRemoved": True}
@@ -468,6 +577,19 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             harnessId=harness_id,
             harnessImplementationRef="harness@1",
             modelConfig=SimpleNamespace(qualifiedId=selected_model, normalizedOptions={}),
+            # Other cases keep a payload without bindings: recording the
+            # observed catalog is advisory and must never fail the launch.
+            **(
+                {
+                    "credentialBindings": {
+                        "primary-model": SimpleNamespace(
+                            providerProfileRef=pinned.profile_id
+                        )
+                    }
+                }
+                if pinned is not None
+                else {}
+            ),
         ),
     )
     unused = SimpleNamespace()
@@ -593,6 +715,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         "probe_exhausted",
         "model_mismatch",
         "model_mismatch_probe_error",
+        "pin_unlisted",
     }
     terminal_http_error = fault.startswith("http_")
     if (
@@ -639,6 +762,9 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             assert exc.value.transient is True
         elif catalog_exhausted:
             assert "after 3 catalog reads" in str(exc.value)
+        if fault == "pin_unlisted":
+            assert selected_model in str(exc.value)
+            await pinned.assert_pin_kept_with_unavailable_status()
         if fault.startswith("model_mismatch"):
             assert "opencode-go/gemini-4-argon-contributor" in str(exc.value)
             assert "opencode/gemini-4-argon-contributor-free" not in str(exc.value)

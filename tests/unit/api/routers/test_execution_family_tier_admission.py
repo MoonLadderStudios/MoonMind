@@ -112,3 +112,119 @@ def test_custom_model_selection_does_not_rewrite_the_profile():
 
     assert (model, source, effort) == ("gpt-6-luna", "task_override", "high")
     assert profile.model_tiers == before
+
+
+class _ProfileSession:
+    def __init__(self, profile):
+        self._profile = profile
+        self.committed = False
+
+    async def get(self, _model, _key):
+        return self._profile
+
+    async def commit(self):
+        self.committed = True
+
+    async def rollback(self):
+        raise AssertionError("a fresh occurrence must admit, not roll back")
+
+
+def _occurrence_parameters(**overrides):
+    digest = "a" * 64
+    parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Inspect", "runtime": {}},
+        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
+        "omnigentExecutionPlan": {
+            "planRef": f"omnigent-execution-plan:sha256:{digest}",
+            "planDigest": f"sha256:{digest}",
+            "planArtifactRef": "artifact:plan",
+            "taskInputSnapshotRef": "artifact:input",
+            "taskInputSnapshotDigest": f"sha256:{digest}",
+        },
+        # Recorded when the schedule was saved, before Sol 7 was released.
+        "model": "gpt-6.1-sol",
+        "effort": "medium",
+        "modelSource": "profile_default_tier",
+    }
+    parameters.update(overrides)
+    return parameters
+
+
+async def _readmit_occurrence(monkeypatch, profile, parameters):
+    from api_service.services import omnigent_execution_plan_service as plan_service
+
+    compiled = {}
+
+    async def compile_frozen(**kwargs):
+        compiled.update(kwargs["initial_parameters"])
+        return SimpleNamespace(execution_parameters={}, artifact_refs=[])
+
+    async def access(*_args, **_kwargs):
+        return object()
+
+    async def provenance(*_args, **_kwargs):
+        return "system"
+
+    monkeypatch.setattr(plan_service, "compile_frozen_execution_plan", compile_frozen)
+    monkeypatch.setattr(plan_service, "frozen_execution_artifact_access", access)
+    monkeypatch.setattr(plan_service, "frozen_task_input_provenance", provenance)
+    session = _ProfileSession(profile)
+    result = await plan_service.readmit_frozen_execution_plan(
+        db_session=session,
+        artifact_service=object(),
+        workflow_id="mm:schedule-occurrence",
+        initial_parameters=parameters,
+        subject="Scheduled occurrence",
+    )
+    assert result["disposition"] == "admitted"
+    assert session.committed
+    return compiled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime,model_source",
+    [({}, "profile_default_tier"), ({"modelTier": 2}, "requested_tier")],
+)
+async def test_fresh_schedule_occurrence_follows_the_current_family_release(
+    monkeypatch, runtime, model_source
+):
+    parameters = _occurrence_parameters(
+        workflow={"instructions": "Inspect", "runtime": dict(runtime)},
+        modelSource=model_source,
+    )
+
+    compiled = await _readmit_occurrence(
+        monkeypatch, _codex_profile("gpt-6.1-sol", "gpt-7-sol"), parameters
+    )
+
+    assert compiled["model"] == "gpt-7-sol"
+    assert compiled["effort"] == "medium"
+    # The stored definition keeps its authored omission or tier intent.
+    assert parameters["model"] == "gpt-6.1-sol"
+    assert parameters["workflow"]["runtime"] == runtime
+
+
+@pytest.mark.asyncio
+async def test_fresh_schedule_occurrence_keeps_pins_and_custom_models(monkeypatch):
+    tiers, _ = first_party_family_tier_template("codex_cli", "openai")
+    pinned = [dict(tier) for tier in tiers]
+    pinned[1].update(model_mode="pinned", model="gpt-6.1-sol")
+    catalog = ("gpt-6.1-sol", "gpt-7-sol")
+
+    pin = await _readmit_occurrence(
+        monkeypatch, _codex_profile(*catalog, tiers=pinned), _occurrence_parameters()
+    )
+    custom = await _readmit_occurrence(
+        monkeypatch,
+        _codex_profile(*catalog),
+        _occurrence_parameters(
+            workflow={"instructions": "Inspect", "runtime": {"model": "gpt-6-luna"}},
+            model="gpt-6-luna",
+            modelSource="task_override",
+        ),
+    )
+
+    assert pin["model"] == "gpt-6.1-sol"
+    assert custom["model"] == "gpt-6-luna"

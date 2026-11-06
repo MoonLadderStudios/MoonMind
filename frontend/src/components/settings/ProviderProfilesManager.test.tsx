@@ -1381,6 +1381,65 @@ describe('ProviderProfilesManager form controls', () => {
       expect(tiers[3]).toMatchObject({ family: 'sonnet', model_mode: 'pinned', model: 'claude-sonnet-5' });
     });
 
+    it('adopts the automatic family defaults on an existing profile only on request', async () => {
+      const legacyTiers = [
+        { label: 'Opus 4.8', model: 'claude-opus-4-8', effort: 'high', parameters: {}, annotations: {} },
+      ];
+      const recommended = {
+        default_model_tier: 2,
+        model_tiers: ['fable', 'opus', 'sonnet', 'haiku'].map((family) => ({
+          label: family[0]!.toUpperCase() + family.slice(1),
+          family,
+          model_mode: 'automatic' as const,
+          model: null,
+          effort: 'medium',
+          parameters: {},
+          annotations: {},
+        })),
+      };
+      const legacyProfile: ProviderProfile = {
+        ...claudeProfile,
+        model_tiers: legacyTiers,
+        default_model_tier: 1,
+        is_default: true,
+      };
+      const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/capabilities')) {
+          return { ok: true, json: async () => ({ ...familyCapabilities, tiers: [], recommended_policy: recommended }) } as Response;
+        }
+        return { ok: true, json: async () => ({ ...legacyProfile }) } as Response;
+      });
+      renderProviderProfilesManager([legacyProfile]);
+      fireEvent.click(profileAction('Edit'));
+
+      const adopt = await screen.findByRole('button', { name: 'Use automatic family defaults' });
+      // Opening the editor never replaces an ambiguous explicit legacy tier.
+      expect(screen.getAllByRole('listitem').filter((item) => item.hasAttribute('data-tier-client-id'))).toHaveLength(1);
+
+      fireEvent.click(adopt);
+      expect(await screen.findByText('Tiers replaced with 4 automatic family tiers. Save to keep them.')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Use automatic family defaults' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+      await waitFor(() => {
+        expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true);
+      });
+      const call = fetchSpy.mock.calls.find(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH');
+      const body = JSON.parse(String((call?.[1] as RequestInit).body));
+      expect(body.default_model_tier).toBe(2);
+      expect(body.model_tiers.map((tier: { family: string; model_mode: string; model: string | null; effort: string }) => [tier.family, tier.model_mode, tier.model, tier.effort])).toEqual([
+        ['fable', 'automatic', null, 'medium'],
+        ['opus', 'automatic', null, 'medium'],
+        ['sonnet', 'automatic', null, 'medium'],
+        ['haiku', 'automatic', null, 'medium'],
+      ]);
+      // Adopting tiers is not a credential or default-profile edit.
+      if ('secret_refs' in body) expect(body.secret_refs).toEqual(legacyProfile.secret_refs ?? {});
+      if ('is_default' in body) expect(body.is_default).toBe(true);
+      expect(body).not.toHaveProperty('enabled', false);
+    });
+
   });
 
   it('requires a backend-supported authentication method before creation', async () => {

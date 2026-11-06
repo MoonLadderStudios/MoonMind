@@ -2706,6 +2706,46 @@ async def _retire_refused_plan_artifacts(
             )
 
 
+def _follow_current_family_release(
+    initial_parameters: Mapping[str, Any], provider_profile: Any
+) -> Mapping[str, Any]:
+    """Resolve a fresh occurrence's automatic family tier against the profile.
+
+    Schedule admission records the model an omitted or tier selection resolved
+    to when the definition was saved. That model is a resolution, not authored
+    intent, so a new occurrence follows the family's current eligible release.
+    Custom models, pinned tiers and explicit legacy tiers keep their selection.
+    An unavailable family raises, and the occurrence keeps its recorded plan.
+    """
+
+    if initial_parameters.get("modelSource") not in {
+        "profile_default_tier",
+        "requested_tier",
+    }:
+        return initial_parameters
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    task = initial_parameters.get("workflow") or initial_parameters.get("task")
+    runtime_intent = task.get("runtime") if isinstance(task, Mapping) else None
+    if not isinstance(runtime_intent, Mapping):
+        runtime_intent = {}
+    resolved = resolve_model_effort(
+        runtime_id=provider_profile.runtime_id,
+        profile=provider_profile,
+        requested_model_tier=runtime_intent.get(
+            "modelTier", initial_parameters.get("modelTier")
+        ),
+        requested_effort=initial_parameters.get("effort"),
+        tier_fallback=runtime_intent.get(
+            "tierFallback", initial_parameters.get("tierFallback", "clamp")
+        ),
+        require_launch_ready=False,
+    )
+    if resolved.model_mode != "automatic" or not resolved.model:
+        return initial_parameters
+    return {**initial_parameters, "model": resolved.model}
+
+
 async def readmit_frozen_execution_plan(
     *,
     db_session: Any,
@@ -2799,6 +2839,10 @@ async def readmit_frozen_execution_plan(
         )
         if provider_profile is None:
             return recorded("the admitted Provider Profile is unavailable")
+        if not preserve_recorded_intent:
+            compilation_parameters = _follow_current_family_release(
+                compilation_parameters, provider_profile
+            )
         persisted_plan = await compile_frozen_execution_plan(
             db_session=db_session,
             artifact_service=artifact_service,

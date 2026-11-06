@@ -674,6 +674,34 @@ def verify_execution_plan_envelope(
     return parsed
 
 
+_MODEL_SELECTION_LAUNCH_FLAGS = frozenset(
+    {"--model", "-m", "--effort", "--reasoning-effort"}
+)
+_MODEL_SELECTION_CONFIG_KEYS = frozenset({"model", "model_reasoning_effort"})
+
+
+def _launch_args_selecting_model(raw: object) -> list[str]:
+    """Return authored launch flags that would choose a model or effort."""
+
+    if not isinstance(raw, (list, tuple)):
+        return []
+    selecting: list[str] = []
+    previous = ""
+    for value in raw:
+        text = str(value).strip()
+        flag, _, inline = text.partition("=")
+        if flag in _MODEL_SELECTION_LAUNCH_FLAGS:
+            selecting.append(flag)
+        elif flag in {"-c", "--config"} and inline:
+            if inline.partition("=")[0].strip() in _MODEL_SELECTION_CONFIG_KEYS:
+                selecting.append(f"{flag} {inline.partition('=')[0].strip()}")
+        elif previous in {"-c", "--config"}:
+            if flag.strip() in _MODEL_SELECTION_CONFIG_KEYS:
+                selecting.append(f"{previous} {flag.strip()}")
+        previous = flag
+    return selecting
+
+
 def bind_omnigent_model_selection(
     request: AgentExecutionRequest,
     *,
@@ -738,6 +766,16 @@ def bind_omnigent_model_selection(
         delivered = None if root_field == "model" and codex_native_default else planned
         parameters[root_field] = delivered
         session[session_field] = delivered
+    # Native harnesses let a passed-through flag outrank the session model or
+    # effort, so authored launch arguments cannot carry a second selection.
+    selecting = _launch_args_selecting_model(session.get("terminalLaunchArgs"))
+    if selecting:
+        raise HarnessPlatformError(
+            "authored Omnigent session terminalLaunchArgs "
+            f"({', '.join(selecting)}) conflict with the persisted execution "
+            "plan's model selection",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
     omnigent["session"] = session
     parameters["omnigent"] = omnigent
     return request.model_copy(update={"parameters": parameters})

@@ -320,7 +320,9 @@ backend's `recommended_policy` (four automatic family tiers, Tier 2 default,
 `medium` effort); React keeps no copy of that list. The template replaces the
 create draft only while it is still untouched, so a late capability response or
 a Provider change never overwrites an edit. Other routes start with one Runtime
-default tier.
+default tier. Editing an existing profile never applies the template; when its
+tiers differ, `Use automatic family defaults` replaces the whole tier draft on
+click and announces it, and only saving the profile persists it.
 
 `Add tier` appends a runtime-default tier (`label`, `model`, `effort` null; empty
 `parameters` and `annotations`) with a new client ID, preserving every existing

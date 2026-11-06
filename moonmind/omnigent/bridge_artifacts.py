@@ -1786,6 +1786,44 @@ def _snapshot_provider_failure(
     return event
 
 
+def observed_model_selection(
+    request: AgentExecutionRequest, snapshot: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """Compare the admitted session model with what the session reports.
+
+    Omnigent clears a session model it cannot serve and launches on the
+    provider default. Keep the requested, current and reported models apart
+    so a replaced selection is disclosed, never labelled as the requested one.
+    """
+
+    def clean(value: object) -> str | None:
+        return str(value).strip() or None if value is not None else None
+
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    omnigent = parameters.get("omnigent")
+    session = omnigent.get("session") if isinstance(omnigent, Mapping) else None
+    requested = (
+        clean(session.get("modelOverride")) if isinstance(session, Mapping) else None
+    )
+    if requested is None or not isinstance(snapshot, Mapping):
+        return None
+    if "model_override" not in snapshot and "llm_model" not in snapshot:
+        return None
+    current = clean(snapshot.get("model_override"))
+    unqualified = {requested, requested.split("/", 1)[-1]}
+    return {
+        "requestedModel": requested,
+        "sessionModelOverride": current,
+        # The harness-reported model when it reported one, else the agent's.
+        "reportedModel": clean(snapshot.get("llm_model")),
+        "status": (
+            "matched"
+            if current is not None and current.split("/", 1)[-1] in unqualified
+            else "replaced"
+        ),
+    }
+
+
 def build_omnigent_result(
     *,
     request: AgentExecutionRequest,
@@ -1894,6 +1932,9 @@ def build_omnigent_result(
         metadata["externalStateRef"] = capture_bundle.external_state_ref
         metadata["stateCheckpointRef"] = capture_bundle.external_state_ref
         metadata["checkpointKind"] = "external_state_ref"
+    model_selection = observed_model_selection(request, final_snapshot)
+    if model_selection is not None:
+        metadata["modelSelection"] = model_selection
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
     request_metadata = parameters.get("metadata")
     moonmind_metadata = (

@@ -160,3 +160,142 @@ async def test_api_compiler_preserves_resolved_model_defaults(
         task_input_snapshot_digest="sha256:" + "1" * 64,
     )
     assert result.envelope.payload.modelConfig.qualifiedId == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source,delivered",
+    [("profile_default_tier", "gpt-6.1-sol"), ("provider_profile_default", None)],
+)
+async def test_codex_native_plan_keeps_the_default_tier_with_a_native_default(
+    monkeypatch, source, delivered
+):
+    from api_service.services import omnigent_execution_plan_service as service
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        bind_omnigent_model_selection,
+    )
+
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    _configure_ready_host_image_pair(monkeypatch)
+    monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+    )
+    policy = "codex-on-demand@1"
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy=policy)
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=_ArtifactService(),
+        principal="user-1",
+        access=access_for_test("user-1"),
+        workflow_id="mm:default-tier-native-default",
+        agent_profile_snapshot=_snapshot(
+            harness="codex-native", policy=policy, provider_id="codex_openai_oauth"
+        ),
+        provider_profile=SimpleNamespace(
+            profile_id="codex_openai_oauth",
+            runtime_id="codex_cli",
+            provider_id="openai",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+            # The operator suppresses the CLI flag for this exact default.
+            command_behavior={"suppress_default_model_flag": True},
+            default_model="gpt-6.1-sol",
+            model_overrides={"gpt-6.1-sol": "gpt-6-luna"},
+        ),
+        initial_parameters={
+            "model": "gpt-6.1-sol",
+            "requestedModel": None,
+            "effort": "medium",
+            "modelSource": source,
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "workflow": {"instructions": "Launch the default tier."},
+        },
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+    )
+    model_config = result.envelope.payload.modelConfig
+    assert model_config.qualifiedId == "gpt-6.1-sol"
+    assert model_config.effort == "medium"
+    native_default = model_config.normalizedOptions.get("codexNativeDefault") is True
+    assert native_default is (delivered is None)
+
+    bound = bind_omnigent_model_selection(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="parent",
+            idempotencyKey="step",
+        ),
+        model=model_config.qualifiedId,
+        effort=model_config.effort,
+        harness_id="codex-native",
+        model_options=model_config.normalizedOptions,
+    )
+    session = bound.parameters["omnigent"]["session"]
+    assert session["modelOverride"] == delivered
+    assert session["reasoningEffort"] == "medium"
+
+
+@pytest.mark.parametrize(
+    "launch_args",
+    [
+        ["--model", "claude-haiku-5-5"],
+        ["--model=claude-haiku-5-5"],
+        ["--effort", "low"],
+        ["-m", "gpt-6-luna"],
+        ["-c", "model=gpt-6-luna"],
+        ["--config=model_reasoning_effort=low"],
+    ],
+)
+def test_passthrough_launch_args_cannot_replace_the_admitted_selection(launch_args):
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        bind_omnigent_model_selection,
+    )
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="parent",
+        idempotencyKey="step",
+        parameters={"omnigent": {"session": {"terminalLaunchArgs": launch_args}}},
+    )
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        bind_omnigent_model_selection(
+            request,
+            model="claude-opus-5-5",
+            effort="medium",
+            harness_id="claude-native",
+        )
+    assert excinfo.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
+
+    unrelated = request.model_copy(
+        update={
+            "parameters": {
+                "omnigent": {
+                    "session": {"terminalLaunchArgs": ["--permission-mode", "plan"]}
+                }
+            }
+        }
+    )
+    session = bind_omnigent_model_selection(
+        unrelated, model="claude-opus-5-5", effort="medium", harness_id="claude-native"
+    ).parameters["omnigent"]["session"]
+    assert session["modelOverride"] == "claude-opus-5-5"
+    assert session["terminalLaunchArgs"] == ["--permission-mode", "plan"]

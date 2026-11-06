@@ -1509,6 +1509,119 @@ def test_apply_resolved_tier_policy_keeps_the_admitted_automatic_family_model():
     assert resolution["familyResolutionSource"] == "admitted_selection"
 
 
+@pytest.mark.parametrize(
+    "profile_overrides",
+    [
+        {},
+        # An account alias keyed by the tier model is not authored selection.
+        {"model_overrides": {"claude-opus-5-5": "claude-haiku-5-5"}},
+        # A first-party profile's env model cannot drop the accepted --model.
+        {"env_overrides": {"ANTHROPIC_MODEL": "claude-haiku-5-5"}},
+    ],
+)
+def test_claude_omitted_model_launches_the_default_tier_two_with_medium(
+    profile_overrides,
+):
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+    from moonmind.workflows.temporal.runtime.strategies.claude_code import (
+        ClaudeCodeStrategy,
+    )
+
+    tiers, default_tier = first_party_family_tier_template("claude_code", "anthropic")
+    profile = _make_profile(
+        profile_id="claude_anthropic_oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        command_template=["claude"],
+        default_model=None,
+        default_effort=None,
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+        **profile_overrides,
+    )
+    request = _make_request(parameters={"runtime": {}}, instruction_ref="Go")
+    strategy = ClaudeCodeStrategy()
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request, profile=profile, strategy=strategy
+    )
+    command = strategy.build_command(profile, request)
+
+    assert command[:5] == ["claude", "--model", "claude-opus-5-5", "--effort", "medium"]
+    resolution = request.parameters["modelTierResolution"]
+    assert resolution["modelSource"] == "profile_default_tier"
+    assert resolution["effectiveModelTier"] == 2
+    assert resolution["effortApplicationStatus"] == "applied"
+
+
+def test_claude_compatible_provider_env_model_still_owns_the_model_flag():
+    from moonmind.workflows.temporal.runtime.strategies.claude_code import (
+        ClaudeCodeStrategy,
+    )
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        provider_id="minimax",
+        command_template=["claude"],
+        default_model="MiniMax-M2.7",
+        env_overrides={"ANTHROPIC_MODEL": "MiniMax-M2.7"},
+    )
+    request = _make_request(parameters={"model": "MiniMax-M2.7"}, instruction_ref="Go")
+
+    assert "--model" not in ClaudeCodeStrategy().build_command(profile, request)
+
+
+def test_codex_suppressed_native_default_keeps_the_default_tier_two_model():
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+    from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+        CodexCliStrategy,
+    )
+
+    tiers, default_tier = first_party_family_tier_template("codex_cli", "openai")
+    profile = _make_profile(
+        profile_id="codex_openai_oauth",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        command_template=["codex", "exec"],
+        # Equal to the tier model, the case the suppression rule once omitted.
+        default_model="gpt-6.1-sol",
+        default_effort=None,
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+        command_behavior={"suppress_default_model_flag": True},
+        model_overrides={"gpt-6.1-sol": "gpt-6-luna"},
+    )
+    request = _make_request(parameters={"runtime": {}}, instruction_ref="Go")
+    strategy = CodexCliStrategy()
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request, profile=profile, strategy=strategy
+    )
+
+    assert strategy.build_command(profile, request) == [
+        "codex",
+        "exec",
+        "-m",
+        "gpt-6.1-sol",
+        "Go",
+    ]
+    assert request.parameters["effort"] == "medium"
+    resolution = request.parameters["modelTierResolution"]
+    assert resolution["modelSource"] == "profile_default_tier"
+    # The direct Codex CLI command has no effort flag; never claim delivery.
+    assert resolution["effortApplicationStatus"] == "not_supported"
+
+
 def test_apply_resolved_tier_policy_initializes_missing_parameters():
     profile = _make_profile(
         runtime_id="codex_cli",
