@@ -2,7 +2,6 @@ name: CI / Alembic Migration Gate
 
 "on":
   pull_request:
-    branches: [main]
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]

@@ -89,7 +89,7 @@ See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed 
 
 CI does **not** currently run a dedicated `pre-commit` step, so local `pre-commit` runs are still the main way to catch formatting and auto-fixable lint issues before pushing.
 
-The main test workflow runs for PRs targeting `main` when opened, updated, reopened, or marked ready for review. It also supports pushes to `main`, merge groups, schedules, and manual dispatch. Pushing a feature branch without an existing PR does not trigger its `push` event. When publication is authorized, open or update the PR, or use an authorized manual dispatch, and confirm the expected run started for the intended revision. Do not assume a successful push is test evidence.
+The test suite and migration gate run when PRs targeting any branch are opened, updated, or reopened, including stacked remediation PRs targeting another job branch. Changing the base branch alone does not trigger them; reopen the PR or push a new commit to verify that candidate. The test suite also supports merge groups, schedules, and manual dispatch; the release workflow owns checks for pushes to `main`. Pushing a feature branch without an existing PR does not trigger CI. When publication is authorized, open or update the PR, or use an authorized manual dispatch, and confirm the expected run started for the intended revision. Do not assume a successful push is test evidence.
 
 ## Setup
 

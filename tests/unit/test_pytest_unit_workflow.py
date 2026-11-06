@@ -62,7 +62,6 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
         release["jobs"][owner]["uses"] == "./.github/workflows/pytest-unit-tests.yml"
         for owner in ("source-checks", "qualify")
     )
-    assert triggers["pull_request"]["branches"] == ["main"]
     assert triggers["pull_request"]["types"] == [
         "opened",
         "synchronize",
@@ -85,6 +84,21 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
 
     required_job = jobs["ci-required"]
     assert {"integration-ci", "integration-hermetic"} <= set(required_job["needs"])
+
+
+@pytest.mark.parametrize(
+    "workflow_name", ["pytest-unit-tests.yml", "alembic-migration-gate.yml"]
+)
+def test_required_ci_accepts_pull_requests_to_any_base_branch(workflow_name) -> None:
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+    )
+    pull_request = _workflow_triggers(workflow)["pull_request"]
+
+    # Stacked remediation PRs target another job branch, not necessarily main.
+    # Either filter can leave merge automation waiting for checks that never run.
+    assert "branches" not in pull_request
+    assert "branches-ignore" not in pull_request
 
 
 def test_required_integration_job_uses_submodule_free_checkout() -> None:

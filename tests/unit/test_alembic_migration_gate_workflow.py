@@ -21,7 +21,7 @@ def test_gate_runs_for_merge_candidates_and_merge_queue() -> None:
     workflow = _load_workflow()
     triggers = _triggers(workflow)
 
-    assert triggers["pull_request"]["branches"] == ["main"]
+    assert "branches" not in triggers["pull_request"]
     assert triggers["merge_group"]["types"] == ["checks_requested"]
     assert "push" not in triggers
     release = yaml.safe_load(
