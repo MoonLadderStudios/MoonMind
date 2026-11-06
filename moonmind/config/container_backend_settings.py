@@ -17,13 +17,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
 from pydantic import ValidationError
 
-from moonmind.schemas.container_job_models import CacheMount, ContainerJobSpec
+from moonmind.config.runtime_resources import load_runtime_resources
+from moonmind.schemas.container_job_models import (
+    SENSITIVE_ENVIRONMENT_KEY_PATTERN,
+    CacheMount,
+    ContainerJobSpec,
+)
 from moonmind.security.container_services import (
     SERVICE_CONNECTIONS_ENV_KEY,
     ServiceConnection,
@@ -67,7 +73,7 @@ CACHE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES"
 #: is a configuration error rather than an ignored field, because every omitted
 #: key falls back to the permissive default.
 _IMAGE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
-    {"sourceRef", "image", "pullPolicy", "registryCredentialRef"}
+    {"sourceRef", "image", "pullPolicy", "registryCredentialRef", "build"}
 )
 _CACHE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
     {"cacheRef", "volumeName", "target", "readOnly"}
@@ -371,16 +377,16 @@ def _reject_unknown_keys(
 
 
 def _declared_image_sources(
-    raw: object, *, reserved_refs: frozenset[str]
-) -> tuple[RegistryImageSource, ...]:
-    """Resolve the deployment's own registry image sources.
+    raw: object, *, reserved_refs: frozenset[str], context_root: Path | None = None
+) -> tuple[ImageSource, ...]:
+    """Resolve registry sources and installed deployment build recipes.
 
     MoonMind ships no project image defaults: a caller selects an image through
     an opaque ``sourceRef`` and the deployment decides what that ref resolves
     to. An unknown ref already fails closed in ``image_source``.
     """
 
-    sources: list[RegistryImageSource] = []
+    sources: list[ImageSource] = []
     seen: set[str] = set()
     for index, item in enumerate(
         _declaration_objects(raw, field_name=IMAGE_SOURCES_ENV_KEY)
@@ -417,6 +423,15 @@ def _declared_image_sources(
             raise ContainerBackendConfigError(
                 f"{field} requires a valid image and opaque registryCredentialRef"
             ) from exc
+        if "build" in item:
+            if credential_ref is not None or "pullPolicy" in item:
+                raise ContainerBackendConfigError(
+                    f"{field} local builds cannot declare registry pull settings"
+                )
+            sources.append(
+                _local_image_recipe(item, context_root=context_root, field=field)
+            )
+            continue
         sources.append(
             RegistryImageSource(
                 source_ref=source_ref,
@@ -434,6 +449,121 @@ def _declared_image_sources(
             )
         )
     return tuple(sources)
+
+
+def _local_image_recipe(
+    item: Mapping[str, Any], *, context_root: Path | None, field: str
+) -> LocalImageRecipe:
+    build = item["build"]
+    allowed = frozenset(
+        {
+            "context",
+            "dockerfile",
+            "target",
+            "args",
+            "validationCommand",
+            "maxAgeSeconds",
+        }
+    )
+    if not isinstance(build, Mapping):
+        raise ContainerBackendConfigError(f"{field}.build must be an object")
+    _reject_unknown_keys(build, allowed=allowed, field_name=f"{field}.build")
+    context = build.get("context", ".")
+    dockerfile = build.get("dockerfile", "Dockerfile")
+    if (
+        context_root is None
+        or not isinstance(context, str)
+        or not isinstance(dockerfile, str)
+    ):
+        raise ContainerBackendConfigError(
+            f"{field}.build requires an installed context"
+        )
+    try:
+        root = context_root.resolve()
+        context_path = (root / context).resolve()
+        dockerfile_path = (context_path / dockerfile).resolve()
+    except (OSError, RuntimeError):
+        raise ContainerBackendConfigError(
+            f"{field}.build context is unavailable"
+        ) from None
+    if (
+        Path(context).is_absolute()
+        or "\\" in context
+        or not context_path.is_relative_to(root)
+    ):
+        raise ContainerBackendConfigError(
+            f"{field}.build context escapes the installed package"
+        )
+    if (
+        Path(dockerfile).is_absolute()
+        or "\\" in dockerfile
+        or not dockerfile_path.is_relative_to(context_path)
+    ):
+        raise ContainerBackendConfigError(
+            f"{field}.build Dockerfile escapes its context"
+        )
+    if not context_path.is_dir() or not dockerfile_path.is_file():
+        raise ContainerBackendConfigError(
+            f"{field}.build context or Dockerfile is unavailable"
+        )
+    target = build.get("target", "")
+    arguments = build.get("args", {})
+    validation = build.get("validationCommand")
+    if (
+        not isinstance(target, str)
+        or (target and not re.fullmatch(r"[A-Za-z0-9_.-]+", target))
+        or not isinstance(arguments, Mapping)
+        or len(arguments) > 32
+        or any(
+            not isinstance(k, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k)
+            or SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(k)
+            or not isinstance(v, str)
+            or len(v) > 4096
+            or any(ord(c) < 32 for c in v)
+            for k, v in arguments.items()
+        )
+        or not isinstance(validation, list)
+        or not 1 <= len(validation) <= 64
+        or any(
+            not isinstance(v, str)
+            or not v
+            or len(v) > 4096
+            or any(ord(c) < 32 for c in v)
+            for v in validation
+        )
+    ):
+        raise ContainerBackendConfigError(
+            f"{field}.build requires safe args and a validationCommand"
+        )
+    return LocalImageRecipe(
+        source_ref=str(item["sourceRef"]).strip(),
+        image=str(item["image"]).strip(),
+        context_root=context_path,
+        dockerfile=dockerfile,
+        target=target,
+        build_args=tuple(sorted(arguments.items())),
+        fingerprint_inputs=("**/*",),
+        recipe_version="installed-v1",
+        max_age_seconds=_coerce_optional_int(
+            build.get("maxAgeSeconds"),
+            minimum=1,
+            field_name=f"{field}.build.maxAgeSeconds",
+        ),
+        validation_command=tuple(validation),
+    )
+
+
+def _resource_declarations(
+    installed: tuple[Mapping[str, Any], ...], raw: object, *, field: str, reference: str
+) -> str:
+    """Existing explicit declarations override installed entries by opaque ref."""
+    explicit = _declaration_objects(raw, field_name=field)
+    overridden = [row.get(reference) for row in explicit]
+    return json.dumps(
+        [row for row in installed if row.get(reference) not in overridden]
+        + list(explicit)
+    )
 
 
 def _declared_cache_sources(raw: object) -> tuple[CacheSource, ...]:
@@ -481,6 +611,7 @@ def resolve_container_backend_settings(
     """
 
     source = os.environ if env is None else env
+    resources = load_runtime_resources(source)
 
     kind = (source.get("MOONMIND_CONTAINER_BACKEND_KIND") or "docker-engine").strip()
     if kind not in SUPPORTED_CONTAINER_BACKEND_KINDS:
@@ -524,9 +655,7 @@ def resolve_container_backend_settings(
             context_root=project_root,
             dockerfile="api_service/Dockerfile",
             target="test-runtime",
-            build_args=(
-                ("INSTALL_TEST_DEPS", "true"),
-            ),
+            build_args=(("INSTALL_TEST_DEPS", "true"),),
             fingerprint_inputs=PYTHON_TEST_FINGERPRINT_INPUTS,
             recipe_version=PYTHON_TEST_RECIPE_VERSION,
             max_age_seconds=_coerce_optional_int(
@@ -544,11 +673,24 @@ def resolve_container_backend_settings(
     image_sources: list[ImageSource] = [python_test_source]
     image_sources.extend(
         _declared_image_sources(
-            source.get(IMAGE_SOURCES_ENV_KEY),
+            _resource_declarations(
+                resources.image_sources,
+                source.get(IMAGE_SOURCES_ENV_KEY),
+                field=IMAGE_SOURCES_ENV_KEY,
+                reference="sourceRef",
+            ),
             reserved_refs=frozenset({PYTHON_TEST_IMAGE_SOURCE_REF}),
+            context_root=resources.path.parent if resources.path is not None else None,
         )
     )
-    cache_sources = _declared_cache_sources(source.get(CACHE_SOURCES_ENV_KEY))
+    cache_sources = _declared_cache_sources(
+        _resource_declarations(
+            resources.cache_sources,
+            source.get(CACHE_SOURCES_ENV_KEY),
+            field=CACHE_SOURCES_ENV_KEY,
+            reference="cacheRef",
+        )
+    )
 
     max_memory_mib = _coerce_int(
         source.get("MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB"),
@@ -652,7 +794,14 @@ def resolve_container_backend_settings(
         ),
         image_sources=tuple(image_sources),
         cache_sources=cache_sources,
-        service_connections=parse_service_connections(source.get(SERVICE_CONNECTIONS_ENV_KEY)),
+        service_connections=parse_service_connections(
+            _resource_declarations(
+                resources.service_connections,
+                source.get(SERVICE_CONNECTIONS_ENV_KEY),
+                field=SERVICE_CONNECTIONS_ENV_KEY,
+                reference="serviceRef",
+            )
+        ),
         egress_policies=parse_egress_policies(source.get(EGRESS_POLICIES_ENV_KEY)),
         workload_profiles=_workload_profiles(
             source.get(WORKLOAD_PROFILES_ENV_KEY), image_sources, cache_sources

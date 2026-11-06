@@ -21,6 +21,9 @@ SERVICE_CONNECTIONS_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_SERVICE_CONNECTIONS"
 SERVICE_LABEL = "moonmind.service.ref"
 SERVICE_DIGEST_LABEL = "moonmind.service.digest"
 RELAY_CONFIG_PATH = "/run/moonmind-service/config.json"
+RELAY_CONFIG_ENV = "MOONMIND_SERVICE_RELAY_CONFIG"
+MANAGED_SERVICE_LABEL = "moonmind.service.managed"
+GATEWAY_INSPECT_FORMAT = '{"networks":{{json .NetworkSettings.Networks}},"image":{{json .Image}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}},"state":{{json .State}},"host":{{json .HostConfig}},"config":{{json .Config}},"mounts":{{json .Mounts}},"id":{{json .Id}}}'
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _REF = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$")
 _DNS = re.compile(r"^(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$")
@@ -47,6 +50,8 @@ class ServiceConnection:
     server_name: str
     allowed_image_source_refs: tuple[str, ...]
     relay: RelayConfig
+    provision: bool = False
+    subnet: str | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> ServiceConnection:
@@ -60,7 +65,12 @@ class ServiceConnection:
             "allowedImageSourceRefs",
             "relay",
         }
-        if not isinstance(value, Mapping) or set(value) != required:
+        optional = {"provision", "subnet"}
+        if (
+            not isinstance(value, Mapping)
+            or required - set(value)
+            or set(value) - required - optional
+        ):
             raise ValueError("service declaration has missing or unsupported fields")
         names = [value[k] for k in ("networkRef", "gatewayRef", "egressNetworkRef")]
         if any(
@@ -74,6 +84,7 @@ class ServiceConnection:
         if (
             not isinstance(gateway_image, str)
             or not gateway_image
+            or gateway_image.startswith("-")
             or len(gateway_image) > 512
             or any(char.isspace() for char in gateway_image)
         ):
@@ -116,6 +127,31 @@ class ServiceConnection:
             )
         if relay.listen_port != relay.target_port:
             raise ValueError("service relay must preserve the endpoint port")
+        provision = value.get("provision", False)
+        if not isinstance(provision, bool):
+            raise TypeError("service provisioning must be an explicit boolean")
+        subnet = None
+        if provision:
+            network = ipaddress.IPv4Network(
+                value.get("subnet") or f"{relay.listen_host}/24", strict=False
+            )
+            address = ipaddress.IPv4Address(relay.listen_host)
+            if (
+                not 16 <= network.prefixlen <= 30
+                or address not in network
+                or address
+                in {
+                    network.network_address,
+                    network.broadcast_address,
+                    network.network_address + 1,
+                }
+            ):
+                raise ValueError(
+                    "service subnet must contain a usable non-gateway relay address"
+                )
+            subnet = str(network)
+        elif "subnet" in value:
+            raise ValueError("service subnet requires managed provisioning")
         return cls(
             ref,
             names[0],
@@ -125,22 +161,25 @@ class ServiceConnection:
             server.lower(),
             tuple(sorted(refs)),
             relay,
+            provision,
+            subnet,
         )
 
     @property
     def digest(self) -> str:
-        return _digest(
-            {
-                "serviceRef": self.service_ref,
-                "networkRef": self.network_ref,
-                "gatewayRef": self.gateway_ref,
-                "gatewayImage": self.gateway_image,
-                "egressNetworkRef": self.egress_network_ref,
-                "serverName": self.server_name,
-                "allowedImageSourceRefs": self.allowed_image_source_refs,
-                "relayDigest": self.relay.digest,
-            }
-        )
+        policy = {
+            "serviceRef": self.service_ref,
+            "networkRef": self.network_ref,
+            "gatewayRef": self.gateway_ref,
+            "gatewayImage": self.gateway_image,
+            "egressNetworkRef": self.egress_network_ref,
+            "serverName": self.server_name,
+            "allowedImageSourceRefs": self.allowed_image_source_refs,
+            "relayDigest": self.relay.digest,
+        }
+        if self.provision:
+            policy.update(provision=True, subnet=self.subnet)
+        return _digest(policy)
 
 
 def parse_service_connections(raw: str | None) -> tuple[ServiceConnection, ...]:
@@ -176,6 +215,114 @@ async def _json(runner: CommandRunner, args: Sequence[str], failure: str) -> dic
         raise RuntimeError(failure) from exc
 
 
+def _configuration_arguments(connection: ServiceConnection) -> list[str]:
+    return (
+        ["--config-env", RELAY_CONFIG_ENV]
+        if connection.provision
+        else ["--config", RELAY_CONFIG_PATH]
+    )
+
+
+def validate_relay_launch(
+    connection: ServiceConnection,
+    gateway: Mapping[str, Any],
+    *,
+    allow_stopped: bool = False,
+) -> None:
+    """Validate a stopped or running relay before any lifecycle mutation."""
+    config = gateway.get("config") or {}
+    host = gateway.get("host") or {}
+    networks = gateway.get("networks") or {}
+    internal = networks.get(connection.network_ref) or {}
+    address = internal.get("IPAddress")
+    if allow_stopped and (gateway.get("state") or {}).get("Running") is False:
+        address = address or (internal.get("IPAMConfig") or {}).get("IPv4Address")
+    mounts = gateway.get("mounts")
+    valid_config = False
+    if connection.provision:
+        values = [
+            value.split("=", 1)[1]
+            for value in config.get("Env") or []
+            if isinstance(value, str) and value.startswith(RELAY_CONFIG_ENV + "=")
+        ]
+        try:
+            valid_config = (
+                len(values) == 1
+                and RelayConfig.from_mapping(json.loads(values[0])).digest
+                == connection.relay.digest
+            )
+        except (ValueError, TypeError, KeyError):
+            # Malformed relay config uses the shared launch validation error below.
+            valid_config = False
+        valid_mounts = isinstance(mounts, list) and all(
+            m.get("Destination") == "/tmp" and m.get("Type") == "tmpfs" for m in mounts
+        )
+        if (
+            config.get("User") != "1000:1000"
+            or "no-new-privileges:true" not in (host.get("SecurityOpt") or [])
+            or (host.get("Sysctls") or {}).get("net.ipv4.ip_forward") != "0"
+        ):
+            raise RuntimeError("service relay managed execution policy is invalid")
+    else:
+        valid_config = True
+        valid_mounts = (
+            isinstance(mounts, list)
+            and any(
+                m.get("Destination") == RELAY_CONFIG_PATH and m.get("RW") is False
+                for m in mounts
+            )
+            and all(
+                m.get("Destination") in {RELAY_CONFIG_PATH, "/tmp"}
+                and (m.get("Destination") != RELAY_CONFIG_PATH or m.get("RW") is False)
+                for m in mounts
+            )
+        )
+    if (
+        config.get("Image") != connection.gateway_image
+        or config.get("Entrypoint")
+        != (
+            ["python"]
+            if connection.provision
+            else ["python", "-m", "moonmind.security.service_relay"]
+        )
+        or config.get("Cmd")
+        != (
+            (["-m", "moonmind.security.service_relay"] if connection.provision else [])
+            + _configuration_arguments(connection)
+        )
+        or config.get("WorkingDir") != "/app"
+        or any(
+            str(value).split("=", 1)[0]
+            in {"PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+            for value in config.get("Env") or []
+        )
+        or not valid_config
+        or not valid_mounts
+    ):
+        raise RuntimeError("service relay launch or mounted configuration is invalid")
+    if (
+        set(networks) != {connection.network_ref, connection.egress_network_ref}
+        or address != connection.relay.listen_host
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(gateway.get("image", "")))
+        or host.get("Privileged") is not False
+        or host.get("ReadonlyRootfs") is not True
+        or host.get("CapAdd")
+        or "ALL" not in (host.get("CapDrop") or [])
+    ):
+        raise RuntimeError("service relay identity or isolation is invalid")
+
+
+async def ensure_service_connection(
+    runner: CommandRunner, connection: ServiceConnection
+) -> dict:
+    """Prepare opted-in shared resources, then attest the actual boundary."""
+    if connection.provision:
+        from moonmind.security.service_provisioning import provision_service_connection
+
+        await provision_service_connection(runner, connection)
+    return await attest_service_connection(runner, connection)
+
+
 async def attest_service_connection(
     runner: CommandRunner,
     connection: ServiceConnection,
@@ -197,51 +344,14 @@ async def attest_service_connection(
         != "isolated"
     ):
         raise RuntimeError("service network must be isolated internal IPv4-only state")
-    fmt = '{"networks":{{json .NetworkSettings.Networks}},"image":{{json .Image}},"health":{{json .State.Health.Status}},"host":{{json .HostConfig}},"config":{{json .Config}},"mounts":{{json .Mounts}},"id":{{json .Id}}}'
     gateway = await _json(
         runner,
-        ("inspect", "--format", fmt, connection.gateway_ref),
+        ("inspect", "--format", GATEWAY_INSPECT_FORMAT, connection.gateway_ref),
         "service relay is unavailable",
     )
-    networks = gateway.get("networks") or {}
-    host = gateway.get("host") or {}
-    config = gateway.get("config") or {}
-    mounts = gateway.get("mounts") or []
-    if (
-        config.get("Image") != connection.gateway_image
-        or config.get("Entrypoint")
-        != ["python", "-m", "moonmind.security.service_relay"]
-        or config.get("Cmd") != ["--config", RELAY_CONFIG_PATH]
-        or config.get("WorkingDir") != "/app"
-        or any(
-            str(value).split("=", 1)[0]
-            in {"PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH"}
-            for value in config.get("Env") or []
-        )
-        or not isinstance(mounts, list)
-        or not any(
-            m.get("Destination") == RELAY_CONFIG_PATH and m.get("RW") is False
-            for m in mounts
-        )
-        or any(
-            m.get("Destination") not in {RELAY_CONFIG_PATH, "/tmp"}
-            or (m.get("Destination") == RELAY_CONFIG_PATH and m.get("RW") is not False)
-            for m in mounts
-        )
-    ):
-        raise RuntimeError("service relay launch or mounted configuration is invalid")
-    if (
-        set(networks) != {connection.network_ref, connection.egress_network_ref}
-        or (networks.get(connection.network_ref) or {}).get("IPAddress")
-        != connection.relay.listen_host
-        or gateway.get("health") != "healthy"
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(gateway.get("image", "")))
-        or host.get("Privileged") is not False
-        or host.get("ReadonlyRootfs") is not True
-        or host.get("CapAdd")
-        or "ALL" not in (host.get("CapDrop") or [])
-    ):
-        raise RuntimeError("service relay identity, isolation or health is invalid")
+    validate_relay_launch(connection, gateway)
+    if gateway.get("health") != "healthy":
+        raise RuntimeError("service relay health is invalid")
     # The relay cannot act as a packet router even if another workload crafts
     # routes to it. It has no NET_ADMIN and forwarding is explicitly disabled.
     code, forwarding, _ = await runner(
@@ -258,8 +368,7 @@ async def attest_service_connection(
             "-m",
             "moonmind.security.service_relay",
             "--check",
-            "--config",
-            RELAY_CONFIG_PATH,
+            *_configuration_arguments(connection),
         ),
         "service relay live configuration is unavailable",
     )

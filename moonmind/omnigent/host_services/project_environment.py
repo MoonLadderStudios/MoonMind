@@ -58,7 +58,9 @@ def is_safe_project_environment_entry(key: str, raw_value: str) -> bool:
 
 def deployment_project_environment() -> dict[str, str]:
     """Resolve only explicitly declared safe settings, never logging values."""
-    result: dict[str, str] = {}
+    from moonmind.config.runtime_resources import load_runtime_resources
+
+    result: dict[str, str] = dict(load_runtime_resources().environment)
     for candidate in os.environ.get(_SETTING, "").split(","):
         key = candidate.strip()
         if not key:

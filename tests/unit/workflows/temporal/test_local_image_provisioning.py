@@ -146,6 +146,67 @@ async def test_local_recipe_builds_once_and_reuses_matching_build_key(
 
 
 @pytest.mark.asyncio
+async def test_installed_recipe_cold_build_reuse_and_changed_context(tmp_path) -> None:
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\nCOPY prepare.py /prepare.py\n")
+    (context / "prepare.py").write_text("print('original')\n")
+    manifest = tmp_path / "resources.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "imageSources": [
+                    {
+                        "sourceRef": "asset-preparer",
+                        "image": "asset-preparer:local",
+                        "build": {
+                            "context": "context",
+                            "dockerfile": "Dockerfile",
+                            "validationCommand": ["true"],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    settings = resolve_container_backend_settings(
+        {"MOONMIND_RUNTIME_RESOURCES_FILE": str(manifest)}
+    )
+    daemon = _LocalBuildDaemon(build_delay=0.02)
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path / "workspace",
+        settings=settings,
+        command_runner=daemon.runner,
+        image_lock_root=tmp_path / "locks",
+        pull_lock_poll_seconds=0.001,
+    )
+    request = _request()
+    request.request.spec.image_source_ref = "asset-preparer"
+    first, second = await asyncio.gather(
+        backend.acquire_image(request), backend.acquire_image(request)
+    )
+    assert daemon.builds == 1
+    assert "--target" not in daemon.build_commands[0]
+    assert "--load" in daemon.build_commands[0]
+    assert sorted(
+        item.image_observation.provision_action for item in (first, second)
+    ) == ["build", "reuse"]
+    (context / "prepare.py").write_text("print('changed')\n")
+    changed = await backend.acquire_image(request)
+    assert daemon.builds == 2
+    assert changed.image_observation.build_key != first.image_observation.build_key
+    assert changed.resolved_image_ref == IMAGE_ID
+    (context / "empty-output-directory").mkdir()
+    directory_change = await backend.acquire_image(request)
+    assert daemon.builds == 3
+    assert (
+        directory_change.image_observation.build_key
+        != changed.image_observation.build_key
+    )
+
+
+@pytest.mark.asyncio
 async def test_only_declared_effective_inputs_invalidate_local_image(
     tmp_path,
 ) -> None:
@@ -165,6 +226,27 @@ async def test_only_declared_effective_inputs_invalidate_local_image(
         dependency_change.image_observation.build_key
         != first.image_observation.build_key
     )
+
+
+@pytest.mark.asyncio
+async def test_local_build_cache_preserves_file_boundaries(tmp_path) -> None:
+    context = tmp_path / "context"
+    context.mkdir()
+    recipe = replace(
+        _recipe(context), fingerprint_inputs=("**/*",), recipe_version="installed-v1"
+    )
+    a = context / "a"
+    a.write_bytes(b"")
+    mode = str(a.stat().st_mode & 0o777).encode()
+    a.write_bytes(b"\0path\0b" + mode + b"payload")
+    daemon = _LocalBuildDaemon()
+    backend = _backend(tmp_path, recipe, daemon)
+    first = await backend.acquire_image(_request())
+    a.write_bytes(b"")
+    (context / "b").write_bytes(b"payload")
+    second = await backend.acquire_image(_request())
+    assert daemon.builds == 2
+    assert first.image_observation.build_key != second.image_observation.build_key
 
 
 @pytest.mark.asyncio

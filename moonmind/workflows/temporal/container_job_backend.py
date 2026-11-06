@@ -86,8 +86,8 @@ from moonmind.security.cloud_assessments import CloudImage, summarize_cloud_asse
 from moonmind.security.container_services import (
     SERVICE_DIGEST_LABEL,
     SERVICE_LABEL,
-    attest_service_connection,
     attest_service_workload,
+    ensure_service_connection,
 )
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
@@ -1516,12 +1516,16 @@ class DockerContainerJobBackend:
             matches: list[Path] = []
             for candidate in root.glob(pattern):
                 resolved = candidate.resolve()
-                if not resolved.is_relative_to(root):
+                if not resolved.is_relative_to(root) or (
+                    recipe.recipe_version == "installed-v1" and candidate.is_symlink()
+                ):
                     raise ImageAcquisitionError(
                         "local image build input escapes the deployment root",
                         failure_class=ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE,
                     )
-                if resolved.is_file():
+                if resolved.is_file() or (
+                    recipe.recipe_version == "installed-v1" and resolved.is_dir()
+                ):
                     matches.append(resolved)
             if not matches:
                 raise ImageAcquisitionError(
@@ -1530,11 +1534,22 @@ class DockerContainerJobBackend:
                 )
             for path in sorted(set(matches)):
                 relative = path.relative_to(root).as_posix()
-                digest.update(b"\0path\0")
-                digest.update(relative.encode())
+                metadata = json.dumps(
+                    [
+                        relative,
+                        path.stat().st_mode & 0o777,
+                        "directory" if path.is_dir() else "file",
+                    ]
+                ).encode()
+                digest.update(len(metadata).to_bytes(8, "big"))
+                digest.update(metadata)
+                if path.is_dir():
+                    continue
+                contents = hashlib.sha256()
                 with path.open("rb") as handle:
                     while chunk := handle.read(1024 * 1024):
-                        digest.update(chunk)
+                        contents.update(chunk)
+                digest.update(contents.digest())
         return f"sha256:{digest.hexdigest()}"
 
     async def _daemon_platform(self) -> str:
@@ -1656,8 +1671,6 @@ class DockerContainerJobBackend:
             "--load",
             "--file",
             str(dockerfile),
-            "--target",
-            recipe.target,
             "--tag",
             recipe.image,
             "--platform",
@@ -1672,15 +1685,15 @@ class DockerContainerJobBackend:
             "--label",
             f"{LABEL_IMAGE_RECIPE_VERSION}={recipe.recipe_version}",
         ]
+        if recipe.target:
+            args.extend(("--target", recipe.target))
         for name, value in recipe.build_args:
             args.extend(("--build-arg", f"{name}={value}"))
         args.append(str(root))
         started = time.monotonic()
         code, stdout, stderr = await self._runner(tuple(args))
         duration_ms = int((time.monotonic() - started) * 1000)
-        diagnostics_ref = await self._publish_build_diagnostics(
-            request, stdout, stderr
-        )
+        diagnostics_ref = await self._publish_build_diagnostics(request, stdout, stderr)
         if code:
             detail = stderr.decode(errors="replace").lower()
             failure = (
@@ -2285,7 +2298,7 @@ class DockerContainerJobBackend:
             raise RuntimeError("service connection authority is absent")
         if self._publish is None:
             raise RuntimeError("service access evidence publisher is unavailable")
-        evidence = await attest_service_connection(self._runner, connection)
+        evidence = await ensure_service_connection(self._runner, connection)
         if workload:
             evidence["workload"] = await attest_service_workload(
                 self._runner, connection, request.container_ref or self._name(request),

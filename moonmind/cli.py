@@ -30,6 +30,9 @@ app = typer.Typer(
 )
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
 container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")
+runtime_resources_app = typer.Typer(
+    help="Install reusable deployment runtime resources."
+)
 workflow_app = typer.Typer(
     help=(
         "Submit and observe ordinary workflows through the public execution API. "
@@ -39,7 +42,45 @@ workflow_app = typer.Typer(
 )
 app.add_typer(worker_app, name="worker")
 app.add_typer(container_app, name="container")
+app.add_typer(runtime_resources_app, name="runtime-resources")
 app.add_typer(workflow_app, name="workflow")
+
+
+@runtime_resources_app.command("install")
+def runtime_resources_install(
+    source: Path = typer.Argument(
+        ..., help="Resource package directory or resources.json."
+    ),
+    project_dir: Path = typer.Option(
+        Path.cwd(), "--project-dir", help="MoonMind deployment project directory."
+    ),
+) -> None:
+    from moonmind.config.runtime_resources_install import install_runtime_resources
+
+    try:
+        installed = install_runtime_resources(source, project_dir)
+    except (OSError, ValueError, RuntimeError) as exc:
+        from moonmind.config.container_backend_settings import (
+            ContainerBackendConfigError,
+        )
+        from moonmind.config.runtime_resources import RuntimeResourcesConfigError
+
+        detail = (
+            str(exc)
+            if isinstance(
+                exc, (ContainerBackendConfigError, RuntimeResourcesConfigError)
+            )
+            or type(exc) is ValueError
+            else type(exc).__name__
+        )
+        typer.secho(
+            f"Resource installation failed: {detail}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1) from None
+    typer.echo(f"Installed runtime resources: {installed}")
+    typer.echo(
+        "Activate through the standard deployment controller update; ordinary workflows then inherit these resources."
+    )
 
 
 def _print_container_job_result(result: ContainerJobResult) -> None:
