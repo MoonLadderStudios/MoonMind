@@ -1463,6 +1463,7 @@ async def compile_and_persist_execution_plan(
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     parent_artifact_access: ArtifactAccessContext | None = None,
     access: ArtifactAccessContext,
+    model_tier_resolution: Mapping[str, Any] | None = None,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
     _recorded_step_provider_configurations: Mapping[
@@ -2080,6 +2081,7 @@ async def compile_and_persist_execution_plan(
         ),
         model_route_ref=str(getattr(provider_profile, "provider_id", "") or "") or None,
         model_normalized_options=model_options,
+        model_tier_resolution=model_tier_resolution,
         workflow_requirements=list(required_capabilities),
         # Capability admission consumes deployment-owned declarations only.
         # A workflow request can require a capability, but it cannot make that
@@ -2441,6 +2443,7 @@ async def compile_frozen_execution_plan(
     access: ArtifactAccessContext,
     refresh_step_selections: bool = False,
     refresh_provider_configuration: bool = False,
+    model_tier_resolution: Mapping[str, Any] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2497,6 +2500,7 @@ async def compile_frozen_execution_plan(
         db_session=db_session,
         parent_repository_plan=parent_repository_plan,
         access=access,
+        model_tier_resolution=model_tier_resolution,
         _compile_step_plans=refresh_step_selections or bool(recorded_steps),
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
         _recorded_step_provider_configurations=recorded_step_configurations,
@@ -2706,69 +2710,64 @@ async def _retire_refused_plan_artifacts(
             )
 
 
+#: Saved model sources that record a resolution rather than authored intent.
+_RESOLVED_MODEL_SOURCES = frozenset(
+    {
+        "profile_default_tier",
+        "requested_tier",
+        "runtime_default",
+        "provider_profile_default",
+    }
+)
+
+
 def _follow_current_tier_policy(
     initial_parameters: Mapping[str, Any], provider_profile: Any
-) -> Mapping[str, Any]:
-    """Resolve a fresh occurrence's tier selection against the current profile.
+) -> tuple[Mapping[str, Any], dict[str, Any] | None]:
+    """Resolve a fresh occurrence's selection against the current profile.
 
     Schedule admission records the pair an omitted or tier selection resolved
     to when the definition was saved. That pair is a resolution, not authored
-    intent, so a new occurrence resolves the tier's current policy: an
-    automatic family's current eligible release, a pin, or an explicit tier
-    model, with the tier's current effort unless the effort was authored.
-    Custom selections keep their pair. An unavailable family raises, and the
-    occurrence keeps its recorded plan.
+    intent, so a new occurrence resolves the profile's current tier policy as
+    a new admission would: an automatic family's current eligible release, a
+    pin, an explicit tier model or Runtime default, with the tier's current
+    effort unless the effort was authored. Returns the parameters to compile
+    and the resolution the plan records for launch; a Custom model, or a
+    target that recorded no resolution, keeps its saved selection and records
+    none. An unavailable family raises, and the occurrence keeps its recorded
+    plan.
     """
 
-    if initial_parameters.get("modelSource") not in {
-        "profile_default_tier",
-        "requested_tier",
-    }:
-        return initial_parameters
-    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+    if initial_parameters.get("modelSource") not in _RESOLVED_MODEL_SOURCES:
+        # An authored Custom model, or no recorded resolution.
+        return initial_parameters, None
+    from moonmind.config.settings import settings
+    from moonmind.workflows.executions.model_resolver import resolve_recorded_selection
 
-    task = initial_parameters.get("workflow") or initial_parameters.get("task")
-    runtime_intent = task.get("runtime") if isinstance(task, Mapping) else None
-    if not isinstance(runtime_intent, Mapping):
-        runtime_intent = {}
-    # As when the schedule was saved, a recorded tier resolution's root effort
-    # is not authored; a legacy flat effort without one still is.
-    recorded = initial_parameters.get("modelTierResolution")
-    effort_resolved = (
-        isinstance(recorded, Mapping)
-        and recorded.get("effortSource") != "task_override"
-    )
-    authored_effort = runtime_intent.get(
-        "effort", None if effort_resolved else initial_parameters.get("effort")
-    )
-    resolved = resolve_model_effort(
-        runtime_id=provider_profile.runtime_id,
+    resolved = resolve_recorded_selection(
+        initial_parameters,
         profile=provider_profile,
-        requested_model_tier=runtime_intent.get(
-            "modelTier", initial_parameters.get("modelTier")
-        ),
-        requested_effort=authored_effort,
-        tier_fallback=runtime_intent.get(
-            "tierFallback", initial_parameters.get("tierFallback", "clamp")
-        ),
-        require_launch_ready=False,
+        workflow_settings=settings.workflow,
     )
-    if resolved.model_source != initial_parameters.get("modelSource"):
-        # The tier no longer supplies a model; keep the saved pair.
-        return initial_parameters
+    if resolved.model_source == "task_override" or resolved.model is None:
+        # A nested Custom model is authored; a policy that resolves no model
+        # leaves the saved pair in place.
+        return initial_parameters, None
+    resolution = {
+        **resolved.as_metadata(),
+        "providerProfileId": provider_profile.profile_id,
+    }
     followed = {
         **initial_parameters,
         "model": resolved.model,
-        "modelTierResolution": {
-            **resolved.as_metadata(),
-            "providerProfileId": provider_profile.profile_id,
-        },
+        "modelSource": resolved.model_source,
+        "modelTierResolution": resolution,
     }
     if resolved.effort is None:
         followed.pop("effort", None)
     else:
         followed["effort"] = resolved.effort
-    return followed
+    return followed, resolution
 
 
 async def readmit_frozen_execution_plan(
@@ -2864,8 +2863,12 @@ async def readmit_frozen_execution_plan(
         )
         if provider_profile is None:
             return recorded("the admitted Provider Profile is unavailable")
-        if not preserve_recorded_intent:
-            compilation_parameters = _follow_current_tier_policy(
+        if preserve_recorded_intent:
+            # A successor keeps the recorded plan's pair, so it also keeps the
+            # resolution that plan recorded.
+            tier_resolution = recorded_plan.payload.modelConfig.tierResolution
+        else:
+            compilation_parameters, tier_resolution = _follow_current_tier_policy(
                 compilation_parameters, provider_profile
             )
         persisted_plan = await compile_frozen_execution_plan(
@@ -2880,6 +2883,7 @@ async def readmit_frozen_execution_plan(
             parent_repository_plan=parent_repository_plan,
             access=access,
             refresh_provider_configuration=not preserve_recorded_intent,
+            model_tier_resolution=tier_resolution,
         )
         changed = []
         if recorded_plan is not None:

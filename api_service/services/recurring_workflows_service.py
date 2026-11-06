@@ -49,7 +49,6 @@ from api_service.services.provider_profile_runtime import (
 from moonmind.config.settings import settings
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
-    model_selection_fields,
     validate_model_selection_submission,
 )
 from moonmind.security.operator_admission import OperatorAdmission
@@ -1849,55 +1848,13 @@ class RecurringWorkflowsService:
             )
         if needs_profile_snapshot and agent_profile_selection is None:
             from moonmind.workflows.executions.model_resolver import (
-                resolve_model_effort,
+                resolve_recorded_selection,
             )
 
-            authored_parameters = target.get("initialParameters") or {}
-            task_intent = (
-                authored_parameters.get("workflow")
-                or authored_parameters.get("task")
-                or {}
-            )
-            runtime_intent = task_intent.get("runtime") or {}
-            # A target the API normalized also records the pair its selection
-            # resolved to. That pair is a resolution, not a legacy flat pair,
-            # so it cannot become Custom intent.
-            recorded = authored_parameters.get("modelTierResolution")
-            model_resolved = authored_parameters.get("modelSource") not in {
-                None,
-                "task_override",
-            }
-            effort_resolved = (
-                isinstance(recorded, Mapping)
-                and recorded.get("effortSource") != "task_override"
-            )
-            resolved = resolve_model_effort(
-                runtime_id=provider_profile.runtime_id,
+            resolved = resolve_recorded_selection(
+                target.get("initialParameters") or {},
                 profile=provider_profile,
-                # Raw schedule fields may still author a legacy flat pair.
-                # Only a nested selection supersedes that saved intent.
-                authored_runtime=(
-                    runtime_intent
-                    if model_selection_fields(runtime_intent)
-                    else None
-                ),
-                requested_model=runtime_intent.get(
-                    "model",
-                    authored_parameters.get(
-                        "requestedModel" if model_resolved else "model"
-                    ),
-                ),
-                requested_effort=runtime_intent.get(
-                    "effort",
-                    None if effort_resolved else authored_parameters.get("effort"),
-                ),
-                requested_model_tier=runtime_intent.get(
-                    "modelTier", authored_parameters.get("modelTier")
-                ),
-                tier_fallback=runtime_intent.get(
-                    "tierFallback", authored_parameters.get("tierFallback", "clamp")
-                ),
-                require_launch_ready=False,
+                workflow_settings=settings.workflow,
             )
             initial_parameters.update(
                 model=resolved.model,

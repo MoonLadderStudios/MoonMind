@@ -1067,6 +1067,7 @@ class _SnapshotSession(_OccurrenceSession):
 def _saved_schedule_selection(runtime, model, effort, model_source, provider):
     """Mirror the recurring target the API saves for one authored selection."""
 
+    from moonmind.config.settings import settings
     from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
     resolved = resolve_model_effort(
@@ -1074,6 +1075,7 @@ def _saved_schedule_selection(runtime, model, effort, model_source, provider):
         profile=provider,
         authored_runtime=runtime if runtime else None,
         require_launch_ready=False,
+        workflow_settings=settings.workflow,
     )
     assert (resolved.model, resolved.effort, resolved.model_source) == (
         model,
@@ -1124,6 +1126,22 @@ def _saved_schedule_selection(runtime, model, effort, model_source, provider):
         ("tier", "withdrawn", None, None),
         ("pinned", "withdrawn", "gpt-6.1-sol", "medium"),
         ("custom", "withdrawn", "gpt-6-luna", "low"),
+        # The operator sets Tier 2 to Runtime default after the save.
+        ("omitted", "runtime_default", "runtime", "runtime"),
+        ("tier", "runtime_default", "runtime", "runtime"),
+        ("custom", "runtime_default", "gpt-6-luna", "low"),
+        # Saved while Tier 2 was Runtime default; the profile then adopts the
+        # automatic family template.
+        ("omitted", "adopted", "gpt-7-sol", "medium"),
+        ("tier", "adopted", "gpt-7-sol", "medium"),
+        # The profile's default tier moves to Terra.
+        ("omitted", "default_tier", "gpt-6.1-terra", "medium"),
+        ("tier", "default_tier", "gpt-7-sol", "medium"),
+        # Only Astra remains, so Tier 2 falls back to it.
+        ("omitted", "tiers_shrink", "gpt-6-astra", "medium"),
+        ("tier", "tiers_shrink", "gpt-6-astra", "medium"),
+        # Tier 2 is pinned to the release it already resolved to.
+        ("omitted", "pin_same", "gpt-6.1-sol", "medium"),
     ],
 )
 async def test_fresh_occurrence_launches_the_model_its_admission_planned(
@@ -1133,22 +1151,34 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
     from unittest.mock import AsyncMock
 
     from api_service.db import base as db_base
+    from moonmind.config.settings import settings
     from moonmind.omnigent import bridge_artifacts
     from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.provider_profiles.model_families import (
         first_party_family_tier_template,
     )
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
     from moonmind.workflows.temporal.activities import omnigent_activities
     from moonmind.workflows.temporal.activities import (
         omnigent_session_activities as session_activities,
     )
 
+    template, _ = first_party_family_tier_template("codex_cli", "openai")
+    runtime_default_tier = {
+        "label": "Sol",
+        "model": None,
+        "effort": None,
+        "parameters": {},
+        "annotations": {},
+    }
     tiers = None
     if selection == "pinned":
-        template, _ = first_party_family_tier_template("codex_cli", "openai")
         tiers = [dict(tier) for tier in template]
         tiers[1].update(model_mode="pinned", model="gpt-6.1-sol")
+    if change == "adopted":
+        tiers = [dict(tier) for tier in template]
+        tiers[1] = dict(runtime_default_tier)
     runtime, model, effort, source = {
         "omitted": ({}, "gpt-6.1-sol", "medium", "profile_default_tier"),
         "tier": ({"modelTier": 2}, "gpt-6.1-sol", "medium", "requested_tier"),
@@ -1174,6 +1204,20 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
         ),
     }[selection]
     provider = _family_provider("gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna", tiers=tiers)
+    if change == "adopted" and selection != "custom":
+        saved_pair = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=provider,
+            authored_runtime=runtime or None,
+            require_launch_ready=False,
+            workflow_settings=settings.workflow,
+        )
+        model, effort, source = (
+            saved_pair.model,
+            saved_pair.effort,
+            saved_pair.model_source,
+        )
+        assert source == "runtime_default"
     saved = _saved_schedule_selection(runtime, model, effort, source, provider)
     workflow_runtime = saved.pop("workflowRuntime")
     if selection == "legacy_flat":
@@ -1234,10 +1278,38 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
     provider.model_tiers = [dict(tier) for tier in provider.model_tiers]
     if change == "pin":
         provider.model_tiers[1].update(model_mode="pinned", model="gpt-6-sol")
+    elif change == "pin_same":
+        provider.model_tiers[1].update(model_mode="pinned", model="gpt-6.1-sol")
     elif change == "effort":
         provider.model_tiers[1]["effort"] = "high"
     elif change == "withdrawn":
         provider.model_catalog_evidence_json = {"models": [{"id": "gpt-6-luna"}]}
+    elif change == "runtime_default":
+        provider.model_tiers[1] = dict(runtime_default_tier)
+    elif change == "adopted":
+        provider.model_tiers = [dict(tier) for tier in template]
+    elif change == "default_tier":
+        provider.model_catalog_evidence_json["models"].append({"id": "gpt-6.1-terra"})
+        provider.default_model_tier = 3
+    elif change == "tiers_shrink":
+        provider.model_catalog_evidence_json["models"].append({"id": "gpt-6-astra"})
+        provider.model_tiers = provider.model_tiers[:1]
+    # A new admission of the same authored selection, against the edited
+    # profile, is what this occurrence must plan and launch.
+    current = None
+    if expected is not None:
+        current = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=provider,
+            authored_runtime=runtime or None,
+            require_launch_ready=False,
+            workflow_settings=settings.workflow,
+        )
+        if expected == "runtime":
+            expected, expected_effort = current.model, current.effort
+            assert current.model_source == "runtime_default"
+        if selection != "custom":
+            assert (current.model, current.effort) == (expected, expected_effort)
     session = _SnapshotSession(
         provider, artifacts=artifacts, task_ref=task_ref, task_digest=task_digest
     )
@@ -1301,16 +1373,52 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
     assert request.parameters["omnigent"]["session"]["reasoningEffort"] == (
         expected_effort
     )
-    if selection != "legacy_flat":
-        resolution = request.parameters["modelTierResolution"]
-        runtime_resolution = request.parameters["workflow"]["runtime"]
-        assert (resolution["resolvedModel"], resolution["resolvedEffort"]) == (
-            expected,
-            expected_effort,
-        )
-        assert runtime_resolution["resolvedModel"] == expected
-        assert runtime_resolution["modelTierResolution"]["resolvedModel"] == expected
+    resolution = request.parameters["modelTierResolution"]
+    assert (resolution["resolvedModel"], resolution["resolvedEffort"]) == (
+        expected,
+        expected_effort,
+    )
+    if selection == "custom":
         assert resolution["modelSource"] == source
+    else:
+        # The launch records the occurrence admission's whole resolution:
+        # tier, label, mode, family status, fallback and sources.
+        admitted_resolution = {**current.as_metadata(), "providerProfileId": "codex"}
+        assert resolution == admitted_resolution
+        assert request.parameters["modelSource"] == current.model_source
+    if selection != "legacy_flat":
+        runtime_resolution = request.parameters["workflow"]["runtime"]
+        assert runtime_resolution["resolvedModel"] == expected
+        assert runtime_resolution["resolvedEffort"] == expected_effort
+        assert runtime_resolution["modelTierResolution"] == resolution
+    if change == "pin_same":
+        # An interrupted Step's successor launches with the occurrence's
+        # resolution, not the one recorded when the schedule was saved.
+        # The occurrence workflow carries its admitted plan into its input.
+        occurrence_input = {**parameters, **admitted}
+        occurrence_input.pop("disposition")
+        admit_successor = (
+            omnigent_activities.omnigent_admit_step_successor_plan_activity
+        )
+        successor = await admit_successor(
+            {
+                "workflowId": "mm:schedule-1:occurrence-2",
+                "initialParameters": json.loads(json.dumps(occurrence_input)),
+            }
+        )
+        assert successor["disposition"] == "admitted", successor
+        successor_binding = OmnigentExecutionPlanBinding.model_validate(
+            successor["omnigentExecutionPlan"]
+        )
+        relaunched = await session_activities._reconstruct_plan_bound_request(
+            binding=successor_binding,
+            plan=_PlanStore.plans[successor_binding.plan_ref],
+            workflow_id="mm:schedule-1:occurrence-2",
+            step_execution_id="mm:schedule-1:occurrence-2:run:execution:2",
+            agent_run_id="agent-run-2",
+        )
+        assert relaunched.parameters["modelTierResolution"] == admitted_resolution
+        assert admitted_resolution["modelMode"] == "pinned"
     # The definition, its stored plan and its original task input are unchanged.
     assert parameters == action_input
     assert task_snapshot["target"]["initialParameters"]["model"] == model

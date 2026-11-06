@@ -20,6 +20,7 @@ Lifecycle ordering preserved (19 steps 1-13).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from moonmind.omnigent.harness_platform.agent_profile import (
@@ -423,6 +424,7 @@ def compile_execution_plan(
     model_effort: str | None,
     model_route_ref: str | None,
     model_normalized_options: dict[str, Any],
+    model_tier_resolution: Mapping[str, Any] | None = None,
     provider_configuration_snapshot: dict[str, Any] | None = None,
     workflow_requirements: list[str] | None = None,
     bridge_capabilities: dict[str, bool] | None = None,
@@ -943,6 +945,11 @@ def compile_execution_plan(
                 "routeRef": model_route_ref,
                 "normalizedOptions": model_normalized_options,
                 "modelConfigDigest": model_digest,
+                **(
+                    {"tierResolution": dict(model_tier_resolution)}
+                    if model_tier_resolution is not None
+                    else {}
+                ),
             },
             "resolvedSkills": skills.model_dump(by_alias=True, mode="json"),
             "resolvedTools": {

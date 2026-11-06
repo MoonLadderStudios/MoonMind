@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping
 
-from moonmind.runtime_intent import is_custom_selection
+from moonmind.runtime_intent import is_custom_selection, model_selection_fields
 from moonmind.workflows.executions.runtime_defaults import (
     normalize_runtime_id,
     resolve_runtime_defaults,
@@ -43,6 +43,7 @@ __all__ = [
     "resolve_effective_model",
     "resolve_model_effort",
     "resolve_opencode_effort",
+    "resolve_recorded_selection",
 ]
 
 
@@ -505,6 +506,56 @@ def resolve_model_effort(
         ),
         advisory_preview,
         profile=profile,
+    )
+
+
+def resolve_recorded_selection(
+    parameters: Mapping[str, Any],
+    *,
+    profile: Any,
+    workflow_settings: Any | None = None,
+) -> ResolvedModelEffort:
+    """Resolve a normalized target's authored selection against ``profile``.
+
+    A target the API normalized also records the pair its selection resolved
+    to. That pair is a resolution, not authored intent: a nested selection,
+    a ``task_override`` model, or an effort recorded without a tier
+    resolution is authored. Saving a schedule and admitting each occurrence
+    resolve that intent the same way, against the profile's current tiers.
+    """
+
+    task = parameters.get("workflow") or parameters.get("task")
+    runtime = task.get("runtime") if isinstance(task, Mapping) else None
+    if not isinstance(runtime, Mapping):
+        runtime = {}
+    recorded = parameters.get("modelTierResolution")
+    model_resolved = parameters.get("modelSource") not in {
+        None,
+        _MODEL_SOURCE_TASK_OVERRIDE,
+    }
+    effort_resolved = (
+        isinstance(recorded, Mapping)
+        and recorded.get("effortSource") != _MODEL_SOURCE_TASK_OVERRIDE
+    )
+    return resolve_model_effort(
+        runtime_id=getattr(profile, "runtime_id", None),
+        profile=profile,
+        # Raw schedule fields may still author a legacy flat pair. Only a
+        # nested selection supersedes that saved intent.
+        authored_runtime=runtime if model_selection_fields(runtime) else None,
+        requested_model=runtime.get(
+            "model",
+            parameters.get("requestedModel" if model_resolved else "model"),
+        ),
+        requested_effort=runtime.get(
+            "effort", None if effort_resolved else parameters.get("effort")
+        ),
+        requested_model_tier=runtime.get("modelTier", parameters.get("modelTier")),
+        tier_fallback=runtime.get(
+            "tierFallback", parameters.get("tierFallback", _FALLBACK_CLAMP)
+        ),
+        require_launch_ready=False,
+        workflow_settings=workflow_settings,
     )
 
 

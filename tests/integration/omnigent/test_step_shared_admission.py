@@ -124,8 +124,11 @@ async def test_scheduled_specialized_step_uses_canonical_identity(
         ("release", ("gpt-7-sol", "medium")),
         ("pin", ("gpt-6-sol", "medium")),
         ("effort", ("gpt-7-sol", "high")),
+        ("runtime_default", None),
+        ("adopted", ("gpt-7-sol", "medium")),
+        ("default_tier", None),
     ],
-    ids=["release", "pin", "effort"],
+    ids=["release", "pin", "effort", "runtime_default", "adopted", "default_tier"],
 )
 @pytest.mark.parametrize(
     "selection,source",
@@ -150,6 +153,7 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         first_party_family_tier_template,
     )
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
     from moonmind.workflows.temporal.activities import omnigent_activities
     from moonmind.workflows.temporal.activities.omnigent_session_activities import (
         _reconstruct_plan_bound_request,
@@ -161,9 +165,21 @@ async def test_fresh_occurrence_launches_its_current_family_release(
     monkeypatch.setattr(base, "async_session_maker", journey.session_factory)
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     tiers, default_tier = first_party_family_tier_template("codex_cli", "openai")
+    # Tier 2 set to Runtime default in the editor: no family, no model.
+    runtime_default_tier = {
+        "label": "Sol",
+        "model": None,
+        "effort": None,
+        "parameters": {},
+        "annotations": {},
+    }
     async with journey.session_factory() as session:
         provider = await session.get(ManagedAgentProviderProfile, PROFILE)
-        provider.model_tiers = tiers
+        provider.model_tiers = (
+            [tiers[0], runtime_default_tier, *tiers[2:]]
+            if change == "adopted"
+            else tiers
+        )
         provider.default_model_tier = default_tier
         provider.model_catalog_evidence_json = {
             "models": [{"id": "gpt-6-sol"}, {"id": "gpt-6.1-sol"}]
@@ -211,11 +227,14 @@ async def test_fresh_occurrence_launches_its_current_family_release(
                 "initial_parameters"
             ]
         )
-        assert saved["model"] == "gpt-6.1-sol"
         # Saving records the resolution, never an omitted or tier selection
         # turned into Custom.
-        assert saved["modelSource"] == source
-        assert saved["effort"] == "medium"
+        if change == "adopted" and source != "task_override":
+            assert saved["modelSource"] == "runtime_default"
+        else:
+            assert saved["model"] == "gpt-6.1-sol"
+            assert saved["modelSource"] == source
+            assert saved["effort"] == "medium"
         # Sol 7 is released after the definition was saved, and the operator
         # then edits Tier 2 without revising the schedule.
         provider = await session.get(ManagedAgentProviderProfile, PROFILE)
@@ -227,11 +246,40 @@ async def test_fresh_occurrence_launches_its_current_family_release(
             edited[1].update(model_mode="pinned", model="gpt-6-sol")
         elif change == "effort":
             edited[1]["effort"] = "high"
+        elif change == "runtime_default":
+            edited[1] = dict(runtime_default_tier)
+        elif change == "adopted":
+            edited = [dict(tier) for tier in tiers]
+        elif change == "default_tier":
+            provider.model_catalog_evidence_json = {
+                "models": [
+                    *provider.model_catalog_evidence_json["models"],
+                    {"id": "gpt-6.1-terra"},
+                ]
+            }
+            provider.default_model_tier = 3
         provider.model_tiers = edited
         await session.commit()
-    expected, expected_effort = (
-        ("gpt-6.1-sol", "medium") if source == "task_override" else current
-    )
+        # What a new admission of the same authored selection resolves now.
+        admission = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=provider,
+            authored_runtime=selection or None,
+            require_launch_ready=False,
+            workflow_settings=settings.workflow,
+        )
+    if source == "task_override":
+        expected, expected_effort = ("gpt-6.1-sol", "medium")
+    else:
+        expected, expected_effort = admission.model, admission.effort
+        if current is not None:
+            assert (expected, expected_effort) == current
+        if change == "runtime_default":
+            assert admission.model_source == "runtime_default"
+        if change == "default_tier":
+            assert expected == (
+                "gpt-6.1-terra" if source == "profile_default_tier" else "gpt-7-sol"
+            )
 
     occurrence = "mm:family-tier-occurrence"
     monkeypatch.setattr(
@@ -277,11 +325,18 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         expected,
         expected_effort,
     )
+    if source != "task_override":
+        # Tier, label, mode, family status and sources are the occurrence
+        # admission's, not the ones recorded when the schedule was saved.
+        assert resolution == {**admission.as_metadata(), "providerProfileId": PROFILE}
+        assert launched.parameters["workflow"]["runtime"]["modelTierResolution"] == (
+            resolution
+        )
     # The definition keeps the selection it recorded when it was saved.
     async with journey.session_factory() as session:
         stored = await session.get(type(definition), definition.id)
-        assert stored.target["initialParameters"]["model"] == "gpt-6.1-sol"
-        assert stored.target["initialParameters"]["effort"] == "medium"
+        assert stored.target["initialParameters"]["model"] == saved["model"]
+        assert stored.target["initialParameters"]["effort"] == saved["effort"]
         assert stored.target["initialParameters"]["omnigentExecutionPlan"] == (
             saved["omnigentExecutionPlan"]
         )

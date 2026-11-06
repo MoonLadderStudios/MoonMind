@@ -138,6 +138,15 @@ class ModelConfig(BaseModel):
         default_factory=dict, alias="normalizedOptions"
     )
     modelConfigDigest: str = Field(alias="modelConfigDigest")
+    # The Provider Profile tier resolution that chose this pair when the
+    # admission resolved it apart from the task input (a fresh schedule
+    # occurrence), so launch records that resolution. Omitted otherwise so
+    # historical plan bytes keep their digest.
+    tierResolution: dict[str, Any] | None = Field(
+        default=None,
+        alias="tierResolution",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class ExecutionAuthority(BaseModel):
@@ -645,6 +654,8 @@ def bind_runtime_request_authority(
             "effort": effective_effort,
             "modelConfigDigest": model_digest,
         }
+        # A step's own model replaces the admitted tier resolution.
+        payload["model"].pop("tierResolution", None)
         support_identity = payload.get("supportIdentity")
         if not isinstance(support_identity, dict):
             raise HarnessPlatformError(
