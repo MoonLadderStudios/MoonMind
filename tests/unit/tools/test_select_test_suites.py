@@ -17,22 +17,39 @@ from tools.select_test_suites import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_source_and_artifact_phases_partition_full_verification():
+def test_source_artifact_and_recovery_phases_partition_full_verification():
     full = select_suites([], event_name="workflow_dispatch")
     source = select_test_suites.for_phase(full, "source")
     artifact = select_test_suites.for_phase(full, "artifact")
+    recovery = select_test_suites.for_phase(full, "recovery")
     assert (
         source.unit_fast and source.integration_hermetic and source.omnigent_conformance
     )
     assert not source.exact_artifact and not source.integration_fresh_journey
+    assert not source.host_recovery
     assert artifact.exact_artifact and artifact.integration_fresh_journey
     assert not artifact.unit_fast and not artifact.integration_hermetic
     assert not artifact.omnigent_conformance
+    # Only host recovery consumes prepared recovery runtimes, so its phase
+    # can wait for them without delaying the other image consumers.
+    assert not artifact.host_recovery
+    assert {
+        key for key in select_test_suites.OUTPUT_KEYS if getattr(recovery, key)
+    } == {"host_recovery"}
     for key in select_test_suites.OUTPUT_KEYS:
         if key not in {"full_backend", "full_frontend", "ownership_full"}:
-            assert getattr(full, key) == (
-                getattr(source, key) or getattr(artifact, key)
-            )
+            phases = [getattr(phase, key) for phase in (source, artifact, recovery)]
+            assert getattr(full, key) == any(phases)
+            # integration_ci aggregates hermetic (source) and journey rows.
+            assert key == "integration_ci" or sum(phases) <= 1, key
+
+
+@pytest.mark.parametrize(
+    "paths", [[], ["docs/README.md"], ["tools/ci/run_credential_free_host_recovery.py"]]
+)
+def test_host_recovery_follows_the_exact_artifact_owner(paths):
+    selection = select_suites(paths, event_name="pull_request")
+    assert selection.host_recovery == selection.exact_artifact
 
 
 def test_unknown_verification_phase_is_rejected():
@@ -918,13 +935,10 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     assert 'elif [[ "$result" != "skipped" ]]; then' in workflow
     assert "was not selected but ended with result=" in workflow
     # Always-required gates (selector itself, preflight invariants including
-    # shard ownership, frontend and generated-contract aggregators) fail on
-    # any non-success.
+    # shard ownership) fail on any non-success.
     assert '"select-test-suites"' in workflow
     assert '"preflight-policy"' in workflow
-    assert '"test-frontend"' in workflow
-    assert '"check-generated-contracts"' in workflow
-    # Every selected backend gate is aggregated through require_selected.
+    # Every selected gate is aggregated through require_selected.
     # The four primary backend suites share one native matrix aggregate
     # (MoonLadderStudios/MoonMind#4377); per-row completion is never inferred
     # from last-writer matrix outputs.
@@ -934,6 +948,9 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
+        "frontend-static",
+        "frontend-browser",
+        "run-generated-contracts",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
     for removed in ("reliability-journey-checkpoint-resume",):
@@ -972,7 +989,7 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     # a failing gate report success.
     assert 'if [[ "$failures" -gt 0 ]]; then' in workflow
     tail = workflow.split('if [[ "$failures" -gt 0 ]]; then')[-1]
-    assert "exit 1" in tail.split("All required backend checks passed.")[0]
+    assert "exit 1" in tail.split("All required checks passed.")[0]
     # No `failures=0` reset may appear after the first require_selected call.
     first_call = workflow.index('require_selected "backend-matrix"')
     assert "failures=0" not in workflow[first_call:]

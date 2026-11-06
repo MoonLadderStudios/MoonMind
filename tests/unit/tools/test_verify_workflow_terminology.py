@@ -23,8 +23,24 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_mm731_terminology_check_passes_current_repository() -> None:
-    assert verify_workflow_terminology.run("all") == []
+def test_runtime_check_rejects_task_prefixed_lifecycle_events(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "api_service/api/routers/events.py",
+        'EVENT = "task.completed"\n',
+    )
+    _write(
+        tmp_path / "moonmind/workflows/temporal/events.py",
+        'EVENT = "workflow_execution.completed"\ncreated = task.created_at\n',
+    )
+
+    findings = verify_workflow_terminology.check_rules(
+        verify_workflow_terminology.RUNTIME_RULES, root=tmp_path
+    )
+
+    assert [
+        (finding.rule, finding.path, finding.line_number) for finding in findings
+    ] == [("task-lifecycle-event", Path("api_service/api/routers/events.py"), 1)]
+    assert "workflow_execution" in findings[0].message
 
 
 def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) -> None:

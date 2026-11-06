@@ -341,6 +341,36 @@ async def test_continue_rejects_authored_execution_plan_replacement(
 
 
 @pytest.mark.asyncio
+async def test_continue_rejects_authored_repository_tool_admissions(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+    forged = [{"tool": "gitlab.merge_request", "principalRef": "principal:foreign"}]
+
+    with pytest.raises(HTTPException) as excinfo:
+        async with sessions() as session:
+            await ex.continue_in_new_workflow(
+                workflow_id="mm:source",
+                payload=_payload(
+                    initialParameters={"repositoryToolAdmissions": forged}
+                ),
+                service=service,  # type: ignore[arg-type]
+                session=session,
+                user=user,
+                _submit_enabled=None,
+            )
+
+    assert excinfo.value.status_code == 422
+    assert "admissions are recorded by submission" in excinfo.value.detail["message"]
+    assert service.create_calls == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_continue_is_idempotent_on_repeat_key(monkeypatch) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())

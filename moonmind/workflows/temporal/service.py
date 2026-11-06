@@ -3791,12 +3791,18 @@ class TemporalExecutionService:
             )
 
         if parameters_patch is not None:
-            # Attribution is server-admitted intent, not an editable input.
-            # Exclude it before Temporal dispatch and canonical-record merging.
+            # Attribution and repository connection admissions are
+            # server-admitted intent, not editable inputs. Exclude them before
+            # Temporal dispatch and canonical-record merging.
             parameters_patch = {
                 key: value
                 for key, value in parameters_patch.items()
-                if key not in {"_publicationGitIdentity", "publicationGitIdentityAdmission"}
+                if key
+                not in {
+                    "_publicationGitIdentity",
+                    "publicationGitIdentityAdmission",
+                    "repositoryToolAdmissions",
+                }
             }
 
         record = await self._require_source_execution(workflow_id)
@@ -4418,7 +4424,11 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Unsupported signal name: {signal_name}"
             )
-        record = await self._require_source_execution(workflow_id)
+        record = await (
+            self._require_cancel_target_execution(workflow_id)
+            if signal_name in {"Pause", "Resume"}
+            else self._require_source_execution(workflow_id)
+        )
         if expected_run_id is not None:
             await self._session.refresh(record)
             if record.run_id != expected_run_id:

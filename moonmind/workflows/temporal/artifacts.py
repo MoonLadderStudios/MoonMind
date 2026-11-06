@@ -1487,6 +1487,11 @@ _LEGACY_SAVED_WORK_OUTPUT_LINKS = (
     "checkpoint.saved_work",
     "evidence.recovery",
 )
+# security.assess publishes these reusable roots; report text has no schema.
+_ASSESSMENT_PRODUCER = "security.assess"
+_ASSESSMENT_ROOT_LINKS = ("security.scan", "security.comparison")
+# The artifact identity form a dependency seal accepts.
+ARTIFACT_ID_PATTERN = re.compile(r"art_[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -1531,7 +1536,7 @@ def _normalized_dependencies(
         if (
             not isinstance(item, ArtifactDependency)
             or not isinstance(item.artifact_id, str)
-            or not re.fullmatch(r"art_[A-Za-z0-9_-]+", item.artifact_id)
+            or not ARTIFACT_ID_PATTERN.fullmatch(item.artifact_id)
             or not isinstance(item.role, str)
             or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,64}", item.role)
             or type(item.required) is not bool
@@ -2240,22 +2245,47 @@ class TemporalArtifactRepository:
             )
         ).correlate(db_models.TemporalArtifact)
 
-    def _legacy_saved_root_condition(self, root, *, now: datetime):
+    @staticmethod
+    def _unsealed_root(root):
+        return and_(
+            root.c.dependency_closure_version.is_(None),
+            root.c.dependency_closure_sha256.is_(None),
+            root.c.dependency_request_sha256.is_(None),
+        )
+
+    @staticmethod
+    def _saved_work_root(root):
         from moonmind.workflows.temporal.saved_work_dependencies import (
             SAVED_WORK_DEPENDENCY_CONTENT_KINDS,
             SAVED_WORK_DEPENDENCY_KINDS,
         )
 
+        return or_(
+            root.c.content_type.in_(tuple(SAVED_WORK_DEPENDENCY_CONTENT_KINDS)),
+            root.c.metadata["artifact_kind"]
+            .as_string()
+            .in_(tuple(SAVED_WORK_DEPENDENCY_KINDS)),
+        )
+
+    def _retained_assessment_root(self, root):
+        """Scan/comparison roots its finished producer published without a seal."""
+        link = db_models.TemporalArtifactLink.__table__
         return and_(
-            root.c.dependency_closure_version.is_(None),
-            root.c.dependency_closure_sha256.is_(None),
-            root.c.dependency_request_sha256.is_(None),
-            or_(
-                root.c.content_type.in_(tuple(SAVED_WORK_DEPENDENCY_CONTENT_KINDS)),
-                root.c.metadata["artifact_kind"]
-                .as_string()
-                .in_(tuple(SAVED_WORK_DEPENDENCY_KINDS)),
+            root.c.metadata["producer"].as_string() == _ASSESSMENT_PRODUCER,
+            exists(
+                select(1).where(
+                    link.c.artifact_id == root.c.artifact_id,
+                    link.c.link_type.in_(_ASSESSMENT_ROOT_LINKS),
+                )
             ),
+            # An active producer seals its own roots before reusing them.
+            ~self._active_execution_reference_exists(root.c.artifact_id),
+        )
+
+    def _legacy_saved_root_condition(self, root, *, now: datetime):
+        return and_(
+            self._unsealed_root(root),
+            self._saved_work_root(root),
             self._intrinsic_root_liveness(root, now=now),
         )
 
@@ -2294,7 +2324,12 @@ class TemporalArtifactRepository:
         ).correlate(db_models.TemporalArtifact)
 
     @_artifact_authority_boundary
-    async def list_unsealed_saved_work_roots(self, *, now, limit, after=None):
+    async def list_unsealed_retained_roots(self, *, now, limit, after=None):
+        """Live unsealed saved-work and assessment roots, with their producer run.
+
+        Only saved-work roots receive the temporary run-link guard; assessment
+        roots are decoded from their own schema and otherwise stay unsealed.
+        """
         root = db_models.TemporalArtifact.__table__.alias("legacy_dependency_root")
         owner = db_models.TemporalArtifactLink.__table__.alias("legacy_root_link")
         execution = db_models.TemporalExecutionCanonicalRecord.__table__
@@ -2321,7 +2356,9 @@ class TemporalArtifactRepository:
                     owner,
                     and_(
                         owner.c.artifact_id == root.c.artifact_id,
-                        owner.c.link_type.in_(_LEGACY_SAVED_WORK_OUTPUT_LINKS),
+                        owner.c.link_type.in_(
+                            _LEGACY_SAVED_WORK_OUTPUT_LINKS + _ASSESSMENT_ROOT_LINKS
+                        ),
                     ),
                 ).outerjoin(
                     execution,
@@ -2332,7 +2369,12 @@ class TemporalArtifactRepository:
                 )
             )
             .where(
-                self._legacy_saved_root_condition(root, now=now),
+                self._unsealed_root(root),
+                or_(
+                    self._saved_work_root(root),
+                    self._retained_assessment_root(root),
+                ),
+                self._intrinsic_root_liveness(root, now=now),
             )
             .subquery()
         )
@@ -4878,9 +4920,16 @@ class TemporalArtifactService:
         root_artifact_id: str,
         dependencies: Iterable[ArtifactDependency],
         access: ArtifactAccessContext,
+        bytes_only_roles: Iterable[str] = (),
     ) -> ArtifactDependencyClosure:
-        """Atomically seal producer-verified immutable input identities."""
+        """Atomically seal producer-verified immutable input identities.
+
+        Entries in ``bytes_only_roles`` keep only their own exact bytes: history
+        a root cites but does not consume, whose own closure follows that
+        cited root's lifetime instead of accumulating into every successor.
+        """
         access = ArtifactAccessContext.require(access)
+        bytes_only_roles = frozenset(bytes_only_roles)
         entries = _normalized_dependencies(dependencies)
         # The direct request is distinct from its frozen transitive result.
         # A lost-ack retry must not expand a child's later first seal.
@@ -4902,6 +4951,8 @@ class TemporalArtifactService:
         expanded = list(entries)
         observed_closures = {}
         for entry in entries:
+            if entry.role in bytes_only_roles:
+                continue
             try:
                 nested = await self._repository.get_verified_dependencies(
                     entry.artifact_id
@@ -6165,19 +6216,58 @@ class TemporalArtifactService:
         await self._finish_mutation()
         return counts
 
-    async def _backfill_saved_work_dependencies(
+    async def seal_admitted_assessment_root(
+        self, *, root_artifact_id: str, access: ArtifactAccessContext
+    ) -> None:
+        """Give an unsealed assessment root that ``access`` admitted backfill's seal.
+
+        As in backfill, the seal runs under the producer execution the root's
+        own link records, so a later occurrence in another workflow can admit
+        it. The admitting execution gains no read of that producer's evidence.
+        """
+        from moonmind.workflows.skills.security_assessment import (
+            seal_retained_assessment_root,
+        )
+
+        artifact, payload = await self.read(artifact_id=root_artifact_id, access=access)
+        producer = next(
+            (
+                link.workflow_id
+                for link in reversed(await self._repository.list_links(root_artifact_id))
+                if link.link_type in _ASSESSMENT_ROOT_LINKS
+            ),
+            None,
+        )
+        if (
+            not producer
+            or (artifact.metadata_json or {}).get("producer") != _ASSESSMENT_PRODUCER
+        ):
+            raise TemporalArtifactStateError(
+                "Retained assessment root has no recorded producer execution"
+            )
+        await seal_retained_assessment_root(
+            self,
+            artifact=artifact,
+            payload=payload,
+            access=ArtifactAccessContext.for_execution(producer),
+        )
+
+    async def _backfill_retained_dependencies(
         self, *, now, limit, on_progress=None
     ) -> bool:
         """Migrate one bounded page before expiry, using original linked authority."""
         from copy import copy
 
+        from moonmind.workflows.skills.security_assessment import (
+            seal_retained_assessment_root,
+        )
         from moonmind.workflows.temporal.saved_work_dependencies import (
             verify_saved_work_dependencies,
         )
 
         draining = getattr(self, "_pending_write_draining", False)
         if not draining or not getattr(self, "_saved_dependency_scan_complete", False):
-            candidates = await self._repository.list_unsealed_saved_work_roots(
+            candidates = await self._repository.list_unsealed_retained_roots(
                 now=now,
                 limit=limit,
                 after=getattr(self, "_saved_dependency_cursor", None),
@@ -6205,9 +6295,22 @@ class TemporalArtifactService:
                     artifact, payload = await participant.read(
                         artifact_id=root_id, access=access
                     )
-                    await verify_saved_work_dependencies(
-                        participant, artifact=artifact, payload=payload, access=access
-                    )
+                    if (artifact.metadata_json or {}).get(
+                        "producer"
+                    ) == _ASSESSMENT_PRODUCER:
+                        await seal_retained_assessment_root(
+                            participant,
+                            artifact=artifact,
+                            payload=payload,
+                            access=access,
+                        )
+                    else:
+                        await verify_saved_work_dependencies(
+                            participant,
+                            artifact=artifact,
+                            payload=payload,
+                            access=access,
+                        )
                     await self._finish_mutation()
                 except BaseException as primary:
                     try:
@@ -6227,7 +6330,7 @@ class TemporalArtifactService:
         else:
             self._saved_dependency_page_advanced = False
         return bool(
-            await self._repository.list_unsealed_saved_work_roots(now=now, limit=1)
+            await self._repository.list_unsealed_retained_roots(now=now, limit=1)
         )
 
     async def sweep_lifecycle(
@@ -6247,9 +6350,22 @@ class TemporalArtifactService:
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
         page_size = max(1, int(limit))
-        pending_saved_dependencies = await self._backfill_saved_work_dependencies(
+        pending_saved_dependencies = await self._backfill_retained_dependencies(
             now=sweep_now, limit=page_size, on_progress=on_progress
         )
+        if pending_saved_dependencies and self._saved_dependency_page_advanced:
+            # Later pages may cite expired evidence without a dependency guard.
+            # Visit them before expiry can make their seals unrecoverable. A
+            # failed root advances the cursor, so it cannot stall cleanup forever.
+            logger.info("Artifact expiry deferred while retained roots are backfilled")
+            await self._finish_mutation()
+            return LifecycleSweepSummary(
+                run_id=lifecycle_run_id,
+                expired_candidate_count=0,
+                soft_deleted_count=0,
+                hard_deleted_count=0,
+                drained=False,
+            )
         pruned = await self._repository.prune_expired_use_claims(now=sweep_now)
         expired = await self._repository.list_expired_artifacts(
             now=sweep_now, limit=page_size

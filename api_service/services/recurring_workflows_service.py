@@ -330,6 +330,9 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     initial_parameters = copy.deepcopy(dict(initial_parameters))
     initial_parameters.pop("_publicationGitIdentity", None)
     initial_parameters.pop("publicationGitIdentityAdmission", None)
+    # Only submission admits repository tool selections; recurring runs carry
+    # none, so their GitLab steps are refused at run time.
+    initial_parameters.pop("repositoryToolAdmissions", None)
     try:
         from moonmind.workflows.executions.execution_contract import (
             validate_workflow_runtime_targets,

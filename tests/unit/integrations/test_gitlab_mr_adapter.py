@@ -8,6 +8,8 @@ hermetic (httpx.MockTransport); no live server, no external mutation.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -552,25 +554,36 @@ async def test_bound_credential_rejects_endpoint_mismatch() -> None:
     assert connection.base_url == "https://gitlab.example.com/api/v4"
 
 
-async def test_bound_credential_enforces_write_permission() -> None:
+async def test_bound_credential_note_requires_admitted_review_request() -> None:
     from moonmind.integrations.gitlab.client import connection_from_bound_credential
 
-    read_only = _bound_acquired(
-        endpoint="https://gitlab.example.com", operations=("read",)
-    )
-    with pytest.raises(GitLabIdentityError):
-        connection_from_bound_credential(
-            read_only,
-            endpoint="https://gitlab.example.com",
-            admitted_endpoints=ADMITTED,
-            action="post_note",
-        )
+    for denied in (("read",), ("read", "write")):
+        with pytest.raises(GitLabIdentityError):
+            connection_from_bound_credential(
+                _bound_acquired(
+                    endpoint="https://gitlab.example.com", operations=denied
+                ),
+                endpoint="https://gitlab.example.com",
+                admitted_endpoints=ADMITTED,
+                action="post_note",
+            )
     # Read-only acquisition still authorizes reads.
     connection = connection_from_bound_credential(
-        read_only,
+        _bound_acquired(endpoint="https://gitlab.example.com", operations=("read",)),
         endpoint="https://gitlab.example.com",
         admitted_endpoints=ADMITTED,
         action="read_mr",
+    )
+    assert connection.base_url == "https://gitlab.example.com/api/v4"
+    # The repository operation that admits merge-request collaboration posts.
+    connection = connection_from_bound_credential(
+        _bound_acquired(
+            endpoint="https://gitlab.example.com",
+            operations=("read", "review_request"),
+        ),
+        endpoint="https://gitlab.example.com",
+        admitted_endpoints=ADMITTED,
+        action="post_note",
     )
     assert connection.base_url == "https://gitlab.example.com/api/v4"
 
@@ -676,3 +689,147 @@ async def test_fresh_adapter_posts_after_empty_footer_lookup() -> None:
     assert result["reconciled"] is False
     assert ("GET", f"/api/v4/projects/99/merge_requests/{MR_IID}/notes") in calls
     assert ("POST", f"/api/v4/projects/99/merge_requests/{MR_IID}/notes") in calls
+
+
+# ---------------------------------------------------------------------------
+# Paginated reconciliation and partial status
+# ---------------------------------------------------------------------------
+
+
+def _adapter(handler, **options) -> tuple[GitLabMRAdapter, httpx.AsyncClient]:
+    connection, injected = _connection(handler)
+    ref = resolve_gitlab_identity(
+        endpoint="https://gitlab.example.com",
+        project="99",
+        mr_iid=MR_IID,
+        admitted_endpoints=ADMITTED,
+    )
+    client = GitLabClient(connection=connection, client=injected)
+    return GitLabMRAdapter(client=client, identity=ref, **options), injected
+
+
+def _newer_notes(count: int, *, start: int = 1000) -> list[dict]:
+    return [{"id": start + index, "body": "unrelated"} for index in range(count)]
+
+
+async def test_fresh_adapter_reconciles_footer_beyond_the_first_note_page() -> None:
+    calls: list[tuple[str, str | None]] = []
+    footer_body = "hello\n\n<!-- moonmind:gitlab-note operation:op:page2 -->"
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params.get("page")
+        calls.append((request.method, page))
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": 999, "body": "duplicate"})
+        if page in (None, "1"):
+            return httpx.Response(
+                200, json=_newer_notes(20), headers={"X-Next-Page": "2"}
+            )
+        return httpx.Response(200, json=[{"id": 4242, "body": footer_body}])
+
+    adapter, injected = _adapter(_handler)
+    try:
+        result = await adapter.post_note(body="hello", operation_id="op:page2")
+    finally:
+        await injected.aclose()
+    assert result == {"note_id": 4242, "reconciled": True}
+    assert [method for method, _ in calls] == ["GET", "GET"]
+    assert [page for _, page in calls] == ["1", "2"]
+
+
+async def test_exhausted_note_pages_stay_uncertain_without_posting() -> None:
+    posts: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            return httpx.Response(201, json={"id": 1, "body": "x"})
+        page = int(request.url.params.get("page", "1"))
+        return httpx.Response(
+            200,
+            json=_newer_notes(100, start=page * 1000),
+            headers={"X-Next-Page": str(page + 1)},
+        )
+
+    adapter, injected = _adapter(_handler, max_note_lookup_pages=2)
+    try:
+        first = await adapter.post_note(body="bounded", operation_id="op:deep")
+        # A repeated call on the same adapter reconciles again; the
+        # uncertain ledger state never authorizes a blind POST.
+        second = await adapter.post_note(body="bounded", operation_id="op:deep")
+    finally:
+        await injected.aclose()
+    assert posts == []
+    for result in (first, second):
+        assert result["note_id"] is None
+        assert result["reconciled"] is False
+        handoff = result["automation_handoff"]
+        assert handoff["operation_id"] == "op:deep"
+        assert handoff["reason"] == "note_lookup_exhausted"
+        assert handoff["pages_examined"] == 2
+
+
+async def test_status_reports_partial_pipelines_and_unknown_approvals() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/approvals"):
+            return httpx.Response(200, json=["unexpected", "shape"])
+        if path.endswith("/pipelines"):
+            page = request.url.params.get("page", "1")
+            return httpx.Response(
+                200,
+                json=[{"id": int(page), "status": "success"}],
+                headers={"X-Next-Page": str(int(page) + 1)},
+            )
+        return httpx.Response(200, json=_mr_payload())
+
+    adapter, injected = _adapter(_handler, max_discussion_pages=2)
+    try:
+        status = await adapter.read_status()
+    finally:
+        await injected.aclose()
+    assert status["pipelines"] == [
+        {"id": 1, "status": "success"},
+        {"id": 2, "status": "success"},
+    ]
+    assert status["approvals"] is None
+    assert status["completeness"]["complete"] is False
+    assert status["completeness"]["approvals_known"] is False
+    assert status["completeness"]["pipelines"]["complete"] is False
+    assert status["completeness"]["pipelines"]["next_page"] == "3"
+
+
+async def test_read_mr_rejects_a_different_merge_request() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_mr_payload(iid=MR_IID + 1))
+
+    adapter, injected = _adapter(_handler)
+    try:
+        with pytest.raises(GitLabIdentityError):
+            await adapter.read_mr()
+    finally:
+        await injected.aclose()
+
+
+async def test_timed_out_note_post_is_uncertain_and_reconciled_not_repeated() -> None:
+    notes: list[dict] = []
+    posts: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            # The note lands; only its acknowledgment is lost.
+            notes.append({"id": 61, "body": json.loads(request.content)["body"]})
+            raise httpx.ReadTimeout("acknowledgment lost", request=request)
+        return httpx.Response(200, json=list(notes))
+
+    adapter, injected = _adapter(_handler)
+    try:
+        with pytest.raises(GitLabToolError) as lost:
+            await adapter.post_note(body="timed out", operation_id="op:timeout")
+        assert lost.value.code == "gitlab_transient"
+        retried = await adapter.post_note(body="timed out", operation_id="op:timeout")
+    finally:
+        await injected.aclose()
+    assert len(posts) == 1
+    assert retried == {"note_id": 61, "reconciled": True}

@@ -203,11 +203,16 @@ def test_missing_source_handoff_fails_before_artifact_download(tmp_path):
     )
     assert steps.index(guard) < steps.index(download)
     assert guard["env"]["SOURCE_ARTIFACT"] == download["with"]["name"]
-    for artifact, accepted in [("", False), ("source-verification-123-1", True)]:
+    artifact, digest = "source-verification-123-1", "sha256:" + "a" * 64
+    for handoff, accepted in [
+        ({"SOURCE_ARTIFACT": "", "SOURCE_DIGEST": digest}, False),
+        ({"SOURCE_ARTIFACT": artifact, "SOURCE_DIGEST": ""}, False),
+        ({"SOURCE_ARTIFACT": artifact, "SOURCE_DIGEST": digest}, True),
+    ]:
         result = subprocess.run(
             ["bash", "-eu", "-c", guard["run"]],
             cwd=tmp_path,
-            env={"PATH": os.environ["PATH"], "SOURCE_ARTIFACT": artifact},
+            env={"PATH": os.environ["PATH"], **handoff},
             capture_output=True,
             text=True,
         )

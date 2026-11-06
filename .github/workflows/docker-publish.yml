@@ -173,6 +173,17 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
   qualify:
+    needs: assemble
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/pytest-unit-tests.yml
+    with:
+      candidate_image: ${{ needs.assemble.outputs.image_ref }}
+      verification_phase: artifact
+  qualify-recovery:
+    # Only host recovery consumes the prepared recovery runtimes, so the other
+    # image consumers start as soon as the manifest is assembled.
     needs:
       - assemble
       - prepare-recovery-images
@@ -182,8 +193,7 @@ jobs:
     uses: ./.github/workflows/pytest-unit-tests.yml
     with:
       candidate_image: ${{ needs.assemble.outputs.image_ref }}
-
-      verification_phase: artifact
+      verification_phase: recovery
       recovery_images_artifact: ${{ needs.prepare-recovery-images.outputs.artifact }}
   qualify-migrations:
     permissions:
@@ -193,6 +203,9 @@ jobs:
       qualification_run_id: ${{ github.run_id }}
 
   verify-source-receipt:
+    # Verifies the source handoff as soon as it exists, in parallel with
+    # artifact qualification rather than on the publication tail.
+    needs: source-checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -200,9 +213,10 @@ jobs:
         shell: bash
         env:
           SOURCE_ARTIFACT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          SOURCE_DIGEST: ${{ needs.source-checks.outputs.source_receipt_digest }}
         run: |
-          if [[ -z "$SOURCE_ARTIFACT" ]]; then
-            echo "::error::Required source verification artifact is missing."
+          if [[ -z "$SOURCE_ARTIFACT" || -z "$SOURCE_DIGEST" ]]; then
+            echo "::error::Required source verification artifact or digest is missing."
             exit 1
           fi
       - name: Check out source
@@ -214,24 +228,28 @@ jobs:
         with:
           name: ${{ needs.source-checks.outputs.source_receipt_artifact }}
           path: artifacts/source-verification
-      - name: Verify the immutable source/run/attempt handoff
+      - name: Verify the immutable source/run/attempt/selection handoff
         run: |
           python3 tools/ci/source_verification.py verify artifacts/source-verification/receipt.json \
             --revision "$MOONMIND_CI_REVISION" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
-            --artifact "$SOURCE_ARTIFACT"
+            --artifact "$SOURCE_ARTIFACT" --digest "$SOURCE_DIGEST" --selection "$SOURCE_SELECTION"
+          {
+            echo "### Verified source receipt \`${SOURCE_ARTIFACT}\` (\`${SOURCE_DIGEST}\`)"
+            echo '```json'
+            cat artifacts/source-verification/receipt.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
           SOURCE_ARTIFACT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          SOURCE_DIGEST: ${{ needs.source-checks.outputs.source_receipt_digest }}
+          SOURCE_SELECTION: ${{ needs.source-checks.outputs.source_selection }}
           MOONMIND_CI_REVISION: ${{ github.sha }}
-    needs:
-      - source-checks
-      - qualify
-      - assemble
-      - qualify-migrations
   publish-latest:
     needs:
       - metadata
       - assemble
       - qualify
+      - qualify-recovery
       - qualify-migrations
       - source-checks
       - verify-source-receipt
@@ -259,13 +277,18 @@ jobs:
           CANDIDATE_IMAGE: ${{ needs.assemble.outputs.image_ref }}
           ASSEMBLY_RESULT: ${{ needs.assemble.result }}
           QUALIFICATION_RESULT: ${{ needs.qualify.result }}
+          RECOVERY_RESULT: ${{ needs.qualify-recovery.result }}
           MIGRATION_RESULT: ${{ needs.qualify-migrations.result }}
+          QUALIFIED_IMAGE: ${{ needs.qualify.outputs.qualified_image }}
+          RECOVERY_IMAGE: ${{ needs.qualify-recovery.outputs.qualified_image }}
           SOURCE_RESULT: ${{ needs.source-checks.result }}
           SOURCE_RECEIPT_RESULT: ${{ needs.verify-source-receipt.result }}
+          SOURCE_RECEIPT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          SOURCE_RECEIPT_DIGEST: ${{ needs.source-checks.outputs.source_receipt_digest }}
         run: |
           set -euo pipefail
           # Job dependencies and the actual mutation boundary both fail closed.
-          for gate in ASSEMBLY_RESULT SOURCE_RESULT SOURCE_RECEIPT_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
+          for gate in ASSEMBLY_RESULT SOURCE_RESULT SOURCE_RECEIPT_RESULT QUALIFICATION_RESULT RECOVERY_RESULT MIGRATION_RESULT; do
             if [[ "${!gate:-}" != "success" ]]; then
               echo "::error::Required release result $gate did not succeed"
               exit 1
@@ -276,6 +299,12 @@ jobs:
             echo "::error::Release qualification requires this image's immutable assembled manifest"
             exit 1
           fi
+          for consumed in QUALIFIED_IMAGE RECOVERY_IMAGE; do
+            if [[ "${!consumed:-}" != "$CANDIDATE_IMAGE" ]]; then
+              echo "::error::Artifact qualification consumed '${!consumed:-}', not ${CANDIDATE_IMAGE}"
+              exit 1
+            fi
+          done
           MAIN_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if [ "${GITHUB_REF}" != "refs/heads/main" ] || [ "${MAIN_HEAD}" != "${GITHUB_SHA}" ]; then
             echo "::notice::Not moving latest: ${GITHUB_SHA} on ${GITHUB_REF} is not the main tip (${MAIN_HEAD})"
@@ -283,14 +312,21 @@ jobs:
           fi
           docker buildx imagetools create -t "${IMAGE_NAME}:latest" "$CANDIDATE_IMAGE"
           echo "Runtime qualification: amd64; arm64 is build-only." >> "$GITHUB_STEP_SUMMARY"
-          echo "Qualified default image: \`${CANDIDATE_IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Qualified default image: \`${CANDIDATE_IMAGE}\`"
+            echo "Verified source receipt: \`${SOURCE_RECEIPT}\` (\`${SOURCE_RECEIPT_DIGEST}\`) for \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
   ci-timings:
+    # The one timing report for this run, including reusable-call jobs.
+    # Advisory: it is outside publication and never changes the run result.
     needs:
       - publish-latest
       - source-checks
       - qualify
+      - qualify-recovery
       - qualify-migrations
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

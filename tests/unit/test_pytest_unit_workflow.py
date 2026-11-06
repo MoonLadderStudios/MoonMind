@@ -294,6 +294,24 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting(cache_hit) 
     ) + 5 + 2 <= int(job["timeout-minutes"])
 
 
+def test_hermetic_job_reports_a_timing_digest_on_every_outcome() -> None:
+    job = _load_workflow()["jobs"]["integration-hermetic"]
+    collect = next(
+        step
+        for step in job["steps"]
+        if step["name"] == "Collect row-owned integration report and diagnostics"
+    )
+
+    # The digest reaches the job log and step summary, which stay readable
+    # when artifact downloads do not, without a step of its own or budget.
+    assert collect["if"] == "always()"
+    command = collect["run"]
+    assert "python3 tools/ci/write_backend_matrix_summary.py digest" in command
+    assert '--summary "$GITHUB_STEP_SUMMARY"' in command
+    for receipt in ("main", "storage-seed", "storage-verify"):
+        assert f"artifacts/integration-ci/{receipt}.receipt.json" in command
+
+
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     jobs = _load_workflow()["jobs"]
     assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
@@ -359,9 +377,9 @@ def test_journey_job_reserves_setup_execution_and_reporting(
 
     def selected(step: dict) -> bool:
         condition = step.get("if", "")
-        if "outputs.artifact_name != ''" in condition and image_source != "archive":
+        if "env.CANDIDATE_ARCHIVE != ''" in condition and image_source != "archive":
             return False
-        if "outputs.artifact_name == ''" in condition and image_source == "archive":
+        if "env.CANDIDATE_ARCHIVE == ''" in condition and image_source == "archive":
             return False
         return True
 
@@ -484,24 +502,11 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
         "npm run contracts:check" in (step.get("run") or "") for step in contract_steps
     )
     assert not any(step.get("if") for step in contract_steps)
-
-    required_job = jobs["check-generated-contracts"]
-    assert required_job["needs"] == [
-        "select-test-suites",
-        "run-generated-contracts",
-    ]
-    assert required_job["if"] == "always()"
-    required_script = "\n".join(
-        (step.get("run") or "") for step in required_job["steps"] if "run" in step
-    )
-    assert "needs.select-test-suites.result" in required_script
-    assert "needs.select-test-suites.outputs.generated_contracts" in required_script
-    assert "needs.run-generated-contracts.result" in required_script
-    assert "Generated contract verification passed." in required_script
-    assert "skipped intentionally" in required_script
+    # The required result is aggregated directly by ci-required.
+    assert "run-generated-contracts" in jobs["ci-required"]["needs"]
 
 
-def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
+def test_frontend_jobs_are_impact_aware_and_report_into_ci_required() -> None:
     workflow = _load_workflow()
     jobs = workflow["jobs"]
 
@@ -526,18 +531,8 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
         "playwright install" in step.get("run", "") for step in browser["steps"]
     )
 
-    aggregator = jobs["test-frontend"]
-    assert aggregator["if"] == "always()"
-    assert aggregator["needs"] == [
-        "select-test-suites",
-        "frontend-static",
-        "frontend-browser",
-    ]
-    assert not any("uses" in step for step in aggregator["steps"])
-    script = "\n".join(step.get("run", "") for step in aggregator["steps"])
-    assert "frontend-static was selected" in script
-    assert "frontend-browser was selected" in script
-    assert "skipped intentionally" in script
+    # The required result is aggregated directly by ci-required.
+    assert {"frontend-static", "frontend-browser"} <= set(jobs["ci-required"]["needs"])
 
 
 def test_playwright_package_and_container_versions_match() -> None:
@@ -661,6 +656,55 @@ def test_deterministic_conformance_is_selection_gated() -> None:
     assert "omnigent_conformance" in workflow["jobs"]["select-test-suites"]["outputs"]
 
 
+def test_rotating_seed_sweep_runs_only_on_direct_schedule_or_dispatch() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["omnigent-fault-rotating-seeds"]
+    condition = " ".join(job["if"].split())
+
+    # A workflow_call reports its caller's event, so only an empty
+    # verification phase distinguishes a direct schedule/dispatch run.
+    assert "inputs.verification_phase == ''" in condition
+    assert "github.event_name == 'schedule'" in condition
+    assert "github.event_name == 'workflow_dispatch'" in condition
+    assert "push" not in condition
+    call_inputs = _workflow_triggers(workflow)["workflow_call"]["inputs"]
+    assert call_inputs["verification_phase"]["default"]
+    callers = [
+        caller_job
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+        for caller_job in yaml.safe_load(path.read_text(encoding="utf-8"))[
+            "jobs"
+        ].values()
+        if caller_job.get("uses") == "./.github/workflows/pytest-unit-tests.yml"
+    ]
+    assert len(callers) >= 3
+    for caller_job in callers:
+        assert caller_job.get("with", {}).get("verification_phase", "full")
+
+    # Exploratory: nothing required, receipted or published waits on it.
+    for name, other in workflow["jobs"].items():
+        needs = other.get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        assert "omnigent-fault-rotating-seeds" not in needs, name
+
+
+def test_rotating_seed_sweep_fails_without_a_matching_recorded_result() -> None:
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["omnigent-fault-rotating-seeds"]["steps"]
+    names = [step.get("name") for step in steps]
+    sweep = names.index("Run rotating fault-lab seed corpus")
+    record = names.index("Record rotating sweep result")
+    assert sweep < record < names.index("Upload rotating fault-lab diagnostics")
+
+    record_step = steps[record]
+    assert record_step["if"] == "${{ !cancelled() }}"
+    assert "python -m tools.omnigent_faultlab.rotating_result" in record_step["run"]
+    assert record_step["env"]["SEED_OFFSET"] == "${{ steps.window.outputs.offset }}"
+    assert record_step["env"]["SEED_COUNT"] == "${{ steps.window.outputs.count }}"
+    diagnostics = steps[sweep]["env"]["MOONMIND_FAULTLAB_DIAGNOSTICS_DIR"]
+    assert f"--dir {diagnostics}" in record_step["run"]
+
+
 def test_image_building_jobs_share_a_layer_cache() -> None:
     jobs = _load_workflow()["jobs"]
     integration_steps = jobs["integration-hermetic"]["steps"]
@@ -731,7 +775,9 @@ def test_shard_ownership_verifier_runs_for_collection_inputs() -> None:
 
     # Policy stays unconditional; changed collection inputs select the real
     # ownership verifier, including all four installed-plugin partitions.
-    assert job["if"] == "inputs.verification_phase != 'artifact'"
+    assert job["if"] == (
+        "inputs.verification_phase != 'artifact' && inputs.verification_phase != 'recovery'"
+    )
     verifier = next(
         step
         for step in job["steps"]
@@ -797,18 +843,6 @@ def test_reliability_shard_validates_duration_hints_before_pytest() -> None:
     assert "durations" in reliability["run"].lower()
 
 
-def test_preflight_policy_runs_status_token_audit() -> None:
-    command = _run_command("preflight-policy", "Audit status tokens")
-
-    assert "tools/audit_status_tokens.py --fail-on-unknown" in command
-
-    ci_required_scripts = "\n".join(
-        step.get("run", "")
-        for step in _load_workflow()["jobs"]["ci-required"]["steps"]
-    )
-    assert "audit_status_tokens.py" not in ci_required_scripts
-
-
 def test_required_unit_workflow_runs_for_merge_queue_candidates() -> None:
     workflow = _load_workflow()
     triggers = _workflow_triggers(workflow) or {}
@@ -841,8 +875,9 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
-        "test-frontend",
-        "check-generated-contracts",
+        "frontend-static",
+        "frontend-browser",
+        "run-generated-contracts",
     ):
         assert dependency in job["needs"]
     for removed in (
@@ -878,20 +913,16 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
-        "test-frontend",
-        "check-generated-contracts",
+        "frontend-static",
+        "frontend-browser",
+        "run-generated-contracts",
     ):
         assert name in script
 
-    # Always-run aggregators and the always-run preflight invariants (policy,
-    # MoonSpec projection, shard ownership) are aggregated unconditionally
-    # (MoonLadderStudios/MoonMind#3950): a failing frontend or
-    # generated-contract gate must fail ci-required, and targeted PRs must not
-    # trip a success-but-unselected failure on an always-run invariant.
-    assert 'require_always "test-frontend"' in script
-    assert "needs.test-frontend.result" in script
-    assert 'require_always "check-generated-contracts"' in script
-    assert "needs.check-generated-contracts.result" in script
+    # The always-run preflight invariants (policy, MoonSpec projection, shard
+    # ownership) are aggregated unconditionally (MoonLadderStudios/MoonMind#3950):
+    # targeted PRs must not trip a success-but-unselected failure on an
+    # always-run invariant.
     assert 'require_always "preflight-policy"' in script
     assert "needs.preflight-policy.result" in script
     assert 'require_selected "preflight-policy" "false"' in script
@@ -914,7 +945,6 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
     assert "tools/verify_workflow_terminology.py --mode runtime" in scripts
     assert "tools/check_removed_capability_semantics.py" in scripts
     assert "tools/status_domain_audit.py" in scripts
-    assert "tools/audit_status_tokens.py --fail-on-unknown" in scripts
     assert "tools/check_github_workflow_names.py" in scripts
 
 
@@ -992,7 +1022,6 @@ def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
         "tools/verify_workflow_terminology.py",
         "tools/check_removed_capability_semantics.py",
         "tools/status_domain_audit.py",
-        "tools/audit_status_tokens.py",
         "tools/verify_test_shard_ownership.py",
     ):
         walker_index = next(
@@ -1376,7 +1405,7 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
     ]["run"]
 
 
-def _run_required_gate(tmp_path, *, outputs=None, results=None):
+def _run_required_gate(tmp_path, *, outputs=None, results=None, inputs=None):
     import os
     import re
     import subprocess
@@ -1384,18 +1413,13 @@ def _run_required_gate(tmp_path, *, outputs=None, results=None):
     selected = select_suites(["README.md"], event_name="pull_request").as_outputs()
     selected.setdefault("backend_matrix", '{"include":[]}')
     selected.setdefault("integration_matrix", '{"suite":[]}')
+    selected.setdefault("generated_contracts", "false")
     selected.update(outputs or {})
     needs = {
         name: {
             "result": (
                 "success"
-                if name
-                in {
-                    "select-test-suites",
-                    "preflight-policy",
-                    "test-frontend",
-                    "check-generated-contracts",
-                }
+                if name in {"select-test-suites", "preflight-policy"}
                 else "skipped"
             )
         }
@@ -1403,13 +1427,13 @@ def _run_required_gate(tmp_path, *, outputs=None, results=None):
     }
     needs["select-test-suites"]["outputs"] = selected
     for name, result in (results or {}).items():
-        needs[name]["result"] = result
+        needs.setdefault(name, {})["result"] = result
     steps = _load_workflow()["jobs"]["ci-required"]["steps"]
     script = "\n".join(step.get("run", "") for step in steps)
 
     def resolve(match):
         path = match.group(1).strip().split(".")
-        value = {"needs": needs, "inputs": {"verification_phase": "full"}}
+        value = {"needs": needs, "inputs": inputs or {"verification_phase": "full"}}
         for key in path:
             value = value.get(key, "")
         return str(value)
@@ -1515,9 +1539,11 @@ def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
             for job, key in (
                 ("unit-slow", "unit_slow"),
                 ("integration-hermetic", "integration_hermetic"),
-                ("omnigent-host-recovery", "exact_artifact"),
+                ("omnigent-host-recovery", "host_recovery"),
                 ("omnigent-exact-artifact", "exact_artifact"),
                 ("omnigent-deterministic-conformance", "omnigent_conformance"),
+                ("frontend-static", "frontend_static"),
+                ("frontend-browser", "frontend_browser_chromium"),
             )
         },
     }
@@ -1531,10 +1557,54 @@ def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
     )
     results["integration-ci"] = "success" if installed else "skipped"
     results["prepare-app-image"] = (
-        "success" if installed or outputs["exact_artifact"] == "true" else "skipped"
+        "success"
+        if installed or "true" in (outputs["exact_artifact"], outputs["host_recovery"])
+        else "skipped"
     )
     proc = _run_required_gate(tmp_path, outputs=outputs, results=results)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("phase", "owners"),
+    [
+        (
+            "artifact",
+            {
+                "omnigent-exact-artifact": "exact_artifact",
+                "integration-ci": "integration_fresh_journey",
+            },
+        ),
+        ("recovery", {"omnigent-host-recovery": "host_recovery"}),
+    ],
+)
+def test_required_gate_qualifies_a_supplied_image_without_a_pass_through(
+    tmp_path, phase, owners
+):
+    from tools.select_test_suites import for_phase
+
+    outputs = for_phase(select_suites([]), phase).as_outputs()
+    inputs = {
+        "verification_phase": phase,
+        "candidate_image": "ghcr.io/o/m@sha256:" + "a" * 64,
+    }
+    assert all(outputs[key] == "true" for key in owners.values())
+    results = {"select-test-suites": "success", "preflight-policy": "skipped"}
+    results.update({job: "success" for job in owners})
+
+    def gate(**changes):
+        return _run_required_gate(
+            tmp_path, outputs=outputs, results={**results, **changes}, inputs=inputs
+        )
+
+    proc = gate()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The supplied manifest is consumed directly; an extra producer run or a
+    # missing/failed consumer is still a required failure.
+    assert gate(**{"prepare-app-image": "success"}).returncode != 0
+    for job in owners:
+        for result in ("failure", "skipped", "cancelled"):
+            assert gate(**{job: result}).returncode != 0, (job, result)
 
 
 @pytest.mark.parametrize(
@@ -1577,6 +1647,62 @@ def test_required_gate_rejects_missing_or_duplicate_reliability_partition(tmp_pa
 @pytest.mark.parametrize("flag", ["full_backend", "full_frontend"])
 def test_required_gate_rejects_empty_full_selection(tmp_path, flag):
     assert _run_required_gate(tmp_path, outputs={flag: "true"}).returncode != 0
+
+
+FRONTEND_AND_CONTRACT_OWNERS = (
+    ("frontend-static", "frontend_static"),
+    ("frontend-browser", "frontend_browser_chromium"),
+    ("run-generated-contracts", "generated_contracts"),
+)
+
+
+@pytest.mark.parametrize("job, selection", FRONTEND_AND_CONTRACT_OWNERS)
+@pytest.mark.parametrize("result", ["failure", "cancelled", "timed_out", "skipped", ""])
+def test_required_gate_rejects_failed_selected_frontend_or_contract_owner(
+    tmp_path, job, selection, result
+):
+    proc = _run_required_gate(
+        tmp_path, outputs={selection: "true"}, results={job: result}
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert f"{job} was selected but ended with result={result}" in proc.stdout
+
+
+@pytest.mark.parametrize("job, selection", FRONTEND_AND_CONTRACT_OWNERS)
+def test_required_gate_rejects_unselected_or_malformed_frontend_or_contract_owner(
+    tmp_path, job, selection
+):
+    ran_unselected = _run_required_gate(tmp_path, results={job: "success"})
+    assert ran_unselected.returncode != 0, ran_unselected.stdout
+    for malformed in ("", "TRUE"):
+        proc = _run_required_gate(tmp_path, outputs={selection: malformed})
+        assert proc.returncode != 0, proc.stdout
+
+
+def test_required_gate_accepts_selected_frontend_and_contract_owners(tmp_path):
+    proc = _run_required_gate(
+        tmp_path,
+        outputs={
+            "frontend_static": "true",
+            "frontend_browser_chromium": "true",
+            "frontend_browser_firefox": "true",
+            "generated_contracts": "true",
+        },
+        results={job: "success" for job, _ in FRONTEND_AND_CONTRACT_OWNERS},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    summary = (tmp_path / "summary").read_text()
+    for job, _ in FRONTEND_AND_CONTRACT_OWNERS:
+        assert f"| `{job}` | true | `success` |" in summary
+
+
+def test_required_gate_rejects_firefox_selection_the_browser_matrix_would_skip(
+    tmp_path,
+):
+    # The browser matrix runs only with Chromium selected, so a Firefox-only
+    # selection would otherwise disappear as an intentional skip.
+    proc = _run_required_gate(tmp_path, outputs={"frontend_browser_firefox": "true"})
+    assert proc.returncode != 0, proc.stdout
 
 
 def test_source_receipt_runs_after_intentional_skips_without_accepting_failure():

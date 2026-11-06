@@ -11755,6 +11755,62 @@ def _validate_repository_submission_compatibility(
             )
 
 
+async def _admit_repository_tool_selections(
+    session: Any, *, principal: str, initial_parameters: dict[str, Any]
+) -> None:
+    """Admit each GitLab step's connection selection with the submitting principal.
+
+    Activities act for the run as ``workflow:<id>``, so they use this recorded
+    admission rather than their own principal; a selection this principal may
+    not use, or an unassigned project, refuses the submission.
+    """
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+    from moonmind.workflows.skills.gitlab_merge_request import (
+        ADMISSIONS_PARAMETER,
+        TOOL_NAME,
+        selected_connections,
+    )
+
+    selections = selected_connections(initial_parameters)
+    if not selections:
+        return
+    if session is None:
+        raise _invalid_workflow_request(
+            f"{TOOL_NAME} steps need their repository connection admitted."
+        )
+    service = RepositoryConnectionService(session)
+    admissions = []
+    for connection_ref, project in selections:
+        try:
+            admitted = await service.admit_selected_use(
+                connection_ref,
+                project,
+                principal_ref=principal,
+                principal_scope=("system", None),
+            )
+        except RepositoryRouteError as exc:
+            raise _invalid_workflow_request(
+                f"{TOOL_NAME} cannot use repository connection {connection_ref} "
+                f"for {project}: {exc}"
+            ) from exc
+        admissions.append({"tool": TOOL_NAME, **admitted})
+    initial_parameters[ADMISSIONS_PARAMETER] = admissions
+
+
+def _refuse_authored_repository_tool_admissions(parameters: Mapping[str, Any]) -> None:
+    """Keep ``_admit_repository_tool_selections`` the only admission writer."""
+
+    from moonmind.workflows.skills.gitlab_merge_request import ADMISSIONS_PARAMETER
+
+    if ADMISSIONS_PARAMETER in parameters:
+        raise _invalid_workflow_request(
+            "Repository tool admissions are recorded by submission, not "
+            "supplied by the request."
+        )
+
+
 async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
@@ -12530,6 +12586,11 @@ async def _create_execution_from_workflow_request(
             },
         )
     initial_parameters = skill_validation.parameters
+    await _admit_repository_tool_selections(
+        session,
+        principal=_execution_principal(user),
+        initial_parameters=initial_parameters,
+    )
     if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
         initial_parameters.setdefault("batchDigest", payload["batchDigest"].strip())
     if isinstance(payload.get("batchTarget"), Mapping):
@@ -13081,6 +13142,7 @@ async def _resolve_recurring_runtime_selection(
         raise _invalid_workflow_request(
             "Step execution plans must be compiled by workflow admission."
         )
+    _refuse_authored_repository_tool_admissions(parameter_payload)
 
     try:
         validate_workflow_runtime_targets(request_payload)
@@ -15457,6 +15519,7 @@ async def create_execution(
 
         request = CreateExecutionRequest.model_validate(payload)
         # Rejected before a recurring definition or execution can store it.
+        _refuse_authored_repository_tool_admissions(request.initial_parameters)
         assessment_scope = _admitted_assessment_scope_parameter(
             request.initial_parameters.get("assessmentScope"),
             principal=(principal_context or {}).get("verified_principal"),
@@ -15676,6 +15739,12 @@ async def create_execution(
                         "persistence complete before scheduling."
                     ),
                 },
+            )
+        if existing is None:
+            await _admit_repository_tool_selections(
+                session,
+                principal=_execution_principal(user),
+                initial_parameters=skill_validation.parameters,
             )
 
         record = await service.create_execution(
@@ -18822,7 +18891,7 @@ async def resolve_workflow_chat_binding(
     # Authorize against the Workflow first (OmnigentBridge.md §16 rule 1); an
     # unknown/deleted/unauthorized Workflow fails here without revealing whether
     # any provider session exists.
-    await _get_owned_execution(
+    record = await _get_owned_execution(
         service=service,
         workflow_id=canonical_workflow_id,
         user=user,
@@ -18838,7 +18907,8 @@ async def resolve_workflow_chat_binding(
     store = OmnigentBridgeSessionStore(async_session_maker)
     try:
         resolution = await store.resolve_chat_binding(
-            workflow_id=canonical_workflow_id
+            workflow_id=canonical_workflow_id,
+            preferred_run_id=record.run_id,
         )
     except BridgeChatBindingAmbiguousError as exc:
         raise HTTPException(
@@ -19490,6 +19560,7 @@ async def continue_in_new_workflow(
     result are never mutated, and no message is posted into the source session.
     """
 
+    _refuse_authored_repository_tool_admissions(payload.initial_parameters or {})
     destination_namespace = service.namespace
     if not isinstance(destination_namespace, str) or not destination_namespace.strip():
         raise HTTPException(status_code=503, detail="Destination namespace is unavailable")

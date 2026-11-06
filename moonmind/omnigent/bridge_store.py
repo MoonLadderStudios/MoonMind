@@ -2922,6 +2922,7 @@ class OmnigentBridgeSessionStore:
         *,
         workflow_id: str,
         run_id: str | None = None,
+        preferred_run_id: str | None = None,
     ) -> ChatBindingResolution:
         """Resolve the authoritative browser-safe Workflow Chat binding (§15).
 
@@ -2936,12 +2937,16 @@ class OmnigentBridgeSessionStore:
         Ambiguous active candidates are rejected rather than selecting the
         newest arbitrary provider session; unsupported runtimes and cleaned-up
         sessions return stable unavailable reasons instead of falling through.
+        An authorized current run takes precedence when it has recorded rows.
+        Without those rows, preserve historical and legacy resolution; an
+        explicit ``run_id`` remains a strict filter.
         """
 
         workflow = (workflow_id or "").strip()
         if not workflow:
             return self._unavailable_binding(workflow, None, "no_session")
         run = (run_id or "").strip() or None
+        preferred_run = (preferred_run_id or "").strip() or None
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
                 OmnigentBridgeSession.moonmind_workflow_id == workflow
@@ -2960,6 +2965,12 @@ class OmnigentBridgeSessionStore:
 
         if not rows:
             return self._unavailable_binding(workflow, run, "no_session")
+        if preferred_run and not run:
+            current_rows = [row for row in rows if row.moonmind_run_id == preferred_run]
+            if current_rows:
+                # A failed predecessor may still have an active bridge row.
+                # It cannot make the current run's own chat ambiguous.
+                rows = current_rows
         supported = [row for row in rows if _serves_native_chat(row)]
         if not supported:
             return self._unavailable_binding(workflow, run, "unsupported_runtime")

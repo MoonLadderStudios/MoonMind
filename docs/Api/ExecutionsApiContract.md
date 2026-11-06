@@ -248,6 +248,12 @@ The single authored context and publication rules apply to UpdateInputs and Requ
 | Pause | signal-specific | Sets a paused overlay and waiting metadata while keeping the underlying state. |
 | Resume | signal-specific | Clears the pause overlay and returns to the underlying gate. |
 
+Pause and Resume also support live child executions with only a projection;
+editing inputs or rerunning still requires the canonical source. An accepted
+pause records control intent, not proof that writers stopped: an active child
+keeps `control_state.safePoint=false`. Failed child delivery rejects the update,
+restores the prior pause state and leaves the workflow queryable.
+
 Remediation approval uses its durable pending approval record and the endpoint in section 2; expired, terminal, self-approved, or ineligible decisions fail with bounded validation errors. Success is 202 with the execution. Signals to terminal executions and invalid signal/payload combinations are rejected, normally 409 `signal_rejected`, and absent targets return 404. A signal or approval cannot replace authored publication intent, broaden repository authority, or authorize duplicate effects.
 
 ## 14. Cancel execution
