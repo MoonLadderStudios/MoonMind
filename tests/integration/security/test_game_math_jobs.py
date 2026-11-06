@@ -126,7 +126,7 @@ SETTLEMENTS = [
 ]
 
 
-def settings():
+def settings(profile=PROFILE):
     return resolve_container_backend_settings(
         {
             IMAGE_SOURCES_ENV_KEY: json.dumps(
@@ -137,7 +137,7 @@ def settings():
                     }
                 ]
             ),
-            WORKLOAD_PROFILES_ENV_KEY: json.dumps([PROFILE]),
+            WORKLOAD_PROFILES_ENV_KEY: json.dumps([profile]),
         }
     )
 
@@ -156,10 +156,14 @@ async def owned(environment, payload: bytes) -> str:
 class Job:
     """One admitted profile job, launched up to ``docker create``."""
 
+    profile, schema, asset = PROFILE, b'"game-math-assessment/v1"', GAME
+    #: Input attachment file names other than ``<name>.json``.
+    file_names: dict[str, str] = {}
+
     def __init__(self, environment, tmp_path, monkeypatch):
         self.environment, self.tmp_path = environment, tmp_path
         self.monkeypatch = monkeypatch
-        self.settings = settings()
+        self.settings = settings(self.profile)
         self.temporal = AsyncMock()
         self.commands: list[tuple] = []
         self.published: dict[str, bytes] = {}
@@ -169,7 +173,7 @@ class Job:
             {
                 "name": name,
                 "artifactRef": await owned(self.environment, body),
-                "fileName": f"{name}.json",
+                "fileName": self.file_names.get(name, f"{name}.json"),
             }
             for name, body in inputs.items()
         ]
@@ -190,7 +194,7 @@ class Job:
                     "source": {"source": "workflow", "workflowId": "assessment"},
                     "spec": {
                         "workloadProfile": {
-                            "profileRef": "game-math",
+                            "profileRef": self.profile["profileRef"],
                             "mode": "evaluate",
                             "arguments": arguments,
                         },
@@ -255,17 +259,13 @@ class Job:
         self.request.terminal_state = terminal_state
         self.request.exit_code = exit_code
         await self.backend.publish_evidence(self.request)
-        return next(
-            ref
-            for ref, body in self.published.items()
-            if b'"game-math-assessment/v1"' in body
-        )
+        return next(ref for ref, body in self.published.items() if self.schema in body)
 
     async def assess(self, ref: str, key: str) -> dict:
         return await invoke(
             self.environment.service,
             {
-                "scope": {"assets": [GAME]},
+                "scope": {"assets": [self.asset]},
                 "tools": ["retained-report"],
                 "reportRefs": [ref],
                 "credentialRefs": [],

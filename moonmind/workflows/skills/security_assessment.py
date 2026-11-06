@@ -35,6 +35,7 @@ from moonmind.security.passive_repo_scan import (
     parse_scan_report_json,
 )
 from moonmind.security.repository_scanners import ScannerSummary
+from moonmind.security.rng_assessment import RngAssessment
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -559,6 +560,98 @@ def _game_math_observation(
     )
 
 
+def _rng_observation(
+    request, summary: RngAssessment, ref: str, created_at: datetime
+) -> Observation:
+    """RNG review, raw-bit and mapped-outcome evidence as separate coverage.
+
+    Each section is its own coverage row, so a statistical result never covers
+    an implementation rule. External claims stay provenance, never coverage.
+    The summary's own invariants refuse a clean outcome over partial evidence.
+    """
+    subject = summary.subject_ref
+    if subject not in request.scope.assets:
+        raise ValueError("RNG outside admitted assessment scope")
+    coverage = []
+    review, raw, mapped = (
+        summary.implementation,
+        summary.raw_bits,
+        summary.mapped_outcomes,
+    )
+    if review is not None:
+        steps = [
+            [row.id, row.kind, row.input_bits, row.range]
+            for row in review.transformations
+        ]
+        coverage.append(("rng-review", review, ["rng-review", steps]))
+    if raw is not None:
+        # A fixture run cannot clear a recorded sample's anomaly, and absence
+        # is comparable only for the same amount, tests and significance.
+        coverage.append(
+            (
+                "rng-diagnostics",
+                raw,
+                [
+                    "rng-diagnostics",
+                    raw.sample.origin,
+                    raw.sample.fixture.name if raw.sample.fixture else None,
+                    raw.sample.requested_bits,
+                    [[row.test, sorted(row.settings.items())] for row in raw.tests],
+                    str(raw.alpha),
+                ],
+            )
+        )
+    if mapped is not None:
+        coverage.append(
+            (
+                "rng-outcomes",
+                mapped,
+                [
+                    "rng-outcomes",
+                    [[row.outcome, str(row.probability)] for row in mapped.rows],
+                    str(mapped.alpha),
+                    mapped.min_expected,
+                ],
+            )
+        )
+    assurance = summary.assurance
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=[
+            Finding(
+                source="rng",
+                tool=tool,
+                rule_id=rule,
+                asset=subject,
+                native_id=native,
+                evidence_refs=[ref],
+            )
+            for tool, rule, native in summary.findings()
+        ],
+        coverage=[
+            Coverage(
+                source="rng",
+                tool=tool,
+                assets=[subject],
+                rule_ids=section.rules(),
+                config_ref=content_key(config),
+                status="complete" if section.covered else "partial",
+            )
+            for tool, section, config in coverage
+        ],
+        provenance={
+            "rngSummary": ref,
+            "rngRequest": summary.request_digest,
+            "rngOutcome": summary.outcome,
+            "rngCryptographicStrength": assurance.cryptographic_strength,
+            "rngCertification": assurance.certification,
+            "rngGameFairness": assurance.game_fairness,
+        },
+    )
+
+
 class AssessmentExecution:
 
     def __init__(
@@ -981,6 +1074,53 @@ class AssessmentExecution:
                                     },
                                     "limitations": sorted(game_summary.limitations),
                                     "verification": game_summary.certification,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "rng-assessment/v1":
+                            rng_summary = RngAssessment.model_validate(payload)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _rng_observation(
+                                request, rng_summary, ref, observed_at
+                            )
+                            raw_bits = rng_summary.raw_bits
+                            mapped = rng_summary.mapped_outcomes
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "rng",
+                                    "target": rng_summary.subject_ref,
+                                    "summaryRef": ref,
+                                    "nativeRefs": {"assessment": ref},
+                                    "coverage": (
+                                        "complete"
+                                        if all(
+                                            row.status == "complete"
+                                            for row in observation.coverage
+                                        )
+                                        else "partial"
+                                    ),
+                                    "outcome": rng_summary.outcome,
+                                    "execution": {
+                                        "rawBits": (
+                                            raw_bits.stop_reason or raw_bits.status
+                                            if raw_bits
+                                            else "not_requested"
+                                        ),
+                                        "mappedOutcomes": (
+                                            mapped.stop_reason or mapped.status
+                                            if mapped
+                                            else "not_requested"
+                                        ),
+                                    },
+                                    "limitations": sorted(rng_summary.limitations),
+                                    "verification": (
+                                        rng_summary.assurance.certification
+                                    ),
+                                    "assurance": rng_summary.assurance.model_dump(
+                                        by_alias=True
+                                    ),
+                                    "interpretation": rng_summary.interpretation,
                                 }
                             )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:

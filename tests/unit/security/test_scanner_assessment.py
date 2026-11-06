@@ -21,8 +21,14 @@ from moonmind.security.repository_scanners import (
     ScannerExecution,
     ScannerSummary,
 )
+from moonmind.security.rng_assessment import (
+    RngAssessmentRequest,
+    assess_rng,
+    fixture_sample,
+)
 from moonmind.workflows.skills.security_assessment import (
     _game_math_observation,
+    _rng_observation,
     _scanner_observation,
 )
 
@@ -283,3 +289,133 @@ def test_imprecise_or_stopped_game_math_stays_partial_coverage(stopped):
 def test_game_outside_admitted_scope_is_refused():
     with pytest.raises(ValueError, match="outside admitted"):
         observe_game(game_math(), assets=["app.py"])
+
+
+RNG = "rng:deal-service"
+REVIEW = {
+    name: {"status": "no_concern_noted", "summary": f"{name} reviewed"}
+    for name in (
+        "generator",
+        "seeding",
+        "restartFork",
+        "stateHandling",
+        "predictableInputs",
+    )
+}
+CARDS = {
+    "description": "card index dealt by the implementation under test",
+    "model": [{"id": f"card{i}", "probability": "1/52"} for i in range(52)],
+}
+
+
+def rng(sample: bytes, *, outcomes=None, review=REVIEW, claims=(), **kwargs):
+    request = RngAssessmentRequest.model_validate(
+        {
+            "schemaVersion": "rng-assessment-request/v1",
+            "subjectRef": RNG,
+            "review": review,
+            "diagnostics": {
+                "origin": {"kind": "recorded", "description": "deal service output"},
+                "bits": len(sample) * 8,
+            },
+            **({"outcomes": CARDS} if outcomes is not None else {}),
+            "externalClaims": list(claims),
+        }
+    )
+    return assess_rng(request, sample=sample, outcomes=outcomes, **kwargs)
+
+
+def observe_rng(summary, assets=(RNG,)):
+    request = AssessmentRequest(
+        scope={"assets": list(assets)},
+        tools=["retained-report"],
+        reportRefs=["art_rng"],
+        credentialRefs=[],
+        networkRefs=[],
+        budget=BUDGET,
+    )
+    return _rng_observation(request, summary, "art_rng", NOW)
+
+
+def test_rng_sections_are_separate_coverage_and_claims_stay_provenance():
+    data = fixture_sample("biased", 1, 12_500)
+    summary = rng(
+        data,
+        outcomes=[f"card{value % 52}" for value in data],
+        review={**REVIEW, "generator": {"status": "concern", "summary": "LCG"}},
+        claims=[
+            {
+                "claim": "cryptographic_strength",
+                "verifier": "specialist",
+                "reportRef": "report:7",
+            }
+        ],
+    )
+    observation = observe_rng(summary)
+    rules = {(f.tool, f.rule_id) for f in observation.findings}
+    assert {
+        ("rng-review", "review:generator"),
+        ("rng-diagnostics", "raw-bits:frequency"),
+        ("rng-outcomes", "mapped-outcome:distribution"),
+    } <= rules
+    assert {f.evidence_refs[0] for f in observation.findings} == {"art_rng"}
+    assert [row.tool for row in observation.coverage] == [
+        "rng-review",
+        "rng-diagnostics",
+        "rng-outcomes",
+    ]
+    # A battery or outcome check never covers an implementation review rule.
+    review, raw, mapped = observation.coverage
+    assert not set(raw.rule_ids) & set(review.rule_ids)
+    assert not set(mapped.rule_ids) & set(review.rule_ids)
+    assert observation.provenance["rngCryptographicStrength"] == "externally_reported"
+    assert observation.provenance["rngCertification"] == "not_performed"
+
+
+def test_rng_battery_pass_never_promotes_assurance_or_review_coverage():
+    summary = rng(fixture_sample("mt19937", 2, 25_000), review=None)
+    observation = observe_rng(summary)
+    assert observation.findings == []
+    (raw,) = observation.coverage
+    assert (raw.tool, raw.status) == ("rng-diagnostics", "complete")
+    assert observation.provenance["rngCryptographicStrength"] == "not_established"
+    assert observation.provenance["rngGameFairness"] == "not_established"
+
+
+def test_rng_incomplete_run_stays_partial_coverage():
+    summary = rng(fixture_sample("mt19937", 2, 25_000), should_stop=lambda: True)
+    raw = observe_rng(summary).coverage[1]
+    assert (raw.status, raw.rule_ids, raw.all_rules) == ("partial", [], False)
+
+
+def test_rng_retest_clears_an_anomaly_only_for_the_same_origin():
+    baseline = compare_observations(
+        observe_rng(rng(fixture_sample("biased", 1, 12_500))), None, now=NOW
+    )
+    retest = rng(fixture_sample("sha256-counter", 1, 12_500))
+    result = compare_observations(observe_rng(retest), baseline, now=NOW)
+    assert {row["state"] for row in result["findings"]} == {"absent_comparable"}
+
+    fixture_run = assess_rng(
+        RngAssessmentRequest.model_validate(
+            {
+                "schemaVersion": "rng-assessment-request/v1",
+                "subjectRef": RNG,
+                "review": REVIEW,
+                "diagnostics": {
+                    "origin": {
+                        "kind": "fixture",
+                        "fixture": {"name": "sha256-counter", "seed": 1},
+                    },
+                    "bits": 100_000,
+                },
+            }
+        )
+    )
+    result = compare_observations(observe_rng(fixture_run), baseline, now=NOW)
+    assert {row["state"] for row in result["findings"]} == {"not_reassessed"}
+
+
+def test_rng_subject_outside_admitted_scope_is_refused():
+    with pytest.raises(ValueError, match="outside admitted"):
+        observe_rng(rng(fixture_sample("mt19937", 2, 1000)), assets=["app.py"])
