@@ -12,6 +12,19 @@ verifier reports, and process instructions are context, not new requirements.
 Preserve source content and stable requirement IDs. Recheck prior gaps against
 current code; previously met requirements remain regression constraints.
 
+Extract each obligation with its conditions, exclusions, and evidence qualifiers
+intact. A requirement to report external assurance separately does not require
+obtaining that assurance. For example, "report specialist verification when
+available; otherwise mark it Unverified" requires truthful reporting, not a
+specialist signoff before implementation can finish. Verify the reporting
+behavior with available fixtures and disclose the unavailable external check.
+Do not split off a qualifier into a new mandatory criterion or turn a reference,
+assumption, suggested diagnostic, or derived acceptance ID into a source obligation.
+When decomposing a qualified statement, retain the complete statement in the
+existing `sourceQuote` for its rows. Source digests prove identity, not that a
+classification faithfully preserves meaning; reread the original statement when
+classifying or reconciling obligations.
+
 Honor explicit exclusions and separately owned release work. Referencing a parent
 epic or architecture does not import its entire acceptance checklist into a child
 story. Record applicable prerequisites and excluded release obligations before

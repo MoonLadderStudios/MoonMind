@@ -142,17 +142,17 @@ the bounded evidence handoff; do not perform an unauthorized deployment.
 
 ## Source obligations and admission
 
-Before expensive checks, bind the assessment's existing `verificationMap` to the
-original source using the acceptance policy. Preserve allowed methods and any
-explicit live/rendered/profile/topology requirements. Resolve cheap capability
-probes and run the helper's `admission` command; continue independent ready work,
-reuse busy owners, and do not repeat unchanged unavailable setup. Never import
-parent-epic physical or human gates or turn a free-form suggestion into a blocker.
+Read the original qualified source statements before reconciling the assessment's
+`verificationMap`. Apply the acceptance policy's extraction rules, preserving
+conditions and nonblocking exceptions in `sourceQuote`; a matching digest or
+historical ID does not establish a mandatory obligation. Verify required reporting
+behavior separately from the external assurance it describes. Retire invented
+subcriteria through `scopeReconciliation`, not by waiving a real source requirement.
 
-Read the current owner-supplied artifact bytes before reissuing an old blocker.
-Retain individually passed objective rows even if the aggregate was nonpassing;
-collect only missing/invalidated proof. A changed inventory requires a fresh
-judgment on the same candidate, not another implementation or full export.
+Preserve explicit proof constraints. Probe capabilities and run the helper's
+`admission` command; continue ready work, reuse busy owners, and disclose checks
+outside reach as Unverified. Read current owner-supplied artifacts before
+reissuing a blocker. Retain passed rows; collect only missing or invalidated proof.
 
 ## Evidence policy
 

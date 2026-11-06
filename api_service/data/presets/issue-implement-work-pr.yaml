@@ -104,10 +104,11 @@ steps:
     optional, or separate-release work cannot become an implementation blocker.
     A changed report reference or elapsed cooldown is not prerequisite progress:
     do not repeat unchanged rejected setup or reset its recorded attempt budget.
-    Explicit source-required rendered, live-provider, or target proof remains
-    mandatory when unavailable. Setup failures repairable through authorized tools
-    stay in that bounded loop; only an actual missing capability or authority becomes a
-    handoff. Save completed code before retrying verification infrastructure, and
+    Explicit source-required proof stays in scope. Obtain it through reasonably
+    available authorized tools; evidence still outside the verifier's reach is
+    Unverified with reason and verifiableBy, outside remainingWork. Actual missing
+    implementation or authorization for the selected action remains a gap or
+    handoff; unavailable proof alone does not create one. Save completed code before retrying verification infrastructure, and
     do not redo implementation when only evidence collection remains.
 
     If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as a bounded implementation backlog. Finish only the remaining gaps. Do not redo work that is already satisfied and do not broaden scope.
@@ -131,7 +132,7 @@ steps:
   enabled: '{{ inputs.run_verify }}'
   repositoryOperation: read
   instructions: |-
-    Run moonspec-verify against the original scope and constraints. The initial assessment is context, not objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise execute the missing checks. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and mandatory evidence gaps; optional enrichment and diagnostics are disclosed limitations.
+    Run moonspec-verify against the original scope and constraints. Read the complete original source statements when deriving or reconciling acceptance, including their optionality and nonblocking evidence qualifiers; carried refs and the initial assessment are context, not a substitute for source meaning or objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise obtain missing evidence or disclose checks outside reach as Unverified under the resolved acceptance policy. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and observed defects; optional enrichment and diagnostics are disclosed limitations.
 
     Use verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}. Read {{ inputs.brief_artifact_path }} as original scope and {{ inputs.assessment_artifact_path }} as initial process context only when identity or freshness requires it; otherwise use the carried validated refs. No MoonSpec packet is required. Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default).
 

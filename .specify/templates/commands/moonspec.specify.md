@@ -16,6 +16,12 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 If the request is backed by a source document, issue, or external acceptance record, preserve its acceptance rows in `artifacts/moonspec/source-acceptance.json` using `"schemaVersion": "v1"` and a `featureId` matching the active feature directory so `/moonspec.assess` can safely consume the matrix before planning.
 
+Use the resolved `moonspec-verify/references/acceptance-policy.md` for source
+extraction. Preserve conditions, exclusions, and nonblocking evidence qualifiers
+when deriving requirements or scenarios. Reporting an unavailable external claim
+as Unverified does not require commissioning its verification; assumptions and
+suggested diagnostics cannot add mandatory acceptance gates.
+
 ## Pre-Execution Checks
 
 **Check for extension hooks (before specification)**:
