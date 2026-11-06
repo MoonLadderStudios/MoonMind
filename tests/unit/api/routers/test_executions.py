@@ -5336,6 +5336,167 @@ def test_api_execution_keeps_authoritative_model_in_opencode_plan(
         assert "modelTierResolution" not in initial_parameters
 
 
+@pytest.mark.parametrize(
+    "authored_runtime,expected_model,expected_source",
+    [
+        ({}, "gpt-7-sol", "profile_default_tier"),
+        ({"modelTier": 2}, "gpt-7-sol", "requested_tier"),
+        # An authored Custom pair stays the selected model.
+        ({"model": "gpt-6.1-sol", "effort": "medium"}, "gpt-6.1-sol", "task_override"),
+    ],
+)
+def test_api_new_admission_rerun_resolves_the_current_family_release(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    authored_runtime: dict[str, object],
+    expected_model: str,
+    expected_source: str,
+) -> None:
+    """A rerun draft carries its source's resolution only as diagnostics."""
+
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    test_client, temporal_service, _user = client
+    temporal_service.create_execution.return_value = _build_execution_record()
+    tiers, default_tier = first_party_family_tier_template("codex_cli", "openai")
+    provider_profile = SimpleNamespace(
+        profile_id="codex_openai_oauth",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        default_model=None,
+        default_effort=None,
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+        # Sol 7 was released after the source execution was admitted.
+        model_catalog_evidence_json={
+            "models": [{"id": "gpt-6.1-sol"}, {"id": "gpt-7-sol"}]
+        },
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-codex-default",
+        "version": 4,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex_openai_oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "allowedLaunchPolicyRefs": ["codex-on-demand@1"],
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-agent",
+        "document": {
+            "model": {"model": "example/model", "settings": {}},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+            "harness": {"id": "codex-native"},
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        },
+    }
+    source_resolution = {
+        "requestedModelTier": authored_runtime.get("modelTier"),
+        "effectiveModelTier": 2,
+        "resolvedModel": "gpt-6.1-sol",
+        "resolvedEffort": "medium",
+        "modelSource": "profile_default_tier",
+        "effortSource": "profile_default_tier",
+        "modelFamily": "sol",
+        "modelMode": "automatic",
+        "familyResolutionStatus": "resolved",
+        "familyResolutionSource": "catalog",
+        "providerProfileId": "codex_openai_oauth",
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_rerun_plan",
+        taskInputSnapshotRef="art_rerun_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_parameters: dict[str, object] = {}
+
+    async def compile_plan(**kwargs):
+        compiled_parameters.update(kwargs["initial_parameters"])
+        return _compiled_plan_result(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_rerun_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_rerun_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-codex-default",
+                        "providerProfileRef": "codex_openai_oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex-default@4",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Rerun the nightly report.",
+                        # The source's authored selection plus the resolution
+                        # it recorded when it was admitted.
+                        "runtime": {
+                            "mode": "omnigent",
+                            "profileId": "codex_openai_oauth",
+                            **authored_runtime,
+                            "resolvedModel": "gpt-6.1-sol",
+                            "resolvedEffort": "medium",
+                            "modelTierResolution": source_resolution,
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert compiled_parameters["model"] == expected_model
+    assert compiled_parameters["effort"] == "medium"
+    assert compiled_parameters["modelSource"] == expected_source
+    initial_parameters = temporal_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == expected_model
+    assert initial_parameters["modelSource"] == expected_source
+    # The new admission records its own resolution, not the source's.
+    resolution = initial_parameters["modelTierResolution"]
+    assert resolution["resolvedModel"] == expected_model
+    assert resolution["modelSource"] == expected_source
+    if expected_source != "task_override":
+        assert resolution["modelMode"] == "automatic"
+        assert resolution["familyResolutionSource"] != "admitted_selection"
+
+
 def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

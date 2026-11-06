@@ -117,6 +117,146 @@ async def test_scheduled_specialized_step_uses_canonical_identity(
         assert dispatched["workflow"]["steps"][0]["id"] == step_id
 
 
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize(
+    "selection,expected,source",
+    [
+        ({}, "gpt-7-sol", "profile_default_tier"),
+        ({"modelTier": 2}, "gpt-7-sol", "requested_tier"),
+        (
+            {"model": "gpt-6.1-sol", "effort": "medium"},
+            "gpt-6.1-sol",
+            "task_override",
+        ),
+    ],
+    ids=["omitted", "tier", "custom"],
+)
+async def test_fresh_occurrence_launches_its_current_family_release(
+    native_journey, monkeypatch, selection, expected, source
+):
+    """A schedule saved before a release launches the release it admits."""
+
+    from api_service.db import base
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.temporal.activities import omnigent_activities
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _reconstruct_plan_bound_request,
+    )
+
+    journey = native_journey
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    monkeypatch.setattr(settings.workflow, "github_repository", "")
+    monkeypatch.setattr(base, "async_session_maker", journey.session_factory)
+    inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
+    tiers, default_tier = first_party_family_tier_template("codex_cli", "openai")
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        provider.model_tiers = tiers
+        provider.default_model_tier = default_tier
+        provider.model_catalog_evidence_json = {"models": [{"id": "gpt-6.1-sol"}]}
+        await session.commit()
+        await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+        await synchronize_omnigent_harness_catalog(session)
+        request = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Review a report on schedule.",
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "providerProfileRef": PROFILE,
+                        **selection,
+                    },
+                },
+                "publishMode": "none",
+                "workspace": {"workspaceSource": {"kind": "scratch"}},
+            },
+        }
+        metadata = await _resolve_recurring_runtime_metadata(request, session=session)
+        target = _build_recurring_target(request, runtime_metadata=metadata)
+        adapter = SimpleNamespace(create_schedule=AsyncMock())
+        definition = await RecurringWorkflowsService(
+            session, temporal_client_adapter=adapter
+        ).create_definition(
+            name="Nightly family-tier report",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 * * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=None,
+            target=target,
+            policy={},
+            actor=OperatorAdmission(via="schedule-family-tier-fixture"),
+        )
+        # Temporal starts each occurrence from the schedule action's input.
+        saved = deepcopy(
+            adapter.create_schedule.await_args.kwargs["workflow_input"][
+                "initial_parameters"
+            ]
+        )
+        assert saved["model"] == "gpt-6.1-sol"
+        # Saving records the resolution, never an omitted or tier selection
+        # turned into Custom.
+        assert saved["modelSource"] == source
+        assert saved["effort"] == "medium"
+        # Sol 7 is released after the definition was saved.
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        provider.model_catalog_evidence_json = {
+            "models": [{"id": "gpt-6.1-sol"}, {"id": "gpt-7-sol"}]
+        }
+        await session.commit()
+
+    occurrence = "mm:family-tier-occurrence"
+    monkeypatch.setattr(
+        omnigent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=occurrence,
+            workflow_run_id="occurrence-run",
+            namespace="default",
+        ),
+    )
+    admit = omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity
+    admitted = await admit(
+        {"workflowId": occurrence, "initialParameters": deepcopy(saved)}
+    )
+    assert admitted["disposition"] == "admitted", admitted
+    binding = OmnigentExecutionPlanBinding.model_validate(
+        admitted["omnigentExecutionPlan"]
+    )
+    plan = await DbExecutionPlanStore(journey.session_factory).load(binding.plan_ref)
+    assert plan.payload.modelConfig.qualifiedId == expected
+    assert binding.task_input_snapshot_ref == (
+        saved["omnigentExecutionPlan"]["taskInputSnapshotRef"]
+    )
+
+    launched = await _reconstruct_plan_bound_request(
+        binding=binding,
+        plan=plan,
+        workflow_id=occurrence,
+        step_execution_id=f"{occurrence}:run:execution:1",
+        agent_run_id="agent-run-1",
+    )
+
+    assert launched.parameters["model"] == expected
+    assert launched.parameters["effort"] == "medium"
+    assert launched.parameters["omnigent"]["session"]["modelOverride"] == expected
+    assert launched.parameters["modelTierResolution"]["resolvedModel"] == expected
+    # The definition keeps the selection it recorded when it was saved.
+    async with journey.session_factory() as session:
+        stored = await session.get(type(definition), definition.id)
+        assert stored.target["initialParameters"]["model"] == "gpt-6.1-sol"
+        assert stored.target["initialParameters"]["omnigentExecutionPlan"] == (
+            saved["omnigentExecutionPlan"]
+        )
+
+
 @pytest.mark.parametrize("native_journey", ["codex-native", "claude-native", "opencode-native"], indirect=True)
 @pytest.mark.parametrize("specialization", ["model", "effort", "clear_effort", "tier"])
 async def test_independent_step_model_uses_its_own_shared_plan(native_journey, monkeypatch, specialization):

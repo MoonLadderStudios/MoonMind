@@ -1859,6 +1859,18 @@ class RecurringWorkflowsService:
                 or {}
             )
             runtime_intent = task_intent.get("runtime") or {}
+            # A target the API normalized also records the pair its selection
+            # resolved to. That pair is a resolution, not a legacy flat pair,
+            # so it cannot become Custom intent.
+            recorded = authored_parameters.get("modelTierResolution")
+            model_resolved = authored_parameters.get("modelSource") not in {
+                None,
+                "task_override",
+            }
+            effort_resolved = (
+                isinstance(recorded, Mapping)
+                and recorded.get("effortSource") != "task_override"
+            )
             resolved = resolve_model_effort(
                 runtime_id=provider_profile.runtime_id,
                 profile=provider_profile,
@@ -1870,10 +1882,14 @@ class RecurringWorkflowsService:
                     else None
                 ),
                 requested_model=runtime_intent.get(
-                    "model", authored_parameters.get("model")
+                    "model",
+                    authored_parameters.get(
+                        "requestedModel" if model_resolved else "model"
+                    ),
                 ),
                 requested_effort=runtime_intent.get(
-                    "effort", authored_parameters.get("effort")
+                    "effort",
+                    None if effort_resolved else authored_parameters.get("effort"),
                 ),
                 requested_model_tier=runtime_intent.get(
                     "modelTier", authored_parameters.get("modelTier")

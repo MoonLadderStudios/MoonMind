@@ -1028,3 +1028,252 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
     assert "repositoryAccess.source" in moved["reason"]
     assert "repositoryAccess.collaboration" not in moved["reason"]
     assert current["session"].commits == 0
+
+
+def _family_provider(*catalog: str, tiers=None):
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    template, default_tier = first_party_family_tier_template("codex_cli", "openai")
+    return SimpleNamespace(
+        profile_id="codex",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        default_model=None,
+        default_effort=None,
+        model_tiers=tiers if tiers is not None else template,
+        default_model_tier=default_tier,
+        model_catalog_evidence_json={"models": [{"id": item} for item in catalog]},
+    )
+
+
+class _SnapshotSession(_OccurrenceSession):
+    """Occurrence lookups whose original task input is a real schedule snapshot."""
+
+    def __init__(self, provider, *, artifacts, task_ref, task_digest) -> None:
+        super().__init__(provider, artifacts=artifacts)
+        self.task_ref, self.task_digest = task_ref, task_digest
+
+    async def get(self, model, key):
+        if model is TemporalArtifact and key == self.task_ref:
+            return SimpleNamespace(
+                created_by_principal="original-task-principal",
+                sha256=self.task_digest.removeprefix("sha256:"),
+            )
+        return await super().get(model, key)
+
+
+def _saved_schedule_selection(runtime, model, effort, model_source, provider):
+    """Mirror the recurring target the API saves for one authored selection."""
+
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    resolved = resolve_model_effort(
+        runtime_id="codex_cli",
+        profile=provider,
+        authored_runtime=runtime if runtime else None,
+        require_launch_ready=False,
+    )
+    assert (resolved.model, resolved.effort, resolved.model_source) == (
+        model,
+        effort,
+        model_source,
+    )
+    resolution = {**resolved.as_metadata(), "providerProfileId": "codex"}
+    return {
+        "model": model,
+        "effort": effort,
+        "modelSource": model_source,
+        "modelTierResolution": resolution,
+        "requestedModel": runtime.get("model"),
+        **({"modelTier": runtime["modelTier"]} if "modelTier" in runtime else {}),
+        "workflowRuntime": {
+            **runtime,
+            "resolvedModel": model,
+            "resolvedEffort": effort,
+            "modelTierResolution": resolution,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection,expected",
+    [
+        ("omitted", "gpt-7-sol"),
+        ("tier", "gpt-7-sol"),
+        ("pinned", "gpt-6.1-sol"),
+        ("custom", "gpt-6-luna"),
+    ],
+)
+async def test_fresh_occurrence_launches_the_model_its_admission_planned(
+    monkeypatch, compiler, selection, expected
+) -> None:
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    from api_service.db import base as db_base
+    from moonmind.omnigent import bridge_artifacts
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.temporal.activities import omnigent_activities
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as session_activities,
+    )
+
+    tiers = None
+    if selection == "pinned":
+        template, _ = first_party_family_tier_template("codex_cli", "openai")
+        tiers = [dict(tier) for tier in template]
+        tiers[1].update(model_mode="pinned", model="gpt-6.1-sol")
+    runtime, model, effort, source = {
+        "omitted": ({}, "gpt-6.1-sol", "medium", "profile_default_tier"),
+        "tier": ({"modelTier": 2}, "gpt-6.1-sol", "medium", "requested_tier"),
+        "pinned": ({"modelTier": 2}, "gpt-6.1-sol", "medium", "requested_tier"),
+        "custom": (
+            {"model": "gpt-6-luna", "effort": "high"},
+            "gpt-6-luna",
+            "high",
+            "task_override",
+        ),
+    }[selection]
+    provider = _family_provider("gpt-6.1-sol", "gpt-6-luna", tiers=tiers)
+    saved = _saved_schedule_selection(runtime, model, effort, source, provider)
+    workflow_runtime = saved.pop("workflowRuntime")
+    snapshot = _snapshot(
+        harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+    )
+    authored = {
+        "targetRuntime": "omnigent",
+        "publishMode": "none",
+        "workflow": {
+            "instructions": "Summarize the nightly report.",
+            "runtime": workflow_runtime,
+        },
+        "system": {"recurrence": {"definitionId": "schedule-1"}},
+        # Saving compiles the Agent Profile snapshot into the task input.
+        "agentProfileSnapshot": snapshot,
+        **saved,
+    }
+    # The schedule's original task input, persisted when the definition was saved.
+    task_snapshot = {
+        "snapshotVersion": "original-task-input/v1",
+        "source": {"kind": "schedule", "definitionId": "schedule-1"},
+        "target": {"initialParameters": deepcopy(authored)},
+    }
+    task_ref = "art_schedule_task"
+    task_digest = session_activities._digest_bytes(
+        session_activities._json_bytes(task_snapshot)
+    )
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters = deepcopy(authored)
+    stored = await plan_service.compile_and_persist_execution_plan(
+        session_factory=None,
+        artifact_service=artifacts,
+        principal="original-task-principal",
+        workflow_id="mm-schedule:schedule-1",
+        agent_profile_snapshot=snapshot,
+        provider_profile=provider,
+        initial_parameters=parameters,
+        authored_request_ref=task_ref,
+        authored_request_digest=task_digest,
+        task_input_snapshot_ref=task_ref,
+        task_input_snapshot_digest=task_digest,
+        execution_plan_store=_PlanStore(object()),
+        access=access_for_test("original-task-principal"),
+    )
+    assert stored.envelope.payload.modelConfig.qualifiedId == model
+    parameters.update(stored.execution_parameters)
+    action_input = deepcopy(parameters)
+
+    # Sol 7 is released after the definition was saved.
+    provider.model_catalog_evidence_json["models"].append({"id": "gpt-7-sol"})
+    session = _SnapshotSession(
+        provider, artifacts=artifacts, task_ref=task_ref, task_digest=task_digest
+    )
+
+    @asynccontextmanager
+    async def session_maker():
+        yield session
+
+    monkeypatch.setattr(db_base, "async_session_maker", session_maker)
+    monkeypatch.setattr(stores, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        omnigent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:schedule-1:occurrence-2",
+            workflow_run_id="occurrence-run",
+            namespace="default",
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_artifacts, "link_verified_execution_plan_inputs", AsyncMock()
+    )
+    _bind_caller_artifacts(monkeypatch, artifacts)
+    admit = omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity
+    admitted = await admit(
+        {
+            "workflowId": "mm:schedule-1:occurrence-2",
+            "initialParameters": json.loads(json.dumps(parameters)),
+        }
+    )
+    assert admitted["disposition"] == "admitted", admitted
+    binding = OmnigentExecutionPlanBinding.model_validate(
+        admitted["omnigentExecutionPlan"]
+    )
+    plan = _PlanStore.plans[binding.plan_ref]
+    assert plan.payload.modelConfig.qualifiedId == expected
+    assert binding.task_input_snapshot_ref == task_ref
+
+    # The occurrence launches from the schedule's original task input.
+    monkeypatch.setattr(
+        session_activities, "_read_json_artifact", AsyncMock(return_value=task_snapshot)
+    )
+    request = await session_activities._reconstruct_plan_bound_request(
+        binding=binding,
+        plan=plan,
+        workflow_id="mm:schedule-1:occurrence-2",
+        step_execution_id="mm:schedule-1:occurrence-2:run:execution:1",
+        agent_run_id="agent-run-1",
+    )
+
+    assert request.parameters["model"] == expected
+    assert request.parameters["omnigent"]["session"]["modelOverride"] == expected
+    assert request.parameters["effort"] == effort
+    resolution = request.parameters["modelTierResolution"]
+    runtime_resolution = request.parameters["workflow"]["runtime"]
+    assert resolution["resolvedModel"] == expected
+    assert runtime_resolution["resolvedModel"] == expected
+    assert runtime_resolution["modelTierResolution"]["resolvedModel"] == expected
+    assert resolution["modelSource"] == source
+    # The definition, its stored plan and its original task input are unchanged.
+    assert parameters == action_input
+    assert task_snapshot["target"]["initialParameters"]["model"] == model
+    saved_plan = _PlanStore.plans[stored.binding.plan_ref]
+    assert saved_plan.payload.modelConfig.qualifiedId == model
+    if selection == "custom":
+        # An authored Custom model stays authored: a plan for another model
+        # is a conflict, never a silent replacement.
+        with pytest.raises(HarnessPlatformError) as conflict:
+            await session_activities._reconstruct_plan_bound_request(
+                binding=binding,
+                plan=SimpleNamespace(
+                    payload=plan.payload.model_copy(
+                        update={
+                            "modelConfig": plan.payload.modelConfig.model_copy(
+                                update={"qualifiedId": "gpt-7-sol"}
+                            )
+                        }
+                    )
+                ),
+                workflow_id="mm:schedule-1:occurrence-2",
+                step_execution_id="mm:schedule-1:occurrence-2:run:execution:1",
+                agent_run_id="agent-run-1",
+            )
+        assert conflict.value.code == "OMNIGENT_EXECUTION_PLAN_CONFLICT"
