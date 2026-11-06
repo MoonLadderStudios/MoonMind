@@ -89,9 +89,14 @@ steps:
 
     The intended completion target override is {{ inputs.completion_target_ref }} (empty resolves the remote default branch). Keep it separate from the comparison base and current candidate. Follow the portable Skill for source recovery, bounded inspection, requirement evidence, and handoff semantics.
 
-    During bounded inspection, persist a verification map for every visible
-    requirement: its stable id, owning production boundary, executable checks,
-    required capabilities, and expected terminal evidence. Preserve the candidate
+    During bounded inspection, classify original source obligations under the
+    resolved acceptance policy before deriving requirements or expected evidence.
+    Preserve the complete source statement and its qualifiers in sourceQuote when
+    decomposing it: reporting unavailable external assurance as Unverified does
+    not require obtaining that assurance. Persist the existing verification map
+    with stable IDs, source locators, obligation classifications, owning production
+    boundaries, executable checks, and required capabilities. Carried refs and
+    historical IDs establish identity, not the meaning of acceptance. Preserve the candidate
     subject, original scope, completionTarget, and prerequisite readiness, permitted
     setup actions, and exact resume checks. Use at most two authorized setup attempts
     per prerequisite and retain their diagnostics and attempt counts across retries.
@@ -111,8 +116,10 @@ steps:
     MoonMind then labels the issue manual-only and skips it until a person
     removes the label. Omit `manualOnly` when any unmet requirement can be
     advanced here, including repository changes and tests that run in a
-    container; that work proceeds and verification records what remains. A
-    missing credential, permission, or approval is not manual-only.
+    container; that work proceeds and verification records what remains.
+    Unavailable verification evidence is a disclosure, not unmet implementation
+    or a reason for manualOnly. A missing credential, permission, or approval
+    is not manual-only.
     {% endif %}
   skill:
     id: moonspec-assess

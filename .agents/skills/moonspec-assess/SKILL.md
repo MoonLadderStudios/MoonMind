@@ -59,13 +59,16 @@ Do not overwrite this artifact with a later verifier verdict.
 
 ## Verification map and feasibility
 
-Before expensive work, emit the existing `verificationMap` with stable IDs,
-original source reference/digest/locator, mandatory/optional/separate-release
-classification, required behavior, executable checks, allowed proof methods,
-and existing owner. Preserve source-declared target/profile/topology/sampling
-constraints; free-form suggestions stay advisory. Follow the shared policy's
-exact field contract. Match mandatory IDs to the independently captured source
-scope, not a prior report or inherited epic checklist.
+Before expensive work, read the original source statements and emit the existing
+`verificationMap` with stable IDs, original source reference/digest/locator,
+mandatory/optional/separate-release classification, required behavior, executable
+checks, allowed proof methods, and existing owner. Preserve each statement's
+qualifiers in `sourceQuote` when decomposing it. Apply the shared policy's
+extraction rules before deriving requirements or `boundedBacklog`; a requirement
+to represent unavailable external evidence honestly is not a requirement to obtain
+it. Preserve source-declared target/profile/topology/sampling constraints. Match
+mandatory IDs to the original scope, not a prior report, invented subcriterion,
+or inherited epic checklist.
 
 Use cheap code and owner probes for capability/prerequisite readiness. Apply the
 shared policy's prerequisite classification before marking repository work

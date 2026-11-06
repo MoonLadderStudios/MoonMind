@@ -2,6 +2,7 @@
 name: moonspec-specify
 description: Create or update a MoonSpec feature specification from a natural language feature request or referenced declarative design. Use when the user asks to run or reproduce `/moonspec.specify`, create a `spec.md`, initialize a feature directory under `specs/`, preserve the original feature request for later verification, map source design requirements, or generate a single-story MoonSpec specification with a requirements quality checklist.
 metadata:
+  required-skills: "moonspec-verify"
   required-capabilities:
     - git
 ---
@@ -40,6 +41,12 @@ Before creating artifacts, classify the request:
 If the prompt says to implement, build, support, or verify behavior described by a document, treat the document as source requirements for `runtime` intent, not as the implementation target.
 
 For source-backed requests:
+
+Read the resolved `moonspec-verify/references/acceptance-policy.md` before
+extracting requirements. Preserve source conditions, optionality, and nonblocking
+evidence exceptions in every derived requirement and acceptance scenario. Do not
+turn reporting an external claim into commissioning its verification, or add a
+mandatory acceptance gate from an assumption or a proposed diagnostic.
 
 1. Resolve the referenced path relative to the repo root unless the path is absolute.
 2. Read the source artifact before drafting the spec.
