@@ -28,6 +28,7 @@ __all__ = [
     "FamilyResolution",
     "ModelFamily",
     "built_in_family",
+    "catalog_lists_family",
     "catalog_rows_from_evidence",
     "family_for_model",
     "first_party_family_tier_template",
@@ -267,6 +268,21 @@ def catalog_rows_from_evidence(evidence: Any) -> list[dict[str, Any]] | None:
         if isinstance(item, Mapping) and _row_model_id(item)
     ]
     return rows or None
+
+
+def catalog_lists_family(
+    family_id: Any, catalog_rows: Iterable[Mapping[str, Any]] | None
+) -> bool:
+    """Report whether any observed row is a release of this family, eligible or not."""
+
+    family = built_in_family(family_id)
+    if family is None:
+        return False
+    return any(
+        _parse_release(_row_model_id(row), family) is not None
+        and _row_declared_family(row) in {None, family.family_id}
+        for row in catalog_rows or ()
+    )
 
 
 @dataclass(frozen=True)

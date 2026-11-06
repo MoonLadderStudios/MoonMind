@@ -392,6 +392,151 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         )
 
 
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_default_tier_rereads_a_catalog_that_omitted_its_family(
+    native_journey, monkeypatch
+):
+    """A cached catalog without Sol refuses Tier 2 only while it is current.
+
+    After the observation's refresh interval, or once the credential is
+    replaced, the default-tier submission itself is admitted and its launch's
+    exact-host read records the route's catalog again.
+    """
+
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db import base
+    from moonmind.omnigent.host_services import attestation
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    journey = native_journey
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    monkeypatch.setattr(settings.workflow, "github_repository", "")
+    monkeypatch.setattr(base, "async_session_maker", journey.session_factory)
+    inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
+    tiers, default_tier = first_party_family_tier_template("codex_cli", "openai")
+
+    def observed(generation, *, age):
+        return {
+            "source": "exact_host_model_options",
+            "credentialGeneration": generation,
+            "validatedAt": (datetime.now(UTC) - age).isoformat(),
+            "models": [
+                {"qualifiedId": model}
+                for model in ("gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna")
+            ],
+        }
+
+    async def set_profile(**values):
+        async with journey.session_factory() as session:
+            provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+            for key, value in values.items():
+                setattr(provider, key, value)
+            await session.commit()
+            return int(provider.credential_generation)
+
+    generation = await set_profile(
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+    )
+    await set_profile(
+        model_catalog_evidence_json=observed(generation, age=timedelta(0))
+    )
+    async with journey.session_factory() as session:
+        await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+        await synchronize_omnigent_harness_catalog(session)
+    plans = DbExecutionPlanStore(journey.session_factory)
+
+    async def submit():
+        async with journey.session_factory() as session:
+            provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+            app = FastAPI()
+            app.include_router(router)
+            service = TemporalExecutionService(session)
+            service._client_adapter.start_workflow = AsyncMock(
+                return_value=SimpleNamespace(run_id="catalog-refresh-run")
+            )
+            app.dependency_overrides[_get_service] = lambda: service
+            app.dependency_overrides[get_async_session] = lambda: session
+            _override_user_dependencies(app, is_superuser=True)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/executions",
+                    json={
+                        "type": "workflow",
+                        "payload": {
+                            "workflow": {
+                                "instructions": "Summarize a report.",
+                                "runtime": {
+                                    "mode": provider.runtime_id,
+                                    "providerProfileRef": PROFILE,
+                                },
+                            },
+                            "publishMode": "none",
+                            "workspace": {"workspaceSource": {"kind": "scratch"}},
+                        },
+                    },
+                )
+            if response.status_code != 201:
+                return response, None, None
+            record = await session.get(
+                TemporalExecutionCanonicalRecord, response.json()["workflowId"]
+            )
+            binding = record.parameters["omnigentExecutionPlan"]
+            plan = await plans.load(binding["planRef"])
+            # The plan's model is the admission's resolution, which the
+            # execution records with its family provenance.
+            resolution = record.parameters["modelTierResolution"]
+            assert plan.payload.modelConfig.qualifiedId == resolution["resolvedModel"]
+            return response, plan, resolution
+
+    refused, _, _ = await submit()
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "model_tier_family_unavailable"
+
+    # An observation older than its refresh interval cannot prove Sol is gone.
+    await set_profile(
+        model_catalog_evidence_json=observed(generation, age=timedelta(days=7))
+    )
+    admitted, plan, resolution = await submit()
+    assert admitted.status_code == 201, admitted.text
+    assert resolution["resolvedModel"] == "gpt-6.1-sol"
+    assert resolution["effectiveModelTier"] == 2
+    assert resolution["familyResolutionStatus"] == "unverified"
+
+    # That launch's exact-host read records the route's current catalog.
+    await attestation._record_profile_catalog(
+        plan=plan,
+        credential_handles=[
+            {"providerProfileRef": PROFILE, "credentialGeneration": generation}
+        ],
+        model_options={
+            "models": [
+                {"id": model, "model": model}
+                for model in ("gpt-6-astra", "gpt-7-sol", "gpt-6.1-terra")
+            ]
+        },
+    )
+    refreshed, _, resolution = await submit()
+    assert refreshed.status_code == 201, refreshed.text
+    assert resolution["resolvedModel"] == "gpt-7-sol"
+    assert resolution["familyResolutionStatus"] == "resolved"
+
+    # A reconnected credential is another account until its own launch reports.
+    await set_profile(
+        credential_generation=generation + 1,
+        model_catalog_evidence_json=observed(generation, age=timedelta(0)),
+    )
+    reconnected, _, resolution = await submit()
+    assert reconnected.status_code == 201, reconnected.text
+    assert resolution["resolvedModel"] == "gpt-6.1-sol"
+    assert resolution["familyResolutionStatus"] == "unverified"
+
+
 @pytest.mark.parametrize("native_journey", ["codex-native", "claude-native", "opencode-native"], indirect=True)
 @pytest.mark.parametrize("specialization", ["model", "effort", "clear_effort", "tier"])
 async def test_independent_step_model_uses_its_own_shared_plan(native_journey, monkeypatch, specialization):

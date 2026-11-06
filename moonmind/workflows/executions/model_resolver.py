@@ -137,7 +137,7 @@ class ModelTierFamilyUnavailableError(ValueError):
         super().__init__(
             f"Model tier {effective_model_tier} ({family}) cannot run on the "
             f"selected profile.{detail} Choose another tier, pin an available "
-            "model, or refresh the profile's model catalog."
+            "model, or retry after the profile's model catalog refreshes."
         )
 
 
@@ -573,6 +573,7 @@ def _resolve_automatic_tier(
     the runtime default or any other selection.
     """
     from moonmind.provider_profiles.model_families import (
+        catalog_lists_family,
         catalog_rows_from_evidence,
         resolve_family_model,
     )
@@ -589,16 +590,39 @@ def _resolve_automatic_tier(
             str(admitted_resolution.get("familyResolutionStatus") or "resolved"),
             "admitted_selection",
         )
+    evidence = _profile_value(
+        profile, "model_catalog_evidence_json", "modelCatalogEvidence"
+    )
+    # An observation taken under a replaced credential describes another
+    # account, so the current credential has not reported a catalog yet.
+    catalog_rows = (
+        None
+        if _evidence_generation_replaced(evidence, profile)
+        else catalog_rows_from_evidence(evidence)
+    )
     resolution = resolve_family_model(
         family,
         provider_id=_profile_provider_id(profile),
-        catalog_rows=catalog_rows_from_evidence(
-            _profile_value(
-                profile, "model_catalog_evidence_json", "modelCatalogEvidence"
-            )
-        ),
+        catalog_rows=catalog_rows,
         effort=effort,
     )
+    if (
+        not resolution.usable
+        and catalog_rows
+        and not catalog_lists_family(family, catalog_rows)
+        and _evidence_expired(evidence)
+    ):
+        # An expired observation cannot prove the family is gone. Resolve it
+        # as unobserved so this launch's exact-host read refreshes the
+        # catalog; the host still refuses a model it does not serve.
+        unobserved = resolve_family_model(
+            family,
+            provider_id=_profile_provider_id(profile),
+            catalog_rows=None,
+            effort=effort,
+        )
+        if unobserved.usable:
+            resolution = unobserved
     if not resolution.usable or resolution.model is None:
         raise ModelTierFamilyUnavailableError(
             effective_model_tier=effective_tier,
@@ -606,6 +630,36 @@ def _resolve_automatic_tier(
             reason=resolution.reason,
         )
     return resolution.model, resolution.status, str(resolution.source)
+
+
+def _evidence_generation_replaced(evidence: Any, profile: Any | None) -> bool:
+    if not isinstance(evidence, Mapping):
+        return False
+    observed = evidence.get(
+        "credentialGeneration", evidence.get("credential_generation")
+    )
+    current = _profile_value(profile, "credential_generation", "credentialGeneration")
+    if observed is None or current is None:
+        return False
+    try:
+        return int(observed) != int(current)
+    except (TypeError, ValueError):
+        return True
+
+
+def _evidence_expired(evidence: Any) -> bool:
+    """Whether a timestamped observation is older than its refresh interval."""
+
+    if (
+        not isinstance(evidence, Mapping)
+        or not str(evidence.get("validatedAt") or "").strip()
+    ):
+        return False
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_observation_is_current,
+    )
+
+    return not evidence_observation_is_current(evidence)
 
 
 def _admitted_family_model(

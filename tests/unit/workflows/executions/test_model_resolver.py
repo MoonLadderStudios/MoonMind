@@ -914,6 +914,82 @@ class TestModelFamilyTiers:
         assert resolved.model_family is None
 
 
+def _observed(models, *, generation=2, age_hours=0.0):
+    from datetime import UTC, datetime, timedelta
+
+    observed_at = datetime.now(UTC) - timedelta(hours=age_hours)
+    return {
+        "source": "exact_host_model_options",
+        "credentialGeneration": generation,
+        "validatedAt": observed_at.isoformat(),
+        "models": [{"qualifiedId": model} for model in models],
+    }
+
+
+class TestFamilyCatalogAuthority:
+    """Catalog evidence answers only for the current credential and interval."""
+
+    def _resolve(self, evidence, *, generation=2, tier=None):
+        return resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(
+                model_catalog_evidence_json=evidence, credential_generation=generation
+            ),
+            requested_model_tier=tier,
+            env={},
+        )
+
+    def test_a_current_observation_without_the_family_refuses(self):
+        from moonmind.workflows.executions.model_resolver import (
+            ModelTierFamilyUnavailableError,
+        )
+
+        with pytest.raises(ModelTierFamilyUnavailableError):
+            self._resolve(_observed(["claude-sonnet-5-5"]))
+
+    @pytest.mark.parametrize("models", [["claude-sonnet-5-5"], ["claude-opus-6"]])
+    def test_a_replaced_credential_s_catalog_is_unobserved(self, models):
+        resolved = self._resolve(_observed(models, generation=1), generation=2)
+
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.family_resolution_status == "unverified"
+        assert resolved.family_resolution_source == "cold_start_placeholder"
+        # The same observation still answers for its own credential.
+        current = self._resolve(_observed(["claude-opus-6"], generation=2))
+        assert current.model == "claude-opus-6"
+
+    def test_an_expired_absence_lets_the_next_launch_reread(self):
+        resolved = self._resolve(_observed(["claude-sonnet-5-5"], age_hours=24 * 7))
+
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.family_resolution_status == "unverified"
+        assert resolved.family_resolution_source == "cold_start_placeholder"
+        # Tiers whose family the old observation lists keep that observation.
+        sonnet = self._resolve(
+            _observed(["claude-sonnet-5-5"], age_hours=24 * 7), tier=3
+        )
+        assert sonnet.model == "claude-sonnet-5-5"
+        assert sonnet.family_resolution_status == "resolved"
+
+    def test_an_expired_observation_keeps_its_last_usable_release(self):
+        resolved = self._resolve(
+            _observed(["claude-opus-6", "claude-opus-5-5"], age_hours=24 * 7)
+        )
+
+        assert resolved.model == "claude-opus-6"
+        assert resolved.family_resolution_status == "resolved"
+
+    def test_an_expired_observation_of_an_ineligible_family_still_refuses(self):
+        from moonmind.workflows.executions.model_resolver import (
+            ModelTierFamilyUnavailableError,
+        )
+
+        evidence = _observed([], age_hours=24 * 7)
+        evidence["models"] = [{"qualifiedId": "claude-opus-5-5", "status": "retired"}]
+        with pytest.raises(ModelTierFamilyUnavailableError):
+            self._resolve(evidence)
+
+
 class TestCodexNativeDefaultSuppression:
     @pytest.mark.parametrize("model_source", ["requested_tier", "profile_default_tier"])
     def test_tier_resolution_is_never_suppressed(self, model_source):
