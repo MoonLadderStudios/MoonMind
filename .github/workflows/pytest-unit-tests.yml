@@ -1187,13 +1187,21 @@ jobs:
         # controller-journey, the journal transition test's phase, ps and log
         # evidence. Text is redacted before upload; if redaction errors, the
         # unredacted files are removed. A hard job kill or runner loss can
-        # still prevent collection and upload.
+        # still prevent collection and upload. The advisory timing digest
+        # (phase, worker and file timing from the receipts, plus runner
+        # CPU/memory) goes to this log and the step summary, which stay
+        # readable when artifact downloads do not; it never fails the row.
         if: always()
         timeout-minutes: 2
         run: |
           set -uo pipefail
           out=/tmp/pytest-integration-ci
           mkdir -p "$out"
+          timeout 20s python3 tools/ci/write_backend_matrix_summary.py digest \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            artifacts/integration-ci/main.receipt.json \
+            artifacts/integration-ci/storage-seed.receipt.json \
+            artifacts/integration-ci/storage-verify.receipt.json
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
           source_dirs=(artifacts/integration-ci)
           if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
@@ -1943,14 +1951,14 @@ jobs:
     # AC8 (MoonLadderStudios/MoonMind#3709): the larger, rotating fault-lab seed
     # corpus. Required PR CI runs a fixed deterministic corpus
     # (tests/unit/omnigent/faultlab/test_generated_properties.py and the
-    # reliability journey); this job runs an expanded, date-rotated window on
-    # main/schedule only. It is intentionally NOT a required PR gate and is not
-    # in the ci-required aggregator.
+    # reliability journey); this job runs an expanded, date-rotated window as
+    # exploratory work. Nothing needs it, so no PR, release or qualification
+    # waits on it (MoonLadderStudios/MoonMind#5223). A workflow_call reports its
+    # caller's event and always carries a verification phase, so the empty
+    # phase limits this job to a direct schedule or dispatch of this workflow.
     if: >-
-      inputs.candidate_image == '' && (
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      inputs.verification_phase == '' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -2000,6 +2008,17 @@ jobs:
             tests/unit/omnigent/faultlab/test_rotating_seed_corpus.py \
             -q --durations=25 \
             --junitxml=artifacts/pytest-faultlab-rotating.xml
+      - name: Record rotating sweep result
+        # A skipped sweep, or one over another window, leaves no matching
+        # record and fails here.
+        if: ${{ !cancelled() }}
+        env:
+          SEED_OFFSET: ${{ steps.window.outputs.offset }}
+          SEED_COUNT: ${{ steps.window.outputs.count }}
+        run: |
+          python -m tools.omnigent_faultlab.rotating_result \
+            --dir artifacts/faultlab-rotating \
+            --offset "$SEED_OFFSET" --count "$SEED_COUNT"
       - name: Upload rotating fault-lab diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

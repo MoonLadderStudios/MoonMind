@@ -8,9 +8,9 @@ reconciler, asserting the twelve invariants and strict determinism. It is fully
 hermetic — no network, credentials, Docker, or Temporal server — so it is safe
 for required CI (``integration_ci``) and belongs to the reliability journey.
 
-Larger, rotating seed coverage runs on main/schedule via
-``tests/unit/omnigent/faultlab/test_generated_properties.py`` scaled up; this
-journey keeps a bounded, predictable budget.
+Larger, rotating seed coverage runs only on scheduled or dispatched CI via
+``tests/unit/omnigent/faultlab/test_rotating_seed_corpus.py``; this journey
+keeps a bounded, predictable budget.
 """
 
 from __future__ import annotations
