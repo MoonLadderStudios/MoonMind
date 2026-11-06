@@ -252,7 +252,8 @@ def validate_relay_launch(
                 == connection.relay.digest
             )
         except (ValueError, TypeError, KeyError):
-            pass
+            # Malformed relay config uses the shared launch validation error below.
+            valid_config = False
         valid_mounts = isinstance(mounts, list) and all(
             m.get("Destination") == "/tmp" and m.get("Type") == "tmpfs" for m in mounts
         )
