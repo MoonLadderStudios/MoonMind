@@ -227,6 +227,14 @@ class _VerificationReceipt:
             "outcome": report.outcome,
             "seconds": report.duration,
         }
+        # Worker and wall-clock span feed the advisory timing digest; xdist
+        # attaches the reporting worker on the controller.
+        node = getattr(report, "node", None)
+        case["worker"] = node.gateway.id if node is not None else "main"
+        if report.when == "setup":
+            case["start"] = report.start
+        elif report.when == "teardown":
+            case["stop"] = report.stop
         if report.failed:
             case["outcome"] = "failed"
         elif report.skipped:
@@ -1192,7 +1200,167 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(
-        run_verified_pytest(sys.argv[2:]) if sys.argv[1:2] == ["run"] else main()
+def runner_resources() -> dict:
+    """CPU and memory of the host summarizing the run (Linux /proc when present)."""
+    resources: dict = {"cpus": os.cpu_count()}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                resources["memoryGiB"] = round(int(line.split()[1]) / 1024**2, 1)
+                break
+        resources["cpuModel"] = next(
+            line.split(":", 1)[1].strip()
+            for line in Path("/proc/cpuinfo").read_text().splitlines()
+            if line.startswith("model name")
+        )
+    except (OSError, ValueError, StopIteration):
+        pass
+    if hasattr(os, "getloadavg"):
+        resources["loadAverage"] = "/".join(f"{value:.1f}" for value in os.getloadavg())
+    return resources
+
+
+def _case_seconds(case: dict, phase: str) -> float:
+    return float(case["phases"].get(phase, {}).get("seconds", 0.0))
+
+
+def timing_digest(
+    receipts: list[Path],
+    *,
+    limit: int = SUMMARY_SLOWEST_SHOWN,
+    resources: dict | None = None,
+) -> str:
+    """Advisory phase, worker and file timing from verification receipts.
+
+    The job log and step summary stay readable when artifact downloads do not,
+    so this compact profile is how per-case receipt timing reaches a reviewer.
+    Worker rows show load balance under ``--dist loadfile``: a worker that
+    finishes early idles until the critical worker's last case stops.
+    """
+    resources = runner_resources() if resources is None else resources
+    lines = [
+        "### Timing digest",
+        "",
+        "Runner: "
+        + (
+            ", ".join(f"{key}={value}" for key, value in resources.items())
+            or "unavailable"
+        ),
+        "",
+        "| receipt | status | cases | workers | collection | elapsed | setup | call | teardown |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    largest: dict | None = None
+    largest_name = ""
+    for path in receipts:
+        try:
+            receipt = json.loads(path.read_text())
+            cases = receipt["cases"]
+            totals = [
+                sum(_case_seconds(case, phase) for case in cases)
+                for phase in ("setup", "call", "teardown")
+            ]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            lines.append(
+                f"| `{path.name}` | unavailable: {type(exc).__name__} | | | | | | | |"
+            )
+            continue
+        lines.append(
+            f"| `{path.name}` | {receipt.get('status')} | {len(cases)} | "
+            f"{receipt.get('workers')} | {_format_time(receipt.get('collectionSeconds'))} | "
+            f"{_format_time(receipt.get('elapsedSeconds'))} | "
+            + " | ".join(_format_time(total) for total in totals)
+            + " |"
+        )
+        if largest is None or len(cases) > len(largest["cases"]):
+            largest, largest_name = receipt, path.name
+    if largest is None:
+        return "\n".join(lines) + "\n"
+
+    cases = largest["cases"]
+    spans = [
+        case
+        for case in cases
+        if "worker" in case and "start" in case and "stop" in case
+    ]
+    lines += ["", f"Workers (`{largest_name}`):", ""]
+    if spans:
+        origin = min(case["start"] for case in spans)
+        end = max(case["stop"] for case in spans)
+        lines += [
+            "| worker | cases | files | busy | finished at | tail idle |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for worker in sorted({case["worker"] for case in spans}):
+            owned = [case for case in spans if case["worker"] == worker]
+            finished = max(case["stop"] for case in owned)
+            busy = sum(
+                _case_seconds(case, phase)
+                for case in owned
+                for phase in ("setup", "call", "teardown")
+            )
+            files = {case["nodeid"].split("::", 1)[0] for case in owned}
+            lines.append(
+                f"| {worker} | {len(owned)} | {len(files)} | {_format_time(busy)} | "
+                f"{_format_time(finished - origin)} | {_format_time(end - finished)} |"
+            )
+    else:
+        lines.append("worker attribution unavailable in this receipt")
+
+    by_file: dict[str, dict] = {}
+    for case in cases:
+        entry = by_file.setdefault(
+            case["nodeid"].split("::", 1)[0],
+            {"workers": set(), "cases": 0, "setup": 0.0, "call": 0.0, "teardown": 0.0},
+        )
+        entry["workers"].add(case.get("worker", "unknown"))
+        entry["cases"] += 1
+        for phase in ("setup", "call", "teardown"):
+            entry[phase] += _case_seconds(case, phase)
+    ranked = sorted(
+        by_file.items(),
+        key=lambda item: item[1]["setup"] + item[1]["call"] + item[1]["teardown"],
+        reverse=True,
     )
+    lines += [
+        "",
+        f"Slowest files ({min(limit, len(ranked))} of {len(ranked)}):",
+        "",
+        "| file | worker | cases | setup | call | teardown | total |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for name, entry in ranked[:limit]:
+        total = entry["setup"] + entry["call"] + entry["teardown"]
+        lines.append(
+            f"| `{name}` | {','.join(sorted(entry['workers']))} | {entry['cases']} | "
+            f"{_format_time(entry['setup'])} | {_format_time(entry['call'])} | "
+            f"{_format_time(entry['teardown'])} | {_format_time(total)} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def digest_main(argv: list[str]) -> int:
+    """Print the timing digest and append it to the step summary; never fail."""
+    parser = argparse.ArgumentParser(description="Advisory receipt timing digest")
+    parser.add_argument("--summary", default="")
+    parser.add_argument("receipts", nargs="+", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        markdown = timing_digest(args.receipts)
+    except Exception as exc:  # noqa: BLE001 -- advisory output must not fail the job
+        markdown = f"### Timing digest\n\nunavailable: {type(exc).__name__}: {exc}\n"
+    sys.stdout.write(markdown)
+    if args.summary:
+        try:
+            with open(args.summary, "a", encoding="utf-8") as handle:
+                handle.write(markdown)
+        except OSError as exc:
+            print(f"warning: cannot append step summary: {exc}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    command = sys.argv[1:2]
+    if command == ["run"]:
+        raise SystemExit(run_verified_pytest(sys.argv[2:]))
+    raise SystemExit(digest_main(sys.argv[2:]) if command == ["digest"] else main())

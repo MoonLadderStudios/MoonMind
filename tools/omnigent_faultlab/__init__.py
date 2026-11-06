@@ -112,7 +112,7 @@ __all__ = [
     "DiagnosticBundle",
     "build_diagnostic_bundle",
     "write_diagnostic_bundle",
-    # CI seed-range policy (fixed PR corpus vs rotating main/schedule window)
+    # CI seed-range policy (fixed PR corpus vs rotating schedule/dispatch window)
     "PR_CI_SEED_COUNT",
     "pr_ci_seeds",
     "rotating_enabled",
