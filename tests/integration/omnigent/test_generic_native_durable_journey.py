@@ -1054,6 +1054,8 @@ async def _compile_plan(
     declare_configuration_home=True,
     native_default=False,
     instructions="Generate a report.",
+    model="example/model",
+    effort=None,
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
     # the real deployment catalog. Admission must resolve and persist its own
@@ -1223,7 +1225,8 @@ async def _compile_plan(
         parameters = {
             "targetRuntime": "omnigent",
             "publishMode": "none",
-            "model": "example/model",
+            "model": model,
+            **({"effort": effort} if effort else {}),
             "workflow": {
                 "instructions": instructions,
                 "skill": {"id": _DURABLE_SKILL_NAME},
@@ -1313,6 +1316,7 @@ async def native_journey(
     workflow_id = "mm:generic-native-durable-journey"
     worker_root = tmp_path / "worker"
     server = NativeTurnServer(harness)
+    server.model = selection.get("model", server.model)
     server.native_default = bool(selection.get("codexNativeDefault"))
     server.hidden_native_default = bool(selection.get("hiddenNativeDefault"))
     running = await start_fake_omnigent_server(server)
@@ -1368,6 +1372,8 @@ async def native_journey(
                 declare_configuration_home=selection.get("declareConfigurationHome", True),
                 native_default=bool(selection.get("codexNativeDefault")),
                 instructions=instructions,
+                model=server.model,
+                effort=selection.get("effort"),
             )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
@@ -2187,6 +2193,28 @@ async def test_shared_commands_follow_admitted_harness_and_preserve_completed_ef
         assert text.startswith("/review --local\n")
     else:
         assert text.startswith("Literal runtime command text:\n")
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": "opencode-native", "model": model, "effort": "medium"}
+        for model in ("openai/gpt-6.1-sol", "anthropic/claude-opus-5-5")
+    ],
+    indirect=True,
+)
+async def test_opencode_session_receives_the_admitted_effort(native_journey):
+    """OpenCode gets the admitted effort with its model, for either provider.
+
+    Omnigent's opencode-native adapter declares a per-model effort family and
+    sends the effort as the model's same-named OpenCode variant.
+    """
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    plan = native_journey.plan.payload.modelConfig
+    created = native_journey.server.create_payloads[0]
+    assert (plan.qualifiedId, plan.effort) == (native_journey.server.model, "medium")
+    assert created["model_override"] == native_journey.server.model
+    assert created["reasoning_effort"] == "medium"
 
 
 async def assert_native_turn_saved_and_cleaned(
