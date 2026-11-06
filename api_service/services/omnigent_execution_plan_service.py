@@ -2706,16 +2706,18 @@ async def _retire_refused_plan_artifacts(
             )
 
 
-def _follow_current_family_release(
+def _follow_current_tier_policy(
     initial_parameters: Mapping[str, Any], provider_profile: Any
 ) -> Mapping[str, Any]:
-    """Resolve a fresh occurrence's automatic family tier against the profile.
+    """Resolve a fresh occurrence's tier selection against the current profile.
 
-    Schedule admission records the model an omitted or tier selection resolved
-    to when the definition was saved. That model is a resolution, not authored
-    intent, so a new occurrence follows the family's current eligible release.
-    Custom models, pinned tiers and explicit legacy tiers keep their selection.
-    An unavailable family raises, and the occurrence keeps its recorded plan.
+    Schedule admission records the pair an omitted or tier selection resolved
+    to when the definition was saved. That pair is a resolution, not authored
+    intent, so a new occurrence resolves the tier's current policy: an
+    automatic family's current eligible release, a pin, or an explicit tier
+    model, with the tier's current effort unless the effort was authored.
+    Custom selections keep their pair. An unavailable family raises, and the
+    occurrence keeps its recorded plan.
     """
 
     if initial_parameters.get("modelSource") not in {
@@ -2729,21 +2731,44 @@ def _follow_current_family_release(
     runtime_intent = task.get("runtime") if isinstance(task, Mapping) else None
     if not isinstance(runtime_intent, Mapping):
         runtime_intent = {}
+    # As when the schedule was saved, a recorded tier resolution's root effort
+    # is not authored; a legacy flat effort without one still is.
+    recorded = initial_parameters.get("modelTierResolution")
+    effort_resolved = (
+        isinstance(recorded, Mapping)
+        and recorded.get("effortSource") != "task_override"
+    )
+    authored_effort = runtime_intent.get(
+        "effort", None if effort_resolved else initial_parameters.get("effort")
+    )
     resolved = resolve_model_effort(
         runtime_id=provider_profile.runtime_id,
         profile=provider_profile,
         requested_model_tier=runtime_intent.get(
             "modelTier", initial_parameters.get("modelTier")
         ),
-        requested_effort=initial_parameters.get("effort"),
+        requested_effort=authored_effort,
         tier_fallback=runtime_intent.get(
             "tierFallback", initial_parameters.get("tierFallback", "clamp")
         ),
         require_launch_ready=False,
     )
-    if resolved.model_mode != "automatic" or not resolved.model:
+    if resolved.model_source != initial_parameters.get("modelSource"):
+        # The tier no longer supplies a model; keep the saved pair.
         return initial_parameters
-    return {**initial_parameters, "model": resolved.model}
+    followed = {
+        **initial_parameters,
+        "model": resolved.model,
+        "modelTierResolution": {
+            **resolved.as_metadata(),
+            "providerProfileId": provider_profile.profile_id,
+        },
+    }
+    if resolved.effort is None:
+        followed.pop("effort", None)
+    else:
+        followed["effort"] = resolved.effort
+    return followed
 
 
 async def readmit_frozen_execution_plan(
@@ -2840,7 +2865,7 @@ async def readmit_frozen_execution_plan(
         if provider_profile is None:
             return recorded("the admitted Provider Profile is unavailable")
         if not preserve_recorded_intent:
-            compilation_parameters = _follow_current_family_release(
+            compilation_parameters = _follow_current_tier_policy(
                 compilation_parameters, provider_profile
             )
         persisted_plan = await compile_frozen_execution_plan(

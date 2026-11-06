@@ -1099,16 +1099,35 @@ def _saved_schedule_selection(runtime, model, effort, model_source, provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "selection,expected",
+    "selection,change,expected,expected_effort",
     [
-        ("omitted", "gpt-7-sol"),
-        ("tier", "gpt-7-sol"),
-        ("pinned", "gpt-6.1-sol"),
-        ("custom", "gpt-6-luna"),
+        ("omitted", "release", "gpt-7-sol", "medium"),
+        ("tier", "release", "gpt-7-sol", "medium"),
+        ("pinned", "release", "gpt-6.1-sol", "medium"),
+        ("custom", "release", "gpt-6-luna", "low"),
+        # The operator pins Tier 2 to an older Sol after the schedule was saved.
+        ("omitted", "pin", "gpt-6-sol", "medium"),
+        ("tier", "pin", "gpt-6-sol", "medium"),
+        ("pinned", "pin", "gpt-6-sol", "medium"),
+        ("tier_effort", "pin", "gpt-6-sol", "low"),
+        ("legacy_flat", "pin", "gpt-6-sol", "low"),
+        ("custom", "pin", "gpt-6-luna", "low"),
+        # The operator raises Tier 2 effort after the schedule was saved.
+        ("omitted", "effort", "gpt-7-sol", "high"),
+        ("tier", "effort", "gpt-7-sol", "high"),
+        ("pinned", "effort", "gpt-6.1-sol", "high"),
+        ("tier_effort", "effort", "gpt-7-sol", "low"),
+        ("legacy_flat", "effort", "gpt-7-sol", "low"),
+        ("custom", "effort", "gpt-6-luna", "low"),
+        # Sol is withdrawn: the tier is unavailable, never replaced.
+        ("omitted", "withdrawn", None, None),
+        ("tier", "withdrawn", None, None),
+        ("pinned", "withdrawn", "gpt-6.1-sol", "medium"),
+        ("custom", "withdrawn", "gpt-6-luna", "low"),
     ],
 )
 async def test_fresh_occurrence_launches_the_model_its_admission_planned(
-    monkeypatch, compiler, selection, expected
+    monkeypatch, compiler, selection, change, expected, expected_effort
 ) -> None:
     from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock
@@ -1134,16 +1153,34 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
         "omitted": ({}, "gpt-6.1-sol", "medium", "profile_default_tier"),
         "tier": ({"modelTier": 2}, "gpt-6.1-sol", "medium", "requested_tier"),
         "pinned": ({"modelTier": 2}, "gpt-6.1-sol", "medium", "requested_tier"),
+        # A tier with an authored effort keeps that effort.
+        "tier_effort": (
+            {"modelTier": 2, "effort": "low"},
+            "gpt-6.1-sol",
+            "low",
+            "requested_tier",
+        ),
+        "legacy_flat": (
+            {"modelTier": 2, "effort": "low"},
+            "gpt-6.1-sol",
+            "low",
+            "requested_tier",
+        ),
         "custom": (
-            {"model": "gpt-6-luna", "effort": "high"},
+            {"model": "gpt-6-luna", "effort": "low"},
             "gpt-6-luna",
-            "high",
+            "low",
             "task_override",
         ),
     }[selection]
-    provider = _family_provider("gpt-6.1-sol", "gpt-6-luna", tiers=tiers)
+    provider = _family_provider("gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna", tiers=tiers)
     saved = _saved_schedule_selection(runtime, model, effort, source, provider)
     workflow_runtime = saved.pop("workflowRuntime")
+    if selection == "legacy_flat":
+        # Saved as a flat tier and effort pair, before tier resolutions were
+        # recorded: that effort stays authored.
+        saved.pop("modelTierResolution")
+        workflow_runtime = {}
     snapshot = _snapshot(
         harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
     )
@@ -1193,6 +1230,14 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
 
     # Sol 7 is released after the definition was saved.
     provider.model_catalog_evidence_json["models"].append({"id": "gpt-7-sol"})
+    # The operator then edits Tier 2; the schedule is not revised.
+    provider.model_tiers = [dict(tier) for tier in provider.model_tiers]
+    if change == "pin":
+        provider.model_tiers[1].update(model_mode="pinned", model="gpt-6-sol")
+    elif change == "effort":
+        provider.model_tiers[1]["effort"] = "high"
+    elif change == "withdrawn":
+        provider.model_catalog_evidence_json = {"models": [{"id": "gpt-6-luna"}]}
     session = _SnapshotSession(
         provider, artifacts=artifacts, task_ref=task_ref, task_digest=task_digest
     )
@@ -1223,12 +1268,19 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
             "initialParameters": json.loads(json.dumps(parameters)),
         }
     )
+    if expected is None:
+        # The occurrence keeps the schedule's recorded plan and says why.
+        assert admitted["disposition"] == "recorded", admitted
+        assert "ModelTierFamilyUnavailableError" in admitted["reason"]
+        assert session.commits == 0
+        return
     assert admitted["disposition"] == "admitted", admitted
     binding = OmnigentExecutionPlanBinding.model_validate(
         admitted["omnigentExecutionPlan"]
     )
     plan = _PlanStore.plans[binding.plan_ref]
     assert plan.payload.modelConfig.qualifiedId == expected
+    assert plan.payload.modelConfig.effort == expected_effort
     assert binding.task_input_snapshot_ref == task_ref
 
     # The occurrence launches from the schedule's original task input.
@@ -1245,18 +1297,27 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
 
     assert request.parameters["model"] == expected
     assert request.parameters["omnigent"]["session"]["modelOverride"] == expected
-    assert request.parameters["effort"] == effort
-    resolution = request.parameters["modelTierResolution"]
-    runtime_resolution = request.parameters["workflow"]["runtime"]
-    assert resolution["resolvedModel"] == expected
-    assert runtime_resolution["resolvedModel"] == expected
-    assert runtime_resolution["modelTierResolution"]["resolvedModel"] == expected
-    assert resolution["modelSource"] == source
+    assert request.parameters["effort"] == expected_effort
+    assert request.parameters["omnigent"]["session"]["reasoningEffort"] == (
+        expected_effort
+    )
+    if selection != "legacy_flat":
+        resolution = request.parameters["modelTierResolution"]
+        runtime_resolution = request.parameters["workflow"]["runtime"]
+        assert (resolution["resolvedModel"], resolution["resolvedEffort"]) == (
+            expected,
+            expected_effort,
+        )
+        assert runtime_resolution["resolvedModel"] == expected
+        assert runtime_resolution["modelTierResolution"]["resolvedModel"] == expected
+        assert resolution["modelSource"] == source
     # The definition, its stored plan and its original task input are unchanged.
     assert parameters == action_input
     assert task_snapshot["target"]["initialParameters"]["model"] == model
+    assert task_snapshot["target"]["initialParameters"]["effort"] == effort
     saved_plan = _PlanStore.plans[stored.binding.plan_ref]
     assert saved_plan.payload.modelConfig.qualifiedId == model
+    assert saved_plan.payload.modelConfig.effort == effort
     if selection == "custom":
         # An authored Custom model stays authored: a plan for another model
         # is a conflict, never a silent replacement.

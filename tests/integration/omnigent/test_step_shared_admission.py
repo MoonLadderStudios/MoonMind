@@ -119,22 +119,31 @@ async def test_scheduled_specialized_step_uses_canonical_identity(
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
 @pytest.mark.parametrize(
-    "selection,expected,source",
+    "change,current",
     [
-        ({}, "gpt-7-sol", "profile_default_tier"),
-        ({"modelTier": 2}, "gpt-7-sol", "requested_tier"),
-        (
-            {"model": "gpt-6.1-sol", "effort": "medium"},
-            "gpt-6.1-sol",
-            "task_override",
-        ),
+        ("release", ("gpt-7-sol", "medium")),
+        ("pin", ("gpt-6-sol", "medium")),
+        ("effort", ("gpt-7-sol", "high")),
+    ],
+    ids=["release", "pin", "effort"],
+)
+@pytest.mark.parametrize(
+    "selection,source",
+    [
+        ({}, "profile_default_tier"),
+        ({"modelTier": 2}, "requested_tier"),
+        ({"model": "gpt-6.1-sol", "effort": "medium"}, "task_override"),
     ],
     ids=["omitted", "tier", "custom"],
 )
 async def test_fresh_occurrence_launches_its_current_family_release(
-    native_journey, monkeypatch, selection, expected, source
+    native_journey, monkeypatch, selection, source, change, current
 ):
-    """A schedule saved before a release launches the release it admits."""
+    """An occurrence launches the tier policy current when it is admitted.
+
+    After the schedule is saved, Sol 7 is released and the operator may pin
+    Tier 2 or change its effort. Custom selections keep their authored pair.
+    """
 
     from api_service.db import base
     from moonmind.provider_profiles.model_families import (
@@ -156,7 +165,9 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         provider = await session.get(ManagedAgentProviderProfile, PROFILE)
         provider.model_tiers = tiers
         provider.default_model_tier = default_tier
-        provider.model_catalog_evidence_json = {"models": [{"id": "gpt-6.1-sol"}]}
+        provider.model_catalog_evidence_json = {
+            "models": [{"id": "gpt-6-sol"}, {"id": "gpt-6.1-sol"}]
+        }
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
         await synchronize_omnigent_harness_catalog(session)
@@ -205,12 +216,22 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         # turned into Custom.
         assert saved["modelSource"] == source
         assert saved["effort"] == "medium"
-        # Sol 7 is released after the definition was saved.
+        # Sol 7 is released after the definition was saved, and the operator
+        # then edits Tier 2 without revising the schedule.
         provider = await session.get(ManagedAgentProviderProfile, PROFILE)
         provider.model_catalog_evidence_json = {
-            "models": [{"id": "gpt-6.1-sol"}, {"id": "gpt-7-sol"}]
+            "models": [{"id": "gpt-6-sol"}, {"id": "gpt-6.1-sol"}, {"id": "gpt-7-sol"}]
         }
+        edited = [dict(tier) for tier in provider.model_tiers]
+        if change == "pin":
+            edited[1].update(model_mode="pinned", model="gpt-6-sol")
+        elif change == "effort":
+            edited[1]["effort"] = "high"
+        provider.model_tiers = edited
         await session.commit()
+    expected, expected_effort = (
+        ("gpt-6.1-sol", "medium") if source == "task_override" else current
+    )
 
     occurrence = "mm:family-tier-occurrence"
     monkeypatch.setattr(
@@ -232,6 +253,7 @@ async def test_fresh_occurrence_launches_its_current_family_release(
     )
     plan = await DbExecutionPlanStore(journey.session_factory).load(binding.plan_ref)
     assert plan.payload.modelConfig.qualifiedId == expected
+    assert plan.payload.modelConfig.effort == expected_effort
     assert binding.task_input_snapshot_ref == (
         saved["omnigentExecutionPlan"]["taskInputSnapshotRef"]
     )
@@ -245,13 +267,21 @@ async def test_fresh_occurrence_launches_its_current_family_release(
     )
 
     assert launched.parameters["model"] == expected
-    assert launched.parameters["effort"] == "medium"
+    assert launched.parameters["effort"] == expected_effort
     assert launched.parameters["omnigent"]["session"]["modelOverride"] == expected
-    assert launched.parameters["modelTierResolution"]["resolvedModel"] == expected
+    assert launched.parameters["omnigent"]["session"]["reasoningEffort"] == (
+        expected_effort
+    )
+    resolution = launched.parameters["modelTierResolution"]
+    assert (resolution["resolvedModel"], resolution["resolvedEffort"]) == (
+        expected,
+        expected_effort,
+    )
     # The definition keeps the selection it recorded when it was saved.
     async with journey.session_factory() as session:
         stored = await session.get(type(definition), definition.id)
         assert stored.target["initialParameters"]["model"] == "gpt-6.1-sol"
+        assert stored.target["initialParameters"]["effort"] == "medium"
         assert stored.target["initialParameters"]["omnigentExecutionPlan"] == (
             saved["omnigentExecutionPlan"]
         )
