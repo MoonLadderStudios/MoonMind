@@ -102,7 +102,10 @@ mean the compatible runtime default; full-pair Custom intent follows the
 The schema and API still carry scalar `default_model` and `default_effort`;
 pre-tier rows are converted into tiers (`moonmind/provider_profiles/model_tiers.py`),
 seeding writes tiers, and materializers consume the resolver's result rather
-than the scalars. Runs keep the concrete values resolved at launch.
+than the scalars. Runs keep the concrete values resolved at admission. Tiers can
+follow a model family automatically or pin a version; per-tier availability is
+separate from credential readiness, so an unavailable family never disables the
+profile's other tiers.
 
 ### 3.5 Enabled vs launch ready
 
@@ -203,6 +206,15 @@ listing setup actions). When `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set at
 startup, `claude_anthropic_api` or `codex_openai_api` is also seeded, connected
 and enabled. Custom profiles are created disabled unless the request is part of
 a verified setup flow.
+
+Both first-party routes, OAuth and API key alike, start with the family template
+from [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md):
+Astra, Sol, Terra, Luna for OpenAI and Fable, Opus, Sonnet, Haiku for Anthropic,
+default Tier 2, `medium` effort, and no credentials needed to view or edit them.
+Profiles created from deployment API keys count as configured. Upgrades replace
+only a seed's untouched single Runtime default tier and never delete, merge, or
+re-enable existing profiles, change their IDs or accounts, or move the default
+profile; a catalog refresh does not enable a disabled profile either.
 
 ### 5.3 User-initiated activation vs passive validation
 

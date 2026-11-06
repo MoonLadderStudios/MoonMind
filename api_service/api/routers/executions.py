@@ -271,6 +271,7 @@ from moonmind.workflows.executions.execution_contract import (
     workflow_requires_agent,
 )
 from moonmind.workflows.executions.model_resolver import (
+    ModelTierFamilyUnavailableError,
     RequestedModelTierUnavailableError,
     ResolvedModelEffort,
     resolve_model_effort,
@@ -8179,6 +8180,16 @@ def _resolve_runtime_model_effort(
                     "message": str(exc),
                     "requestedModelTier": exc.requested_model_tier,
                     "configuredTierCount": exc.configured_tier_count,
+                },
+            ) from exc
+        except ModelTierFamilyUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": exc.code,
+                    "message": str(exc),
+                    "effectiveModelTier": exc.effective_model_tier,
+                    "modelFamily": exc.family,
                 },
             ) from exc
         except ValueError as exc:

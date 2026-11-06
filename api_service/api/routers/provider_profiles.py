@@ -80,6 +80,7 @@ from moonmind.workflows.provider_failures import (
     build_provider_failure_event,
 )
 from moonmind.workflows.executions.model_resolver import (
+    ModelTierFamilyUnavailableError,
     RequestedModelTierUnavailableError,
     provider_profile_version,
     resolve_model_effort,
@@ -741,6 +742,12 @@ class ProviderProfileTierPreviewItem(BaseModel):
     fallback_reason: Optional[str] = Field(default=None, alias="fallbackReason")
     model_source: Optional[str] = Field(default=None, alias="modelSource")
     effort_source: Optional[str] = Field(default=None, alias="effortSource")
+    model_family: Optional[str] = Field(default=None, alias="modelFamily")
+    model_mode: Optional[str] = Field(default=None, alias="modelMode")
+    family_resolution_status: Optional[str] = Field(
+        default=None, alias="familyResolutionStatus"
+    )
+    unavailable_reason: Optional[str] = Field(default=None, alias="unavailableReason")
 
     model_config = {"populate_by_name": True}
 
@@ -1511,6 +1518,8 @@ async def create_profile(
             default_model_tier=body.default_model_tier,
             legacy_default_model=body.default_model,
             legacy_default_effort=body.default_effort,
+            runtime_id=values.get("runtime_id") or body.runtime_id,
+            provider_id=values.get("provider_id"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2348,6 +2357,22 @@ async def preview_model_tiers(
                 tier_fallback=step.tier_fallback or "clamp",
                 require_launch_ready=False,
             )
+        except ModelTierFamilyUnavailableError as exc:
+            # Previews report the unavailable tier instead of substituting one.
+            items.append(
+                {
+                    "stepId": step.step_id,
+                    "requestedTier": step.model_tier,
+                    "effectiveTier": exc.effective_model_tier,
+                    "model": None,
+                    "effort": None,
+                    "modelFamily": exc.family,
+                    "modelMode": "automatic",
+                    "familyResolutionStatus": "unavailable",
+                    "unavailableReason": str(exc),
+                }
+            )
+            continue
         except RequestedModelTierUnavailableError as exc:
             raise HTTPException(
                 status_code=422,
@@ -2370,6 +2395,9 @@ async def preview_model_tiers(
                 "fallbackReason": resolved.fallback_reason,
                 "modelSource": resolved.model_source,
                 "effortSource": resolved.effort_source,
+                "modelFamily": resolved.model_family,
+                "modelMode": resolved.model_mode,
+                "familyResolutionStatus": resolved.family_resolution_status,
             }
         )
 

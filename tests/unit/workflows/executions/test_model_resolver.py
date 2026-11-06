@@ -720,3 +720,227 @@ class TestOpenRouterModelInheritance:
         )
         assert model == "openrouter/pinned"
         assert source == "provider_profile_default"
+
+
+# ---------------------------------------------------------------------------
+# Model-family tiers: automatic selection, pins, and admitted authority
+# ---------------------------------------------------------------------------
+
+
+def _family_profile(*, catalog=None, tiers=None, default_model_tier=2, **overrides):
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    template_tiers, _ = first_party_family_tier_template("claude_code", "anthropic")
+    profile = {
+        "profile_id": "claude_anthropic_oauth",
+        "provider_id": "anthropic",
+        "enabled": True,
+        "auth_state": "connected",
+        "default_model": None,
+        "default_effort": None,
+        "model_tiers": tiers if tiers is not None else template_tiers,
+        "default_model_tier": default_model_tier,
+        "model_catalog_evidence_json": (
+            None if catalog is None else {"models": [{"id": m} for m in catalog]}
+        ),
+    }
+    profile.update(overrides)
+    return profile
+
+
+class TestModelFamilyTiers:
+    def test_omitted_model_uses_default_tier_two_family_with_medium(self):
+        resolved = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-5-5", "claude-sonnet-5-5"]),
+            env={},
+        )
+
+        assert resolved.effective_model_tier == 2
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.effort == "medium"
+        assert resolved.model_source == "profile_default_tier"
+        assert resolved.model_family == "opus"
+        assert resolved.model_mode == "automatic"
+        assert resolved.family_resolution_status == "resolved"
+        metadata = resolved.as_metadata()
+        assert metadata["modelFamily"] == "opus"
+        assert metadata["modelMode"] == "automatic"
+        assert metadata["familyResolutionSource"] == "profile_catalog"
+
+    def test_automatic_tier_follows_a_new_release_but_pins_do_not(self):
+        from moonmind.provider_profiles.model_families import (
+            first_party_family_tier_template,
+        )
+
+        tiers, _ = first_party_family_tier_template("claude_code", "anthropic")
+        pinned_old = [dict(tier) for tier in tiers]
+        pinned_old[1].update(model_mode="pinned", model="claude-opus-5")
+        pinned_current = [dict(tier) for tier in tiers]
+        pinned_current[1].update(model_mode="pinned", model="claude-opus-5-5")
+        newer = ["claude-opus-5", "claude-opus-5-5", "claude-opus-6"]
+
+        automatic = resolve_model_effort(
+            runtime_id="claude_code", profile=_family_profile(catalog=newer), env={}
+        )
+        old_pin = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=newer, tiers=pinned_old),
+            env={},
+        )
+        current_pin = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=newer, tiers=pinned_current),
+            env={},
+        )
+
+        assert automatic.model == "claude-opus-6"
+        assert old_pin.model == "claude-opus-5"
+        assert old_pin.model_mode == "pinned"
+        assert current_pin.model == "claude-opus-5-5"
+        assert current_pin.family_resolution_status == "pinned"
+
+    def test_unavailable_selected_family_never_falls_back(self):
+        from moonmind.workflows.executions.model_resolver import (
+            ModelTierFamilyUnavailableError,
+        )
+
+        profile = _family_profile(catalog=["claude-sonnet-5-5", "claude-haiku-5-5"])
+        with pytest.raises(ModelTierFamilyUnavailableError) as excinfo:
+            resolve_model_effort(runtime_id="claude_code", profile=profile, env={})
+        assert excinfo.value.effective_model_tier == 2
+        assert excinfo.value.family == "opus"
+        assert "Opus" in str(excinfo.value)
+
+        # Other tiers on the same profile stay usable.
+        sonnet = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=profile,
+            requested_model_tier=3,
+            env={},
+        )
+        assert sonnet.model == "claude-sonnet-5-5"
+
+    def test_cold_start_resolution_is_reported_unverified(self):
+        resolved = resolve_model_effort(
+            runtime_id="claude_code", profile=_family_profile(catalog=None), env={}
+        )
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.family_resolution_status == "unverified"
+        assert resolved.family_resolution_source == "cold_start_placeholder"
+
+    def test_admitted_selection_survives_a_catalog_update(self):
+        admitted = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-5-5"]),
+            env={},
+        ).as_metadata()
+        admitted["providerProfileId"] = "claude_anthropic_oauth"
+
+        relaunch = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-5-5", "claude-opus-6"]),
+            admitted_resolution=admitted,
+            env={},
+        )
+        fresh = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-5-5", "claude-opus-6"]),
+            env={},
+        )
+
+        assert relaunch.model == "claude-opus-5-5"
+        assert relaunch.family_resolution_source == "admitted_selection"
+        assert fresh.model == "claude-opus-6"
+
+    def test_admitted_selection_from_another_profile_is_not_reused(self):
+        admitted = {
+            "providerProfileId": "other-profile",
+            "effectiveModelTier": 2,
+            "modelFamily": "opus",
+            "modelMode": "automatic",
+            "resolvedModel": "claude-opus-4",
+        }
+        resolved = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-6"]),
+            admitted_resolution=admitted,
+            env={},
+        )
+        assert resolved.model == "claude-opus-6"
+
+    def test_custom_model_and_effort_do_not_consult_family_policy(self):
+        resolved = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-sonnet-5-5"]),
+            authored_runtime={"model": "claude-opus-5", "effort": "high"},
+            env={},
+        )
+        assert resolved.model == "claude-opus-5"
+        assert resolved.effort == "high"
+        assert resolved.model_source == "task_override"
+        assert resolved.model_family is None
+
+    def test_effort_override_keeps_the_family_model(self):
+        resolved = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(catalog=["claude-opus-5-5"]),
+            requested_effort="high",
+            env={},
+        )
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.effort == "high"
+
+    def test_runtime_default_null_model_tier_is_unchanged(self):
+        resolved = resolve_model_effort(
+            runtime_id="claude_code",
+            profile=_family_profile(
+                tiers=[
+                    {
+                        "label": "Runtime default",
+                        "model": None,
+                        "effort": None,
+                        "parameters": {},
+                        "annotations": {},
+                    }
+                ],
+                default_model_tier=1,
+            ),
+            env={},
+        )
+        assert resolved.model_source == "runtime_default"
+        assert resolved.model_family is None
+
+
+class TestCodexNativeDefaultSuppression:
+    @pytest.mark.parametrize("model_source", ["requested_tier", "profile_default_tier"])
+    def test_tier_resolution_is_never_suppressed(self, model_source):
+        from moonmind.workflows.executions.model_resolver import (
+            codex_uses_native_default,
+        )
+
+        assert (
+            codex_uses_native_default(
+                suppress_default_model_flag=True,
+                requested_model=None,
+                resolved_model="gpt-6.1-sol",
+                profile_default_model=None,
+                model_source=model_source,
+            )
+            is False
+        )
+
+    def test_omitted_runtime_default_is_still_suppressed(self):
+        from moonmind.workflows.executions.model_resolver import (
+            codex_uses_native_default,
+        )
+
+        assert codex_uses_native_default(
+            suppress_default_model_flag=True,
+            requested_model=None,
+            resolved_model="codex-MiniMax-M2.7",
+            profile_default_model="codex-MiniMax-M2.7",
+            model_source="provider_profile_default",
+        )

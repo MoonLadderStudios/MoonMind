@@ -24,6 +24,16 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
   const partialSaved = hasModelSelection(value) && value.modelTier === undefined && !isCustomSelection(value);
   if (partialSaved && !display.unavailable) display.selected = "saved";
   const tiers = profile?.model_tiers || [];
+  // An automatic family tier resolves at admission. The preview shows today's
+  // resolution as text only; it never becomes an authored Custom model.
+  const effectiveTier = !isCustomSelection(effective) && display.effective != null ? tiers[display.effective - 1] : undefined;
+  const automaticFamily = effectiveTier?.family && effectiveTier.model_mode === "automatic" && display.model === null ? effectiveTier.family : null;
+  const familyName = automaticFamily ? automaticFamily.charAt(0).toUpperCase() + automaticFamily.slice(1) : null;
+  const automaticNote = familyName
+    ? preview?.familyResolutionStatus === "unavailable" || (preview && !preview.model)
+      ? preview?.unavailableReason ?? `Tier ${display.effective} (${familyName}) is unavailable for this profile.`
+      : preview?.model ? `Tier ${display.effective} follows the latest ${familyName} release: currently ${preview.model}.` : null
+    : null;
   const selectedEffort = capabilities?.effort?.options?.find((option) => option.value === display.effort);
   const effortIncompatible = selectedEffort && !isTierEffortOptionAvailable(selectedEffort, display.model ?? capabilities?.model.runtime_default ?? null);
   const selectedModel = capabilities?.model?.options?.find((option) => option.value === display.model);
@@ -51,7 +61,7 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
         </select>
       </label>
       <label>Model
-        <input aria-label={`${scope} Model`} name={scope === "Workflow" ? "model" : undefined} list={capabilities ? `${inputId}-models` : modelList} value={display.model ?? ""} placeholder="Runtime default"
+        <input aria-label={`${scope} Model`} name={scope === "Workflow" ? "model" : undefined} list={capabilities ? `${inputId}-models` : modelList} value={display.model ?? ""} placeholder={familyName ? `Latest ${familyName} automatically` : "Runtime default"}
           onChange={(event) => onChange(editModelSelection(value, display, "model", event.target.value))} />
       </label>
       <label>Effort
@@ -69,6 +79,7 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
       {(capabilities.diagnostics || []).map((diagnostic) => <p className="small" key={diagnostic.code}>{diagnostic.message}</p>)}
     </> : null}
     <p className="small" aria-live="polite">{status}</p>
+    {automaticNote ? <p className="small" role={preview?.familyResolutionStatus === "unavailable" ? "alert" : "status"}>{automaticNote}</p> : null}
     {!isCustomSelection(effective) && preview?.modelSource === "provider_profile_default" ? <p className="small">Model uses the saved profile default.</p> : null}
     {!isCustomSelection(effective) && preview?.effortSource === "provider_profile_default" ? <p className="small">Effort uses the saved profile default.</p> : null}
     {loading ? <p className="small" role="status">Loading profile tiers…</p> : error ? <p className="small" role="alert">{error}</p> : profile && tiers.length === 0 ? <p className="small" role="alert">This profile has an empty tier policy. Review Profile settings; your draft is preserved.</p> : null}

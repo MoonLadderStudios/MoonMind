@@ -2253,6 +2253,11 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
                 "fallbackReason": None,
                 "modelSource": "requested_tier",
                 "effortSource": "requested_tier",
+                # Tiers without family policy report none.
+                "modelFamily": None,
+                "modelMode": None,
+                "familyResolutionStatus": None,
+                "unavailableReason": None,
             },
             {
                 "stepId": "docs",
@@ -2263,6 +2268,10 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
                 "fallbackReason": "requested_tier_above_configured_range",
                 "modelSource": "requested_tier",
                 "effortSource": "requested_tier",
+                "modelFamily": None,
+                "modelMode": None,
+                "familyResolutionStatus": None,
+                "unavailableReason": None,
             },
         ],
     }
@@ -6543,3 +6552,138 @@ async def test_update_api_key_profile_can_pin_effective_launch_configuration(
         assert stored.execution_configuration == pin
         assert stored.secret_refs == launch["secret_refs"]
         assert stored.env_template == launch["env_template"]
+
+
+@pytest.mark.asyncio
+async def test_first_party_api_key_creation_without_tiers_uses_the_family_template(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "family_template_create",
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "authentication_method": "api_key",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["default_model_tier"] == 2
+    assert [tier["family"] for tier in data["model_tiers"]] == [
+        "astra",
+        "sol",
+        "terra",
+        "luna",
+    ]
+    assert {tier["model_mode"] for tier in data["model_tiers"]} == {"automatic"}
+    assert {tier["effort"] for tier in data["model_tiers"]} == {"medium"}
+
+
+@pytest.mark.asyncio
+async def test_full_array_patch_preserves_each_tier_family_policy(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "family_policy_patch"
+    create_payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "authentication_method": "api_key",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+    }
+
+    async with client_app as client:
+        created = await client.post("/api/v1/provider-profiles", json=create_payload)
+        tiers = created.json()["model_tiers"]
+        # Pin only Sol to the already-current release and change Terra's effort.
+        tiers[1] = {**tiers[1], "model_mode": "pinned", "model": "gpt-6.1-sol"}
+        tiers[2] = {**tiers[2], "effort": "high"}
+        pinned = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"model_tiers": tiers, "default_model_tier": 3},
+        )
+        unrelated = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"account_label": "Renamed"},
+        )
+        restored_tiers = [dict(tier) for tier in unrelated.json()["model_tiers"]]
+        restored_tiers[1] = {
+            **restored_tiers[1],
+            "model_mode": "automatic",
+            "model": None,
+        }
+        restored = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"model_tiers": restored_tiers},
+        )
+        ambiguous = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "model_tiers": [
+                    {
+                        "label": "Sol",
+                        "family": "sol",
+                        "model_mode": "automatic",
+                        "model": "gpt-6.1-sol",
+                    }
+                ]
+            },
+        )
+
+    assert pinned.status_code == 200
+    pinned_tiers = pinned.json()["model_tiers"]
+    assert pinned_tiers[1]["model_mode"] == "pinned"
+    assert pinned_tiers[1]["model"] == "gpt-6.1-sol"
+    assert pinned_tiers[2]["model_mode"] == "automatic"
+    assert pinned_tiers[2]["effort"] == "high"
+    assert [tier["model_mode"] for tier in (pinned_tiers[0], pinned_tiers[3])] == [
+        "automatic",
+        "automatic",
+    ]
+    assert unrelated.status_code == 200
+    assert unrelated.json()["model_tiers"] == pinned_tiers
+    assert unrelated.json()["default_model_tier"] == 3
+    assert restored.status_code == 200
+    assert restored.json()["model_tiers"][1]["model_mode"] == "automatic"
+    assert restored.json()["model_tiers"][1]["model"] is None
+    assert ambiguous.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_tier_preview_reports_an_unavailable_family_without_substituting(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "family_preview_profile"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "authentication_method": "api_key",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+    }
+
+    async with client_app as client:
+        created = await client.post("/api/v1/provider-profiles", json=payload)
+        async with db_base.async_session_maker() as session:
+            row = await session.get(ManagedAgentProviderProfile, profile_id)
+            row.model_catalog_evidence_json = {
+                "models": [{"id": "gpt-6.1-sol"}, {"id": "gpt-6.2-sol"}]
+            }
+            await session.commit()
+        preview = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/model-tiers:preview",
+            json={"steps": [{"id": "default"}, {"id": "astra", "modelTier": 1}]},
+        )
+
+    assert created.status_code == 201
+    assert preview.status_code == 200
+    items = {item["stepId"]: item for item in preview.json()["items"]}
+    assert items["default"]["effectiveTier"] == 2
+    assert items["default"]["model"] == "gpt-6.2-sol"
+    assert items["default"]["modelMode"] == "automatic"
+    assert items["astra"]["model"] is None
+    assert items["astra"]["familyResolutionStatus"] == "unavailable"
+    assert "Astra" in items["astra"]["unavailableReason"]

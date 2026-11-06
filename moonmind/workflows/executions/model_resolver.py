@@ -33,6 +33,7 @@ from moonmind.workflows.executions.runtime_defaults import (
 )
 
 __all__ = [
+    "ModelTierFamilyUnavailableError",
     "RequestedModelTierUnavailableError",
     "ResolvedModelEffort",
     "apply_profile_model_alias",
@@ -60,8 +61,15 @@ def codex_uses_native_default(
     resolved_model: str | None, profile_default_model: str | None,
     model_source: str | None = None,
 ) -> bool:
-    """Use the same default omission rule for direct and shared Codex launches."""
-    if not suppress_default_model_flag or model_source == "requested_tier":
+    """Use the same default omission rule for direct and shared Codex launches.
+
+    A model resolved from a profile tier, requested or default, is selection
+    authority and is never replaced by the Codex native default.
+    """
+    if not suppress_default_model_flag or model_source in {
+        "requested_tier",
+        "profile_default_tier",
+    }:
         return False
     if not str(requested_model or "").strip():
         return True
@@ -105,6 +113,33 @@ class RequestedModelTierUnavailableError(ValueError):
         )
 
 
+class ModelTierFamilyUnavailableError(ValueError):
+    """An automatic family tier has no usable release on the selected route.
+
+    The selected tier is never substituted with another tier, family,
+    provider, or the runtime default.
+    """
+
+    code = "model_tier_family_unavailable"
+
+    def __init__(
+        self,
+        *,
+        effective_model_tier: int,
+        family: str,
+        reason: str | None,
+    ) -> None:
+        self.effective_model_tier = effective_model_tier
+        self.family = family
+        self.reason = reason
+        detail = f" {reason}" if reason else ""
+        super().__init__(
+            f"Model tier {effective_model_tier} ({family}) cannot run on the "
+            f"selected profile.{detail} Choose another tier, pin an available "
+            "model, or refresh the profile's model catalog."
+        )
+
+
 @dataclass(frozen=True)
 class ResolvedModelEffort:
     """Resolved model/effort policy for a launch-ready provider profile."""
@@ -120,9 +155,13 @@ class ResolvedModelEffort:
     effort_application_status: str | None
     tier_parameters: dict[str, Any]
     preview_mismatch: bool = False
+    model_family: str | None = None
+    model_mode: str | None = None
+    family_resolution_status: str | None = None
+    family_resolution_source: str | None = None
 
     def as_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "requestedModelTier": self.requested_model_tier,
             "effectiveModelTier": self.effective_model_tier,
             "tierLabel": self.tier_label,
@@ -134,6 +173,17 @@ class ResolvedModelEffort:
             "effortApplicationStatus": self.effort_application_status,
             "previewMismatch": self.preview_mismatch,
         }
+        if self.model_family is not None:
+            # Family provenance for diagnostics and admitted-selection reuse.
+            metadata.update(
+                {
+                    "modelFamily": self.model_family,
+                    "modelMode": self.model_mode,
+                    "familyResolutionStatus": self.family_resolution_status,
+                    "familyResolutionSource": self.family_resolution_source,
+                }
+            )
+        return metadata
 
 
 def _profile_provider_id(profile: Any | None) -> str | None:
@@ -261,12 +311,18 @@ def resolve_model_effort(
     require_launch_ready: bool = True,
     workflow_settings: Any | None = None,
     env: Mapping[str, str] | None = None,
+    admitted_resolution: Mapping[str, Any] | None = None,
 ) -> ResolvedModelEffort:
     """Resolve model and effort from explicit overrides, profile tiers, and defaults.
 
     This is the tier-aware backend resolver for MM-1170.  The legacy
     ``resolve_effective_model`` tuple helper remains available for current
     callers that only need the effective model and source.
+
+    An automatic family tier resolves against the selected profile's catalog
+    observations. ``admitted_resolution`` is the resolution recorded when the
+    work was admitted; a matching automatic tier keeps that concrete model so
+    later catalog changes never rewrite accepted work.
     """
     if require_launch_ready:
         _ensure_launch_ready_profile(profile)
@@ -364,6 +420,20 @@ def resolve_model_effort(
             workflow_settings=workflow_settings,
             env=env,
         )
+        tier_family = _clean(tier.get("family"))
+        tier_mode = _clean(tier.get("model_mode"))
+        family_status: str | None = None
+        family_source: str | None = None
+        if tier_family is not None and tier_mode == "automatic":
+            tier_model, family_status, family_source = _resolve_automatic_tier(
+                profile=profile,
+                family=tier_family,
+                effective_tier=effective_tier,
+                effort=clean_requested_effort or tier_effort or runtime_effort,
+                admitted_resolution=admitted_resolution,
+            )
+        elif tier_family is not None:
+            family_status, family_source = "pinned", "profile_pin"
         model, model_source = _first_value(
             (tier_model, tier_source),
             (
@@ -391,6 +461,10 @@ def resolve_model_effort(
                 fallback_reason=fallback_reason,
                 effort_application_status=_EFFORT_APPLICATION_UNKNOWN,
                 tier_parameters=dict(tier_parameters),
+                model_family=tier_family,
+                model_mode=tier_mode if tier_family is not None else None,
+                family_resolution_status=family_status,
+                family_resolution_source=family_source,
             ),
             advisory_preview,
             profile=profile,
@@ -432,6 +506,77 @@ def resolve_model_effort(
         advisory_preview,
         profile=profile,
     )
+
+
+def _resolve_automatic_tier(
+    *,
+    profile: Any | None,
+    family: str,
+    effective_tier: int,
+    effort: str | None,
+    admitted_resolution: Mapping[str, Any] | None,
+) -> tuple[str, str, str]:
+    """Return (model, status, source) for an automatic family tier.
+
+    Raises :class:`ModelTierFamilyUnavailableError` instead of falling back to
+    the runtime default or any other selection.
+    """
+    from moonmind.provider_profiles.model_families import (
+        catalog_rows_from_evidence,
+        resolve_family_model,
+    )
+
+    admitted_model = _admitted_family_model(
+        admitted_resolution,
+        profile=profile,
+        family=family,
+        effective_tier=effective_tier,
+    )
+    if admitted_model is not None:
+        return (
+            admitted_model,
+            str(admitted_resolution.get("familyResolutionStatus") or "resolved"),
+            "admitted_selection",
+        )
+    resolution = resolve_family_model(
+        family,
+        provider_id=_profile_provider_id(profile),
+        catalog_rows=catalog_rows_from_evidence(
+            _profile_value(
+                profile, "model_catalog_evidence_json", "modelCatalogEvidence"
+            )
+        ),
+        effort=effort,
+    )
+    if not resolution.usable or resolution.model is None:
+        raise ModelTierFamilyUnavailableError(
+            effective_model_tier=effective_tier,
+            family=family,
+            reason=resolution.reason,
+        )
+    return resolution.model, resolution.status, str(resolution.source)
+
+
+def _admitted_family_model(
+    admitted_resolution: Mapping[str, Any] | None,
+    *,
+    profile: Any | None,
+    family: str,
+    effective_tier: int,
+) -> str | None:
+    if not isinstance(admitted_resolution, Mapping):
+        return None
+    if admitted_resolution.get("modelMode") != "automatic":
+        return None
+    if admitted_resolution.get("modelFamily") != family:
+        return None
+    if admitted_resolution.get("effectiveModelTier") != effective_tier:
+        return None
+    admitted_profile = _clean(admitted_resolution.get("providerProfileId"))
+    profile_id = _clean(_profile_value(profile, "profile_id", "profileId"))
+    if admitted_profile is not None and admitted_profile != profile_id:
+        return None
+    return _clean(admitted_resolution.get("resolvedModel"))
 
 
 def coerce_effort_for_model(model: str | None, effort: str | None) -> str | None:

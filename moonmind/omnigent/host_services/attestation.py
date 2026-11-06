@@ -193,6 +193,50 @@ async def _read_exact_host_model_options(
     return model_options, "omnigent-host-tunnel"
 
 
+_PROFILE_CATALOG_HARNESSES = frozenset({"codex-native", "claude-native"})
+
+
+async def _record_profile_catalog(
+    *,
+    plan: Any,
+    credential_handles: list[dict[str, Any]],
+    model_options: dict[str, Any],
+) -> None:
+    """Keep the selected Codex/Claude profile's catalog observation current.
+
+    The exact host answers for the admitted profile's own credential, so its
+    model options are that route's catalog. Recording is advisory and never
+    changes the launch outcome.
+    """
+
+    if plan.payload.harnessId not in _PROFILE_CATALOG_HARNESSES:
+        return
+    binding = (plan.payload.credentialBindings or {}).get("primary-model")
+    profile_ref = str(getattr(binding, "providerProfileRef", "") or "").strip()
+    if not profile_ref:
+        return
+    generation = next(
+        (
+            int(handle["credentialGeneration"])
+            for handle in credential_handles
+            if str(handle.get("providerProfileRef") or "") == profile_ref
+            and handle.get("credentialGeneration") is not None
+        ),
+        None,
+    )
+    from api_service.db.base import async_session_maker
+    from moonmind.provider_profiles.catalog_observations import (
+        record_profile_catalog_observation,
+    )
+
+    await record_profile_catalog_observation(
+        async_session_maker,
+        profile_id=profile_ref,
+        credential_generation=generation,
+        model_options=model_options,
+    )
+
+
 def _codex_native_default_model(options: Any) -> str | None:
     rows = options.get("models") if isinstance(options, dict) else None
     defaults = [row for row in rows or [] if isinstance(row, dict) and row.get("isDefault") is True]
@@ -1272,6 +1316,7 @@ class DockerOmnigentHostAttestor:
         # OpenCode can exit zero with its bundled catalog after a failed
         # refresh. Re-read before releasing this exact host/credential lease;
         # do not substitute a model or re-admit another host to recover a read.
+        observed_model_options: Any = None
         for attempt in range(1, _MODEL_ATTESTATION_MAX_ATTEMPTS + 1):
             observation: dict[str, Any] = {
                 "attempt": attempt,
@@ -1287,6 +1332,7 @@ class DockerOmnigentHostAttestor:
                         harness_id=plan.payload.harnessId,
                     )
                 )
+                observed_model_options = model_options
                 native_default_model = None
                 if codex_native_default:
                     native_default_model = _codex_native_default_model(model_options)
@@ -1335,6 +1381,13 @@ class DockerOmnigentHostAttestor:
                 break
             if attempt < _MODEL_ATTESTATION_MAX_ATTEMPTS:
                 await asyncio.sleep(attempt)
+
+        if isinstance(observed_model_options, dict):
+            await _record_profile_catalog(
+                plan=plan,
+                credential_handles=credential_handles,
+                model_options=observed_model_options,
+            )
 
         async def write_model_evidence() -> str:
             return await self._artifacts.write_json(

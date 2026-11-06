@@ -93,7 +93,7 @@ Authentication
   Connection or setup action
 
 Model & effort tiers
-  One runtime-default tier initially
+  Backend-supplied initial tiers
 
 Capacity and selection
   Max parallel runs
@@ -179,8 +179,11 @@ allowed). The choice drives a guided setup flow; raw `credential_source`,
 ### 2.5 Model and effort tiers
 
 Tier policy sits outside the advanced disclosure because it is core profile
-policy. A new profile starts with one tier using backend-reported runtime
-defaults, customizable through the
+policy. The backend supplies the initial policy for the chosen route: OpenAI via
+Codex and Anthropic via Claude Code start with four automatic family tiers,
+default Tier 2, and `medium` effort, whether they authenticate through OAuth or
+an API key; other routes start with one Runtime default tier. Both are
+customizable through the
 [tier editor](./ProviderProfileModelEffortTierSettings.md). The form has no
 separate default model or default effort fields.
 
@@ -309,7 +312,7 @@ options to recommended`.
 | `provider_id` | Required Provider selector scoped to Harness | Backend provider catalog and creation capabilities |
 | `account_label` | Optional friendly label | Empty, OAuth identity, or user |
 | Authentication method | Guided choice | Backend capabilities |
-| `model_tiers`, `default_model_tier` | Core policy, one runtime-default tier initially | Backend tier capabilities |
+| `model_tiers`, `default_model_tier` | Core policy, backend-supplied initial tiers | Backend tier capabilities |
 | `max_parallel_runs` | Capacity input | Backend preset; baseline `1` |
 | `is_default` | Optional intent when readiness permits | User choice plus backend normalization |
 | Credential readiness | Status and setup action | Backend validation and activation |

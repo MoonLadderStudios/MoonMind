@@ -18,8 +18,14 @@ import {
   duplicateTierDraft,
   normalizeProviderProfileTiers,
   runtimeDefaultTierDraft,
+  selectTierModel,
+  tierDraftsFromPolicy,
+  tierFamilyResolution,
+  tierModeLabel,
+  type ProviderModelEffortTier,
   tierDisplayEffort,
   tierDisplayModel,
+  tierSummaryModel,
   type ProviderProfileTierDraft,
 } from '../../utils/providerProfileTiers';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
@@ -145,13 +151,7 @@ function asAuthenticationMethod(value: string | null | undefined): Authenticatio
     : '';
 }
 
-export interface ProviderModelEffortTier {
-  label?: string | null;
-  model?: string | null;
-  effort?: string | null;
-  parameters?: Record<string, unknown> | null;
-  annotations?: Record<string, unknown> | null;
-}
+export type { ProviderModelEffortTier };
 
 interface ProviderReadinessCheck {
   id: string;
@@ -2192,6 +2192,12 @@ export function ProviderProfilesManager({
   const [tierBaseline, setTierBaseline] = useState<ProviderProfileTierDraft[] | null>(
     () => cloneTierDrafts(tierDrafts),
   );
+  // Create-form tiers that still equal an initial policy (the Runtime default
+  // draft or a backend template) follow the route's template; any edit keeps
+  // the operator's draft, even when a capability response arrives late.
+  const tierDraftsRef = useRef({ tiers: tierDrafts, defaultTierClientId });
+  tierDraftsRef.current = { tiers: tierDrafts, defaultTierClientId };
+  const appliedTierTemplateRef = useRef<string | null>(null);
   const [tierBaselineDefaultId, setTierBaselineDefaultId] = useState<string | null>(
     () => tierDrafts[0]?.clientId ?? null,
   );
@@ -2467,6 +2473,7 @@ export function ProviderProfilesManager({
       .then((caps) => {
         if (controller.signal.aborted) return;
         setTierCapabilities(caps);
+        applyRecommendedTierPolicy(caps.recommended_policy ?? null);
         if (caps.evidence?.stale) {
           setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
         }
@@ -2483,6 +2490,28 @@ export function ProviderProfilesManager({
       });
     return () => controller.abort();
   }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
+
+  function applyRecommendedTierPolicy(policy: ProviderProfileTierCapabilities['recommended_policy'] | null) {
+    const current = tierDraftsRef.current;
+    const currentPayload = JSON.stringify(buildProviderProfileTierPayload(current.tiers, current.defaultTierClientId));
+    const initialPayload = JSON.stringify(buildProviderProfileTierPayload([runtimeDefaultTierDraft()], null));
+    const untouched = currentPayload === initialPayload || currentPayload === appliedTierTemplateRef.current;
+    if (!untouched) return;
+    const next = policy
+      ? tierDraftsFromPolicy(policy)
+      : (() => {
+          const tier = runtimeDefaultTierDraft();
+          return { tiers: [tier], defaultTierClientId: tier.clientId };
+        })();
+    appliedTierTemplateRef.current = policy
+      ? JSON.stringify(buildProviderProfileTierPayload(next.tiers, next.defaultTierClientId))
+      : null;
+    if (!policy && currentPayload === initialPayload) return;
+    setTierDrafts(next.tiers);
+    setDefaultTierClientId(next.defaultTierClientId);
+    setTierBaseline(cloneTierDrafts(next.tiers));
+    setTierBaselineDefaultId(next.defaultTierClientId);
+  }
 
   useEffect(() => {
     const isEditingProfile = editingProfileId !== null;
@@ -2953,8 +2982,10 @@ export function ProviderProfilesManager({
     setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, label } : t)));
   };
 
+  // On a family tier a concrete model pins the tier; null restores automatic
+  // family tracking. Effort edits never change the model mode.
   const handleTierModelChange = (clientId: string, model: string | null) => {
-    setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, model } : t)));
+    setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? selectTierModel(t, model) : t)));
   };
 
   const handleTierEffortChange = (clientId: string, effort: string | null) => {
@@ -4587,7 +4618,7 @@ export function ProviderProfilesManager({
                                   {' · '}
                                   <span className="font-mono">{tier.label || `Tier ${tierNumber}`}</span>
                                   {' · '}
-                                  <span className="font-mono">{tierDisplayModel(tier.model)}</span>
+                                  <span className="font-mono">{tierSummaryModel(tier)}</span>
                                   {' · '}
                                   <span className="font-mono">{tierDisplayEffort(tier.effort)}</span>
                                   {tierNumber === validDefault ? <span className="ml-1 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-1 text-[10px] font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}
@@ -4608,7 +4639,7 @@ export function ProviderProfilesManager({
                                       {' · '}
                                       <span className="font-mono">{tier.label || `Tier ${tierNumber}`}</span>
                                       {' · '}
-                                      <span className="font-mono">{tierDisplayModel(tier.model)}</span>
+                                      <span className="font-mono">{tierSummaryModel(tier)}</span>
                                       {' · '}
                                       <span className="font-mono">{tierDisplayEffort(tier.effort)}</span>
                                     </div>
@@ -5550,11 +5581,17 @@ export function ProviderProfilesManager({
                                 // default and the saved value are offered.
                                 const catalogOptions = tierCapabilities?.model?.options ?? [];
                                 const allowCustomModel = tierCapabilities?.model?.allow_custom === true;
+                                // A family tier offers "Latest automatically" in place of
+                                // Runtime default; any concrete choice pins the tier.
+                                const familyResolution = tierFamilyResolution(tier, index, tierCapabilities);
+                                const isFamilyTier = Boolean(tier.family);
                                 const knownValues = new Set([
-                                  '__runtime_default__',
+                                  isFamilyTier ? '__automatic__' : '__runtime_default__',
                                   ...catalogOptions.map((o) => o.value),
                                 ]);
-                                const currentValue = tier.model ?? '__runtime_default__';
+                                const currentValue = isFamilyTier && tier.modelMode === 'automatic'
+                                  ? '__automatic__'
+                                  : tier.model ?? '__runtime_default__';
                                 const isCustomValue = tier.model != null && tier.model !== '' && !knownValues.has(tier.model);
                                 const isCustomDraft = customModelEntryTiers.has(tier.clientId);
                                 // Catalog freshness controls observed options. The backend's
@@ -5576,13 +5613,18 @@ export function ProviderProfilesManager({
                                         nextSet.delete(tier.clientId);
                                         return nextSet;
                                       });
-                                      handleTierModelChange(tier.clientId, next === '__runtime_default__' ? null : next);
+                                      handleTierModelChange(tier.clientId, next === '__runtime_default__' || next === '__automatic__' ? null : next);
                                     }} aria-label={`Tier ${tierNumber} model`}>
-                                      <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
+                                      {isFamilyTier ? (
+                                        <option value="__automatic__">Latest automatically{familyResolution?.model && tier.modelMode === 'automatic' ? ` · currently ${familyResolution.model}` : ''}</option>
+                                      ) : (
+                                        <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
+                                      )}
                                       {catalogOptions.map((opt) => (
                                         <option key={opt.value} value={opt.value}>
                                           {opt.label}
                                           {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
+                                          {opt.status === 'unverified' ? ' (Not yet observed)' : ''}
                                           {opt.recommended ? ' · Recommended' : ''}
                                         </option>
                                       ))}
@@ -5627,7 +5669,22 @@ export function ProviderProfilesManager({
                               {tierFieldErrors[`${tier.clientId}.effort`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.effort`]}</span> : null}
                             </label>
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400">Resolves to {tierDisplayModel(tier.model)} · {tierDisplayEffort(tier.effort)}</div>
+                          {tier.family ? (
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400" data-tier-mode={tier.modelMode ?? ''}>
+                              <span aria-label={`Tier ${tierNumber} model mode`}>{tierModeLabel(tier, index, tierCapabilities)} · {tierDisplayEffort(tier.effort)}</span>
+                              {tier.modelMode === 'pinned' ? (
+                                <Button variant="secondary" size="sm" type="button" className="min-h-11 text-xs" onClick={() => handleTierModelChange(tier.clientId, null)} aria-label={`Use latest automatically for Tier ${tierNumber}`}>Use latest automatically</Button>
+                              ) : null}
+                              {(() => {
+                                const resolution = tierFamilyResolution(tier, index, tierCapabilities);
+                                return resolution?.reason && resolution.status !== 'resolved' ? (
+                                  <span className={resolution.status === 'unavailable' ? 'text-amber-700 dark:text-amber-300' : undefined}>{resolution.reason}</span>
+                                ) : null;
+                              })()}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-slate-500 dark:text-slate-400">Resolves to {tierDisplayModel(tier.model)} · {tierDisplayEffort(tier.effort)}</div>
+                          )}
                           <details className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
                             <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">Advanced tier options</summary>
                             <div className="mt-3 space-y-3">
@@ -5659,7 +5716,11 @@ export function ProviderProfilesManager({
                       ) : (
                         <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
                           <div>Label: {tier.label || `Tier ${tierNumber}`}</div>
-                          <div>Model: <span className="font-mono">{tierDisplayModel(tier.model)}</span></div>
+                          {tier.family ? (
+                            <div>Model: {tierModeLabel(tier, index, tierCapabilities)}</div>
+                          ) : (
+                            <div>Model: <span className="font-mono">{tierDisplayModel(tier.model)}</span></div>
+                          )}
                           <div>Effort: <span className="font-mono">{tierDisplayEffort(tier.effort)}</span></div>
                           {Object.keys(tier.parameters).length > 0 ? <div>Parameters: <span className="font-mono text-xs">{JSON.stringify(tier.parameters)}</span></div> : null}
                           {Object.keys(tier.annotations).length > 0 ? <div>Annotations: <span className="font-mono text-xs">{JSON.stringify(tier.annotations)}</span></div> : null}

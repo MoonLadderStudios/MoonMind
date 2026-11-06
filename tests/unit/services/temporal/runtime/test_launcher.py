@@ -1463,6 +1463,52 @@ def test_apply_resolved_tier_policy_shapes_omitted_and_explicit_default_tiers(
     }
 
 
+def test_apply_resolved_tier_policy_keeps_the_admitted_automatic_family_model():
+    """A catalog change after admission must not rewrite accepted work."""
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    tiers, default_tier = first_party_family_tier_template("claude_code", "anthropic")
+    profile = _make_profile(
+        profile_id="claude_anthropic_oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        default_model=None,
+        default_effort=None,
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+    )
+    admitted = {
+        "providerProfileId": "claude_anthropic_oauth",
+        "effectiveModelTier": 2,
+        "resolvedModel": "claude-opus-5-1",
+        "resolvedEffort": "medium",
+        "effortSource": "profile_default_tier",
+        "modelSource": "profile_default_tier",
+        "modelFamily": "opus",
+        "modelMode": "automatic",
+        "familyResolutionStatus": "resolved",
+    }
+    request = _make_request(parameters={"modelTierResolution": dict(admitted)})
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert request.parameters["model"] == "claude-opus-5-1"
+    assert request.parameters["effort"] == "medium"
+    resolution = request.parameters["modelTierResolution"]
+    assert resolution["modelFamily"] == "opus"
+    assert resolution["modelMode"] == "automatic"
+    assert resolution["familyResolutionSource"] == "admitted_selection"
+
+
 def test_apply_resolved_tier_policy_initializes_missing_parameters():
     profile = _make_profile(
         runtime_id="codex_cli",

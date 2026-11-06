@@ -14,7 +14,7 @@ export interface ProviderProfileTierCapabilities {
   model: {
     runtime_default: string | null;
     allow_custom: boolean;
-    options: Array<{ value: string; label: string; description: string | null; status: string; recommended?: boolean }>;
+    options: Array<{ value: string; label: string; description: string | null; status: string; recommended?: boolean; family?: string | null }>;
   };
   effort: {
     supported: boolean;
@@ -23,7 +23,34 @@ export interface ProviderProfileTierCapabilities {
     application: string;
     options: Array<{ value: string; label: string; description: string | null; status: string; compatible_models: string[] | null }>;
   };
+  /** Families this route can follow, with their current resolution. */
+  families?: ProviderProfileFamilyOption[];
+  /** Per saved tier availability, separate from credential readiness. */
+  tiers?: ProviderProfileTierResolution[];
+  /** Backend-owned initial tier policy for a new profile on this route. */
+  recommended_policy?: { model_tiers: ProviderModelEffortTier[]; default_model_tier: number } | null;
   diagnostics: Array<{ code: string; level: string; message: string }>;
+}
+
+export type TierModelMode = 'automatic' | 'pinned';
+
+export interface ProviderProfileFamilyOption {
+  value: string;
+  label: string;
+  resolved_model: string | null;
+  status: string;
+  source: string | null;
+  reason: string | null;
+}
+
+export interface ProviderProfileTierResolution {
+  index: number;
+  family: string | null;
+  model_mode: TierModelMode | null;
+  model: string | null;
+  status: string | null;
+  source: string | null;
+  reason: string | null;
 }
 
 export type ProviderProfileTierEffortOption = ProviderProfileTierCapabilities['effort']['options'][number];
@@ -42,6 +69,8 @@ export const FALLBACK_TIER_EFFORT_OPTIONS: ProviderProfileTierEffortOption[] = [
 
 export interface ProviderModelEffortTier {
   label?: string | null;
+  family?: string | null;
+  model_mode?: TierModelMode | null;
   model?: string | null;
   effort?: string | null;
   parameters?: Record<string, unknown> | null;
@@ -51,6 +80,9 @@ export interface ProviderModelEffortTier {
 export interface ProviderProfileTierDraft {
   clientId: string;
   label: string;
+  /** Machine-readable model family; null for an exact-model or Runtime default tier. */
+  family: string | null;
+  modelMode: TierModelMode | null;
   model: string | null;
   effort: string | null;
   parameters: Record<string, unknown>;
@@ -79,6 +111,8 @@ export function runtimeDefaultTierDraft(): ProviderProfileTierDraft {
   return {
     clientId: generateTierClientId(),
     label: '',
+    family: null,
+    modelMode: null,
     model: null,
     effort: null,
     parameters: {},
@@ -104,6 +138,8 @@ export function normalizeProviderProfileTiers(
   const tiers: ProviderProfileTierDraft[] = raw.map((tier) => ({
     clientId: generateTierClientId(),
     label: typeof tier.label === 'string' ? tier.label : tier.label == null ? '' : String(tier.label),
+    family: tier.family ?? null,
+    modelMode: tier.family ? tier.model_mode ?? null : null,
     model: tier.model ?? null,
     effort: tier.effort ?? null,
     parameters: tier.parameters && typeof tier.parameters === 'object' && !Array.isArray(tier.parameters) ? { ...tier.parameters } as Record<string, unknown> : {},
@@ -144,7 +180,10 @@ export function buildProviderProfileTierPayload(
   const effectiveDefaultIndex = defaultIndex >= 0 ? defaultIndex : 0;
   const model_tiers: ProviderModelEffortTier[] = tiers.map((tier) => ({
     label: tier.label.trim() ? tier.label.trim() : null,
-    model: tier.model,
+    // Family policy is serialized only for family tiers, so other tiers keep
+    // their established shape. An automatic tier never carries a model.
+    ...(tier.family ? { family: tier.family, model_mode: tier.modelMode } : {}),
+    model: tier.family && tier.modelMode === 'automatic' ? null : tier.model,
     effort: tier.effort,
     parameters: tier.parameters,
     annotations: tier.annotations,
@@ -171,9 +210,83 @@ export function computeTierRenumberingImpact(
   return impacts;
 }
 
+/**
+ * Apply a model choice to a tier. On a family tier, a concrete model pins the
+ * tier (even when it equals today's resolution) and `null` restores automatic
+ * family tracking. Other tiers keep their exact/Runtime default meaning.
+ */
+export function selectTierModel(tier: ProviderProfileTierDraft, model: string | null): ProviderProfileTierDraft {
+  if (!tier.family) {
+    return { ...tier, model };
+  }
+  return model
+    ? { ...tier, modelMode: 'pinned', model }
+    : { ...tier, modelMode: 'automatic', model: null };
+}
+
+/** The current route resolution for a family tier draft, if the backend reported one. */
+export function tierFamilyResolution(
+  tier: ProviderProfileTierDraft,
+  index: number,
+  capabilities: ProviderProfileTierCapabilities | null,
+): { model: string | null; status: string | null; reason: string | null } | null {
+  if (!tier.family || !capabilities) return null;
+  const saved = capabilities.tiers?.find((entry) => entry.index === index + 1);
+  if (saved && saved.family === tier.family && saved.model_mode === tier.modelMode && (tier.modelMode === 'automatic' || saved.model === tier.model)) {
+    return { model: saved.model, status: saved.status, reason: saved.reason };
+  }
+  if (tier.modelMode !== 'automatic') return null;
+  const family = capabilities.families?.find((entry) => entry.value === tier.family);
+  return family ? { model: family.resolved_model, status: family.status, reason: family.reason } : null;
+}
+
+function familyDisplayName(tier: ProviderProfileTierDraft, capabilities: ProviderProfileTierCapabilities | null): string {
+  const option = capabilities?.families?.find((entry) => entry.value === tier.family);
+  if (option?.label) return option.label;
+  const family = tier.family ?? '';
+  return family ? family.charAt(0).toUpperCase() + family.slice(1) : '';
+}
+
+/** Accessible row summary such as "Opus — Latest automatically · currently claude-opus-5-5". */
+export function tierModeLabel(
+  tier: ProviderProfileTierDraft,
+  index: number,
+  capabilities: ProviderProfileTierCapabilities | null,
+): string | null {
+  if (!tier.family) return null;
+  const name = familyDisplayName(tier, capabilities);
+  const resolution = tierFamilyResolution(tier, index, capabilities);
+  if (tier.modelMode === 'pinned') {
+    const status = resolution?.status && !['available', 'pinned'].includes(resolution.status) ? ` · ${resolution.status}` : '';
+    return `${name} — Pinned to ${tier.model ?? ''}${status}`;
+  }
+  if (!resolution) return `${name} — Latest automatically`;
+  if (resolution.status === 'unavailable' || !resolution.model) {
+    return `${name} — Latest automatically · unavailable for this profile`;
+  }
+  const unverified = resolution.status === 'unverified' ? ' (not yet observed)' : '';
+  return `${name} — Latest automatically · currently ${resolution.model}${unverified}`;
+}
+
+/** Build tier drafts from a backend-supplied tier policy. */
+export function tierDraftsFromPolicy(policy: { model_tiers: ProviderModelEffortTier[]; default_model_tier: number }): {
+  tiers: ProviderProfileTierDraft[];
+  defaultTierClientId: string | null;
+} {
+  const normalized = normalizeProviderProfileTiers(policy.model_tiers, policy.default_model_tier);
+  return { tiers: normalized.tiers, defaultTierClientId: normalized.defaultTierClientId };
+}
+
 export function tierDisplayModel(model: string | null | undefined): string {
   const trimmed = typeof model === 'string' ? model.trim() : '';
   return trimmed ? trimmed : 'Runtime default';
+}
+
+/** Saved-tier model summary that never presents an automatic family tier as Runtime default. */
+export function tierSummaryModel(tier: ProviderModelEffortTier): string {
+  if (tier.family && tier.model_mode === 'automatic') return 'Latest automatically';
+  if (tier.family && tier.model_mode === 'pinned') return `Pinned to ${tier.model ?? ''}`;
+  return tierDisplayModel(tier.model);
 }
 
 export function tierDisplayEffort(effort: string | null | undefined): string {
@@ -185,6 +298,8 @@ export function duplicateTierDraft(source: ProviderProfileTierDraft): ProviderPr
   return {
     clientId: generateTierClientId(),
     label: source.label ? `${source.label} copy` : '',
+    family: source.family,
+    modelMode: source.modelMode,
     model: source.model,
     effort: source.effort,
     parameters: { ...source.parameters },

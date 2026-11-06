@@ -187,3 +187,27 @@ describe('MoonMind#4636 saved resolution uses current provenance', () => {
     expect(submitted).toEqual({ model: 'saved-model', effort: 'legacy-effort' });
   });
 });
+describe('automatic family tiers', () => {
+  const familyProfile: ModelSelectionProfile = {
+    default_model_tier: 2,
+    model_tiers: [
+      { label: 'Fable', family: 'fable', model_mode: 'automatic', model: null, effort: 'medium' },
+      { label: 'Opus', family: 'opus', model_mode: 'automatic', model: null, effort: 'medium' },
+    ],
+  };
+  it('shows the current resolution without authoring it', () => {
+    render(<><ModelSelectionFields scope="Workflow" value={{}} profile={familyProfile} preview={{ model: 'claude-opus-5-5', effort: 'medium', effectiveTier: 2, modelSource: 'profile_default_tier', modelMode: 'automatic', modelFamily: 'opus', familyResolutionStatus: 'resolved' }} onChange={() => undefined} /></>);
+    expect(screen.getByText('Tier 2 follows the latest Opus release: currently claude-opus-5-5.')).toBeTruthy();
+    expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).placeholder).toBe('Latest Opus automatically');
+  });
+  it('enters Custom on an effort edit without copying the resolved automatic model', () => {
+    render(<Form policy={familyProfile} />);
+    fireEvent.change(screen.getByLabelText('Workflow Effort'), { target: { value: 'high' } });
+    expect(payload()).toEqual({ model: null, effort: 'high' });
+  });
+  it('reports an unavailable automatic tier instead of substituting one', () => {
+    render(<ModelSelectionFields scope="Workflow" value={{ modelTier: 1 }} profile={familyProfile} preview={{ model: null, effectiveTier: 1, modelMode: 'automatic', modelFamily: 'fable', familyResolutionStatus: 'unavailable', unavailableReason: 'Model tier 1 (fable) cannot run on the selected profile.' }} onChange={() => undefined} />);
+    expect(screen.getByRole('alert').textContent).toContain('Model tier 1 (fable) cannot run');
+  });
+});

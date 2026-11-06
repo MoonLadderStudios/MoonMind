@@ -5,8 +5,11 @@ import {
   duplicateTierDraft,
   normalizeProviderProfileTiers,
   runtimeDefaultTierDraft,
+  selectTierModel,
   tierDisplayEffort,
   tierDisplayModel,
+  tierModeLabel,
+  tierSummaryModel,
 } from './providerProfileTiers';
 
 describe('normalizeProviderProfileTiers', () => {
@@ -159,5 +162,48 @@ describe('capability degradation', () => {
     expect(tierDisplayModel(null)).toBe('Runtime default');
     expect(tierDisplayEffort('')).toBe('Runtime default');
     expect(tierDisplayModel('custom-model-xyz')).toBe('custom-model-xyz');
+  });
+});
+
+describe('model family tiers', () => {
+  const saved = [
+    { label: 'Opus', family: 'opus', model_mode: 'automatic' as const, model: null, effort: 'medium', parameters: {}, annotations: {} },
+    { label: 'Exact', model: 'gpt-custom', effort: null, parameters: {}, annotations: {} },
+  ];
+
+  it('round-trips family policy and keeps the legacy shape for other tiers', () => {
+    const normalized = normalizeProviderProfileTiers(saved, 1);
+    const payload = buildProviderProfileTierPayload(normalized.tiers, normalized.defaultTierClientId);
+    expect(payload.model_tiers).toEqual(saved);
+  });
+
+  it('pins on a concrete choice and restores automatic on null', () => {
+    const [opus] = normalizeProviderProfileTiers(saved, 1).tiers;
+    const pinned = selectTierModel(opus!, 'claude-opus-5');
+    expect(pinned).toMatchObject({ family: 'opus', modelMode: 'pinned', model: 'claude-opus-5' });
+    const restored = selectTierModel(pinned, null);
+    expect(restored).toMatchObject({ family: 'opus', modelMode: 'automatic', model: null });
+    expect(duplicateTierDraft(pinned)).toMatchObject({ family: 'opus', modelMode: 'pinned', model: 'claude-opus-5' });
+  });
+
+  it('keeps exact and Runtime default meaning on tiers without a family', () => {
+    const exact = normalizeProviderProfileTiers(saved, 1).tiers[1]!;
+    expect(selectTierModel(exact, null)).toMatchObject({ family: null, modelMode: null, model: null });
+  });
+
+  it('describes saved tiers without calling automatic tiers Runtime default', () => {
+    expect(tierSummaryModel(saved[0]!)).toBe('Latest automatically');
+    expect(tierSummaryModel({ ...saved[0]!, model_mode: 'pinned', model: 'claude-opus-5' })).toBe('Pinned to claude-opus-5');
+    expect(tierSummaryModel(saved[1]!)).toBe('gpt-custom');
+  });
+
+  it('labels the automatic resolution and its unverified state', () => {
+    const [opus] = normalizeProviderProfileTiers(saved, 1).tiers;
+    const capabilities = {
+      families: [{ value: 'opus', label: 'Opus', resolved_model: 'claude-opus-5-5', status: 'unverified', source: 'cold_start_placeholder', reason: null }],
+      tiers: [],
+    } as never;
+    expect(tierModeLabel(opus!, 0, capabilities)).toBe('Opus — Latest automatically · currently claude-opus-5-5 (not yet observed)');
+    expect(tierModeLabel(opus!, 0, null)).toBe('Opus — Latest automatically');
   });
 });

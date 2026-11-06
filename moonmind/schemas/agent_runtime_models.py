@@ -21,7 +21,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionBinding,
     canonical_managed_session_runtime_id,
 )
-from moonmind.provider_profiles.model_tiers import ProviderModelEffortTier
+from moonmind.provider_profiles.model_tiers import ModelEffortTierPolicy
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 from moonmind.schemas.workload_models import parse_cpu_units, parse_size_bytes
 
@@ -1825,16 +1825,14 @@ class AgentRunResult(BaseModel):
             )
         return self
 
-class ProviderModelEffortTier(BaseModel):
-    """Profile-local model/effort tier policy entry."""
+class ProviderModelEffortTier(ModelEffortTierPolicy):
+    """Profile-local model/effort tier policy entry on runtime payloads.
+
+    Unlike the write contract, persisted tier metadata is re-screened for
+    credentials at launch so the error names the profile.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    label: str | None = Field(None, alias="label")
-    model: str | None = Field(None, alias="model")
-    effort: str | None = Field(None, alias="effort")
-    parameters: dict[str, Any] = Field(default_factory=dict, alias="parameters")
-    annotations: dict[str, Any] = Field(default_factory=dict, alias="annotations")
 
 
 class ManagedAgentProviderProfile(BaseModel):
