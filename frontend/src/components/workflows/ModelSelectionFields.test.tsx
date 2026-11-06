@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ModelSelectionFields } from './ModelSelectionFields';
-import type { ModelSelection, ModelSelectionProfile } from '../../lib/modelSelection';
+import type { ModelSelection, ModelSelectionPreview, ModelSelectionProfile } from '../../lib/modelSelection';
 import type { ProviderProfileTierCapabilities } from '../../utils/providerProfileTiers';
 
 const profile = { default_model_tier: 2, model_tiers: [{ model: 'plan', effort: 'low' }, { model: 'implement', effort: 'high' }] };
-function Form({ initial = {}, policy = profile, inherited, capabilities }: { initial?: ModelSelection; policy?: ModelSelectionProfile; inherited?: ModelSelection | undefined; capabilities?: ProviderProfileTierCapabilities }) {
+function Form({ initial = {}, policy = profile, inherited, capabilities, preview }: { initial?: ModelSelection; policy?: ModelSelectionProfile; inherited?: ModelSelection | undefined; capabilities?: ProviderProfileTierCapabilities; preview?: ModelSelectionPreview | undefined }) {
   const [value, setValue] = useState(initial);
-  return <><ModelSelectionFields scope="Workflow" value={value} profile={policy} inherited={inherited} capabilities={capabilities} onChange={setValue} /><output aria-label="payload">{JSON.stringify(value)}</output></>;
+  return <><ModelSelectionFields scope="Workflow" value={value} profile={policy} inherited={inherited} capabilities={capabilities} preview={preview} onChange={setValue} /><output aria-label="payload">{JSON.stringify(value)}</output></>;
 }
 const payload = () => JSON.parse(screen.getByLabelText('payload').textContent || '{}');
 afterEach(cleanup);
@@ -201,10 +201,33 @@ describe('automatic family tiers', () => {
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).placeholder).toBe('Latest Opus automatically');
   });
-  it('enters Custom on an effort edit without copying the resolved automatic model', () => {
-    render(<Form policy={familyProfile} />);
+  const opusPreview: ModelSelectionPreview = { model: 'claude-opus-5-5', effort: 'medium', effectiveTier: 2, modelSource: 'profile_default_tier', modelMode: 'automatic', modelFamily: 'opus', familyResolutionStatus: 'resolved' };
+  it('keeps the tier family when an effort edit enters Custom', () => {
+    render(<Form policy={familyProfile} preview={opusPreview} />);
     fireEvent.change(screen.getByLabelText('Workflow Effort'), { target: { value: 'high' } });
-    expect(payload()).toEqual({ model: null, effort: 'high' });
+    expect(payload()).toEqual({ model: 'claude-opus-5-5', effort: 'high' });
+    expect((screen.getByLabelText('Workflow Tier') as HTMLSelectElement).value).toBe('custom');
+  });
+  it('keeps the tier family when Custom is chosen directly', () => {
+    render(<Form policy={familyProfile} preview={opusPreview} />);
+    fireEvent.change(screen.getByLabelText('Workflow Tier'), { target: { value: 'custom' } });
+    expect(payload()).toEqual({ model: 'claude-opus-5-5', effort: 'medium' });
+  });
+  it('authors a typed model with the tier effort', () => {
+    render(<Form policy={familyProfile} />);
+    fireEvent.change(screen.getByLabelText('Workflow Model'), { target: { value: 'claude-opus-5' } });
+    expect(payload()).toEqual({ model: 'claude-opus-5', effort: 'medium' });
+  });
+  it.each([
+    ['no preview', undefined],
+    ['a preview for another tier', { ...opusPreview, effectiveTier: 1, modelFamily: 'fable', model: 'claude-fable-5-1' }],
+    ['an unavailable family', { ...opusPreview, model: null, familyResolutionStatus: 'unavailable' }],
+  ])('refuses to detach an automatic tier with %s instead of authoring Runtime default', (_case, preview) => {
+    render(<Form policy={familyProfile} preview={preview} />);
+    fireEvent.change(screen.getByLabelText('Workflow Effort'), { target: { value: 'high' } });
+    fireEvent.change(screen.getByLabelText('Workflow Tier'), { target: { value: 'custom' } });
+    expect(payload()).toEqual({});
+    expect(screen.getByText(/Choose a model to use Custom/).getAttribute('role')).toBe('alert');
   });
   it('reports an unavailable automatic tier instead of substituting one', () => {
     render(<ModelSelectionFields scope="Workflow" value={{ modelTier: 1 }} profile={familyProfile} preview={{ model: null, effectiveTier: 1, modelMode: 'automatic', modelFamily: 'fable', familyResolutionStatus: 'unavailable', unavailableReason: 'Model tier 1 (fable) cannot run on the selected profile.' }} onChange={() => undefined} />);
