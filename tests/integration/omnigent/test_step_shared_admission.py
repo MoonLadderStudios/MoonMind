@@ -332,6 +332,56 @@ async def test_fresh_occurrence_launches_its_current_family_release(
         assert launched.parameters["workflow"]["runtime"]["modelTierResolution"] == (
             resolution
         )
+    # Sol 8 is released while the occurrence's Step runs.
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        provider.model_catalog_evidence_json = {
+            "models": [
+                *provider.model_catalog_evidence_json["models"],
+                {"id": "gpt-8-sol"},
+            ]
+        }
+        await session.commit()
+        if change == "release" and source != "task_override":
+            # A new admission would now resolve the newer release.
+            assert (
+                resolve_model_effort(
+                    runtime_id="codex_cli",
+                    profile=provider,
+                    authored_runtime=selection or None,
+                    require_launch_ready=False,
+                    workflow_settings=settings.workflow,
+                ).model
+                == "gpt-8-sol"
+            )
+    # The interrupted Step's successor is admitted with the occurrence's pair
+    # and resolution. The occurrence workflow carries its admitted plan into
+    # its input; the rest is the schedule's saved selection.
+    occurrence_input = {**deepcopy(saved), **admitted}
+    occurrence_input.pop("disposition")
+    successor = await omnigent_activities.omnigent_admit_step_successor_plan_activity(
+        {"workflowId": occurrence, "initialParameters": occurrence_input}
+    )
+    assert successor["disposition"] == "admitted", successor
+    successor_binding = OmnigentExecutionPlanBinding.model_validate(
+        successor["omnigentExecutionPlan"]
+    )
+    assert successor_binding.plan_ref != binding.plan_ref
+    successor_plan = await DbExecutionPlanStore(journey.session_factory).load(
+        successor_binding.plan_ref
+    )
+    assert successor_plan.payload.modelConfig.qualifiedId == expected
+    assert successor_plan.payload.modelConfig.effort == expected_effort
+    relaunched = await _reconstruct_plan_bound_request(
+        binding=successor_binding,
+        plan=successor_plan,
+        workflow_id=occurrence,
+        step_execution_id=f"{occurrence}:run:execution:2",
+        agent_run_id="agent-run-2",
+    )
+    assert relaunched.parameters["model"] == expected
+    assert relaunched.parameters["effort"] == expected_effort
+    assert relaunched.parameters["modelTierResolution"] == resolution
     # The definition keeps the selection it recorded when it was saved.
     async with journey.session_factory() as session:
         stored = await session.get(type(definition), definition.id)

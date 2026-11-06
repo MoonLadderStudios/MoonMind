@@ -167,7 +167,8 @@ reconciles a schedule-pinned digest against the current Host Class, and already-
 occurrences retain their immutable inputs. Provider selection, authored model and effort
 overrides (including nulls), and task inputs remain authoritative per occurrence. An omitted
 or tier selection resolves the Provider Profile's current tier policy; the occurrence's plan,
-not the model recorded when the schedule was saved, owns that pair at launch. A change to
+not the model recorded when the schedule was saved, owns that pair at launch and for its
+interrupted steps' successors. A change to
 those authored inputs requires an explicit schedule revision.
 
 #### Authored policy and Auto

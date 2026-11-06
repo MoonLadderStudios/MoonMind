@@ -2770,6 +2770,35 @@ def _follow_current_tier_policy(
     return followed, resolution
 
 
+def _recorded_tier_selection(
+    initial_parameters: Mapping[str, Any], recorded_plan: OmnigentExecutionPlanEnvelope
+) -> tuple[Mapping[str, Any], dict[str, Any] | None]:
+    """Compile a successor with the tier selection its recorded plan admitted.
+
+    A fresh occurrence resolves its tier policy when it is admitted, so its
+    plan's pair and resolution can differ from the ones the schedule saved in
+    the frozen inputs. The successor keeps the admitted ones; a later catalog
+    or tier edit does not move them. A plan that recorded no resolution was
+    compiled from the frozen inputs as they are.
+    """
+
+    model = recorded_plan.payload.modelConfig
+    if model.tierResolution is None:
+        return initial_parameters, None
+    resolution = dict(model.tierResolution)
+    admitted = {
+        **initial_parameters,
+        "model": model.qualifiedId,
+        "modelSource": resolution.get("modelSource"),
+        "modelTierResolution": resolution,
+    }
+    if model.effort is None:
+        admitted.pop("effort", None)
+    else:
+        admitted["effort"] = model.effort
+    return admitted, resolution
+
+
 async def readmit_frozen_execution_plan(
     *,
     db_session: Any,
@@ -2788,9 +2817,9 @@ async def readmit_frozen_execution_plan(
     child recompiles from its own frozen task input and recorded plan, within
     its recorded repository authority. Plans that attempts already
     used are never rewritten. With ``preserve_recorded_intent`` the new plan
-    retains admitted provider settings and is refused when it would change the
-    recorded request intent. Fresh occurrences resolve current provider settings
-    while preserving recorded step selections.
+    retains admitted provider settings and tier selection and is refused when
+    it would change the recorded request intent. Fresh occurrences resolve
+    current provider settings while preserving recorded step selections.
 
     Returns ``disposition`` ``admitted`` with the new plan binding and Skill
     snapshot, or ``recorded`` with the reason when the frozen authority cannot
@@ -2864,9 +2893,9 @@ async def readmit_frozen_execution_plan(
         if provider_profile is None:
             return recorded("the admitted Provider Profile is unavailable")
         if preserve_recorded_intent:
-            # A successor keeps the recorded plan's pair, so it also keeps the
-            # resolution that plan recorded.
-            tier_resolution = recorded_plan.payload.modelConfig.tierResolution
+            compilation_parameters, tier_resolution = _recorded_tier_selection(
+                compilation_parameters, recorded_plan
+            )
         else:
             compilation_parameters, tier_resolution = _follow_current_tier_policy(
                 compilation_parameters, provider_profile

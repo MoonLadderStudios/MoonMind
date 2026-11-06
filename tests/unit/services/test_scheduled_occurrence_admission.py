@@ -1392,33 +1392,55 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
         assert runtime_resolution["resolvedEffort"] == expected_effort
         assert runtime_resolution["modelTierResolution"] == resolution
     if change == "pin_same":
-        # An interrupted Step's successor launches with the occurrence's
-        # resolution, not the one recorded when the schedule was saved.
-        # The occurrence workflow carries its admitted plan into its input.
-        occurrence_input = {**parameters, **admitted}
-        occurrence_input.pop("disposition")
-        admit_successor = (
-            omnigent_activities.omnigent_admit_step_successor_plan_activity
-        )
-        successor = await admit_successor(
-            {
-                "workflowId": "mm:schedule-1:occurrence-2",
-                "initialParameters": json.loads(json.dumps(occurrence_input)),
-            }
-        )
-        assert successor["disposition"] == "admitted", successor
-        successor_binding = OmnigentExecutionPlanBinding.model_validate(
-            successor["omnigentExecutionPlan"]
-        )
-        relaunched = await session_activities._reconstruct_plan_bound_request(
-            binding=successor_binding,
-            plan=_PlanStore.plans[successor_binding.plan_ref],
-            workflow_id="mm:schedule-1:occurrence-2",
-            step_execution_id="mm:schedule-1:occurrence-2:run:execution:2",
-            agent_run_id="agent-run-2",
-        )
-        assert relaunched.parameters["modelTierResolution"] == admitted_resolution
         assert admitted_resolution["modelMode"] == "pinned"
+
+    # An update installs a new runtime while the occurrence's Step runs, and
+    # Sol 8 is released before its successor is admitted.
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+    provider.model_catalog_evidence_json["models"].append({"id": "gpt-8-sol"})
+    if change == "release" and selection in {"omitted", "tier"}:
+        # A new admission would now resolve the newer release.
+        assert (
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=provider,
+                authored_runtime=runtime or None,
+                require_launch_ready=False,
+                workflow_settings=settings.workflow,
+            ).model
+            == "gpt-8-sol"
+        )
+    # The occurrence workflow carries its admitted plan into its input; the
+    # rest is the schedule's saved selection.
+    occurrence_input = {**parameters, **admitted}
+    occurrence_input.pop("disposition")
+    successor = await omnigent_activities.omnigent_admit_step_successor_plan_activity(
+        {
+            "workflowId": "mm:schedule-1:occurrence-2",
+            "initialParameters": json.loads(json.dumps(occurrence_input)),
+        }
+    )
+    # The successor binds the installed runtime with the occurrence's pair.
+    assert successor["disposition"] == "admitted", successor
+    successor_binding = OmnigentExecutionPlanBinding.model_validate(
+        successor["omnigentExecutionPlan"]
+    )
+    successor_plan = _PlanStore.plans[successor_binding.plan_ref]
+    assert successor_binding.plan_ref != binding.plan_ref
+    assert successor_plan.payload.hostImageRef == _REPO + "8" * 64
+    assert (
+        plan_service.changed_admitted_intent(plan.payload, successor_plan.payload) == []
+    )
+    relaunched = await session_activities._reconstruct_plan_bound_request(
+        binding=successor_binding,
+        plan=successor_plan,
+        workflow_id="mm:schedule-1:occurrence-2",
+        step_execution_id="mm:schedule-1:occurrence-2:run:execution:2",
+        agent_run_id="agent-run-2",
+    )
+    assert relaunched.parameters["model"] == expected
+    assert relaunched.parameters["effort"] == expected_effort
+    assert relaunched.parameters["modelTierResolution"] == resolution
     # The definition, its stored plan and its original task input are unchanged.
     assert parameters == action_input
     assert task_snapshot["target"]["initialParameters"]["model"] == model
