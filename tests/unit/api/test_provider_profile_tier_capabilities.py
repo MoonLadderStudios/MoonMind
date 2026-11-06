@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -162,3 +162,154 @@ def test_opencode_draft_does_not_offer_max_without_a_compatible_model():
     )
     assert max_option["status"] == "unavailable"
     assert max_option["compatible_models"] == []
+
+
+def _first_party_profile(**overrides):
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    tiers, default_tier = first_party_family_tier_template("claude_code", "anthropic")
+    base = {
+        "runtime_id": "claude_code",
+        "provider_id": "anthropic",
+        "profile_id": "claude_anthropic_oauth",
+        "credential_generation": 1,
+        "default_model": None,
+        "runtime_validation_image_ref": None,
+        "model_tiers": tiers,
+        "default_model_tier": default_tier,
+        "model_catalog_evidence_json": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_first_party_draft_supplies_the_backend_family_template():
+    result = tier_capabilities_for_draft("codex_cli", "openai")
+
+    policy = result["recommended_policy"]
+    assert policy["default_model_tier"] == 2
+    assert [tier["family"] for tier in policy["model_tiers"]] == [
+        "astra",
+        "sol",
+        "terra",
+        "luna",
+    ]
+    assert [family["value"] for family in result["families"]] == [
+        "astra",
+        "sol",
+        "terra",
+        "luna",
+    ]
+    # No stale static model list: starting releases are explicitly unverified.
+    assert {option["status"] for option in result["model"]["options"]} == {"unverified"}
+    assert "gpt-4o" not in {option["value"] for option in result["model"]["options"]}
+
+
+def test_other_drafts_have_no_family_template():
+    result = tier_capabilities_for_draft("opencode", "openrouter")
+    assert result["recommended_policy"] is None
+    assert result["families"] == []
+
+
+def test_unavailable_family_keeps_its_tier_number_and_status():
+    evidence = {
+        "credentialGeneration": 1,
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "models": [
+            {"id": "claude-opus-5-5"},
+            {"id": "claude-sonnet-5-5"},
+            {"id": "claude-haiku-5-5"},
+        ],
+    }
+    result = tier_capabilities_for_profile(
+        _first_party_profile(model_catalog_evidence_json=evidence)
+    )
+
+    tiers = {entry["index"]: entry for entry in result["tiers"]}
+    assert len(tiers) == 4
+    assert tiers[1]["family"] == "fable"
+    assert tiers[1]["status"] == "unavailable"
+    assert tiers[1]["model"] is None
+    assert tiers[1]["reason"]
+    assert tiers[2]["status"] == "resolved"
+    assert tiers[2]["model"] == "claude-opus-5-5"
+    assert tiers[3]["model"] == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize(
+    ("generation", "age"),
+    [(1, timedelta(days=7)), (2, timedelta(0))],
+    ids=["expired", "replaced_credential"],
+)
+def test_tier_availability_matches_admission_for_old_observations(generation, age):
+    """The editor reports what admission would admit, not the raw catalog."""
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    evidence = {
+        "credentialGeneration": 1,
+        "validatedAt": (datetime.now(UTC) - age).isoformat(),
+        "models": [{"id": "claude-sonnet-5-5"}, {"id": "claude-haiku-5-5"}],
+    }
+    profile = _first_party_profile(
+        credential_generation=generation, model_catalog_evidence_json=evidence
+    )
+
+    opus = tier_capabilities_for_profile(profile)["tiers"][1]
+    admitted = resolve_model_effort(runtime_id="claude_code", profile=profile, env={})
+
+    assert (opus["model"], opus["status"]) == (admitted.model, "unverified")
+    assert admitted.family_resolution_status == "unverified"
+
+
+def test_pinned_tier_reports_status_without_changing_the_pin():
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    tiers, _ = first_party_family_tier_template("claude_code", "anthropic")
+    tiers[1] = {**tiers[1], "model_mode": "pinned", "model": "claude-opus-5"}
+    evidence = {
+        "credentialGeneration": 1,
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "models": [{"id": "claude-opus-6"}],
+    }
+    result = tier_capabilities_for_profile(
+        _first_party_profile(model_tiers=tiers, model_catalog_evidence_json=evidence)
+    )
+
+    opus = result["tiers"][1]
+    assert opus["model_mode"] == "pinned"
+    assert opus["model"] == "claude-opus-5"
+    assert opus["status"] == "unavailable"
+
+
+def test_unobserved_first_party_profile_reports_unverified_resolutions():
+    result = tier_capabilities_for_profile(_first_party_profile())
+    assert {entry["status"] for entry in result["tiers"]} == {"unverified"}
+    assert result["tiers"][1]["model"] == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code"])
+def test_runtime_default_matches_the_launch_resolver(runtime_id, monkeypatch):
+    from moonmind.config.settings import settings
+    from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+
+    for key in (
+        "MOONMIND_CODEX_MODEL",
+        "CODEX_MODEL",
+        "MOONMIND_CLAUDE_MODEL",
+        "CLAUDE_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    model, effort = resolve_runtime_defaults(
+        runtime_id, workflow_settings=settings.workflow
+    )
+
+    result = tier_capabilities_for_draft(
+        runtime_id, "anthropic" if runtime_id == "claude_code" else "openai"
+    )
+
+    assert result["model"]["runtime_default"] == model
+    assert result["effort"]["runtime_default"] == effort

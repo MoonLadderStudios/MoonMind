@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _SENSITIVE_KEY_TERMS = (
     "token",
@@ -49,16 +49,70 @@ _SAFE_KEY_EXCLUSIONS = frozenset(
 )
 
 
-class ProviderModelEffortTier(BaseModel):
-    """Profile-local model/effort tier definition."""
+_FAMILY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+class ModelEffortTierPolicy(BaseModel):
+    """Tier fields and model-family policy shared by every tier schema.
+
+    ``family`` + ``model_mode`` express model-family policy: ``automatic``
+    follows the newest eligible release of the family (``model`` stays null),
+    while ``pinned`` keeps the concrete ``model`` until the operator restores
+    automatic selection. Without a family, ``model`` keeps its existing
+    meaning: an exact model, or null for the Runtime default. Effort is
+    independent of the model mode in both cases.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     label: str | None = None
+    # Tiers without family policy keep their established serialized shape.
+    family: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    model_mode: Literal["automatic", "pinned"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     model: str | None = None
     effort: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     annotations: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("family", mode="before")
+    @classmethod
+    def _normalize_family(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        if not _FAMILY_ID_PATTERN.match(text):
+            raise ValueError(
+                "family must be a short machine-readable identifier such as 'opus'"
+            )
+        return text
+
+    @model_validator(mode="after")
+    def _require_unambiguous_family_policy(self) -> "ModelEffortTierPolicy":
+        model = (self.model or "").strip() or None
+        if self.model_mode is None:
+            if self.family is not None:
+                raise ValueError(
+                    "a family tier requires model_mode automatic or pinned"
+                )
+            return self
+        if self.family is None:
+            raise ValueError("model_mode requires a family")
+        if self.model_mode == "automatic" and model is not None:
+            raise ValueError(
+                "an automatic family tier must not also pin a model; use "
+                "model_mode pinned to keep a specific version"
+            )
+        if self.model_mode == "pinned" and model is None:
+            raise ValueError("a pinned family tier requires a concrete model")
+        return self
+
+
+class ProviderModelEffortTier(ModelEffortTierPolicy):
+    """Profile-local model/effort tier definition accepted on writes."""
 
     @field_validator("parameters", "annotations", mode="after")
     @classmethod
@@ -157,6 +211,38 @@ def is_single_legacy_default_model_effort_tier(
     )
 
 
+def initial_model_effort_tier_policy(
+    *,
+    runtime_id: Any,
+    provider_id: Any,
+    legacy_default_model: str | None,
+    legacy_default_effort: str | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return the tier policy a new profile receives when none was authored.
+
+    Legacy defaults become one Legacy default tier. Otherwise the first-party
+    OpenAI/Codex and Anthropic/Claude Code routes receive their automatic
+    family template (default Tier 2), and every other route one Runtime
+    default tier.
+    """
+
+    if legacy_default_model is not None or legacy_default_effort is not None:
+        return [
+            legacy_default_model_effort_tier(
+                legacy_default_model=legacy_default_model,
+                legacy_default_effort=legacy_default_effort,
+            )
+        ], 1
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    template = first_party_family_tier_template(runtime_id, provider_id)
+    if template is not None:
+        return template
+    return [runtime_default_model_effort_tier()], 1
+
+
 def coerce_model_effort_tier_policy(
     *,
     model_tiers: Any,
@@ -164,11 +250,15 @@ def coerce_model_effort_tier_policy(
     legacy_default_model: str | None,
     legacy_default_effort: str | None,
     empty_as_missing: bool = False,
+    runtime_id: Any = None,
+    provider_id: Any = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Validate and normalize persisted Provider Profile tier policy.
 
-    Missing tier policy is migrated from legacy defaults when present, otherwise
-    it receives a runtime-default tier.
+    Missing tier policy is migrated from legacy defaults when present. A new
+    profile on a route with a built-in family template (when ``runtime_id``
+    and ``provider_id`` are supplied) receives that template; otherwise it
+    receives a runtime-default tier.
     """
 
     has_legacy_default = (
@@ -190,6 +280,15 @@ def coerce_model_effort_tier_policy(
                     legacy_default_effort=legacy_default_effort,
                 )
             ]
+        elif runtime_id is not None and model_tiers is None:
+            raw_tiers, template_default = initial_model_effort_tier_policy(
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+                legacy_default_model=None,
+                legacy_default_effort=None,
+            )
+            if default_model_tier is None:
+                default_model_tier = template_default
         else:
             raw_tiers = [runtime_default_model_effort_tier()]
     else:

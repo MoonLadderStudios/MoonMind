@@ -147,7 +147,8 @@ T2  Implementation     gpt-5.5 / xhigh
 
 The collapsed row shows the count, default tier, up to two mappings, and `+N
 more`; a row expansion or native `details` reveals every mapping. Null values read
-`Runtime default`, the default has an accessible text badge, exact values use
+`Runtime default`, automatic family tiers read `Latest automatically`, pinned ones
+`Pinned to <model>`, the default has an accessible text badge, exact values use
 monospace, and read-only users see the same mapping without edit controls.
 
 On narrow screens rows become cards (`Profile name`, `Harness / Provider`, `3
@@ -236,6 +237,16 @@ Harness and Provider, so until both are chosen, or while capabilities are
 unavailable, it offers only `Runtime default` and the saved value rather than a
 guessed list. Custom entry is available only when capabilities allow it.
 
+A tier with a `family` replaces `Runtime default` with `Latest automatically ·
+currently <model>`. Choosing any concrete version pins that row, including the
+version it already resolves to; `Use latest automatically` (accessible name
+`Use latest automatically for Tier N`) returns a pinned row to family tracking.
+Below the controls the row states its mode, for example `Opus — Latest
+automatically · currently claude-opus-5-5`, `Opus — Pinned to claude-opus-5`, or
+`Opus — Latest automatically · unavailable for this profile` with the backend's
+reason. A resolution not yet observed for the profile reads `(not yet observed)`.
+Effort, label, default, duplicate, and remove edits never change a row's mode.
+
 | Value | Display |
 | --- | --- |
 | null | `Runtime default` |
@@ -296,13 +307,22 @@ focuses the field, so the previous value is never saved in its place.
 ### 7.8 Duplicate
 
 `Duplicate tier` (accessible name `Duplicate Tier N as new last tier`) copies the
-label, model, effort, parameters, and annotations, appends the copy, and does not
+label, family, model mode, model, effort, parameters, and annotations, appends the copy, and does not
 make it the default. The draft label may gain `copy` to reduce ambiguity. A card
 may also offer `Reset model and effort to runtime defaults`.
 
 ---
 
 ## 8. Adding a Tier
+
+A new first-party OpenAI/Codex or Anthropic/Claude Code profile starts from the
+backend's `recommended_policy` (four automatic family tiers, Tier 2 default,
+`medium` effort); React keeps no copy of that list. The template replaces the
+create draft only while it is still untouched, so a late capability response or
+a Provider change never overwrites an edit. Other routes start with one Runtime
+default tier. Editing an existing profile never applies the template; when its
+tiers differ, `Use automatic family defaults` replaces the whole tier draft on
+click and announces it, and only saving the profile persists it.
 
 `Add tier` appends a runtime-default tier (`label`, `model`, `effort` null; empty
 `parameters` and `annotations`) with a new client ID, preserving every existing
@@ -378,11 +398,19 @@ The response carries an opaque `version`; the `profile_id`, `runtime_id`, and
 `runtime_draft`, `credential_generation`, `image_ref`, `observed_at`, `stale`);
 `tier_constraints` (`min_count`, `max_count`); a `model` block
 (`runtime_default`, `allow_custom`, and `options` with value, label, description,
-status `available | deprecated | unavailable`, and `recommended`); an `effort`
+status `available | deprecated | unavailable | unverified`, `recommended`, and
+`family`); `families` (each followable family with its `resolved_model`,
+`status`, and `reason`); `tiers` (per saved tier: `index`, `family`,
+`model_mode`, `model`, `status`, `reason`); `recommended_policy`; an `effort`
 block (`supported`, `runtime_default`, `allow_custom`, `application` of `native |
 config | environment | metadata_only | unsupported | unknown`, and options with
 `compatible_models`); and `diagnostics`. The backend response, not this
 document, is the source of truth for values.
+
+Per-tier status is separate from credential readiness: an unavailable family keeps
+its row and number, and other tiers stay usable. Before a first-party profile has
+reported a catalog, options and resolutions are its family starting releases with
+status `unverified`, not a static model list.
 
 `version` changes whenever the option sets or evidence identity change, so a
 client can detect stale choices without parsing it. Options with
@@ -430,6 +458,8 @@ Indexes shift during editing, so the draft gives each tier a stable client ID:
 type ProviderProfileTierDraft = {
   clientId: string;
   label: string;
+  family: string | null;
+  modelMode: 'automatic' | 'pinned' | null;
   model: string | null;
   effort: string | null;
   parameters: Record<string, unknown>;
@@ -478,7 +508,9 @@ state (section 15.3) rather than a synthesized tier presented as saved policy.
 
 A focused tier save is a partial PATCH containing only tier fields (and optional
 concurrency metadata), so it cannot overwrite credentials, activation, or limits
-changed elsewhere. The whole-profile form may submit the same fields with the
+changed elsewhere. The whole array is sent, and every row carries its own
+`family` and `model_mode` (an automatic row always sends `model: null`), so
+editing one row preserves every other row's policy and pin. The whole-profile form may submit the same fields with the
 rest of the profile.
 
 <a id="152-tier-only-persistence"></a>

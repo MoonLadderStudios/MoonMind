@@ -572,6 +572,70 @@ def test_profile_model_intent_does_not_depend_on_discovery(evidence):
     assert (model, effort, route) == ("opencode/selected", "high", "opencode")
 
 
+@pytest.mark.parametrize("authored_runtime", [{}, {"modelTier": 2}])
+def test_generic_plan_keeps_the_admitted_automatic_tier_after_a_catalog_update(
+    authored_runtime,
+):
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+
+    service = object.__new__(OmnigentExecutionPlanningService)
+    service._deployment_default_model = ""
+    tiers, default_tier = first_party_family_tier_template("claude_code", "anthropic")
+    provider = SimpleNamespace(
+        profile_id="claude_anthropic_oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        enabled=True,
+        auth_state="connected",
+        default_model=None,
+        default_effort=None,
+        model_tiers=tiers,
+        default_model_tier=default_tier,
+        model_overrides={},
+        # Opus 6 was released after the work below was admitted.
+        model_catalog_evidence_json={
+            "models": [{"id": "claude-opus-5-5"}, {"id": "claude-opus-6"}]
+        },
+    )
+    admitted = {
+        "providerProfileId": "claude_anthropic_oauth",
+        "effectiveModelTier": 2,
+        "resolvedModel": "claude-opus-5-5",
+        "resolvedEffort": "medium",
+        "modelSource": "profile_default_tier",
+        "effortSource": "profile_default_tier",
+        "modelFamily": "opus",
+        "modelMode": "automatic",
+        "familyResolutionStatus": "resolved",
+    }
+    profile = SimpleNamespace(model={})
+    retried = _request().model_copy(
+        update={
+            "parameters": {
+                "runtime": dict(authored_runtime),
+                "model": "claude-opus-5-5",
+                "modelTierResolution": admitted,
+            }
+        }
+    )
+    new_admission = _request().model_copy(
+        update={"parameters": {"runtime": dict(authored_runtime)}}
+    )
+
+    assert service._resolve_model(retried, profile, provider) == (
+        "anthropic/claude-opus-5-5",
+        "medium",
+        "anthropic",
+    )
+    assert service._resolve_model(new_admission, profile, provider) == (
+        "anthropic/claude-opus-6",
+        "medium",
+        "anthropic",
+    )
+
+
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 def test_generic_opencode_slot_rejects_unrelated_provider_runtimes(runtime):
     profile = SimpleNamespace(

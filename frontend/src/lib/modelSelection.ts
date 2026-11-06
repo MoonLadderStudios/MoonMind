@@ -8,7 +8,7 @@ export type ModelSelection = {
   hardOverrideAudit?: unknown;
   parameters?: Record<string, unknown>;
 };
-export type ModelTier = { model?: string | null; effort?: string | null; label?: string | null };
+export type ModelTier = { model?: string | null; effort?: string | null; label?: string | null; family?: string | null; model_mode?: "automatic" | "pinned" | null };
 export type ModelSelectionProfile = { model_tiers?: ModelTier[] | null; default_model_tier?: number | null };
 const selectionKeys = ["modelTier", "model", "effort", "tierFallback", "tierPreview", "hardOverrideAudit", "parameters"] as const;
 const owns = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -36,6 +36,10 @@ export type ModelSelectionPreview = {
   effectiveTier?: number | null;
   modelSource?: string | null;
   effortSource?: string | null;
+  modelFamily?: string | null;
+  modelMode?: string | null;
+  familyResolutionStatus?: string | null;
+  unavailableReason?: string | null;
 };
 
 export function displayModelSelection(value: ModelSelection, profile?: ModelSelectionProfile, preview?: ModelSelectionPreview) {

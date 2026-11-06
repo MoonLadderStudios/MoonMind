@@ -21,18 +21,19 @@ from moonmind.omnigent.bootstrap.opencode import (
     KNOWN_MODEL_EFFORTS,
     get_supported_efforts,
 )
+from moonmind.provider_profiles.model_families import (
+    FAMILY_MODE_AUTOMATIC,
+    FAMILY_MODE_PINNED,
+    built_in_family,
+    catalog_rows_from_evidence,
+    family_for_model,
+    first_party_family_tier_template,
+    pinned_model_status,
+    resolve_family_model,
+)
+from moonmind.workflows.executions.model_resolver import resolve_profile_family
 
 _MODEL_OPTIONS_BY_PROVIDER: dict[str, list[dict[str, Any]]] = {
-    "openai": [
-        {"value": "gpt-5.5", "label": "GPT-5.5", "description": "General coding model", "status": "available", "recommended": True},
-        {"value": "gpt-4o", "label": "GPT-4o", "description": "Multimodal flagship", "status": "available", "recommended": False},
-        {"value": "gpt-4o-mini", "label": "GPT-4o mini", "description": "Cost-efficient", "status": "available", "recommended": False},
-    ],
-    "anthropic": [
-        {"value": "claude-4-sonnet", "label": "Claude 4 Sonnet", "description": "Balanced", "status": "available", "recommended": True},
-        {"value": "claude-4-opus", "label": "Claude 4 Opus", "description": "Highest capability", "status": "available", "recommended": False},
-        {"value": "claude-3-5-sonnet", "label": "Claude 3.5 Sonnet", "description": "Previous generation", "status": "deprecated", "recommended": False},
-    ],
     "default": [
         {"value": "gpt-5.5", "label": "GPT-5.5", "description": "General coding model", "status": "available", "recommended": True},
         {"value": "gpt-4o", "label": "GPT-4o", "description": None, "status": "available", "recommended": False},
@@ -48,18 +49,157 @@ _DEFAULT_EFFORT_OPTIONS: list[dict[str, Any]] = [
 ]
 
 _RUNTIME_DEFAULTS: dict[str, dict[str, Any]] = {
-    "codex_cli": {"model": "gpt-5.5", "effort": "medium"},
-    "claude_code": {"model": "claude-4-sonnet", "effort": "medium"},
     "default": {"model": None, "effort": "medium"},
 }
+# These runtimes report the same runtime defaults the launch resolver applies.
+_RESOLVED_RUNTIME_DEFAULTS = frozenset({"codex_cli", "claude_code"})
 
 
 def _runtime_defaults(runtime_id: str) -> dict[str, Any]:
+    if runtime_id in _RESOLVED_RUNTIME_DEFAULTS:
+        from moonmind.config.settings import settings
+        from moonmind.workflows.executions.runtime_defaults import (
+            resolve_runtime_defaults,
+        )
+
+        model, effort = resolve_runtime_defaults(
+            runtime_id, workflow_settings=settings.workflow
+        )
+        return {"model": model, "effort": effort}
     return _RUNTIME_DEFAULTS.get(runtime_id, _RUNTIME_DEFAULTS["default"])
 
 
-def _model_options(provider_id: str) -> list[dict[str, Any]]:
+def _model_options(runtime_id: str, provider_id: str) -> list[dict[str, Any]]:
+    """Advisory model options before the route has reported a catalog.
+
+    First-party routes offer their family starting releases, marked
+    unverified, instead of a static model list that would go stale.
+    """
+    template = first_party_family_tier_template(runtime_id, provider_id)
+    if template is not None:
+        options = []
+        for tier in template[0]:
+            family = built_in_family(tier["family"])
+            if family is None:
+                continue
+            options.append(
+                {
+                    "value": family.cold_start_model,
+                    "label": family.cold_start_model,
+                    "description": f"{family.display_name} starting release; not yet observed for this profile",
+                    "status": "unverified",
+                    "recommended": False,
+                    "family": family.family_id,
+                }
+            )
+        return options
     return _MODEL_OPTIONS_BY_PROVIDER.get(provider_id, _MODEL_OPTIONS_BY_PROVIDER["default"])
+
+
+def _family_options(
+    runtime_id: str,
+    provider_id: str,
+    catalog_rows: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Families this route can follow, with their current resolution."""
+    template = first_party_family_tier_template(runtime_id, provider_id)
+    if template is None:
+        return []
+    options = []
+    for tier in template[0]:
+        resolution = resolve_family_model(
+            tier["family"],
+            provider_id=provider_id,
+            catalog_rows=catalog_rows,
+            effort=tier["effort"],
+        )
+        family = built_in_family(tier["family"])
+        options.append(
+            {
+                "value": tier["family"],
+                "label": family.display_name if family else tier["family"],
+                "resolved_model": resolution.model,
+                "status": resolution.status,
+                "source": resolution.source,
+                "reason": resolution.reason,
+            }
+        )
+    return options
+
+
+def _tier_resolutions(
+    model_tiers: Any,
+    *,
+    provider_id: str,
+    catalog_rows: list[dict[str, Any]] | None,
+    profile: Any = None,
+) -> list[dict[str, Any]]:
+    """Per-tier availability, separate from credential readiness.
+
+    Automatic tiers report what they currently resolve to, through the same
+    rule admission uses for a saved profile; pinned tiers keep their saved
+    model and report its observed status.
+    """
+    if not isinstance(model_tiers, list):
+        return []
+    resolutions: list[dict[str, Any]] = []
+    for index, tier in enumerate(model_tiers, start=1):
+        if not isinstance(tier, dict):
+            continue
+        family_id = str(tier.get("family") or "").strip() or None
+        mode = tier.get("model_mode")
+        model = str(tier.get("model") or "").strip() or None
+        entry: dict[str, Any] = {
+            "index": index,
+            "family": family_id,
+            "model_mode": mode if family_id else None,
+            "model": model,
+            "status": None,
+            "source": None,
+            "reason": None,
+        }
+        if family_id and mode == FAMILY_MODE_AUTOMATIC:
+            resolution = (
+                resolve_profile_family(profile, family_id, effort=tier.get("effort"))
+                if profile is not None
+                else resolve_family_model(
+                    family_id,
+                    provider_id=provider_id,
+                    catalog_rows=catalog_rows,
+                    effort=tier.get("effort"),
+                )
+            )
+            entry.update(
+                model=resolution.model,
+                status=resolution.status,
+                source=resolution.source,
+                reason=resolution.reason,
+            )
+        elif model and (family_id and mode == FAMILY_MODE_PINNED or catalog_rows):
+            entry["status"] = pinned_model_status(model, catalog_rows=catalog_rows)
+            entry["source"] = "profile_pin" if family_id else "profile_model"
+            if entry["status"] == "unavailable":
+                entry["reason"] = (
+                    "The saved model is not in this profile's catalog; it stays "
+                    "selected until you change it."
+                )
+        resolutions.append(entry)
+    return resolutions
+
+
+def _annotate_option_families(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    annotated = []
+    for option in options:
+        family = family_for_model(option.get("value"))
+        annotated.append({**option, "family": family.family_id if family else option.get("family")})
+    return annotated
+
+
+def _recommended_policy(runtime_id: str, provider_id: str) -> dict[str, Any] | None:
+    template = first_party_family_tier_template(runtime_id, provider_id)
+    if template is None:
+        return None
+    return {"model_tiers": template[0], "default_model_tier": template[1]}
 
 
 def _effort_options(
@@ -181,6 +321,9 @@ def build_tier_capabilities(
     stale: bool = False,
     diagnostics: list[dict[str, Any]] | None = None,
     model_options: list[dict[str, Any]] | None = None,
+    catalog_rows: list[dict[str, Any]] | None = None,
+    model_tiers: Any = None,
+    profile: Any = None,
 ) -> dict[str, Any]:
     """Return the ProviderProfileEditorCapabilities payload.
 
@@ -192,10 +335,10 @@ def build_tier_capabilities(
     runtime_id = (runtime_id or "").strip() or "unknown"
     provider_id = (provider_id or "").strip() or "unknown"
     defaults = _runtime_defaults(runtime_id)
-    resolved_model_options = (
+    resolved_model_options = _annotate_option_families(
         model_options
         if model_options is not None
-        else ([] if runtime_id == "opencode" else _model_options(provider_id))
+        else ([] if runtime_id == "opencode" else _model_options(runtime_id, provider_id))
     )
     effort_options = _effort_options(runtime_id, resolved_model_options)
 
@@ -231,6 +374,14 @@ def build_tier_capabilities(
             "application": "native",
             "options": effort_options,
         },
+        "families": _family_options(runtime_id, provider_id, catalog_rows),
+        "tiers": _tier_resolutions(
+            model_tiers,
+            provider_id=provider_id,
+            catalog_rows=catalog_rows,
+            profile=profile,
+        ),
+        "recommended_policy": _recommended_policy(runtime_id, provider_id),
         "diagnostics": diagnostics or [],
     }
     # version is opaque catalog identity; it changes when catalog or evidence changes
@@ -253,9 +404,13 @@ def tier_capabilities_for_profile(profile: Any) -> dict[str, Any]:
     credential_generation = getattr(profile, "credential_generation", None)
     default_model = str(getattr(profile, "default_model", None) or "").strip() or None
     profile_image_ref = getattr(profile, "runtime_validation_image_ref", None)
+    model_tiers = getattr(profile, "model_tiers", None)
+    catalog_rows = catalog_rows_from_evidence(evidence_raw)
 
     if not evidence_raw:
         return build_tier_capabilities(
+            model_tiers=model_tiers,
+            profile=profile,
             runtime_id=runtime_id,
             provider_id=provider_id,
             profile_id=profile_id,
@@ -309,6 +464,9 @@ def tier_capabilities_for_profile(profile: Any) -> dict[str, Any]:
         stale=stale,
         diagnostics=diagnostics,
         model_options=evidence_options,
+        catalog_rows=catalog_rows,
+        model_tiers=model_tiers,
+        profile=profile,
         evidence={"source": "profile_catalog_evidence", "credential_generation": credential_generation, "image_ref": profile_image_ref or evidence_image_ref, "observed_at": observed_at, "stale": stale},
     )
 

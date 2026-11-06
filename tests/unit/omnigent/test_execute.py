@@ -7217,3 +7217,76 @@ async def test_running_codex_native_tool_output_does_not_request_continuation() 
 
     assert status == "completed"
     assert snapshot is finished
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_model,status",
+    [("claude-opus-5", "matched"), (None, "replaced")],
+)
+async def test_omnigent_result_discloses_a_replaced_session_model(
+    monkeypatch, tmp_path, session_model, status
+) -> None:
+    """A pin Omnigent could not serve is reported, not relabelled as requested."""
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.stream_started = False
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "claude-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            assert payload["model_override"] == "claude-opus-5"
+            return {"id": "session-1"}
+
+        async def post_event(self, session_id, payload):
+            assert self.stream_started is True
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            self.stream_started = True
+            yield {"session": {"status": "running"}}
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {
+                "status": "completed",
+                "summary": "done",
+                # Omnigent clears an unserved pick before launching its default.
+                "model_override": session_model,
+                "llm_model": session_model or "claude-opus-5-5",
+            }
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr("moonmind.omnigent.execute._safe_heartbeat", lambda _d: None)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "claude-native-ui"},
+                    "session": {
+                        "allowEmptyWorkspace": True,
+                        "modelOverride": "claude-opus-5",
+                        "reasoningEffort": "medium",
+                    },
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+
+    assert result.metadata["modelSelection"] == {
+        "requestedModel": "claude-opus-5",
+        "sessionModelOverride": session_model,
+        "reportedModel": session_model or "claude-opus-5-5",
+        "status": status,
+    }

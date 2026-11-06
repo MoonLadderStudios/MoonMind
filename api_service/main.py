@@ -1534,6 +1534,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
             },
         }
 
+    from moonmind.provider_profiles.model_families import (
+        first_party_family_tier_template,
+    )
+    from moonmind.provider_profiles.model_tiers import (
+        is_single_runtime_default_model_effort_tier,
+    )
+
+    def _first_party_tier_policy(runtime_id: str, provider_id: str) -> dict[str, Any]:
+        template = first_party_family_tier_template(runtime_id, provider_id)
+        assert template is not None
+        return {"model_tiers": template[0], "default_model_tier": template[1]}
+
     # Well-known runtime defaults matching docker-compose.yaml conventions.
     _DEFAULT_PROFILES = [
         {
@@ -1542,7 +1554,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": False,
             "provider_id": "openai",
             "provider_label": "OpenAI",
-            "default_model": None,  # inherits runtime default: gpt-5.5
+            "default_model": None,
+            **_first_party_tier_policy("codex_cli", "openai"),
             "credential_source": ProviderCredentialSource.NONE,
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
@@ -1560,7 +1573,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": False,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
-            "default_model": None,  # inherits runtime default: claude-opus-4-8
+            "default_model": None,
+            **_first_party_tier_policy("claude_code", "anthropic"),
             "credential_source": ProviderCredentialSource.NONE,
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
@@ -1582,7 +1596,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "is_default": False,
                 "provider_id": "openai",
                 "provider_label": "OpenAI",
-                "default_model": None,  # inherits runtime default: gpt-5.5
+                "default_model": None,
+                **_first_party_tier_policy("codex_cli", "openai"),
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
                 "secret_refs": {
@@ -1621,7 +1636,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "is_default": False,
                 "provider_id": "anthropic",
                 "provider_label": "Anthropic",
-                "default_model": None,  # inherits runtime default: claude-opus-4-8
+                "default_model": None,
+                **_first_party_tier_policy("claude_code", "anthropic"),
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
                 "secret_refs": {
@@ -2369,6 +2385,51 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     existing_by_id[go_profile_id].update(go_updates)
                     touched_runtime_ids.add(str(go_current["runtime_id"]))
                     needs_commit = True
+
+            # Upgrade first-party seeds whose tier policy is still exactly the
+            # one Runtime default tier the earlier seed (or the provenance
+            # backfill) wrote, with no legacy defaults. Any edited value keeps
+            # the row operator-authored. The upgraded array no longer matches
+            # this shape, so repeated starts are no-ops.
+            for profile_id in (
+                "codex_openai_oauth",
+                "claude_anthropic_oauth",
+                "codex_openai_api",
+                "claude_anthropic_api",
+            ):
+                current = existing_by_id.get(profile_id)
+                if current is None:
+                    continue
+                template = first_party_family_tier_template(
+                    current.get("runtime_id"), current.get("provider_id")
+                )
+                if template is None:
+                    continue
+                untouched_seed_policy = (
+                    not str(current.get("default_model") or "").strip()
+                    and not str(current.get("default_effort") or "").strip()
+                    and current.get("default_model_tier") in (None, 1)
+                    and is_single_runtime_default_model_effort_tier(
+                        current.get("model_tiers")
+                    )
+                )
+                if not untouched_seed_policy:
+                    continue
+                tier_updates = {
+                    "model_tiers": template[0],
+                    "default_model_tier": template[1],
+                }
+                await session.execute(
+                    update(ManagedAgentProviderProfile)
+                    .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                    .values(**tier_updates)
+                )
+                current.update(tier_updates)
+                needs_commit = True
+                logger.info(
+                    "Applied first-party model family tiers to untouched seed %s",
+                    profile_id,
+                )
 
             to_insert = [
                 p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids

@@ -1,5 +1,5 @@
 import { Button } from '../Button';
-import { useId } from "react";
+import { useId, useState } from "react";
 import { isTierEffortOptionAvailable, type ProviderProfileTierCapabilities } from "../../utils/providerProfileTiers";
 import { displayModelSelection, editModelSelection, hasModelSelection, inheritModelSelection, isCustomSelection, replaceModelSelection } from "../../lib/modelSelection";
 import type { ModelSelection, ModelSelectionProfile, ModelSelectionPreview } from "../../lib/modelSelection";
@@ -24,6 +24,26 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
   const partialSaved = hasModelSelection(value) && value.modelTier === undefined && !isCustomSelection(value);
   if (partialSaved && !display.unavailable) display.selected = "saved";
   const tiers = profile?.model_tiers || [];
+  // An automatic family tier resolves at admission. The preview shows today's
+  // resolution as text only; it never becomes an authored Custom model.
+  const effectiveTier = !isCustomSelection(effective) && display.effective != null ? tiers[display.effective - 1] : undefined;
+  const automaticFamily = effectiveTier?.family && effectiveTier.model_mode === "automatic" && display.model === null ? effectiveTier.family : null;
+  const familyName = automaticFamily ? automaticFamily.charAt(0).toUpperCase() + automaticFamily.slice(1) : null;
+  // Detaching an automatic tier into Custom keeps its family: an explicit
+  // edit authors the current preview's resolution, never null (Runtime default).
+  const currentResolution = automaticFamily && preview?.modelMode === "automatic" && preview.effectiveTier === display.effective
+    && preview.modelFamily === automaticFamily && preview.familyResolutionStatus !== "unavailable" ? preview.model ?? null : null;
+  const [detachRefused, setDetachRefused] = useState(false);
+  const detach = (next: ModelSelection) => {
+    setDetachRefused(Boolean(automaticFamily) && next.model == null);
+    if (!automaticFamily || next.model != null) onChange(next);
+  };
+  const companion = { ...display, model: automaticFamily ? currentResolution : display.model };
+  const automaticNote = familyName
+    ? preview?.familyResolutionStatus === "unavailable" || (preview && !preview.model)
+      ? preview?.unavailableReason ?? `Tier ${display.effective} (${familyName}) is unavailable for this profile.`
+      : preview?.model ? `Tier ${display.effective} follows the latest ${familyName} release: currently ${preview.model}.` : null
+    : null;
   const selectedEffort = capabilities?.effort?.options?.find((option) => option.value === display.effort);
   const effortIncompatible = selectedEffort && !isTierEffortOptionAvailable(selectedEffort, display.model ?? capabilities?.model.runtime_default ?? null);
   const selectedModel = capabilities?.model?.options?.find((option) => option.value === display.model);
@@ -42,7 +62,7 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
     <div className="model-selection__fields">
       <label>Tier
         <select aria-label={`${scope} Tier`} name={scope === "Workflow" ? "modelTier" : undefined} value={display.selected}
-          onChange={(event) => onChange(replaceModelSelection(value, event.target.value === "custom" ? { model: display.model, effort: display.effort } : { modelTier: Number(event.target.value) }))}>
+          onChange={(event) => event.target.value === "custom" ? detach(replaceModelSelection(value, { model: companion.model, effort: display.effort })) : onChange(replaceModelSelection(value, { modelTier: Number(event.target.value) }))}>
           {display.selected === "pending" ? <option value="pending" disabled>{loading ? "Loading tiers…" : "Tiers unavailable"}</option> : null}
           {display.selected === "unavailable" ? <option value="unavailable" disabled>{`Requested Tier ${display.requested} (unavailable)`}</option> : null}
           {display.selected === "saved" ? <option value="saved" disabled>Saved selection</option> : null}
@@ -51,12 +71,12 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
         </select>
       </label>
       <label>Model
-        <input aria-label={`${scope} Model`} name={scope === "Workflow" ? "model" : undefined} list={capabilities ? `${inputId}-models` : modelList} value={display.model ?? ""} placeholder="Runtime default"
+        <input aria-label={`${scope} Model`} name={scope === "Workflow" ? "model" : undefined} list={capabilities ? `${inputId}-models` : modelList} value={display.model ?? ""} placeholder={familyName ? `Latest ${familyName} automatically` : "Runtime default"}
           onChange={(event) => onChange(editModelSelection(value, display, "model", event.target.value))} />
       </label>
       <label>Effort
         <input aria-label={`${scope} Effort`} name={scope === "Workflow" ? "effort" : undefined} list={capabilities ? `${inputId}-efforts` : effortList} value={display.effort ?? ""} placeholder="Runtime default"
-          onChange={(event) => onChange(editModelSelection(value, display, "effort", event.target.value))} />
+          onChange={(event) => detach(editModelSelection(value, companion, "effort", event.target.value))} />
       </label>
     </div>
     {capabilities ? <>
@@ -69,6 +89,8 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
       {(capabilities.diagnostics || []).map((diagnostic) => <p className="small" key={diagnostic.code}>{diagnostic.message}</p>)}
     </> : null}
     <p className="small" aria-live="polite">{status}</p>
+    {automaticNote ? <p className="small" role={preview?.familyResolutionStatus === "unavailable" ? "alert" : "status"}>{automaticNote}</p> : null}
+    {detachRefused && familyName ? <p className="small" role="alert">{`Tier ${display.effective} follows the latest ${familyName} release, and its current model is not resolved for this profile. Choose a model to use Custom.`}</p> : null}
     {!isCustomSelection(effective) && preview?.modelSource === "provider_profile_default" ? <p className="small">Model uses the saved profile default.</p> : null}
     {!isCustomSelection(effective) && preview?.effortSource === "provider_profile_default" ? <p className="small">Effort uses the saved profile default.</p> : null}
     {loading ? <p className="small" role="status">Loading profile tiers…</p> : error ? <p className="small" role="alert">{error}</p> : profile && tiers.length === 0 ? <p className="small" role="alert">This profile has an empty tier policy. Review Profile settings; your draft is preserved.</p> : null}

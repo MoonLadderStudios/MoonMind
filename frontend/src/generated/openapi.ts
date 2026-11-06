@@ -10930,11 +10930,15 @@ export interface components {
         };
         /**
          * ProviderModelEffortTier
-         * @description Profile-local model/effort tier definition.
+         * @description Profile-local model/effort tier definition accepted on writes.
          */
         ProviderModelEffortTier: {
             /** Label */
             label?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Model Mode */
+            model_mode?: ("automatic" | "pinned") | null;
             /** Model */
             model?: string | null;
             /** Effort */
@@ -11375,6 +11379,14 @@ export interface components {
             modelSource?: string | null;
             /** Effortsource */
             effortSource?: string | null;
+            /** Modelfamily */
+            modelFamily?: string | null;
+            /** Modelmode */
+            modelMode?: string | null;
+            /** Familyresolutionstatus */
+            familyResolutionStatus?: string | null;
+            /** Unavailablereason */
+            unavailableReason?: string | null;
         };
         /** ProviderProfileTierPreviewRequest */
         ProviderProfileTierPreviewRequest: {

@@ -850,6 +850,75 @@ async def _load_intent_request(
     return agent_request
 
 
+#: Admission sources whose recorded model is a Provider Profile tier's resolution.
+_TIER_RESOLUTION_SOURCES = frozenset({"profile_default_tier", "requested_tier"})
+#: Runtime keys that record a resolved selection rather than authored intent.
+_RECORDED_RESOLUTION_KEYS = (
+    "resolvedModel",
+    "resolvedEffort",
+    "modelSource",
+    "modelTierResolution",
+)
+
+
+def _adopt_planned_tier_resolution(
+    parameters: dict[str, Any], model_config: Any
+) -> dict[str, Any]:
+    """Record the plan's selection in place of a schedule's saved resolution.
+
+    A schedule's task input also records the pair its omitted or tier selection
+    resolved to when the definition was saved. That pair is a resolution, not
+    authored intent: each occurrence is admitted against the profile's current
+    tier policy, and its plan owns the pair and the tier resolution behind it.
+    A Custom model stays authored, so a different planned model still
+    conflicts.
+    """
+
+    model, effort = model_config.qualifiedId, model_config.effort
+    planned = getattr(model_config, "tierResolution", None)
+    source = parameters.get("modelSource")
+    if planned is None and source not in _TIER_RESOLUTION_SOURCES:
+        return parameters
+    if planned is not None and source == "task_override":
+        return parameters
+
+    def adopt(values: Mapping[str, Any], *, runtime: bool) -> dict[str, Any]:
+        adopted = dict(values)
+        if planned is None:
+            # A plan admitted before occurrences recorded their resolution.
+            resolution = adopted.get("modelTierResolution")
+            if isinstance(resolution, Mapping):
+                adopted["modelTierResolution"] = {
+                    **resolution,
+                    "resolvedModel": model,
+                    "resolvedEffort": effort,
+                }
+            for key, value in (("resolvedModel", model), ("resolvedEffort", effort)):
+                if key in adopted:
+                    adopted[key] = value
+            return adopted
+        if runtime and not any(key in adopted for key in _RECORDED_RESOLUTION_KEYS):
+            return adopted
+        adopted["modelTierResolution"] = dict(planned)
+        if "modelSource" in adopted:
+            adopted["modelSource"] = planned.get("modelSource")
+        for key, value in (("resolvedModel", model), ("resolvedEffort", effort)):
+            if value is None:
+                adopted.pop(key, None)
+            elif runtime or key in adopted:
+                adopted[key] = value
+        return adopted
+
+    adopted = {**adopt(parameters, runtime=False), "model": model, "effort": effort}
+    workflow = parameters.get("workflow")
+    if isinstance(workflow, Mapping) and isinstance(workflow.get("runtime"), Mapping):
+        adopted["workflow"] = {
+            **workflow,
+            "runtime": adopt(workflow["runtime"], runtime=True),
+        }
+    return adopted
+
+
 async def _reconstruct_plan_bound_request(
     *,
     binding: OmnigentExecutionPlanBinding,
@@ -886,6 +955,13 @@ async def _reconstruct_plan_bound_request(
     )
 
     authored_parameters = original_task_snapshot_parameters(snapshot)
+    # A schedule's task input also carries the Agent Profile snapshot it was
+    # compiled with. The plan binds that snapshot by reference; it is not
+    # authored request input.
+    authored_parameters.pop("agentProfileSnapshot", None)
+    authored_parameters = _adopt_planned_tier_resolution(
+        authored_parameters, plan.payload.modelConfig
+    )
     workflow_value = authored_parameters.get("workflow")
     workflow = dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
     repository = str(authored_parameters.get("repository") or "").strip()

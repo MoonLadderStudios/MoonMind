@@ -171,6 +171,13 @@ _MODEL_TIER_DIAGNOSTIC_FIELDS = (
     "effortApplicationStatus",
     "previewMismatch",
 )
+# Family provenance is recorded only for family tiers.
+_MODEL_TIER_FAMILY_DIAGNOSTIC_FIELDS = (
+    "modelFamily",
+    "modelMode",
+    "familyResolutionStatus",
+    "familyResolutionSource",
+)
 
 _CLAUDE_WORKSPACE_TRUST_CONFIG_SCRIPT = r"""
 import fcntl
@@ -934,7 +941,12 @@ class ManagedRuntimeLauncher:
 
         compact: dict[str, object] = {}
         truncated_fields: list[str] = []
-        for field in _MODEL_TIER_DIAGNOSTIC_FIELDS:
+        family_fields = tuple(
+            field
+            for field in _MODEL_TIER_FAMILY_DIAGNOSTIC_FIELDS
+            if resolution.get(field) is not None
+        )
+        for field in (*_MODEL_TIER_DIAGNOSTIC_FIELDS, *family_fields):
             value = resolution.get(field)
             if (
                 isinstance(value, str)
@@ -2163,6 +2175,11 @@ class ManagedRuntimeLauncher:
             requested_effort=requested_effort,
             tier_fallback=parameters.get("tierFallback", "clamp"),
             advisory_preview=parameters.get("tierPreview"),
+            admitted_resolution=(
+                admission_resolution
+                if isinstance(admission_resolution, Mapping)
+                else None
+            ),
         )
 
         from moonmind.provider_profiles.model_tiers import (

@@ -157,15 +157,18 @@ durable usage is named in the refresh failures and is not changed.
 An Omnigent schedule stores the Agent Profile snapshot, launch policy, and execution plan
 admitted when it was last planned; an image release does not rewrite them. Each
 schedule-started occurrence is a fresh attempt: before planning, it compiles those frozen
-inputs (task input, Agent Profile snapshot, Provider Profile, model, and Skills) against the
+inputs (task input, Agent Profile snapshot, Provider Profile, model selection, and Skills) against the
 installed same-repository server and host images, and Continue-As-New keeps that admitted
 plan; an interrupted step's successor is admitted again the same way. An explicitly requested
 Host Class stays exact. When the
 compile is refused (for example a foreign host family), the occurrence launches its stored
 plan under the normal launch-time checks and logs why. Deployment maintenance therefore never
 reconciles a schedule-pinned digest against the current Host Class, and already-started
-occurrences retain their immutable inputs. Provider selection, model, effort, authored
-overrides (including nulls), and task inputs remain authoritative per occurrence. A change to
+occurrences retain their immutable inputs. Provider selection, authored model and effort
+overrides (including nulls), and task inputs remain authoritative per occurrence. An omitted
+or tier selection resolves the Provider Profile's current tier policy; the occurrence's plan,
+not the model recorded when the schedule was saved, owns that pair at launch and for its
+interrupted steps' successors. A change to
 those authored inputs requires an explicit schedule revision.
 
 #### Authored policy and Auto

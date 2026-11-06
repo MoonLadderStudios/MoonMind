@@ -3699,10 +3699,21 @@ class ManagedAgentProviderProfile(Base):
             kwargs["capacity_scope_ref"] = f"provider-profile:{profile_id}"
         super().__init__(**kwargs)
         if kwargs.get("model_tiers") is None:
-            self.model_tiers = _provider_profile_model_tiers_default_for_values(
-                self.default_model,
-                self.default_effort,
+            from moonmind.provider_profiles.model_tiers import (
+                initial_model_effort_tier_policy,
             )
+
+            # Every creation path (seed, API, OAuth enrollment) shares one
+            # initial policy, including the first-party family template.
+            tiers, default_tier = initial_model_effort_tier_policy(
+                runtime_id=self.runtime_id,
+                provider_id=self.provider_id,
+                legacy_default_model=self.default_model,
+                legacy_default_effort=self.default_effort,
+            )
+            self.model_tiers = tiers
+            if kwargs.get("default_model_tier") is None:
+                self.default_model_tier = default_tier
 
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(

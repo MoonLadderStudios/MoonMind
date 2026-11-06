@@ -1261,6 +1261,193 @@ describe('ProviderProfilesManager form controls', () => {
     expect(payload.model_tiers).toEqual([{ label: null, model: 'my-custom-model', effort: null, parameters: {}, annotations: {} }]);
   });
 
+  describe('model family tiers', () => {
+    const familyTiers = [
+      { label: 'Fable', family: 'fable', model_mode: 'automatic' as const, model: null, effort: 'medium', parameters: {}, annotations: {} },
+      { label: 'Opus', family: 'opus', model_mode: 'automatic' as const, model: null, effort: 'medium', parameters: {}, annotations: {} },
+      { label: 'Sonnet', family: 'sonnet', model_mode: 'pinned' as const, model: 'claude-sonnet-5', effort: 'medium', parameters: {}, annotations: {} },
+    ];
+    const claudeProfile: ProviderProfile = {
+      ...profile,
+      profile_id: 'claude-family',
+      runtime_id: 'claude_code',
+      provider_id: 'anthropic',
+      model_tiers: familyTiers,
+      default_model_tier: 2,
+    };
+    const familyCapabilities = {
+      version: 'tier-cap-v1-family',
+      profile_id: 'claude-family',
+      runtime_id: 'claude_code',
+      provider_id: 'anthropic',
+      evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false },
+      tier_constraints: { min_count: 1, max_count: null },
+      model: {
+        runtime_default: 'claude-opus-4-8',
+        allow_custom: true,
+        options: [
+          { value: 'claude-opus-5', label: 'claude-opus-5', description: null, status: 'available', family: 'opus' },
+          { value: 'claude-opus-5-5', label: 'claude-opus-5-5', description: null, status: 'available', family: 'opus' },
+          { value: 'claude-sonnet-5', label: 'claude-sonnet-5', description: null, status: 'available', family: 'sonnet' },
+        ],
+      },
+      effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }, { value: 'high', label: 'High', description: null, status: 'available', compatible_models: null }] },
+      families: [
+        { value: 'fable', label: 'Fable', resolved_model: null, status: 'unavailable', source: 'profile_catalog', reason: 'No eligible Fable release is available for this profile.' },
+        { value: 'opus', label: 'Opus', resolved_model: 'claude-opus-5-5', status: 'resolved', source: 'profile_catalog', reason: null },
+        { value: 'sonnet', label: 'Sonnet', resolved_model: 'claude-sonnet-5', status: 'resolved', source: 'profile_catalog', reason: null },
+      ],
+      tiers: [
+        { index: 1, family: 'fable', model_mode: 'automatic', model: null, status: 'unavailable', source: 'profile_catalog', reason: 'No eligible Fable release is available for this profile.' },
+        { index: 2, family: 'opus', model_mode: 'automatic', model: 'claude-opus-5-5', status: 'resolved', source: 'profile_catalog', reason: null },
+        { index: 3, family: 'sonnet', model_mode: 'pinned', model: 'claude-sonnet-5', status: 'available', source: 'profile_pin', reason: null },
+      ],
+      recommended_policy: null,
+      diagnostics: [],
+    };
+
+    function mockFamilyFetch() {
+      return vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/capabilities')) {
+          // The editor renders before tier capabilities arrive, as on a slow runner.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return { ok: true, json: async () => familyCapabilities } as Response;
+        }
+        return { ok: true, json: async () => ({ ...claudeProfile }) } as Response;
+      });
+    }
+
+    // Wait for the catalog-derived state; the tier rows alone render before it.
+    async function editFamilyProfile() {
+      renderProviderProfilesManager([claudeProfile]);
+      fireEvent.click(profileAction('Edit'));
+      await waitFor(() => {
+        expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('currently claude-opus-5-5');
+      });
+    }
+
+    async function savedTierPayload(fetchSpy: ReturnType<typeof mockFamilyFetch>) {
+      fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+      await waitFor(() => {
+        expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true);
+      });
+      const call = fetchSpy.mock.calls.find(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH');
+      return JSON.parse(String((call?.[1] as RequestInit).body)).model_tiers;
+    }
+
+    it('labels automatic, pinned, and unavailable family tiers accessibly', async () => {
+      mockFamilyFetch();
+      await editFamilyProfile();
+
+      expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('Opus — Latest automatically · currently claude-opus-5-5');
+      expect(screen.getByLabelText('Tier 1 model mode').textContent).toContain('Fable — Latest automatically · unavailable for this profile');
+      expect(screen.getByText('No eligible Fable release is available for this profile.')).toBeTruthy();
+      expect(screen.getByLabelText('Tier 3 model mode').textContent).toContain('Sonnet — Pinned to claude-sonnet-5');
+      expect((screen.getByLabelText('Tier 2 model') as HTMLSelectElement).value).toBe('__automatic__');
+    });
+
+    it('keeps every tier mode when only effort changes', async () => {
+      const fetchSpy = mockFamilyFetch();
+      await editFamilyProfile();
+
+      fireEvent.change(screen.getByLabelText('Tier 2 effort'), { target: { value: 'high' } });
+      const tiers = await savedTierPayload(fetchSpy);
+
+      expect(tiers.map((tier: { model_mode: string }) => tier.model_mode)).toEqual(['automatic', 'automatic', 'pinned']);
+      expect(tiers[1]).toEqual({ label: 'Opus', family: 'opus', model_mode: 'automatic', model: null, effort: 'high', parameters: {}, annotations: {} });
+      expect(tiers[2].model).toBe('claude-sonnet-5');
+    });
+
+    it('pins a concrete version, including the current one, and restores automatic only on request', async () => {
+      const fetchSpy = mockFamilyFetch();
+      await editFamilyProfile();
+
+      const tier2Model = screen.getByLabelText('Tier 2 model') as HTMLSelectElement;
+      await within(tier2Model).findByRole('option', { name: 'claude-opus-5-5' });
+      fireEvent.change(tier2Model, { target: { value: 'claude-opus-5-5' } });
+      expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('Opus — Pinned to claude-opus-5-5');
+      fireEvent.click(screen.getByRole('button', { name: 'Use latest automatically for Tier 3' }));
+      expect(screen.getByLabelText('Tier 3 model mode').textContent).toContain('Sonnet — Latest automatically · currently claude-sonnet-5');
+
+      const tiers = await savedTierPayload(fetchSpy);
+      expect(tiers[1]).toMatchObject({ family: 'opus', model_mode: 'pinned', model: 'claude-opus-5-5' });
+      expect(tiers[2]).toMatchObject({ family: 'sonnet', model_mode: 'automatic', model: null });
+      expect(tiers[0]).toMatchObject({ family: 'fable', model_mode: 'automatic', model: null });
+    });
+
+    it('duplicates a family tier with its mode', async () => {
+      const fetchSpy = mockFamilyFetch();
+      await editFamilyProfile();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Duplicate Tier 3 as new last tier' }));
+      const tiers = await savedTierPayload(fetchSpy);
+
+      expect(tiers).toHaveLength(4);
+      expect(tiers[3]).toMatchObject({ family: 'sonnet', model_mode: 'pinned', model: 'claude-sonnet-5' });
+    });
+
+    it('adopts the automatic family defaults on an existing profile only on request', async () => {
+      const legacyTiers = [
+        { label: 'Opus 4.8', model: 'claude-opus-4-8', effort: 'high', parameters: {}, annotations: {} },
+      ];
+      const recommended = {
+        default_model_tier: 2,
+        model_tiers: ['fable', 'opus', 'sonnet', 'haiku'].map((family) => ({
+          label: family[0]!.toUpperCase() + family.slice(1),
+          family,
+          model_mode: 'automatic' as const,
+          model: null,
+          effort: 'medium',
+          parameters: {},
+          annotations: {},
+        })),
+      };
+      const legacyProfile: ProviderProfile = {
+        ...claudeProfile,
+        model_tiers: legacyTiers,
+        default_model_tier: 1,
+        is_default: true,
+      };
+      const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/capabilities')) {
+          return { ok: true, json: async () => ({ ...familyCapabilities, tiers: [], recommended_policy: recommended }) } as Response;
+        }
+        return { ok: true, json: async () => ({ ...legacyProfile }) } as Response;
+      });
+      renderProviderProfilesManager([legacyProfile]);
+      fireEvent.click(profileAction('Edit'));
+
+      const adopt = await screen.findByRole('button', { name: 'Use automatic family defaults' });
+      // Opening the editor never replaces an ambiguous explicit legacy tier.
+      expect(screen.getAllByRole('listitem').filter((item) => item.hasAttribute('data-tier-client-id'))).toHaveLength(1);
+
+      fireEvent.click(adopt);
+      expect(await screen.findByText('Tiers replaced with 4 automatic family tiers. Save to keep them.')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Use automatic family defaults' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+      await waitFor(() => {
+        expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true);
+      });
+      const call = fetchSpy.mock.calls.find(([url, init]) => String(url).includes('/api/v1/provider-profiles/claude-family') && (init as RequestInit | undefined)?.method === 'PATCH');
+      const body = JSON.parse(String((call?.[1] as RequestInit).body));
+      expect(body.default_model_tier).toBe(2);
+      expect(body.model_tiers.map((tier: { family: string; model_mode: string; model: string | null; effort: string }) => [tier.family, tier.model_mode, tier.model, tier.effort])).toEqual([
+        ['fable', 'automatic', null, 'medium'],
+        ['opus', 'automatic', null, 'medium'],
+        ['sonnet', 'automatic', null, 'medium'],
+        ['haiku', 'automatic', null, 'medium'],
+      ]);
+      // Adopting tiers is not a credential or default-profile edit.
+      if ('secret_refs' in body) expect(body.secret_refs).toEqual(legacyProfile.secret_refs ?? {});
+      if ('is_default' in body) expect(body.is_default).toBe(true);
+      expect(body).not.toHaveProperty('enabled', false);
+    });
+
+  });
+
   it('requires a backend-supported authentication method before creation', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
@@ -2816,6 +3003,47 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       default_model_tier: 1,
       creation_capabilities: openAiCapabilities,
     }) as ProviderProfile;
+
+  it('starts a first-party draft from the backend template without overwriting edits', async () => {
+    const template = {
+      model_tiers: [
+        { label: 'Astra', family: 'astra', model_mode: 'automatic', model: null, effort: 'medium', parameters: {}, annotations: {} },
+        { label: 'Sol', family: 'sol', model_mode: 'automatic', model: null, effort: 'medium', parameters: {}, annotations: {} },
+        { label: 'Terra', family: 'terra', model_mode: 'automatic', model: null, effort: 'medium', parameters: {}, annotations: {} },
+        { label: 'Luna', family: 'luna', model_mode: 'automatic', model: null, effort: 'medium', parameters: {}, annotations: {} },
+      ],
+      default_model_tier: 2,
+    };
+    const late = deferredResponse();
+    let draftRequests = 0;
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        draftRequests += 1;
+        if (draftRequests > 1) return late.response;
+        const base = await tierCapabilitiesResponse(url)!.json();
+        return { ok: true, json: async () => ({ ...base, recommended_policy: template }) } as Response;
+      }
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    expect((await screen.findByLabelText('Tier 4 model mode')).textContent).toContain('Luna — Latest automatically');
+    expect((screen.getByRole('radio', { name: 'Default tier' }) as HTMLInputElement).value).toBe(
+      screen.getByLabelText('Tier 2 model mode').closest('li')?.getAttribute('data-tier-client-id'),
+    );
+
+    fireEvent.change(screen.getByLabelText('Tier 1 effort'), { target: { value: 'high' } });
+    await chooseProvider('minimax');
+    await act(async () => late.release({ ...(await tierCapabilitiesResponse('/api/v1/provider-profiles/capabilities?x')!.json()), recommended_policy: null }));
+
+    // The edited draft survives a later capability response.
+    expect(screen.getByLabelText('Tier 4 model mode').textContent).toContain('Luna — Latest automatically');
+    expect((screen.getByLabelText('Tier 1 effort') as HTMLSelectElement).value).toBe('high');
+  });
 
   it('keeps a same-identity profile tier refresh from clearing the newer request state', async () => {
     const pendingProfileTiers: Array<{ release: (payload: unknown) => void; ok: boolean }> = [];

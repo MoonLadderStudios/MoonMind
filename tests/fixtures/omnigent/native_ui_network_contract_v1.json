@@ -4,7 +4,7 @@
   "source": "vendored pinned omnigent server and native workspace UI",
   "evidence": {
     "capture": "stock-ui-and-server-static-analysis",
-    "sourceCommit": "ebf63ff916dec81b3e74938dc4e67627dd20642e",
+    "sourceCommit": "1164f5894432ba7824a8720a071e5b1207404527",
     "sourceFiles": [
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_resources.py",

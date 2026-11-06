@@ -138,6 +138,15 @@ class ModelConfig(BaseModel):
         default_factory=dict, alias="normalizedOptions"
     )
     modelConfigDigest: str = Field(alias="modelConfigDigest")
+    # The Provider Profile tier resolution that chose this pair when the
+    # admission resolved it apart from the task input (a fresh schedule
+    # occurrence), so launch records that resolution. Omitted otherwise so
+    # historical plan bytes keep their digest.
+    tierResolution: dict[str, Any] | None = Field(
+        default=None,
+        alias="tierResolution",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class ExecutionAuthority(BaseModel):
@@ -645,6 +654,8 @@ def bind_runtime_request_authority(
             "effort": effective_effort,
             "modelConfigDigest": model_digest,
         }
+        # A step's own model replaces the admitted tier resolution.
+        payload["model"].pop("tierResolution", None)
         support_identity = payload.get("supportIdentity")
         if not isinstance(support_identity, dict):
             raise HarnessPlatformError(
@@ -672,6 +683,34 @@ def verify_execution_plan_envelope(
     # Verify without mutation: canonicalize only payload and compare
     parsed = OmnigentExecutionPlanEnvelope.model_validate(envelope)
     return parsed
+
+
+_MODEL_SELECTION_LAUNCH_FLAGS = frozenset(
+    {"--model", "-m", "--effort", "--reasoning-effort"}
+)
+_MODEL_SELECTION_CONFIG_KEYS = frozenset({"model", "model_reasoning_effort"})
+
+
+def _launch_args_selecting_model(raw: object) -> list[str]:
+    """Return authored launch flags that would choose a model or effort."""
+
+    if not isinstance(raw, (list, tuple)):
+        return []
+    selecting: list[str] = []
+    previous = ""
+    for value in raw:
+        text = str(value).strip()
+        flag, _, inline = text.partition("=")
+        if flag in _MODEL_SELECTION_LAUNCH_FLAGS:
+            selecting.append(flag)
+        elif flag in {"-c", "--config"} and inline:
+            if inline.partition("=")[0].strip() in _MODEL_SELECTION_CONFIG_KEYS:
+                selecting.append(f"{flag} {inline.partition('=')[0].strip()}")
+        elif previous in {"-c", "--config"}:
+            if flag.strip() in _MODEL_SELECTION_CONFIG_KEYS:
+                selecting.append(f"{previous} {flag.strip()}")
+        previous = flag
+    return selecting
 
 
 def bind_omnigent_model_selection(
@@ -738,6 +777,16 @@ def bind_omnigent_model_selection(
         delivered = None if root_field == "model" and codex_native_default else planned
         parameters[root_field] = delivered
         session[session_field] = delivered
+    # Native harnesses let a passed-through flag outrank the session model or
+    # effort, so authored launch arguments cannot carry a second selection.
+    selecting = _launch_args_selecting_model(session.get("terminalLaunchArgs"))
+    if selecting:
+        raise HarnessPlatformError(
+            "authored Omnigent session terminalLaunchArgs "
+            f"({', '.join(selecting)}) conflict with the persisted execution "
+            "plan's model selection",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
     omnigent["session"] = session
     parameters["omnigent"] = omnigent
     return request.model_copy(update={"parameters": parameters})

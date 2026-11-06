@@ -890,6 +890,9 @@ class OmnigentExecutionPlanningService:
                 if isinstance(authored_workflow, Mapping)
                 else None
             )
+        # Retry, recovery and replay keep the admitted automatic-tier model;
+        # only a new admission resolves the current family catalog.
+        admitted_resolution = request.parameters.get("modelTierResolution")
         try:
             resolved = resolve_model_effort(
                 runtime_id=provider.runtime_id,
@@ -902,6 +905,11 @@ class OmnigentExecutionPlanningService:
                     str(explicit_effort).strip()
                     if explicit_effort is not None
                     else request.parameters.get("effort")
+                ),
+                admitted_resolution=(
+                    admitted_resolution
+                    if isinstance(admitted_resolution, Mapping)
+                    else None
                 ),
             )
         except ValueError as exc:

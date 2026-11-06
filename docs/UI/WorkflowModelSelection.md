@@ -77,6 +77,8 @@ runtime:
 
 This example represents an explicitly authored tier choice. The Tier select already names it, so no supporting source text repeats it. The populated Model and Effort fields are previews. Do not add their concrete values to the request as overrides. Future launches continue to follow Tier 2's policy. A default-derived numbered display has no authored `modelTier` and remains omitted until the user changes the selection.
 
+When the tier follows a model family automatically, Model stays empty with a `Latest Opus automatically` placeholder, and supporting text such as `Tier 2 follows the latest Opus release: currently claude-opus-5-5.` shows the preview's resolution. Each new admission resolves the family again, so a later release reaches new work while accepted work keeps the model it was admitted with. Editing Model or Effort, or choosing Custom, still enters Custom for that execution only, and the Provider Profile is not edited. That explicit edit authors the current preview's resolved model as the Custom model, because a null model would mean Runtime default rather than the tier's family. If no current resolution for that tier exists, the edit is refused with an explanation; typing a model still works. An unavailable family shows the backend's reason instead of another tier's values.
+
 ### Custom
 
 ```yaml

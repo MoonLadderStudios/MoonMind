@@ -115,6 +115,15 @@ class ManagedRuntimeStrategy(ABC):
         if requested_model:
             from moonmind.workflows.executions.model_resolver import apply_profile_model_alias
 
+            # As in shared compilation, account aliases apply only to an
+            # authored model. A model the launcher resolved from the profile
+            # is already the accepted selection.
+            resolution = parameters.get("modelTierResolution")
+            if (
+                isinstance(resolution, Mapping)
+                and resolution.get("modelSource") != "task_override"
+            ):
+                return requested_model
             return apply_profile_model_alias(profile, requested_model)
 
         if parameters.get("modelTier") is not None:

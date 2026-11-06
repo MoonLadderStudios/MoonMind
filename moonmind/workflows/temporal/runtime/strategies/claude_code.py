@@ -88,16 +88,22 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         """
         cmd = list(profile.command_template)
 
-        # Skip --model when the profile already sets ANTHROPIC_MODEL via env overrides
-        # (e.g. MiniMax profile).  Passing --model with a non-Anthropic model name causes
-        # the Claude CLI to reject the run immediately.
+        # Skip --model when a compatible-provider profile sets ANTHROPIC_MODEL via
+        # env overrides (e.g. MiniMax). Passing --model with a non-Anthropic model
+        # name causes the Claude CLI to reject the run immediately. A first-party
+        # Anthropic profile always passes its accepted model: --model outranks
+        # ANTHROPIC_MODEL, so the env value cannot replace the selection.
         env_overrides: dict = getattr(profile, "env_overrides", {}) or {}
         anthropic_model_override = env_overrides.get("ANTHROPIC_MODEL")
         has_env_model = (
             isinstance(anthropic_model_override, str)
             and anthropic_model_override.strip() != ""
         )
-        if not has_env_model:
+        first_party = (
+            str(getattr(profile, "provider_id", None) or "").strip().lower()
+            == "anthropic"
+        )
+        if first_party or not has_env_model:
             model = self.get_model(profile, request)
             if model:
                 cmd.extend(["--model", model])

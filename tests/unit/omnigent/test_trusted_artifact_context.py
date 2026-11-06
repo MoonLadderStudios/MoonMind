@@ -579,6 +579,8 @@ async def test_readmission_compares_fresh_compiler_snapshots_without_creator_aut
 
     def payload(artifact_id):
         return SimpleNamespace(
+            # Admitted from its frozen inputs, with no separate tier resolution.
+            modelConfig=SimpleNamespace(tierResolution=None),
             resolvedTools={
                 "repositoryAccess": {
                     "source_read": {
@@ -586,7 +588,7 @@ async def test_readmission_compares_fresh_compiler_snapshots_without_creator_aut
                         "snapshotRef": "repository-access-snapshot:" + digest,
                     }
                 }
-            }
+            },
         )
 
     binding = OmnigentExecutionPlanBinding(

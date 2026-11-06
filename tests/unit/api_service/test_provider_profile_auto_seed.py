@@ -1785,3 +1785,143 @@ async def test_auto_seed_disables_and_reenables_env_api_profiles(
         assert profile.auth_state == ProviderProfileAuthState.CONNECTED
         assert profile.disabled_reason is None
         assert profile.command_behavior["auth_readiness"]["launch_ready"] is True
+
+
+FIRST_PARTY_FAMILIES = {
+    "codex_openai_oauth": ["astra", "sol", "terra", "luna"],
+    "claude_anthropic_oauth": ["fable", "opus", "sonnet", "haiku"],
+    "codex_openai_api": ["astra", "sol", "terra", "luna"],
+    "claude_anthropic_api": ["fable", "opus", "sonnet", "haiku"],
+}
+
+
+def _assert_family_template(profile, families):
+    assert profile.default_model_tier == 2
+    assert [tier.get("family") for tier in profile.model_tiers] == families
+    assert {tier.get("model_mode") for tier in profile.model_tiers} == {"automatic"}
+    assert {tier.get("effort") for tier in profile.model_tiers} == {"medium"}
+    assert all(tier.get("model") is None for tier in profile.model_tiers)
+
+
+@pytest.mark.asyncio
+async def test_fresh_seed_gives_first_party_profiles_four_family_tiers(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-key-123456")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key-123456")
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        for profile_id, families in FIRST_PARTY_FAMILIES.items():
+            profile = await session.get(ManagedAgentProviderProfile, profile_id)
+            assert profile is not None
+            _assert_family_template(profile, families)
+        oauth = await session.get(ManagedAgentProviderProfile, "claude_anthropic_oauth")
+        # Visible and configurable before authentication, but not launchable.
+        assert oauth.enabled is False
+        assert oauth.auth_state == ProviderProfileAuthState.OAUTH_PENDING
+
+
+async def _set_legacy_runtime_default_tiers(profile_id: str, **fields) -> None:
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        profile.model_tiers = [
+            {
+                "label": "Runtime default",
+                "model": None,
+                "effort": None,
+                "parameters": {},
+                "annotations": fields.pop("annotations", {}),
+            }
+        ]
+        profile.default_model_tier = 1
+        for key, value in fields.items():
+            setattr(profile, key, value)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("annotations", [{}, {"migratedFrom": "runtime_default"}])
+async def test_restart_upgrades_untouched_first_party_seed_tiers_once(
+    _module_db, monkeypatch, annotations
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _set_legacy_runtime_default_tiers(
+        "claude_anthropic_oauth",
+        annotations=annotations,
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+    )
+
+    await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_oauth"
+        )
+        _assert_family_template(profile, FIRST_PARTY_FAMILIES["claude_anthropic_oauth"])
+        # Credentials, enablement, and identity are untouched by the upgrade.
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        first_upgrade = [dict(tier) for tier in profile.model_tiers]
+
+    await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_oauth"
+        )
+        assert profile.model_tiers == first_upgrade
+
+
+@pytest.mark.asyncio
+async def test_restart_preserves_customized_and_legacy_explicit_first_party_tiers(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    customized = [
+        {
+            "label": "Mine",
+            "model": "claude-opus-5",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    async with db_base.async_session_maker() as session:
+        claude = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_oauth"
+        )
+        claude.model_tiers = customized
+        claude.default_model_tier = 2
+        await session.commit()
+    # A lone Runtime default tier on a profile with an explicit legacy default
+    # is ambiguous operator intent and stays as authored.
+    await _set_legacy_runtime_default_tiers(
+        "codex_openai_oauth", default_model="gpt-user-custom"
+    )
+
+    await _auto_seed_provider_profiles()
+    async with db_base.async_session_maker() as session:
+        claude = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_oauth"
+        )
+        codex = await session.get(ManagedAgentProviderProfile, "codex_openai_oauth")
+        assert claude.model_tiers == customized
+        assert claude.default_model_tier == 2
+        assert codex.default_model == "gpt-user-custom"
+        assert len(codex.model_tiers) == 1
+        assert codex.model_tiers[0]["label"] == "Runtime default"
