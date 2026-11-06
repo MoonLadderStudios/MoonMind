@@ -1310,9 +1310,20 @@ describe('ProviderProfilesManager form controls', () => {
       return vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
         const url = String(input);
         if (url.includes('/capabilities')) {
+          // The editor renders before tier capabilities arrive, as on a slow runner.
+          await new Promise((resolve) => setTimeout(resolve, 50));
           return { ok: true, json: async () => familyCapabilities } as Response;
         }
         return { ok: true, json: async () => ({ ...claudeProfile }) } as Response;
+      });
+    }
+
+    // Wait for the catalog-derived state; the tier rows alone render before it.
+    async function editFamilyProfile() {
+      renderProviderProfilesManager([claudeProfile]);
+      fireEvent.click(profileAction('Edit'));
+      await waitFor(() => {
+        expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('currently claude-opus-5-5');
       });
     }
 
@@ -1327,10 +1338,9 @@ describe('ProviderProfilesManager form controls', () => {
 
     it('labels automatic, pinned, and unavailable family tiers accessibly', async () => {
       mockFamilyFetch();
-      renderProviderProfilesManager([claudeProfile]);
-      fireEvent.click(profileAction('Edit'));
+      await editFamilyProfile();
 
-      expect((await screen.findByLabelText('Tier 2 model mode')).textContent).toContain('Opus — Latest automatically · currently claude-opus-5-5');
+      expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('Opus — Latest automatically · currently claude-opus-5-5');
       expect(screen.getByLabelText('Tier 1 model mode').textContent).toContain('Fable — Latest automatically · unavailable for this profile');
       expect(screen.getByText('No eligible Fable release is available for this profile.')).toBeTruthy();
       expect(screen.getByLabelText('Tier 3 model mode').textContent).toContain('Sonnet — Pinned to claude-sonnet-5');
@@ -1339,9 +1349,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     it('keeps every tier mode when only effort changes', async () => {
       const fetchSpy = mockFamilyFetch();
-      renderProviderProfilesManager([claudeProfile]);
-      fireEvent.click(profileAction('Edit'));
-      await screen.findByLabelText('Tier 2 model mode');
+      await editFamilyProfile();
 
       fireEvent.change(screen.getByLabelText('Tier 2 effort'), { target: { value: 'high' } });
       const tiers = await savedTierPayload(fetchSpy);
@@ -1353,11 +1361,11 @@ describe('ProviderProfilesManager form controls', () => {
 
     it('pins a concrete version, including the current one, and restores automatic only on request', async () => {
       const fetchSpy = mockFamilyFetch();
-      renderProviderProfilesManager([claudeProfile]);
-      fireEvent.click(profileAction('Edit'));
-      await screen.findByLabelText('Tier 2 model mode');
+      await editFamilyProfile();
 
-      fireEvent.change(screen.getByLabelText('Tier 2 model'), { target: { value: 'claude-opus-5-5' } });
+      const tier2Model = screen.getByLabelText('Tier 2 model') as HTMLSelectElement;
+      await within(tier2Model).findByRole('option', { name: 'claude-opus-5-5' });
+      fireEvent.change(tier2Model, { target: { value: 'claude-opus-5-5' } });
       expect(screen.getByLabelText('Tier 2 model mode').textContent).toContain('Opus — Pinned to claude-opus-5-5');
       fireEvent.click(screen.getByRole('button', { name: 'Use latest automatically for Tier 3' }));
       expect(screen.getByLabelText('Tier 3 model mode').textContent).toContain('Sonnet — Latest automatically · currently claude-sonnet-5');
@@ -1370,9 +1378,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     it('duplicates a family tier with its mode', async () => {
       const fetchSpy = mockFamilyFetch();
-      renderProviderProfilesManager([claudeProfile]);
-      fireEvent.click(profileAction('Edit'));
-      await screen.findByLabelText('Tier 3 model mode');
+      await editFamilyProfile();
 
       fireEvent.click(screen.getByRole('button', { name: 'Duplicate Tier 3 as new last tier' }));
       const tiers = await savedTierPayload(fetchSpy);
