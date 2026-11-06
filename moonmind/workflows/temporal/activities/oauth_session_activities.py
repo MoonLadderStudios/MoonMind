@@ -221,11 +221,14 @@ async def oauth_session_revalidate_bound_host(
     """Require matching-generation destination preflight after reconnect."""
 
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+    from moonmind.omnigent.host_image_drift import bind_installed_shared_host_launch
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import (
         HostPreflightFailure,
         OmnigentOAuthHostRepository,
+        deterministic_host_lease_id,
     )
     from moonmind.omnigent.settings import (
         resolved_api_token,
@@ -267,6 +270,18 @@ async def oauth_session_revalidate_bound_host(
                 "status": "validation_unavailable",
                 "validation_mode": "credential_only",
             }
+    # A saved binding can predate a runtime update. Bind installed images for
+    # a new validation, while redelivery retains the recorded attempt's launch.
+    previous_lease = await repository.get_host_lease(
+        deterministic_host_lease_id(provider_lease_id)
+    )
+    if previous_lease is None:
+        validate_effective_launch_snapshot(binding.effective_launch_snapshot)
+    effective_launch = (
+        previous_lease.effective_launch_snapshot
+        if previous_lease is not None
+        else bind_installed_shared_host_launch(binding.effective_launch_snapshot)
+    )
     lease = await repository.create_or_get_host_lease(
         binding=binding,
         provider_lease_id=provider_lease_id,
@@ -275,6 +290,7 @@ async def oauth_session_revalidate_bound_host(
         idempotency_key=f"oauth-revalidate:{session_id}",
         lease_purpose="credential_validation",
         ttl_seconds=600,
+        effective_launch_snapshot=effective_launch,
     )
     if lease.status in {"stopped", "failed"}:
         lease = await repository.restart_host_lease(lease.lease_id, ttl_seconds=600)
