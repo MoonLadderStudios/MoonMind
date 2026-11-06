@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -236,6 +236,31 @@ def test_unavailable_family_keeps_its_tier_number_and_status():
     assert tiers[2]["status"] == "resolved"
     assert tiers[2]["model"] == "claude-opus-5-5"
     assert tiers[3]["model"] == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize(
+    ("generation", "age"),
+    [(1, timedelta(days=7)), (2, timedelta(0))],
+    ids=["expired", "replaced_credential"],
+)
+def test_tier_availability_matches_admission_for_old_observations(generation, age):
+    """The editor reports what admission would admit, not the raw catalog."""
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    evidence = {
+        "credentialGeneration": 1,
+        "validatedAt": (datetime.now(UTC) - age).isoformat(),
+        "models": [{"id": "claude-sonnet-5-5"}, {"id": "claude-haiku-5-5"}],
+    }
+    profile = _first_party_profile(
+        credential_generation=generation, model_catalog_evidence_json=evidence
+    )
+
+    opus = tier_capabilities_for_profile(profile)["tiers"][1]
+    admitted = resolve_model_effort(runtime_id="claude_code", profile=profile, env={})
+
+    assert (opus["model"], opus["status"]) == (admitted.model, "unverified")
+    assert admitted.family_resolution_status == "unverified"
 
 
 def test_pinned_tier_reports_status_without_changing_the_pin():

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from moonmind.runtime_intent import is_custom_selection, model_selection_fields
 from moonmind.workflows.executions.runtime_defaults import (
@@ -32,17 +32,21 @@ from moonmind.workflows.executions.runtime_defaults import (
     resolve_runtime_defaults,
 )
 
+if TYPE_CHECKING:
+    from moonmind.provider_profiles.model_families import FamilyResolution
+
 __all__ = [
     "ModelTierFamilyUnavailableError",
     "RequestedModelTierUnavailableError",
     "ResolvedModelEffort",
     "apply_profile_model_alias",
-    "coerce_effort_for_model",
     "codex_uses_native_default",
+    "coerce_effort_for_model",
     "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
     "resolve_opencode_effort",
+    "resolve_profile_family",
     "resolve_recorded_selection",
 ]
 
@@ -572,12 +576,6 @@ def _resolve_automatic_tier(
     Raises :class:`ModelTierFamilyUnavailableError` instead of falling back to
     the runtime default or any other selection.
     """
-    from moonmind.provider_profiles.model_families import (
-        catalog_lists_family,
-        catalog_rows_from_evidence,
-        resolve_family_model,
-    )
-
     admitted_model = _admitted_family_model(
         admitted_resolution,
         profile=profile,
@@ -590,39 +588,7 @@ def _resolve_automatic_tier(
             str(admitted_resolution.get("familyResolutionStatus") or "resolved"),
             "admitted_selection",
         )
-    evidence = _profile_value(
-        profile, "model_catalog_evidence_json", "modelCatalogEvidence"
-    )
-    # An observation taken under a replaced credential describes another
-    # account, so the current credential has not reported a catalog yet.
-    catalog_rows = (
-        None
-        if _evidence_generation_replaced(evidence, profile)
-        else catalog_rows_from_evidence(evidence)
-    )
-    resolution = resolve_family_model(
-        family,
-        provider_id=_profile_provider_id(profile),
-        catalog_rows=catalog_rows,
-        effort=effort,
-    )
-    if (
-        not resolution.usable
-        and catalog_rows
-        and not catalog_lists_family(family, catalog_rows)
-        and _evidence_expired(evidence)
-    ):
-        # An expired observation cannot prove the family is gone. Resolve it
-        # as unobserved so this launch's exact-host read refreshes the
-        # catalog; the host still refuses a model it does not serve.
-        unobserved = resolve_family_model(
-            family,
-            provider_id=_profile_provider_id(profile),
-            catalog_rows=None,
-            effort=effort,
-        )
-        if unobserved.usable:
-            resolution = unobserved
+    resolution = resolve_profile_family(profile, family, effort=effort)
     if not resolution.usable or resolution.model is None:
         raise ModelTierFamilyUnavailableError(
             effective_model_tier=effective_tier,
@@ -630,6 +596,49 @@ def _resolve_automatic_tier(
             reason=resolution.reason,
         )
     return resolution.model, resolution.status, str(resolution.source)
+
+
+def resolve_profile_family(
+    profile: Any | None, family: str, *, effort: str | None
+) -> FamilyResolution:
+    """Resolve one automatic family tier against the profile's catalog evidence.
+
+    Admission, previews and the tier editor share this rule. Evidence taken
+    under a replaced credential describes another account, so it counts as
+    unobserved. An expired observation cannot prove a family is gone: the
+    tier resolves as unobserved, so its launch's exact-host read refreshes
+    the catalog, and the host still refuses a model it does not serve.
+    """
+    from moonmind.provider_profiles.model_families import (
+        catalog_lists_family,
+        catalog_rows_from_evidence,
+        resolve_family_model,
+    )
+
+    evidence = _profile_value(
+        profile, "model_catalog_evidence_json", "modelCatalogEvidence"
+    )
+    catalog_rows = (
+        None
+        if _evidence_generation_replaced(evidence, profile)
+        else catalog_rows_from_evidence(evidence)
+    )
+    provider_id = _profile_provider_id(profile)
+    resolution = resolve_family_model(
+        family, provider_id=provider_id, catalog_rows=catalog_rows, effort=effort
+    )
+    if (
+        not resolution.usable
+        and catalog_rows
+        and not catalog_lists_family(family, catalog_rows)
+        and _evidence_expired(evidence)
+    ):
+        unobserved = resolve_family_model(
+            family, provider_id=provider_id, catalog_rows=None, effort=effort
+        )
+        if unobserved.usable:
+            return unobserved
+    return resolution
 
 
 def _evidence_generation_replaced(evidence: Any, profile: Any | None) -> bool:

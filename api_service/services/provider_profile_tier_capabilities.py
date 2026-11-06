@@ -31,6 +31,7 @@ from moonmind.provider_profiles.model_families import (
     pinned_model_status,
     resolve_family_model,
 )
+from moonmind.workflows.executions.model_resolver import resolve_profile_family
 
 _MODEL_OPTIONS_BY_PROVIDER: dict[str, list[dict[str, Any]]] = {
     "default": [
@@ -131,11 +132,13 @@ def _tier_resolutions(
     *,
     provider_id: str,
     catalog_rows: list[dict[str, Any]] | None,
+    profile: Any = None,
 ) -> list[dict[str, Any]]:
     """Per-tier availability, separate from credential readiness.
 
-    Automatic tiers report what they currently resolve to; pinned tiers keep
-    their saved model and report its observed status.
+    Automatic tiers report what they currently resolve to, through the same
+    rule admission uses for a saved profile; pinned tiers keep their saved
+    model and report its observed status.
     """
     if not isinstance(model_tiers, list):
         return []
@@ -156,11 +159,15 @@ def _tier_resolutions(
             "reason": None,
         }
         if family_id and mode == FAMILY_MODE_AUTOMATIC:
-            resolution = resolve_family_model(
-                family_id,
-                provider_id=provider_id,
-                catalog_rows=catalog_rows,
-                effort=tier.get("effort"),
+            resolution = (
+                resolve_profile_family(profile, family_id, effort=tier.get("effort"))
+                if profile is not None
+                else resolve_family_model(
+                    family_id,
+                    provider_id=provider_id,
+                    catalog_rows=catalog_rows,
+                    effort=tier.get("effort"),
+                )
             )
             entry.update(
                 model=resolution.model,
@@ -316,6 +323,7 @@ def build_tier_capabilities(
     model_options: list[dict[str, Any]] | None = None,
     catalog_rows: list[dict[str, Any]] | None = None,
     model_tiers: Any = None,
+    profile: Any = None,
 ) -> dict[str, Any]:
     """Return the ProviderProfileEditorCapabilities payload.
 
@@ -368,7 +376,10 @@ def build_tier_capabilities(
         },
         "families": _family_options(runtime_id, provider_id, catalog_rows),
         "tiers": _tier_resolutions(
-            model_tiers, provider_id=provider_id, catalog_rows=catalog_rows
+            model_tiers,
+            provider_id=provider_id,
+            catalog_rows=catalog_rows,
+            profile=profile,
         ),
         "recommended_policy": _recommended_policy(runtime_id, provider_id),
         "diagnostics": diagnostics or [],
@@ -399,6 +410,7 @@ def tier_capabilities_for_profile(profile: Any) -> dict[str, Any]:
     if not evidence_raw:
         return build_tier_capabilities(
             model_tiers=model_tiers,
+            profile=profile,
             runtime_id=runtime_id,
             provider_id=provider_id,
             profile_id=profile_id,
@@ -454,6 +466,7 @@ def tier_capabilities_for_profile(profile: Any) -> dict[str, Any]:
         model_options=evidence_options,
         catalog_rows=catalog_rows,
         model_tiers=model_tiers,
+        profile=profile,
         evidence={"source": "profile_catalog_evidence", "credential_generation": credential_generation, "image_ref": profile_image_ref or evidence_image_ref, "observed_at": observed_at, "stale": stale},
     )
 
