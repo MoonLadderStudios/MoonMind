@@ -246,3 +246,66 @@ async def test_reconciliation_required_failure_preserves_original_or_legacy_retr
             {"legacy_retry": True}, None
         )
         assert calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patched", [True, False])
+async def test_cancelled_attempt_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, patched: bool
+) -> None:
+    """An operator cancel ends the lane; it is not a failed attempt to retry.
+
+    The cancelled Activity already settled its runtime binding, so a second
+    attempt only reconciles a cleaned binding with no provider result and
+    replaces the cancellation with OMNIGENT_RUNTIME_BINDING_CONFLICT.
+    Retained histories keep their recorded retry.
+    """
+    from temporalio.exceptions import ActivityError, CancelledError
+
+    cancelled = ActivityError(
+        "Activity cancelled",
+        scheduled_event_id=120,
+        started_event_id=126,
+        identity="worker",
+        activity_type="integration.omnigent.profile_bound_execute",
+        activity_id="6",
+        retry_state=None,
+    )
+    cancelled.__cause__ = CancelledError("Cancelled")
+    calls = 0
+
+    async def execute_activity(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise cancelled
+        return ({"legacy_retry": True}, None)
+
+    run = agent_run_module.MoonMindAgentRun()
+    monkeypatch.setattr(run, "_execute_omnigent_with_admitted_capacity", execute_activity)
+    monkeypatch.setattr(run, "_workflow_patch_enabled", lambda _patch_id: patched)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "now",
+        lambda: datetime(2026, 11, 7, tzinfo=timezone.utc),
+    )
+    kwargs = dict(
+        act_name="integration.omnigent.profile_bound_execute",
+        request=object(),
+        admission=None,
+        parent_info=None,
+        stc_seconds=21600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+
+    if patched:
+        with pytest.raises(ActivityError) as raised:
+            await run._execute_profile_bound_with_remaining_budget(**kwargs)
+        assert raised.value is cancelled
+        assert calls == 1
+    else:
+        assert await run._execute_profile_bound_with_remaining_budget(**kwargs) == (
+            {"legacy_retry": True}, None
+        )
+        assert calls == 2
