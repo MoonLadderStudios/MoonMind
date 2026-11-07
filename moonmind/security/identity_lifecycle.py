@@ -101,12 +101,13 @@ def reconcile(selection, workforce, accounts, events, *, observed_at):
         if row.person_id:
             by_person[row.person_id]
         if row.account_id:
-            kinds[row.account_id].add(row.account_kind)
+            if row.account_kind != "unknown":
+                kinds[row.account_id].add(row.account_kind)
             if row.person_id:
                 by_person[row.person_id].add(row.account_id)
                 people_by_account[row.account_id].add(row.person_id)
     ambiguous = {a for a, p in people_by_account.items() if len(p) > 1}
-    ambiguous |= {a for a, k in kinds.items() if len(k - {"unknown"}) > 1}
+    ambiguous |= {a for a, k in kinds.items() if len(k) > 1}
     seen_accounts = defaultdict(set)
     for account in accounts:
         seen_accounts[account["id"]].add(account["status"])
@@ -154,7 +155,7 @@ def reconcile(selection, workforce, accounts, events, *, observed_at):
                 for g in (event.remove_group_ids if event.type == "mover" else [None])
             ]
             matched = []
-            restored = False
+            restorations = []
             for account_id, group_id in required:
                 types = {
                     "joiner": {"user.lifecycle.create", "user.lifecycle.activate"},
@@ -175,8 +176,10 @@ def reconcile(selection, workforce, accounts, events, *, observed_at):
                     continue
                 matched.append(candidates[0])
                 if event.type != "joiner":
-                    restored |= any(
-                        at >= candidates[0][0]
+                    restorations.extend(
+                        (at, r)
+                        for at, r in relevant
+                        if at >= candidates[0][0]
                         and account_id in r["accountIds"]
                         and (
                             r["type"]
@@ -185,32 +188,35 @@ def reconcile(selection, workforce, accounts, events, *, observed_at):
                             else r["type"] == "group.user_membership.add"
                             and group_id in r["groupIds"]
                         )
-                        for at, r in relevant
                     )
-            for _, record in matched:
+            for _, record in [*matched, *restorations]:
                 row["evidenceRefs"].extend(record["evidenceRefs"])
                 row["sourceEventIds"].append(record["id"])
-            if len(matched) != len(required):
-                reason = "missing_historical_event"
-            else:
+            row["sourceEventIds"] = list(dict.fromkeys(row["sourceEventIds"]))
+            row["historyComplete"] = len(matched) == len(required)
+            if matched:
                 delay = max(
                     (at - event.effective_at).total_seconds() / 3600
                     for at, _ in matched
                 )
                 row["recordedDelayHours"] = round(delay, 6)
                 exception = event.type != "joiner" and (
-                    delay > selection.removal_hours or restored
+                    delay > selection.removal_hours or bool(restorations)
                 )
-                row["status"] = "policy_exception" if exception else "event_observed"
+            else:
+                exception = False
+            if exception:
+                row["status"] = "policy_exception"
                 reason = (
                     "access_restored_after_removal"
-                    if restored
-                    else (
-                        "recorded_removal_outside_policy"
-                        if exception
-                        else "successful_event_observed"
-                    )
+                    if restorations
+                    else "recorded_removal_outside_policy"
                 )
+            elif not row["historyComplete"]:
+                reason = "missing_historical_event"
+            else:
+                row["status"] = "event_observed"
+                reason = "successful_event_observed"
         row["reason"] = reason
         row["evidenceRefs"] = list(dict.fromkeys(row["evidenceRefs"]))
         lifecycle.append(row)

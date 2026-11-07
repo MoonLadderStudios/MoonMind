@@ -62,7 +62,8 @@ class Okta:
         original = httpx.AsyncClient
 
         def client(**kwargs):
-            assert kwargs.pop("proxy") == "http://identity-proxy:3128"
+            proxy = kwargs.pop("proxy")
+            assert proxy == "http://identity-proxy:3128"
             assert kwargs["trust_env"] is False
             assert kwargs["follow_redirects"] is False
             return original(
@@ -706,3 +707,125 @@ async def test_provider_cannot_echo_the_credential_into_a_pagination_cursor(
             artifact_id=ref, access=access_for_test("workflow:assessment")
         )
         assert SECRET_CANARY.encode() not in body
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+@pytest.mark.parametrize("error", [httpx.ReadError, TimeoutError])
+async def test_failed_stream_bytes_remain_charged_across_restarts(
+    environment, monkeypatch, interrupt, error
+):
+    payload = await admission(environment, monkeypatch, maxBytes=1024)
+    fake = Okta(monkeypatch)
+
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"x" * 900
+            raise error("test disconnect")
+
+    def respond(req):
+        fake.requests.append(req)
+        return httpx.Response(200, stream=BrokenStream())
+
+    fake.respond = respond
+    original_write = AssessmentExecution.write
+
+    async def write(self, body, **kwargs):
+        ref = await original_write(self, body, **kwargs)
+        if kwargs["kind"] == "security.identity-page":
+            raise asyncio.CancelledError()
+        return ref
+
+    if interrupt:
+        with monkeypatch.context() as patch:
+            patch.setattr(AssessmentExecution, "write", write)
+            with pytest.raises(asyncio.CancelledError):
+                await invoke(environment.service, payload)
+    outputs = await invoke(environment.service, payload, key="after-disconnect")
+    identity = await report(environment.service, outputs)
+    assert len(fake.requests) == 2
+    assert identity["usage"]["bytes"] == 1800
+    assert identity["usage"]["requests"] == 2
+    assert "byte_budget" in identity["limitations"]
+    page = await read(environment.service, identity["pageRefs"][0])
+    assert page["bytes"] == 1800
+    retry = await invoke(environment.service, payload, key="retry-disconnect")
+    assert await report(environment.service, retry) == identity
+    assert len(fake.requests) == 2
+
+
+async def test_large_identity_report_is_readable_and_reused_after_restart(
+    environment, monkeypatch
+):
+    person, account = "p" * 128, "a" * 128
+    data = {
+        **workforce(),
+        "roster": [{"personId": person, "accountId": account}],
+        "events": [
+            {
+                "id": f"{i:06d}" + "e" * 122,
+                "personId": person,
+                "type": "leaver",
+                "effectiveAt": None,
+            }
+            for i in range(20000)
+        ],
+    }
+    assert len(json.dumps(data).encode()) < 8 * 1024 * 1024
+    payload = await admission(environment, monkeypatch, data=data)
+    fake = Okta(monkeypatch, users=[], events=[])
+    outputs = await invoke(environment.service, payload)
+    root = outputs["identityLifecycle"]["evidenceRef"]
+    identity = await report(environment.service, outputs)
+    access = access_for_test("workflow:assessment")
+    _, root_body = await environment.service.read(artifact_id=root, access=access)
+    assert len(root_body) <= 8 * 1024 * 1024
+    reconstructed = bytearray()
+    for ref in identity["reportParts"]:
+        _, part = await environment.service.read(artifact_id=ref, access=access)
+        assert len(part) <= 8 * 1024 * 1024
+        reconstructed.extend(part)
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await environment.service.read(
+                artifact_id=ref, access=access_for_test("workflow:another")
+            )
+    complete = json.loads(reconstructed)
+    assert len(reconstructed) > 8 * 1024 * 1024
+    assert len(complete["lifecycle"]) == 20000
+    assert {r["workforceEventId"] for r in complete["lifecycle"]} == {
+        e["id"] for e in data["events"]
+    }
+    assert all(r["reason"] == "unknown_effective_date" for r in complete["lifecycle"])
+    assert complete["counts"] == identity["counts"]
+    proof = await environment.service.dependency_proof(
+        root_artifact_id=root, access=access
+    )
+    assert set(identity["reportParts"]) <= {p.artifact_id for p in proof}
+    count = len(fake.requests)
+    async with environment.sessions() as session:
+        later = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        retry = await invoke(later, payload, key="large-report-restart")
+        assert retry["identityLifecycle"]["evidenceRef"] == root
+        assert await report(later, retry) == identity
+    assert len(fake.requests) == count
+
+
+async def test_known_exception_keeps_missing_history_in_coverage_limits(
+    environment, monkeypatch
+):
+    data = workforce()
+    data["roster"].append({"personId": "p-leave", "accountId": "u-other"})
+    data["events"] = [e for e in data["events"] if e["id"] == "l1"]
+    payload = await admission(environment, monkeypatch, data=data)
+    Okta(monkeypatch)
+    identity = await report(
+        environment.service, await invoke(environment.service, payload)
+    )
+    row = next(r for r in identity["lifecycle"] if r["workforceEventId"] == "l1")
+    assert row["status"] == "policy_exception"
+    assert row["historyComplete"] is False
+    assert row["recordedDelayHours"] == 48
+    assert "missing_historical_event" in identity["limitations"]
+    assert identity["counts"]["policyExceptions"] == 1

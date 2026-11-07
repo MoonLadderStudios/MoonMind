@@ -69,9 +69,10 @@ Event types are `joiner`, `mover`, and `leaver`. Movers declare the old access t
 remove in `removeGroupIds`. Set `effectiveAt` to `null` when unknown. Missing
 account IDs, duplicate or conflicting identities, unspecified mover changes, and
 unmatched people or accounts require review. Names and email similarity never
-establish a match. Service identities need an explicit roster classification;
-an unmatched account is not automatically improper. Extra HR attributes are
-discarded during parsing. Avoid including them in the original upload, whose
+establish a match. Incomplete duplicate rows preserve a unique explicit account
+classification; conflicting kinds remain ambiguous. An unmatched account is not
+automatically improper. Extra HR attributes are discarded during parsing. Avoid
+including them in the original upload, whose
 access and retention remain owned by the artifact service.
 
 Select the tool through its existing Temporal Activity handoff:
@@ -112,8 +113,9 @@ collection time, capability and retention limits, source event IDs, and artifact
 links. Account and assignment results are current snapshots. Audit timestamps
 are event publication times, not independently verified effective removal times.
 A successful recorded removal after `removalHours` is a traceable policy
-exception; missing events or unknown workforce dates remain review questions.
-Reactivation or restored group access after removal also requires attention.
+exception even when another required removal has no history. Such rows retain
+`historyComplete=false` and the report's missing-history limitation. Restoration
+events retain their evidence links. Unknown workforce dates require review.
 
 Okta documents a [90-day System Log retention limit](https://developer.okta.com/docs/reference/system-log-query/).
 The report preserves an estimate based on the original collection time and
@@ -124,11 +126,14 @@ unverified. An empty or disabled-account snapshot cannot establish historical
 control operation.
 
 The existing artifact owner saves projected pages before reconciliation. An
-Activity retry or restart reuses completed pages and the original collection
-window and budget. A completed partial report stays partial on retry; a new
-collection needs a new execution. Restricted evidence is sealed to the workforce
-input and saved pages. Provider profiles, names, email addresses, actors, raw
-error bodies, and credential values are omitted from collected records.
+Activity retry or restart reuses completed pages, charged bytes from failed
+streams, and the original window and budget. Large reports use a restricted
+`identity-lifecycle-evidence-manifest/v1` artifact with counts, limitations, and
+ordered `reportParts`; concatenate those parts to read the complete JSON report.
+Each part is at most 4 MiB and sealed with the workforce input and saved pages.
+A completed partial report stays partial on retry; a new collection needs a new
+execution. Provider profiles, names, email addresses, actors, raw error bodies,
+and credential values are omitted from collected records.
 Ordinary outputs contain counts, limitation codes, and evidence references.
 
 When a framework is selected in the same assessment, the generated

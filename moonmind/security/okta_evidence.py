@@ -45,6 +45,7 @@ _STATUSES = {
     "SUSPENDED",
     "DEPROVISIONED",
 }
+_REPORT_PART_BYTES = 4 * 1024 * 1024
 
 
 def _json(value):
@@ -190,7 +191,6 @@ class _Reader:
     async def endpoint(self, client, secret, name, path, params):
         category = name.split(":")[0]
         records, cursor, seen = [], None, set()
-        status = "pagination_limit"
         pages = 0
         record_limits = set()
         for index in range(self.selection.max_pages):
@@ -291,16 +291,12 @@ class _Reader:
                         },
                         timeout=min(remaining, 15),
                     ) as response:
-                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                            body.extend(chunk)
-                            if (
-                                self.bytes + page["bytes"] + len(body)
-                                > self.selection.max_bytes
-                            ):
+                        async for chunk in response.aiter_bytes():
+                            page["bytes"] += len(chunk)
+                            if self.bytes + page["bytes"] > self.selection.max_bytes:
                                 page["status"] = "byte_budget"
-                                page["bytes"] += len(body)
                                 return page
-                        page["bytes"] += len(body)
+                            body.extend(chunk)
                         status = response.status_code
                         if status in {500, 502, 503, 504}:
                             continue
@@ -491,6 +487,8 @@ async def collect_identity(execution, selection):
             for row in reconciled["lifecycle"]
             if row["status"] == "review_required"
         )
+        if any(row.get("historyComplete") is False for row in reconciled["lifecycle"]):
+            reader.limitations.add("missing_historical_event")
         for event in events:
             if (
                 event["published"]
@@ -558,7 +556,41 @@ async def collect_identity(execution, selection):
                 }
             ],
         }
-        root = await execution.write(_json(report), kind="security.identity", key=key)
+        body = _json(report)
+        if len(body) > _REPORT_PART_BYTES:
+            # Expanded reconciliation can outgrow both upload and retry-read
+            # limits. Keep every byte in ordered parts under the same owner.
+            parts = []
+            for offset in range(0, len(body), _REPORT_PART_BYTES):
+                parts.append(
+                    await execution.write(
+                        body[offset : offset + _REPORT_PART_BYTES],
+                        kind="security.identity-report-part",
+                        key=content_key([key, offset]),
+                        content_type="application/octet-stream",
+                    )
+                )
+            report = {
+                "schemaVersion": "identity-lifecycle-evidence-manifest/v1",
+                "reportSchemaVersion": report["schemaVersion"],
+                "reportParts": parts,
+                **{
+                    name: report[name]
+                    for name in (
+                        "provider",
+                        "organisation",
+                        "requestedPeriod",
+                        "observedAt",
+                        "counts",
+                        "limitations",
+                        "controlOperation",
+                        "anchorRef",
+                        "pageRefs",
+                    )
+                },
+            }
+            body = _json(report)
+        root = await execution.write(body, kind="security.identity", key=key)
 
     async def dependencies():
         return [
@@ -569,6 +601,7 @@ async def collect_identity(execution, selection):
                 selection.workforce_ref,
                 report["anchorRef"],
                 *report["pageRefs"],
+                *report.get("reportParts", []),
             ]
         ]
 

@@ -276,3 +276,135 @@ def test_duplicate_workforce_records_do_not_hide_ambiguous_source_ids():
         next(r for r in report["lifecycle"] if r["workforceEventId"] == "l1")["reason"]
         == "ambiguous_identity"
     )
+
+
+@pytest.mark.parametrize("kind", ["leaver", "mover"])
+@pytest.mark.parametrize("restored", [False, True])
+def test_known_policy_exceptions_survive_incomplete_removal_history(kind, restored):
+    from moonmind.security.identity_lifecycle import Workforce, reconcile
+
+    data = workforce()
+    data["roster"] = [
+        {"personId": "person", "accountId": "account"},
+        *([] if kind == "mover" else [{"personId": "person", "accountId": "other"}]),
+    ]
+    data["events"] = [
+        {
+            "id": "change",
+            "personId": "person",
+            "type": kind,
+            "effectiveAt": "2026-11-02T00:00:00Z",
+            "removeGroupIds": ["removed", "missing"] if kind == "mover" else [],
+        }
+    ]
+    removal = {
+        "id": "removed",
+        "type": (
+            "group.user_membership.remove"
+            if kind == "mover"
+            else "user.lifecycle.deactivate"
+        ),
+        "published": "2026-11-02T02:00:00Z" if restored else "2026-11-04T00:00:00Z",
+        "accountIds": ["account"],
+        "groupIds": ["removed"] if kind == "mover" else [],
+        "successful": True,
+        "evidenceRefs": ["art_removal"],
+    }
+    events = [removal]
+    if restored:
+        events.append(
+            {
+                **removal,
+                "id": "restored",
+                "type": (
+                    "group.user_membership.add"
+                    if kind == "mover"
+                    else "user.lifecycle.activate"
+                ),
+                "published": "2026-11-02T03:00:00Z",
+                "evidenceRefs": ["art_restoration"],
+            }
+        )
+    result = reconcile(
+        AssessmentRequest.model_validate(request()).identity_lifecycle,
+        Workforce.model_validate(data),
+        [],
+        events,
+        observed_at=NOW,
+    )
+    row = result["lifecycle"][0]
+    assert row["status"] == "policy_exception"
+    assert row["reason"] == (
+        "access_restored_after_removal"
+        if restored
+        else "recorded_removal_outside_policy"
+    )
+    assert row["historyComplete"] is False
+    assert row["recordedDelayHours"] == (2 if restored else 48)
+    assert result["counts"]["policyExceptions"] == 1
+    assert "art_removal" in row["evidenceRefs"]
+    if restored:
+        assert "art_restoration" in row["evidenceRefs"]
+        assert "restored" in row["sourceEventIds"]
+
+
+@pytest.mark.parametrize("explicit_kind", ["human", "service"])
+@pytest.mark.parametrize("matched", [False, True])
+def test_incomplete_roster_rows_preserve_the_explicit_account_kind(
+    explicit_kind, matched
+):
+    from moonmind.security.identity_lifecycle import Workforce, reconcile
+
+    row = {"accountId": "account", **({"personId": "person"} if matched else {})}
+    data = {
+        **workforce(),
+        "roster": [
+            row,
+            {**row, "accountKind": explicit_kind},
+            {**row, "accountKind": "unknown"},
+        ],
+        "events": [],
+    }
+    result = reconcile(
+        AssessmentRequest.model_validate(request()).identity_lifecycle,
+        Workforce.model_validate(data),
+        [{"id": "account", "status": "ACTIVE"}],
+        [],
+        observed_at=NOW,
+    )
+    assert result["accountKinds"] == {"account": explicit_kind}
+    assert result["ambiguousAccounts"] == []
+    assert result["unmatchedAccounts"] == (
+        []
+        if matched
+        else [
+            {
+                "accountId": "account",
+                "accountKind": explicit_kind,
+                "disposition": "review_required",
+            }
+        ]
+    )
+
+
+def test_conflicting_explicit_account_kinds_remain_ambiguous():
+    from moonmind.security.identity_lifecycle import Workforce, reconcile
+
+    data = {
+        **workforce(),
+        "roster": [
+            {"accountId": "account", "accountKind": kind}
+            for kind in ("human", "service", "unknown")
+        ],
+        "events": [],
+    }
+    result = reconcile(
+        AssessmentRequest.model_validate(request()).identity_lifecycle,
+        Workforce.model_validate(data),
+        [{"id": "account", "status": "ACTIVE"}],
+        [],
+        observed_at=NOW,
+    )
+    assert result["accountKinds"] == {"account": "unknown"}
+    assert result["ambiguousAccounts"] == ["account"]
+    assert result["unmatchedAccounts"][0]["accountKind"] == "unknown"
