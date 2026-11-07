@@ -301,8 +301,23 @@ def prepare_audit(
         period = choice.period if choice and choice.period else request.period
         if not set(selected) <= set(systems):
             raise ValueError("Requirement systems outside critical-system scope")
-        matched = [e for e in records if e.covers(requirement.id, selected, period)]
-        methods = {e.method for e in matched}
+        matched = []
+        methods_by_system = {system_id: set() for system_id in selected}
+        for item in records:
+            covered = [
+                system_id
+                for system_id in selected
+                if item.covers(requirement.id, [system_id], period)
+            ]
+            if covered:
+                matched.append(item)
+                for system_id in covered:
+                    methods_by_system[system_id].add(item.method)
+        methods = (
+            set.intersection(*methods_by_system.values())
+            if methods_by_system
+            else set()
+        )
         missing_methods = sorted({"enquiry", "evidence", "observation"} - methods)
         excluded = bool(choice and choice.not_applicable_reason)
         status = (
@@ -472,7 +487,12 @@ def render_audit_preparation(report: dict) -> str:
     parts += ["", "## Requirement results", ""]
     for row in report["requirements"]:
         parts.append(
-            f"- {row['id']} {row['title']}: {row['status']}; methods: {', '.join(row['methods']) or 'missing'}; evidence: {', '.join(row['evidenceRefs']) or 'missing'}"
+            f"- {row['id']} {row['title']}: {row['status']}; "
+            f"systems: {', '.join(row['systems']) or 'none'}; "
+            f"period: {row['period']['start']} to {row['period']['end']}; "
+            f"exclusion reason: {row['exclusionReason'] or 'none'}; "
+            f"methods: {', '.join(row['methods']) or 'missing'}; "
+            f"evidence: {', '.join(row['evidenceRefs']) or 'missing'}"
         )
     parts += ["", "## Missing external evidence and next actions", ""]
     parts += [f"- {r['id']}: {r['prompt']}" for r in report["evidenceRequests"]] or [

@@ -319,7 +319,8 @@ The Create fields accept saved system inputs, an audit period (`start` and
 `end` dates), evidence artifact IDs, an optional audit-record artifact, and
 requirement choices keyed by control ID. Omitted choices use the full admitted
 system scope and period; a choice can set `systems`, `period`, or
-`notApplicableReason`. Exclusions stay visible for auditor review.
+`notApplicableReason`. Markdown and JSON reports retain these choices for
+auditor review.
 
 System inputs describe `operatorName`, `businessDescription`, `licenceClass`,
 `systemIdentification`, and `criticalSystems`. Each critical-system entry names
@@ -340,8 +341,10 @@ Unknown classes or missing scope produce actionable requests, not an exemption.
 Each evidence artifact contains `kind`, `requirementIds`, `systems`, `period`,
 `method` (`enquiry`, `evidence`, or `observation`), a description of documents,
 staff, versions and samples, and `provenance` (`sourceRef`, `issuer`, `version`,
-`recordedOn`, `standard`). A prior `external_audit` also needs auditor-reviewed
-`reliance` with `reviewedBy`, `reason`, `reviewRef` and `validFor`. Work against
+`recordedOn`, `standard`). Separate records can cover each system; every
+selected system needs all three methods for the chosen period. A prior
+`external_audit` also needs auditor-reviewed `reliance` with `reviewedBy`,
+`reason`, `reviewRef` and `validFor`. Work against
 another standard also needs an explicit `equivalenceReason`. Its coverage
 and provenance remain in the package. `iso_certificate` and
 `technical_assessment` records supply context without completing audit elements.

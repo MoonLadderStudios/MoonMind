@@ -212,3 +212,61 @@ def test_requirement_scope_and_period_do_not_widen_evidence():
         AssessmentRequest.model_validate(
             dict(request_payload(), framework=data["framework"])
         )
+
+
+@pytest.mark.parametrize("missing_method", [None, "enquiry", "evidence", "observation"])
+def test_requirement_combines_evidence_per_system_and_method(missing_method):
+    data = fixture()
+    data["framework"]["systemInputs"]["criticalSystems"][1]["systems"] = ["rng"]
+    data["framework"]["requirementChoices"]["8.29"] = {"systems": ["casino", "rng"]}
+    data["evidence"] = [
+        dict(row, systems=[system])
+        for system in ("casino", "rng")
+        for row in data["evidence"]
+        if system != "rng" or row["method"] != missing_method
+    ]
+
+    report = evaluate(data)
+    result = next(row for row in report["requirements"] if row["id"] == "8.29")
+    assert result["status"] == ("incomplete" if missing_method else "evidence_recorded")
+    assert result["methods"] == sorted(
+        {"enquiry", "evidence", "observation"} - {missing_method}
+    )
+    assert result["evidenceRefs"] == [
+        f"art_evidence_{i}" for i in range(len(data["evidence"]))
+    ]
+    requests = [
+        row for row in report["evidenceRequests"] if row.get("requirementId") == "8.29"
+    ]
+    if missing_method:
+        assert len(requests) == 1
+        assert requests[0]["methods"] == [missing_method]
+    else:
+        assert not requests
+        assert report["readiness"] == "prepared"
+
+
+def test_markdown_preserves_each_requirements_scope_period_and_exclusion():
+    from moonmind.security.ukgc_rts import render_audit_preparation
+
+    data = fixture()
+    data["framework"]["systemInputs"]["criticalSystems"][1]["systems"] = ["rng"]
+    data["framework"]["requirementChoices"] = {
+        "5.23": {
+            "systems": ["casino"],
+            "period": {"start": "2025-04-01", "end": "2025-10-31"},
+            "notApplicableReason": "No cloud services within the admitted scope",
+        },
+        "8.29": {
+            "systems": ["rng"],
+            "period": {"start": "2026-02-01", "end": "2026-11-30"},
+        },
+    }
+    text = render_audit_preparation(evaluate(data))
+    excluded = next(line for line in text.splitlines() if line.startswith("- 5.23 "))
+    assert "systems: casino" in excluded
+    assert "2025-04-01" in excluded and "2025-10-31" in excluded
+    assert "No cloud services within the admitted scope" in excluded
+    testing = next(line for line in text.splitlines() if line.startswith("- 8.29 "))
+    assert "systems: rng" in testing
+    assert "2026-02-01" in testing and "2026-11-30" in testing
