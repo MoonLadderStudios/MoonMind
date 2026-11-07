@@ -2042,7 +2042,22 @@ class AssessmentExecution:
             control_ref, control_report = controls
             outputs.update(
                 controlAssessmentRef=control_ref,
-                frameworkPack=control_report.framework_pack,
+                # Pack narrative belongs in the retained report, not a potentially
+                # multi-megabyte Temporal activity result.
+                frameworkPack=(
+                    {
+                        key: control_report.framework_pack[key]
+                        for key in (
+                            "id",
+                            "edition",
+                            "revision",
+                            "artifactRef",
+                            "sha256",
+                        )
+                    }
+                    if control_report.framework_pack
+                    else None
+                ),
                 assessmentIntelligenceChanges=control_report.intelligence_changes,
                 frameworkPackDiagnostics=control_report.diagnostics,
                 controlAssessmentCounts={

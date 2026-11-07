@@ -44,6 +44,12 @@ async def test_declared_pack_produces_retained_requirement_report(environment):
     report = await recurring.read(service, result["controlAssessmentRef"])
     assert report["requirements"][0]["conclusion"] == "satisfied"
     assert report["frameworkPack"]["revision"] == "1"
+    assert (
+        result["frameworkPack"]["artifactRef"]
+        == request["frameworkPack"]["artifactRef"]
+    )
+    assert "requirements" not in result["frameworkPack"]
+    assert "mappings" not in result["frameworkPack"]
     assert report["frameworkPack"]["sha256"] == request["frameworkPack"]["sha256"]
     assert request["frameworkPack"]["artifactRef"] in await recurring.required(
         service, result["controlAssessmentRef"]
