@@ -12,6 +12,11 @@ Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)
 ]
 Strings = Annotated[list[Text], Field(max_length=256)]
+# Declared framework inputs that flow into the control evaluator share its bound.
+# Legacy framework narrative fields retain their wider original contract.
+AssessmentText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
+]
 
 
 class FrameworkContract(BaseModel):
@@ -85,6 +90,32 @@ class RequirementChoice(FrameworkContract):
     not_applicable_reason: Text | None = None
     responsible_entity: Literal["assessed_entity", "partner"] = "assessed_entity"
     responsibility_reason: Text | None = None
+
+
+class DeclaredRequirementChoice(RequirementChoice):
+    applicability: Literal["applicable", "not_applicable", "undetermined"] = (
+        "undetermined"
+    )
+    applicability_reason: AssessmentText | None = None
+    not_applicable_reason: AssessmentText | None = None
+    responsibility_reason: AssessmentText | None = None
+
+
+class FrameworkPackSelection(FrameworkContract):
+    """An explicitly selected, retained pack, not a mutable registry alias."""
+
+    artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    pack_id: Text
+    edition: Text
+    revision: Text
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    period: EvidencePeriod
+    requirement_choices: Annotated[
+        dict[Text, DeclaredRequirementChoice], Field(max_length=64)
+    ] = Field(default_factory=dict)
+    previous_assessment_ref: (
+        Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
+    ) = None
 
 
 class FrameworkAssessmentInput(FrameworkContract):
