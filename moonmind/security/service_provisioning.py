@@ -70,8 +70,16 @@ async def _network(runner: CommandRunner, name: str) -> dict | None:
 
 
 async def _gateway(runner: CommandRunner, connection: ServiceConnection) -> dict | None:
+    # Untyped lookup probes unrelated daemon APIs when the relay is absent.
     return await _inspect(
-        runner, ("inspect", "--format", GATEWAY_INSPECT_FORMAT, connection.gateway_ref)
+        runner,
+        (
+            "container",
+            "inspect",
+            "--format",
+            GATEWAY_INSPECT_FORMAT,
+            connection.gateway_ref,
+        ),
     )
 
 

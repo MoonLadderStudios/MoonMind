@@ -82,8 +82,12 @@ class Daemon:
         if args[0] == "pull":
             self.image = True
             return 0, b"pulled", b""
-        if args[0] == "inspect":
+        if args[:2] == ("container", "inspect"):
             return self.result(self.gateway, "No such container")
+        if args[0] == "inspect":
+            # Docker's untyped lookup probes plugins after a missing container.
+            # The deployment proxy refuses that unrelated API.
+            return self.result(self.gateway, "Error response from daemon: Forbidden")
         if args[0] == "create":
             if self.gateway is not None:
                 return 1, b"", b"container name already exists"

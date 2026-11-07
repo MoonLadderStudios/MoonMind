@@ -180,12 +180,13 @@ def runner_for(connection, state, commands):
             if "--check" in args:
                 return 0, json.dumps(state["health"]).encode(), b""
             return 0, state["forwarding"], b""
-        if args[:2] == ("inspect", "--format"):
+        if args[:2] in {("inspect", "--format"), ("container", "inspect")}:
+            template = args[args.index("--format") + 1]
             if args[-1] == connection.gateway_ref:
                 return 0, json.dumps(state["gateway"]).encode(), b""
-            if args[2] == "{{json .Config.Labels}}":
+            if template == "{{json .Config.Labels}}":
                 return 1, b"", b"no such container"
-            if args[2] == "{{json .State}}":
+            if template == "{{json .State}}":
                 return 0, b'{"Status":"exited","Running":false,"ExitCode":0}', b""
             return 0, json.dumps(state["workload"]).encode(), b""
         return 0, b"", b""
@@ -502,7 +503,7 @@ async def test_disappearing_peer_requires_confirmed_network_removal(removed):
 
     async def runner(args):
         nonlocal inspections
-        if args[0] == "inspect" and args[-1] == "finishing-peer":
+        if args[:2] == ("container", "inspect") and args[-1] == "finishing-peer":
             inspections += 1
             if removed:
                 state["network"]["Containers"].pop("finishing-peer", None)
@@ -528,7 +529,7 @@ async def test_peer_reconciliation_rechecks_boundary_and_is_bounded(drift):
 
     async def runner(args):
         nonlocal failures
-        if args[0] == "inspect" and args[-1] in {"first", "second"}:
+        if args[:2] == ("container", "inspect") and args[-1] in {"first", "second"}:
             failures += 1
             state["network"]["Containers"].pop(args[-1], None)
             if drift == "new-peer":
