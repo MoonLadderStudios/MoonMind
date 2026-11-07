@@ -24,6 +24,11 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from moonmind.security.assessments import Contract, Evidence, Text, content_key
+from moonmind.security.authorization_matrix import (
+    AccessObservation,
+    AuthorizationMatrix,
+)
+from moonmind.security.target_assessments import TargetObservation
 
 Ident = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")]
 Tick = Annotated[int, Field(strict=True, ge=0, le=10**15)]
@@ -82,6 +87,7 @@ class Operation(Contract):
     wager_ref: Ident | None = None
     received_at: Tick
     processed_at: Tick
+    access_case_ref: Ident | None = None
 
     @model_validator(mode="after")
     def _valid(self):
@@ -144,6 +150,7 @@ class RgsScenarioSpec(Contract):
     ]
     interruption: Interruption
     scenarios: Annotated[list[Scenario], Field(min_length=1, max_length=32)]
+    authorization_matrix: AuthorizationMatrix | None = None
 
     @model_validator(mode="after")
     def _valid(self):
@@ -162,6 +169,21 @@ class RgsScenarioSpec(Contract):
             raise ValueError("interruption requires a declared transition")
         transitions = {(t.event, t.from_state): t.to_state for t in self.transitions}
         for scenario in self.scenarios:
+            wagers = {w.id: w for w in scenario.wagers}
+            for operation in scenario.operations:
+                if self.authorization_matrix is None:
+                    if operation.access_case_ref is not None:
+                        raise ValueError("access case requires a target matrix")
+                    continue
+                cases = {c.id: c for c in self.authorization_matrix.cases}
+                case = cases.get(operation.access_case_ref)
+                if case is None:
+                    raise ValueError("every operation requires a declared access case")
+                if case.action != operation.kind or (
+                    operation.wager_ref
+                    and case.account_ref != wagers[operation.wager_ref].account_ref
+                ):
+                    raise ValueError("access case contradicts the requested operation")
             state = self.initial_state
             for event in scenario.events:
                 if (event.event, state) not in transitions:
@@ -217,10 +239,13 @@ class Trace(Contract):
     ]
     round_state: Ident
     complete: Annotated[bool, Field(strict=True)]
+    access_observations: list[AccessObservation] | None = Field(None, max_length=128)
 
     @model_validator(mode="after")
     def _unique(self):
         _unique([r.operation for r in self.operations])
+        if self.access_observations is not None:
+            _unique([r.operation for r in self.access_observations])
         return self
 
 
@@ -228,6 +253,8 @@ class RgsTraceBundle(Contract):
     schema_version: Literal["rgs-traces/v1"] = "rgs-traces/v1"
     source_ref: Text
     traces: Annotated[list[Trace], Field(max_length=32)]
+    collection: dict[Text, Text] | None = None
+    observations: list[TargetObservation] | None = Field(None, max_length=8192)
 
     @model_validator(mode="after")
     def _unique(self):
@@ -246,6 +273,7 @@ class Check(Contract):
         "wager-outcome",
         "round-state",
         "scenario-completion",
+        "target-access",
     ]
     expected: Text
     observed: Text
@@ -313,6 +341,12 @@ class RgsAssessment(Contract):
         partial |= {
             c.scenario for c in self.checks if c.rule == "scenario-completion"
         } != {s.id for s in self.spec.scenarios}
+        if self.spec.authorization_matrix is not None:
+            partial |= {
+                (c.scenario, c.operation)
+                for c in self.checks
+                if c.rule == "target-access"
+            } != planned
         if not partial:
             required = set()
             for scenario in self.spec.scenarios:
@@ -350,7 +384,28 @@ class RgsAssessment(Contract):
 
 
 def _digest(value: Contract) -> str:
-    return "sha256:" + content_key(value.model_dump(mode="json", by_alias=True))
+    # Absent extensions must not invalidate already retained v1 reports.
+    def compatible(item):
+        if isinstance(item, dict):
+            extensions = {
+                "accessCaseRef",
+                "authorizationMatrix",
+                "accessObservations",
+                "collection",
+                "observations",
+            }
+            return {
+                k: compatible(v)
+                for k, v in item.items()
+                if k not in extensions or v is not None
+            }
+        if isinstance(item, list):
+            return [compatible(v) for v in item]
+        return item
+
+    return "sha256:" + content_key(
+        compatible(value.model_dump(mode="json", by_alias=True))
+    )
 
 
 def _display(value):
@@ -392,6 +447,13 @@ def _expected(spec, scenario):
     for operation in scenario.operations:
         tx, kind = operation.transaction_id, operation.kind
         fingerprint = (kind, operation.wager_ref)
+        if spec.authorization_matrix is not None:
+            case = spec.authorization_matrix.case(operation.access_case_ref)
+            # Access is checked before looking up a successful transaction:
+            # knowing another account's transaction ID never authorizes replay.
+            if case.expected == "deny":
+                decisions[operation.id] = "denied"
+                continue
         if tx in accepted:
             decisions[operation.id] = (
                 "accepted" if accepted[tx] == fingerprint else "denied"
@@ -484,6 +546,15 @@ def assess_rgs(
             o.id for o in scenario.operations
         }:
             raise ValueError("receipt outside declared operation scope")
+        if trace and trace.access_observations:
+            operations = {o.id: o for o in scenario.operations}
+            for observation in trace.access_observations:
+                operation = operations.get(observation.operation)
+                if (
+                    operation is None
+                    or observation.case_ref != operation.access_case_ref
+                ):
+                    raise ValueError("access observation outside declared case scope")
     checks, stop_reason = [], None
     processed = 0
     started = clock()
@@ -500,6 +571,28 @@ def assess_rgs(
             and len([c for c in checks if c.rule == "scenario-completion"])
             == len(spec.scenarios)
         )
+        if spec.authorization_matrix is not None:
+            complete &= len([c for c in checks if c.rule == "target-access"]) == sum(
+                len(s.operations) for s in spec.scenarios
+            )
+        limitations = list(LIMITATIONS)
+        if (
+            traces.collection
+            and traces.collection.get("producer") == "moonmind.security.rgs_target"
+            and traces.observations
+        ):
+            limitations.remove("transport_not_exercised")
+            if (
+                spec.authorization_matrix
+                and all(
+                    c.decision != "incomplete"
+                    for c in checks
+                    if c.rule == "target-access"
+                )
+                and sum(c.rule == "target-access" for c in checks)
+                == sum(len(s.operations) for s in spec.scenarios)
+            ):
+                limitations.remove("authorization_matrix_not_exercised")
         return RgsAssessment(
             spec=spec,
             spec_digest=_digest(spec),
@@ -532,7 +625,15 @@ def assess_rgs(
                 else "consistent" if complete else "incomplete"
             ),
             stop_reason=stop_reason,
-            limitations=[*LIMITATIONS, *([stop_reason] if stop_reason else [])],
+            limitations=[
+                *limitations,
+                *([stop_reason] if stop_reason else []),
+                *(
+                    ["target_" + traces.collection["stopReason"]]
+                    if traces.collection and traces.collection.get("stopReason")
+                    else []
+                ),
+            ],
         )
 
     def progress():
@@ -627,6 +728,26 @@ def assess_rgs(
                 reconciled=reconciled,
             )
             processed += 1
+            if spec.authorization_matrix is not None:
+                case = spec.authorization_matrix.case(operation.access_case_ref)
+                observations = (
+                    {a.operation: a for a in trace.access_observations or []}
+                    if trace
+                    else {}
+                )
+                access = observations.get(operation.id)
+                check(
+                    "target-access",
+                    operation.id,
+                    case.expected,
+                    access.observed if access else "unknown",
+                    incomplete=access is None or access.observed == "unknown",
+                    evidence_refs=list(
+                        dict.fromkeys(
+                            [*refs, *(access.evidence_refs if access else [])]
+                        )
+                    )[:64],
+                )
             progress()
         final = bool(trace and trace.complete and set(receipts) == set(operations))
         check(

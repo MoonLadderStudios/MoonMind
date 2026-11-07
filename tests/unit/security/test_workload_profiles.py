@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -124,6 +125,85 @@ def spec(arguments=None, *, mode="scan", inputs=None, **fields):
 
 
 PROFILES = settings().workload_profiles
+
+
+@pytest.mark.parametrize(
+    "gap", ["origin", "route", "exclusion", "action", "message", "credential"]
+)
+def test_target_observation_profile_cannot_bypass_the_signed_scope(gap):
+    target = {
+        "webOrigin": "http://app.example.test",
+        "webRoutes": [
+            {"path": "/api", "methods": ["GET", "POST"]},
+            {"path": "/channel", "methods": ["GET"]},
+        ],
+        "webExclusions": ["/api/private"],
+    }
+    web = {
+        "mode": "active",
+        "activeStrength": "low",
+        "origin": target["webOrigin"],
+        "routes": target["webRoutes"],
+        "startPaths": ["/api"],
+        "exclusions": target["webExclusions"],
+        "egressPolicyRef": "target",
+    }
+    observation_scope = {
+        "web": web,
+        "messages": {},
+        "credentialSlots": {"secret://target/admitted": "identity"},
+    }
+    profile = copy.deepcopy(PROFILE)
+    profile.update(
+        networkMode="bridge",
+        egressPolicyRef="target",
+        credentials=[
+            {"name": "identity", "purpose": "application_auth", "delivery": "file"}
+        ],
+    )
+    admitted = AdmittedAssessmentScope.model_validate(
+        {
+            **SCOPE,
+            "targets": [*SCOPE["targets"], target],
+            "networkRefs": ["target"],
+            "actionClasses": ["source-analysis", "web-active"],
+        }
+    )
+    selection = {"assessmentRef": SCOPE["assessmentRef"]}
+    profile["environment"]["MOONMIND_TARGET_ASSESSMENT_SCOPE"] = json.dumps(
+        observation_scope
+    )
+    base_profiles = settings(profile).workload_profiles
+    resolved_job_within_scope(
+        resolve_profile_job(spec(selection=selection), base_profiles),
+        admitted,
+        base_profiles,
+    )
+    if gap == "origin":
+        web["origin"] = "http://other.example.test"
+    elif gap == "route":
+        web["routes"] = [*web["routes"], {"path": "/unadmitted", "methods": ["GET"]}]
+    elif gap == "exclusion":
+        web["exclusions"] = []
+    elif gap == "action":
+        admitted = admitted.model_copy(update={"action_classes": ("source-analysis",)})
+    elif gap == "message":
+        observation_scope["messages"] = {"/channel": ["unadmitted"]}
+    else:
+        selection["credentials"] = [
+            {
+                "slot": "identity",
+                "credentialRef": "secret://target/other",
+                "account": "other",
+            }
+        ]
+    profile["environment"]["MOONMIND_TARGET_ASSESSMENT_SCOPE"] = json.dumps(
+        observation_scope
+    )
+    profiles = settings(profile).workload_profiles
+    resolved = resolve_profile_job(spec(selection=selection), profiles)
+    with pytest.raises(PermissionError):
+        resolved_job_within_scope(resolved, admitted, profiles)
 
 
 @pytest.mark.parametrize(
@@ -409,6 +489,54 @@ def test_scoped_capability_round_trips_its_signed_scope():
         ).assessment_scope
         is None
     )
+
+
+def test_real_time_message_scope_round_trips_the_signed_capability():
+    admitted = AdmittedAssessmentScope.model_validate(
+        {
+            **SCOPE,
+            "targets": [
+                {
+                    "webOrigin": "https://app.example.test",
+                    "webRoutes": [{"path": "/channel", "methods": ["GET"]}],
+                    "webMessages": {"/channel": ["operation", "snapshot"]},
+                }
+            ],
+        }
+    )
+    token = mint(assessment_scope=admitted)
+    decoded = verify_container_job_session_capability(token, secret="scope-secret")
+    assert decoded.assessment_scope.targets[0].web_messages == {
+        "/channel": ("operation", "snapshot")
+    }
+    profile = copy.deepcopy(PROFILE)
+    profile.update(networkMode="bridge", egressPolicyRef="target")
+    profile["environment"]["MOONMIND_TARGET_ASSESSMENT_SCOPE"] = json.dumps(
+        {
+            "web": {
+                "mode": "active",
+                "activeStrength": "low",
+                "origin": "https://app.example.test",
+                "routes": [{"path": "/channel", "methods": ["GET"]}],
+                "startPaths": ["/channel"],
+                "egressPolicyRef": "target",
+            },
+            "messages": {"/channel": ["operation"]},
+        }
+    )
+    full_scope = admitted.model_copy(
+        update={
+            "targets": (
+                *admitted.targets,
+                *AdmittedAssessmentScope.model_validate(SCOPE).targets,
+            ),
+            "network_refs": ("target",),
+            "action_classes": ("source-analysis", "web-active"),
+        }
+    )
+    profiles = settings(profile).workload_profiles
+    resolved = resolve_profile_job(scoped(), profiles)
+    resolved_job_within_scope(resolved, full_scope, profiles)
 
 
 def test_scoped_capability_rejects_tampered_or_downgraded_scope():

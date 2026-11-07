@@ -282,3 +282,128 @@ def test_concurrent_cashouts_linearize_once_and_both_serial_orders_are_legal():
         )
         assert result.outcome == "consistent"
         assert target.wallet.balances == {"wallet-a": 1050}
+
+
+def access_inputs():
+    """An explicit target matrix, independent of MoonMind operator access."""
+    raw = json.loads(FIXTURE.read_text())["spec"]
+    raw["scenarios"] = [raw["scenarios"][0]]
+    raw["authorizationMatrix"] = {
+        "identities": [
+            {
+                "id": "owner",
+                "accountRef": "wallet-a",
+                "sessionRef": "session-a",
+                "integrationRef": "integration-a",
+                "credentialRef": "secret://target/a",
+            },
+            {
+                "id": "other",
+                "accountRef": "wallet-b",
+                "sessionRef": "session-b",
+                "integrationRef": "integration-b",
+                "credentialRef": "secret://target/b",
+            },
+        ],
+        "cases": [
+            {
+                "id": "own",
+                "identityRef": "owner",
+                "accountRef": "wallet-a",
+                "sessionRef": "session-a",
+                "integrationRef": "integration-a",
+                "action": "wager",
+                "expected": "allow",
+            },
+            {
+                "id": "cross-account",
+                "identityRef": "other",
+                "accountRef": "wallet-a",
+                "sessionRef": "session-b",
+                "integrationRef": "integration-b",
+                "action": "wager",
+                "expected": "deny",
+            },
+        ],
+    }
+    scenario = raw["scenarios"][0]
+    scenario["operations"] = [scenario["operations"][0]]
+    scenario["operations"][0]["accessCaseRef"] = "own"
+    return raw
+
+
+def test_declared_target_access_changes_expected_financial_outcomes():
+    from moonmind.security.rgs_assessment import RgsScenarioSpec
+
+    _, traces = inputs()
+    raw = access_inputs()
+    result = assess(
+        RgsScenarioSpec.model_validate(raw), traces.model_copy(update={"traces": []})
+    )
+    assert result.checks[0].expected == "accepted"
+    raw["authorizationMatrix"]["cases"][0]["expected"] = "deny"
+    result = assess(
+        RgsScenarioSpec.model_validate(raw), traces.model_copy(update={"traces": []})
+    )
+    assert result.checks[0].expected == "denied"
+    assert not any(c.rule == "wallet-effect" for c in result.checks)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "duplicate-identity",
+        "unknown-identity",
+        "contradiction",
+        "unknown-case",
+        "wrong-account",
+        "wrong-action",
+        "missing-case",
+        "orphan-case",
+    ],
+)
+def test_target_access_contract_rejects_ambiguous_cases(change):
+    from moonmind.security.rgs_assessment import RgsScenarioSpec
+
+    raw = access_inputs()
+    matrix = raw["authorizationMatrix"]
+    operation = raw["scenarios"][0]["operations"][0]
+    if change == "duplicate-identity":
+        matrix["identities"].append(copy.deepcopy(matrix["identities"][0]))
+    elif change == "unknown-identity":
+        matrix["cases"][0]["identityRef"] = "missing"
+    elif change == "contradiction":
+        other = {**matrix["cases"][0], "id": "contradictory", "expected": "deny"}
+        matrix["cases"].append(other)
+    elif change == "unknown-case":
+        operation["accessCaseRef"] = "missing"
+    elif change == "wrong-account":
+        matrix["cases"][0]["accountRef"] = "wallet-b"
+    elif change == "wrong-action":
+        matrix["cases"][0]["action"] = "cashout"
+    elif change == "missing-case":
+        del operation["accessCaseRef"]
+    else:
+        del raw["authorizationMatrix"]
+    with pytest.raises(ValueError):
+        RgsScenarioSpec.model_validate(raw)
+
+
+def test_denied_actor_cannot_replay_an_allowed_transaction():
+    from moonmind.security.rgs_assessment import RgsScenarioSpec, RgsTraceBundle
+
+    raw = access_inputs()
+    scenario = raw["scenarios"][0]
+    original = scenario["operations"][0]
+    scenario["operations"].append(
+        {**original, "id": "cross-replay", "accessCaseRef": "cross-account"}
+    )
+    result = assess(
+        RgsScenarioSpec.model_validate(raw),
+        RgsTraceBundle(source_ref="fixture:access", traces=[]),
+    )
+    assert [
+        (c.operation, c.expected)
+        for c in result.checks
+        if c.rule == "operation-decision"
+    ] == [(original["id"], "accepted"), ("cross-replay", "denied")]

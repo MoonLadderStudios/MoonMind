@@ -4015,25 +4015,45 @@ class DockerContainerJobBackend:
         raw = await asyncio.to_thread(
             self._build_output_entries, self._output_root(request), list(outputs)
         )
+        invocation = (
+            *request.request.spec.entrypoint[1:],
+            *request.request.spec.command,
+        )
+        rgs_target = "moonmind.security.rgs_target" in invocation
+        if rgs_target:
+            # A live observation's recoverable capture must be retained before
+            # publishing the report that depends on it.
+            raw.sort(key=lambda entry: entry["name"] != "capture")
+        capture_ref = None
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
-            if payload is not None and "moonmind.security.rgs_assessment" in (
-                *request.request.spec.entrypoint[1:],
-                *request.request.spec.command,
+            if payload is not None and (
+                rgs_target or "moonmind.security.rgs_assessment" in invocation
             ):
-                from moonmind.security.rgs_assessment import bind_job_result
+                from moonmind.security.rgs_assessment import (
+                    RgsTraceBundle,
+                    bind_job_result,
+                )
 
                 try:
-                    payload = bind_job_result(
-                        payload,
-                        str(request.terminal_state or "failed"),
-                        request.exit_code,
-                        {
+                    if rgs_target and entry["name"] == "capture":
+                        RgsTraceBundle.model_validate_json(payload)
+                    else:
+                        if rgs_target and capture_ref is None:
+                            raise ValueError("RGS target capture was not retained")
+                        input_refs = {
                             attachment.name: attachment.artifact_ref
                             for attachment in request.request.spec.input_attachments
-                        },
-                    )
+                        }
+                        if capture_ref:
+                            input_refs["capture"] = capture_ref
+                        payload = bind_job_result(
+                            payload,
+                            str(request.terminal_state or "failed"),
+                            request.exit_code,
+                            input_refs,
+                        )
                 except ValueError:
                     payload = None
                     entry.update(
@@ -4083,6 +4103,8 @@ class DockerContainerJobBackend:
             if entry["media_type"] == "application/gzip":
                 name = name.removesuffix(suffixes) + ".tar.gz"
             ref = await self._publish_artifact(request, name, payload)
+            if rgs_target and entry["name"] == "capture":
+                capture_ref = ref
             manifest.append(
                 ContainerJobArtifact(
                     name=entry["name"],

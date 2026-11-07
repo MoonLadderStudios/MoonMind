@@ -1,6 +1,6 @@
 # RGS Transaction Assessment
 
-`moonmind.security.rgs_assessment` checks recorded game, wallet and audit behavior against an explicit scenario specification. It adds assertions to the existing workload-profile and `security.assess` retained-report paths. The evaluator reads captured inputs and sends no requests or financial operations. Mathematical payout modeling remains in [game math assessment](GameMathAssessment.md).
+`moonmind.security.rgs_assessment` checks game, wallet and audit traces against an explicit scenario specification through existing workload profiles and `security.assess` retained reports. Evaluation sends no financial operations. `moonmind.security.rgs_target` can collect traces through the shared scoped HTTP/WebSocket client before evaluation. Mathematical payout modeling remains in [game math assessment](GameMathAssessment.md).
 
 ## Inputs and expectations
 
@@ -11,6 +11,8 @@ The contract declares round states, initial state, event transitions, allowed st
 Each scenario provides initial balances, wagers, timed events, evidence references, and operations in processing order. Operations have distinct attempt IDs and stable transaction IDs across retries. Receive times may be reordered; equal processing times express competing requests in their selected serial order. Include both serial orders when assessing a race. Reusing a successful transaction ID with a different operation or wager is denied. A duplicate of the same successful request returns its original decision without another wallet effect, even after a close boundary.
 
 A `rgs-traces/v1` input supplies receipts by attempt ID, confirmed wallet effects, balances, wager outcomes, final round state, and corresponding audit effects. Unknown acknowledgements remain incomplete unless a later accepted receipt with the same transaction and operation reconciles them. Final wallet and audit reconciliation still checks every effect independently. An incomplete snapshot cannot establish the absence of a financial effect; confirmed extra effects remain violations.
+
+For target access checks, `authorizationMatrix` uses the shared target contract: `identities` name an `id`, `accountRef`, `sessionRef`, `integrationRef` and opaque `credentialRef`; `cases` name an `id`, `identityRef`, target account/session/integration, `action`, and expected `allow` or `deny`. Each operation binds an `accessCaseRef` whose action and account match its wager. Duplicate identities, unknown references and contradictory cases are rejected. Expectations can permit delegated access; same-account or same-integration access is not assumed universally. Denied access is checked before transaction replay and produces no expected wallet effect. This matrix concerns the assessed application, not MoonMind operator roles.
 
 The synthetic [scenario input](../../tests/fixtures/security/rgs-scenarios.json) and independent [game/wallet fixture](../../tests/fixtures/security/rgs_reference.py) exercise wagers before/at/after closing, cashout timing, replay, reordered delivery, competing cashouts, lost settlement acknowledgements, reconnect and rollback. Deliberate double-debit, double-credit, audit, balance and outcome defects demonstrate detection.
 
@@ -35,8 +37,25 @@ The `rgs-assessment/v1` result retains the specification, canonical specificatio
 
 SIGTERM or exhausted budgets retain completed checks with incomplete coverage. The CLI atomically saves an initial partial report and replaces it after each operation, so a killed process can retain its latest report. Collection makes failed, canceled or timed-out jobs partial even if a complete file exists. Confirmed violations survive that failure. Retesting the same captured inputs is safe because evaluation performs no target effects.
 
-## Coverage limits
+## Scoped target observations
 
-`consistent` means that the supplied traces agree with the declared scenarios. It does not establish transport confinement, target authentication or authorization, or certification. Reports explicitly retain `transport_not_exercised` and `authorization_matrix_not_exercised`.
+`rgs-target-plan/v1` binds a `sourceRef`, ordered `operations` (`scenario`, `operation`, `request`) and one read-only `snapshots` request per scenario. Requests use the shared target adapter's `id`, `protocol` (`http` or `websocket`), `path`, `method`, optional `messageType` and `credentialRef`, and JSON `payload`. The RGS payload carries the exact declared `operation`, `action`, `accountRef`, `sessionRef` and `integrationRef`. The observer validates the whole plan before sending anything. The target replies with `decision` (`accepted`, `denied`, `unknown`) and `access` (`allow`, `deny`, `unknown`); HTTP 401/403 also establishes denial. Snapshot responses use the `Trace` contract above.
 
-The shared target authorization matrix and real-time assessment adapters are not yet available. Cross-account, cross-session and cross-integration execution and live HTTP/real-time scope enforcement remain incomplete until those shared owners supply their evidence. `integrationRulesRef` records the specification source; it grants no authority and cannot substitute for those checks. Synthetic fixtures require no real money or private customer execution.
+An observing workload profile runs `python -m moonmind.security.rgs_target` with captured `--spec` and `--plan` inputs, `--capture=/outputs/rgs-traces.json`, and `--output=/outputs/rgs-assessment.json`. Declare both outputs, naming the trace output `capture`. An optional `--resume` names a previously collected capture input. The collector publishes that capture before the assessment, binds its artifact reference and the actual terminal outcome into the report, and retains the dependency through `security.assess`.
+
+The deployment profile fixes `MOONMIND_TARGET_ASSESSMENT_SCOPE` in its `environment`. Its value contains:
+
+- `web`: the existing `WebAssessment` origin, routes, methods, exclusions, active mode, rate, timeout and egress policy;
+- `messages`: exact WebSocket paths mapped to permitted message types;
+- `credentialSlots`: opaque credential references mapped to existing file-delivered `application_auth` profile slots;
+- `maxRequests`: the shared total bound, counting HTTP requests, WebSocket handshakes and messages.
+
+The profile uses `networkMode: bridge` and the same `egressPolicyRef`. Existing signed assessment admission must allow its web action class, origin, routes and exclusions; `webMessages` on that admitted web target lists the permitted channel/message pairs. Selected credentials must match the profile's slots as well as the existing credential grants. The client requires the worker's matching egress policy/proxy and reads bearer values only from `/run/moonmind-credentials/<slot>`. Redirects are refused, sessions do not share cookies, and both protocols share rate/time/request budgets. Request and response messages are bounded to 256 KiB; reflected credentials are refused rather than retained.
+
+The observer first reconciles a read-only snapshot from the target, then atomically saves each uncertain attempt and reserves its request budget before the transport handoff. Resuming a capture preserves the specification, plan, admitted scope, elapsed deadline and spent budget. It skips attempted operations, including one whose acknowledgement was lost; the target's persisted receipts can reconcile them without another send. When a capture is unavailable but the independent target store shows prior effects, collection retains that evidence and stops rather than guessing the predecessor's budget or replaying payments. Unknown access evidence remains incomplete. Explicit replay operations in a scenario remain declared test inputs. Retain captures and reports as job artifacts for recovery on another host.
+
+## Interpretation
+
+`consistent` means that the evidence agrees with the declared scenarios. Recorded traces without adapter observations retain `transport_not_exercised`; missing matrix observations retain `authorization_matrix_not_exercised`. Target observations retain response evidence, expected versus observed access checks and final financial reconciliation. They do not establish regulatory certification or coverage of undeclared target operations.
+
+Synthetic HTTP/WebSocket fixtures with persisted accounts, sessions, integration delegation, wallets and audit records cover correct and permissive targets, scope refusal, shared budgets and interrupted recovery. No real money or private customer execution is required. `integrationRulesRef` records the source of the integration expectations; it grants no authority.

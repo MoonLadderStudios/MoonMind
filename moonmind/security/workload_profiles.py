@@ -41,6 +41,7 @@ from moonmind.schemas.repository_scanner_models import (
 )
 
 WORKLOAD_PROFILES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_WORKLOAD_PROFILES"
+TARGET_SCOPE_ENV = "MOONMIND_TARGET_ASSESSMENT_SCOPE"
 
 _REF = r"^[a-z0-9][a-z0-9.-]{0,127}$"
 _ARGUMENT_NAME = r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
@@ -464,6 +465,9 @@ class AssessmentTarget(_Model):
     web_origin: str | None = Field(None, alias="webOrigin", max_length=300)
     web_routes: tuple[WebRoute, ...] = Field((), alias="webRoutes", max_length=64)
     web_exclusions: tuple[str, ...] = Field((), alias="webExclusions", max_length=64)
+    web_messages: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict, alias="webMessages", max_length=32
+    )
     cloud_account: str | None = Field(
         None, alias="cloudAccount", pattern=r"^[0-9]{12}$"
     )
@@ -500,6 +504,27 @@ class AssessmentTarget(_Model):
             raise ValueError("web origins, and only they, admit routes")
         if self.web_exclusions and self.web_origin is None:
             raise ValueError("web exclusions belong to a web origin")
+        for path, messages in self.web_messages.items():
+            if self.web_origin is None or web_route(path) != path:
+                raise ValueError("real-time messages belong to an admitted web path")
+            if (
+                not messages
+                or len(messages) > 64
+                or len(set(messages)) != len(messages)
+            ):
+                raise ValueError("real-time message types must be explicit and unique")
+            if any(
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", m)
+                for m in messages
+            ):
+                raise ValueError("invalid real-time message type")
+            if not any(
+                route_within(path, r.path) and "GET" in r.methods
+                for r in self.web_routes
+            ) or any(route_within(path, e) for e in self.web_exclusions):
+                raise ValueError(
+                    "real-time channels need admitted, unexcluded GET routes"
+                )
         cloud = self.cloud_account is not None
         if cloud != (self.cloud_provider is not None) or cloud != bool(
             self.cloud_regions
@@ -668,6 +693,11 @@ def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
         raise PermissionError("web assessment network access is not admitted")
     if spec.timeout_seconds > scope.max_job_seconds:
         raise PermissionError("web assessment timeout exceeds the assessment budget")
+    _web_target_within_scope(web, scope)
+
+
+def _web_target_within_scope(web, scope: AdmittedAssessmentScope):
+    """One route/exclusion authority for scanners and target observations."""
     targets = [t for t in scope.targets if t.web_origin == web.origin]
     if not targets:
         raise PermissionError("web origin is not an admitted target")
@@ -692,6 +722,7 @@ def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
     artifacts = {t.artifact_ref for t in scope.targets if t.artifact_ref}
     if api is not None and api.input_artifact_ref not in artifacts:
         raise PermissionError("API definition is not an admitted input")
+    return target
 
 
 def cloud_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
@@ -749,6 +780,32 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
         raise PermissionError("scoped assessment jobs cannot select pull credentials")
     if spec.timeout_seconds > scope.max_job_seconds:
         raise PermissionError("workload timeout exceeds the assessment budget")
+    configured = profile.environment.get(TARGET_SCOPE_ENV)
+    if configured is not None and spec.network_mode != "none":
+        from moonmind.security.target_assessments import TargetScope
+
+        try:
+            target_scope = TargetScope.model_validate_json(configured)
+        except ValueError as exc:
+            raise PermissionError("invalid target observation scope") from exc
+        if target_scope.web.action_class not in scope.action_classes:
+            raise PermissionError("target observation action class is not admitted")
+        if target_scope.web.egress_policy_ref != spec.egress_policy_ref:
+            raise PermissionError(
+                "target observation egress policy differs from admission"
+            )
+        target = _web_target_within_scope(target_scope.web, scope)
+        for path, messages in target_scope.messages.items():
+            if not set(messages) <= set(target.web_messages.get(path, ())):
+                raise PermissionError("target real-time message type is not admitted")
+        for selected in spec.workload_profile.credentials or ():
+            if (
+                target_scope.credential_slots.get(selected.credential_ref)
+                != selected.slot
+            ):
+                raise PermissionError(
+                    "target credential does not match its admitted slot"
+                )
 
 
 __all__ = [
