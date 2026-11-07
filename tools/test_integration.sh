@@ -240,6 +240,11 @@ run_phase "" "${pipeline_compose[@]}" run --rm \
   pytest bash -lc \
   "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
 
+# Write the corpus summary as the same container user that owns its evidence,
+# before teardown exports any temporary checkout to the host.
+run_phase "" "${pipeline_compose[@]}" run --rm --no-deps \
+  pytest python -m tests.integration.security.quality
+
 if (( TEST_STATUS != 0 )); then
   compose "$CLEANUP_TIMEOUT" ps -a > "$REPORT_DIR/compose-ps.txt" 2>&1 \
     || echo "compose ps failed or timed out (exit=$?)" >> "$REPORT_DIR/compose-ps.txt"
