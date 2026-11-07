@@ -21,6 +21,7 @@ from moonmind.security.assessments import (
     Finding,
     Inventory,
     Observation,
+    ProductBaseline,
     SecurityReview,
     TriageDecision,
     compare_observations,
@@ -47,6 +48,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
@@ -741,6 +744,61 @@ class AssessmentExecution:
             *_history_evidence(_scan_citations(work), history),
         ]
 
+    async def product_evidence(self, components, records=()) -> list[str]:
+        """Check retained evidence through the existing artifact authority.
+
+        A URL or a producer's availability label does not prove record access.
+        Missing private records remain reportable, without admitting their bytes
+        or making them required dependencies of otherwise completed work.
+        """
+        rows = [*components, *records]
+        refs = list(
+            dict.fromkeys(
+                ref for row in rows for ref in _artifact_refs(row.evidence_refs)
+            )
+        )
+        if len(refs) > 128:
+            raise ValueError("product evidence exceeds the reference bound")
+        available, unavailable = [], {}
+        total = 0
+        for ref in refs:
+            try:
+                _, body = await self.read(ref)
+                total += len(body)
+                if total > _MAX_INPUT_BYTES * 2:
+                    raise ValueError("product evidence exceeds the byte bound")
+                available.append(ref)
+            except (
+                TemporalArtifactNotFoundError,
+                TemporalArtifactAuthorizationError,
+                TemporalArtifactStateError,
+                TemporalArtifactValidationError,
+                TemporalArtifactStorageAccessError,
+                TemporalArtifactUnavailableError,
+            ) as exc:
+                unavailable[ref] = type(exc).__name__
+        for row in rows:
+            artifact_refs = _artifact_refs(row.evidence_refs)
+            missing = [
+                f"{ref} ({unavailable[ref]})"
+                for ref in artifact_refs
+                if ref in unavailable
+            ]
+            reason = (
+                "No readable retained artifact evidence; external references are Unverified."
+                if not artifact_refs
+                else "Evidence unavailable: " + ", ".join(missing) if missing else None
+            )
+            if reason:
+                if hasattr(row, "stage"):
+                    row.status = "unverified"
+                    row.reason = f"{row.reason}; {reason}"[:1024]
+                else:
+                    row.omission_reason = "; ".join(
+                        filter(None, [row.omission_reason, reason])
+                    )[:1024]
+        return available
+
     async def write(
         self, payload: bytes, *, kind: str, key: str, content_type="application/json"
     ) -> str:
@@ -977,6 +1035,47 @@ class AssessmentExecution:
         history: dict[str, str] = {}
         diagnostics = []
         scan_diagnostics = []
+        product_baseline = None
+        product_baseline_error = None
+        product_refs = []
+        if request.product_baseline_ref:
+            try:
+                _, raw = await self.read(request.product_baseline_ref)
+                product_refs.append(request.product_baseline_ref)
+                product_baseline = ProductBaseline.model_validate_json(raw)
+                if product_baseline.product not in request.scope.assets:
+                    raise ValueError("product baseline outside admitted scope")
+                product_refs += await self.product_evidence(
+                    [
+                        *product_baseline.components,
+                        *[
+                            change.component
+                            for change in product_baseline.approved_changes
+                        ],
+                    ],
+                    [
+                        *product_baseline.records,
+                        *[
+                            change.record
+                            for change in product_baseline.approved_changes
+                        ],
+                    ],
+                )
+            except (
+                TemporalArtifactNotFoundError,
+                TemporalArtifactAuthorizationError,
+                TemporalArtifactStateError,
+                TemporalArtifactValidationError,
+                TemporalArtifactStorageAccessError,
+                TemporalArtifactUnavailableError,
+                ValidationError,
+                ValueError,
+            ) as exc:
+                product_baseline = None
+                product_baseline_error = f"Selected product baseline is unavailable or invalid: {type(exc).__name__}. Approval is Unverified."
+                diagnostics.append(
+                    {"boundary": "product-baseline", "error": type(exc).__name__}
+                )
         if request.baseline_ref:
             try:
                 artifact, raw = await self.read(request.baseline_ref)
@@ -1061,6 +1160,7 @@ class AssessmentExecution:
             )
         else:
             observations = []
+            product_scan_refs = []
             outcomes = []
             scanner_summaries = []
             github_alerts = None
@@ -1377,6 +1477,10 @@ class AssessmentExecution:
                             raise ValueError(
                                 "report scope differs from admitted assessment scope"
                             )
+                        if observation.deployment:
+                            product_scan_refs += await self.product_evidence(
+                                observation.deployment.components
+                            )
                         observations.append(observation)
                         outcomes.append(
                             "complete" if observation.complete(now) else "incomplete"
@@ -1438,6 +1542,17 @@ class AssessmentExecution:
                         config_ref=scan_key,
                     )
                 )
+            deployments = {
+                content_key(item.deployment.model_dump(mode="json")): item.deployment
+                for item in observations
+                if item.deployment is not None
+            }
+            if len(deployments) > 1:
+                raise ToolFailure(
+                    "INVALID_INPUT",
+                    "Conflicting deployment observations require separate assessments.",
+                    False,
+                )
             observation = Observation(
                 scope=request.scope,
                 observed_at=max(
@@ -1447,6 +1562,7 @@ class AssessmentExecution:
                 findings=list(findings_by_id.values()),
                 coverage=coverage,
                 upstream_closed=upstream_closed,
+                deployment=next(iter(deployments.values()), None),
                 provenance={
                     **{f"input{index}": ref for index, ref in enumerate(refs)},
                     **{
@@ -1465,6 +1581,7 @@ class AssessmentExecution:
                 "originalOutcomes": outcomes,
                 "diagnostics": scan_diagnostics,
                 "scannerSummaries": scanner_summaries,
+                "productEvidenceRefs": list(dict.fromkeys(product_scan_refs)),
             }
             if github_alerts is not None:
                 work["githubAlerts"] = github_alerts["projection"]
@@ -1479,7 +1596,14 @@ class AssessmentExecution:
             now=now,
             baseline_unavailable=baseline_unavailable,
             baseline_ref=request.baseline_ref,
+            product_baseline=product_baseline,
+            product_baseline_ref=request.product_baseline_ref,
+            product_baseline_error=product_baseline_error,
         )
+        if comparison["productComparison"] is not None:
+            comparison["productComparison"]["evidenceRefs"] = list(
+                dict.fromkeys(product_refs)
+            )
         comparison["baselineRef"] = request.baseline_ref
         comparison["scanRef"] = scan_ref
         report_key = content_key(
@@ -1507,6 +1631,12 @@ class AssessmentExecution:
                         ref, self.digests[ref], True, "security.evidence"
                     )
                     for ref in decision_evidence
+                ),
+                *(
+                    ArtifactDependency(
+                        ref, self.digests[ref], True, "security.product-evidence"
+                    )
+                    for ref in dict.fromkeys(product_refs)
                 ),
             ]
             if request.decisions_ref:
@@ -1579,6 +1709,12 @@ class AssessmentExecution:
             "reviewStatus": review_status,
             "scannerSummaries": work.get("scannerSummaries", []),
         }
+        if comparison["productComparison"] is not None:
+            outputs.update(
+                productBaselineRef=request.product_baseline_ref,
+                productComparisonStatus=comparison["productComparison"]["status"],
+                productApprovalStatus=comparison["productComparison"]["approvalStatus"],
+            )
         github = work.get("githubAlerts")
         if github is not None:
             outputs["githubAlerts"] = {
@@ -1740,7 +1876,7 @@ def _json(payload: Any) -> bytes:
 
 
 def _native_refs(work: Mapping[str, Any]) -> list[str]:
-    """Native reports a scan root cites in its scanner and GitHub fields."""
+    """Readable native and product evidence cited by a saved scan."""
     refs = [
         ref
         for summary in work.get("scannerSummaries", [])
@@ -1748,19 +1884,24 @@ def _native_refs(work: Mapping[str, Any]) -> list[str]:
     ]
     if work.get("githubAlerts") is not None:
         refs.append(work["githubAlerts"]["nativeRef"])
-    return refs
+    return list(dict.fromkeys([*refs, *work.get("productEvidenceRefs", [])]))
 
 
 def _scan_citations(work: Mapping[str, Any]) -> set[str]:
+    deployment = work["observation"].get("deployment")
     return {
         ref
         for finding in work["observation"]["findings"]
         for ref in finding["evidenceRefs"]
+    } | {
+        ref
+        for component in (deployment["components"] if deployment else [])
+        for ref in _artifact_refs(component["evidenceRefs"])
     }
 
 
 def _artifact_refs(refs) -> list[str]:
-    """Decision evidence that names an artifact; other references stay text."""
+    """Evidence that names an artifact; other references stay text."""
     return [ref for ref in refs if ARTIFACT_ID_PATTERN.fullmatch(ref)]
 
 
@@ -1775,9 +1916,20 @@ def _decision_citations(comparison: Mapping[str, Any]) -> set[str]:
 
 
 def _comparison_citations(comparison: Mapping[str, Any]) -> set[str]:
-    return {
-        ref for row in comparison["findings"] for ref in row["finding"]["evidenceRefs"]
-    } | _decision_citations(comparison)
+    return (
+        {
+            ref
+            for row in comparison["findings"]
+            for ref in row["finding"]["evidenceRefs"]
+        }
+        | _decision_citations(comparison)
+        | _product_citations(comparison)
+    )
+
+
+def _product_citations(comparison: Mapping[str, Any]) -> set[str]:
+    product = comparison.get("productComparison")
+    return set(_artifact_refs(product.get("evidenceRefs", []))) if product else set()
 
 
 def _history_evidence(
@@ -1860,6 +2012,15 @@ async def seal_retained_assessment_root(
                 "security.evidence",
             )
             for ref in sorted(_decision_citations(document) - history.keys())
+        ]
+        entries += [
+            ArtifactDependency(
+                ref,
+                await _current_digest(service, ref, access),
+                True,
+                "security.product-evidence",
+            )
+            for ref in sorted(_product_citations(document) - history.keys())
         ]
         # History the baseline's seal verified may belong to an earlier
         # occurrence's workflow; only this seal verifies it through that proof.
@@ -1959,7 +2120,61 @@ def _summary(comparison: dict) -> str:
             "Finding evidence, provenance and attributed decisions are retained in the structured report.",
             "",
         ]
+    ) + _product_summary(comparison.get("productComparison"))
+
+
+def _product_summary(product: dict | None) -> str:
+    if product is None:
+        return ""
+
+    def text(value):
+        return html.escape(redact_sensitive_text(str(value)), quote=True)
+
+    baseline = product["baseline"]
+    deployment = product["deployment"]
+    lines = [
+        "",
+        "## Assessed product baseline comparison",
+        "",
+        f"Product baseline: {text(product['baselineRef'])}. Comparison: {product['status']}.",
+        f"Approval evidence: {product['approvalStatus']}. Independent assurance: Unverified.",
+        f"Baseline identity: {text(baseline['baselineId'] if baseline else 'unavailable')}; state: {text(baseline['state'] if baseline else 'unavailable')}.",
+        f"Observed deployment: {text(deployment['deploymentId'] if deployment else 'unavailable')}.",
+        text(product["interpretation"]),
+    ]
+    for row in product["components"]:
+        lines.append(
+            f"- {text(row['kind'])} / {text(row['id'])}: {row['status']}. {text(row['reason'])}"
+        )
+        for name in ("expected", "observed"):
+            component = row[name]
+            if component:
+                lines.append(
+                    f"  {name}: {text(component['identity'])}; method: {text(component['method'])}; "
+                    f"evidence: {text(', '.join(component['evidenceRefs']))}; "
+                    f"omission: {text(component['omissionReason'] or 'none')}."
+                )
+        if row["approvedChangeId"]:
+            lines.append(
+                f"  Recorded approved change: {text(row['approvedChangeId'])}."
+            )
+    if baseline:
+        for record in [
+            *baseline["records"],
+            *[change["record"] for change in baseline["approvedChanges"]],
+        ]:
+            lines.append(
+                f"- {record['stage']} record for {text(record['product'])} / {text(record['baselineId'])}: "
+                f"{record['status']}; {text(record['reason'])}; verifier: {text(record['verifier'])}; "
+                f"evidence: {text(', '.join(record['evidenceRefs']))}."
+            )
+    lines += [f"- Reason: {text(reason)}" for reason in product["reasons"]]
+    lines += [f"- Scope omission: {text(reason)}" for reason in product["omissions"]]
+    external = product["externalVerification"]
+    lines.append(
+        f"Unverified: {text(external['reason'])} Verifiable by: {text(external['verifiableBy'])}"
     )
+    return "\n".join(lines) + "\n"
 
 
 def _scanner_summary(summaries: list[dict]) -> str:

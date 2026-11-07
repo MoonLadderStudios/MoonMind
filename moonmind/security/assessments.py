@@ -230,6 +230,126 @@ class Coverage(Contract):
         )
 
 
+ProductComponentKind = Literal[
+    "artifact",
+    "game_configuration",
+    "paytable",
+    "feature_settings",
+    "critical_file",
+    "rng_configuration",
+    "external_configuration",
+    "database",
+]
+ProductStage = Literal[
+    "submitted", "evaluated", "certified", "approved", "regulator_approved"
+]
+# Report explanations join bounded identifiers, reasons, and verifier names.
+ProductExplanation = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=3072)
+]
+
+
+class ProductComponent(Contract):
+    id: Text
+    kind: ProductComponentKind
+    identity: Text | None = None
+    method: Text
+    evidence_refs: Annotated[Items, Field(max_length=64)] = Field(default_factory=list)
+    omission_reason: Text | None = None
+
+
+class ProductRecord(Contract):
+    stage: ProductStage
+    product: Text
+    baseline_id: Text
+    status: Literal["available", "unavailable", "unverified"]
+    evidence_refs: Annotated[Items, Field(max_length=64)] = Field(default_factory=list)
+    reason: Text
+    verifier: Text
+
+
+class ApprovedProductChange(Contract):
+    id: Text
+    component: ProductComponent
+    record: ProductRecord
+
+
+class ProductSnapshot(Contract):
+    product: Text
+    components: Annotated[list[ProductComponent], Field(max_length=128)]
+    omissions: Annotated[Items, Field(max_length=64)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_components(self):
+        if len({row.id for row in self.components}) != len(self.components):
+            raise ValueError("duplicate product component")
+        return self
+
+
+class ProductDeployment(ProductSnapshot):
+    deployment_id: Text
+
+
+class ProductBaseline(ProductSnapshot):
+    schema_version: Literal["security-product-baseline/v1"] = (
+        "security-product-baseline/v1"
+    )
+    baseline_id: Text
+    state: ProductStage
+    regulator_approval_required: bool
+    records: Annotated[list[ProductRecord], Field(max_length=64)]
+    approved_changes: Annotated[list[ApprovedProductChange], Field(max_length=64)] = (
+        Field(default_factory=list)
+    )
+    # A non-applicable category needs a recorded scope reason. Silence is a
+    # coverage gap, so an image-only baseline cannot imply a whole-system match.
+    excluded_kinds: Annotated[dict[ProductComponentKind, Text], Field(max_length=8)] = (
+        Field(default_factory=dict)
+    )
+
+    @model_validator(mode="after")
+    def validate_changes(self):
+        if len({row.id for row in self.approved_changes}) != len(self.approved_changes):
+            raise ValueError("duplicate approved product change")
+        if {row.kind for row in self.components} & self.excluded_kinds.keys():
+            raise ValueError("product component category is also excluded")
+        return self
+
+
+class ComparedProductComponent(Contract):
+    id: Text
+    kind: ProductComponentKind
+    status: Literal["match", "drift", "missing"]
+    reason: Text
+    expected: ProductComponent | None
+    observed: ProductComponent | None
+    approved_change_id: Text | None = None
+
+
+class ProductComparison(Contract):
+    baseline_ref: Text | None
+    baseline: ProductBaseline | None
+    deployment: ProductDeployment | None
+    status: Literal["match", "drift", "incomplete"]
+    approval_status: Literal["recorded", "not_approved", "unverified"]
+    components: Annotated[list[ComparedProductComponent], Field(max_length=320)]
+    reasons: Annotated[list[ProductExplanation], Field(max_length=4096)]
+    omissions: Annotated[list[ProductExplanation], Field(max_length=4096)]
+    # Only artifacts actually readable when this comparison was produced.
+    evidence_refs: Annotated[Items, Field(max_length=129)] = Field(default_factory=list)
+    interpretation: Text = (
+        "Identity equality records only the scoped comparison. It establishes no "
+        "system security, certification, regulatory approval, or compatibility."
+    )
+    external_verification: dict[Text, Text] = Field(
+        default_factory=lambda: {
+            "status": "Unverified",
+            "reason": "Retained references do not independently authenticate private laboratory or regulator records.",
+            "verifiableBy": "Applicable laboratory, regulator, or assessed product evidence owner with authorized record access.",
+        }
+    )
+
+
 class Observation(Contract):
     schema_version: Literal["security-observation/v1"] = "security-observation/v1"
     scope: AssessmentScope
@@ -243,6 +363,7 @@ class Observation(Contract):
     upstream_closed: Annotated[dict[Text, UpstreamClosure], Field(max_length=4096)] = (
         Field(default_factory=dict)
     )
+    deployment: ProductDeployment | None = None
 
     @model_validator(mode="after")
     def validate_findings(self):
@@ -255,6 +376,8 @@ class Observation(Contract):
             raise ValueError("finding outside assessment scope")
         if any(set(row.assets) - set(self.scope.assets) for row in self.coverage):
             raise ValueError("coverage outside assessment scope")
+        if self.deployment and self.deployment.product not in self.scope.assets:
+            raise ValueError("deployment outside assessment scope")
         return self
 
     def complete(self, now: datetime) -> bool:
@@ -328,6 +451,7 @@ class Comparison(Contract):
     intelligence_changes: Items = Field(default_factory=list)
     baseline_ref: Text | None = None
     scan_ref: Text | None = None
+    product_comparison: ProductComparison | None = None
 
     @model_validator(mode="after")
     def validate_unique_findings(self):
@@ -430,6 +554,7 @@ class AssessmentRequest(Contract):
     github_alerts: GitHubAlertImport | None = None
     framework: FrameworkAssessmentInput | None = None
     oscal_export: OscalExportRequest | None = None
+    product_baseline_ref: Text | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):
@@ -530,6 +655,159 @@ def _intelligence_changes(
     return sorted(key for key in now.keys() & before.keys() if now[key] != before[key])
 
 
+def compare_product_deployment(
+    observation: Observation,
+    baseline: ProductBaseline | None,
+    baseline_ref: str | None,
+    unavailable_reason: str | None,
+    now: datetime,
+) -> ProductComparison | None:
+    deployment = observation.deployment
+    if baseline is None and deployment is None and baseline_ref is None:
+        return None
+    reasons = []
+    omissions = list(deployment.omissions if deployment else [])
+    approval = "unverified"
+    expected = {}
+    changes = {}
+
+    def applicable(record: ProductRecord) -> bool:
+        return (
+            baseline is not None
+            and baseline.product in observation.scope.assets
+            and record.product == baseline.product
+            and record.baseline_id == baseline.baseline_id
+            and record.status == "available"
+            and bool(record.evidence_refs)
+        )
+
+    if baseline is None:
+        reasons.append(
+            unavailable_reason or "No explicit product baseline was supplied."
+        )
+    else:
+        omissions += baseline.omissions
+        omissions += [
+            f"{kind}: {reason}" for kind, reason in baseline.excluded_kinds.items()
+        ]
+        expected = {row.id: row for row in baseline.components}
+        approval_stages = (
+            {"regulator_approved"}
+            if baseline.regulator_approval_required
+            else {"approved", "regulator_approved"}
+        )
+        if baseline.state not in {"approved", "regulator_approved"}:
+            approval = "not_approved"
+            reasons.append(
+                f"Selected baseline is {baseline.state}, not an approved release."
+            )
+        elif any(
+            applicable(row) and row.stage in approval_stages for row in baseline.records
+        ):
+            approval = "recorded"
+        else:
+            reasons.append(
+                "Applicable approval evidence is Unverified for this product and baseline."
+            )
+        for row in baseline.records:
+            if not applicable(row):
+                reasons.append(
+                    f"{row.stage} evidence is Unverified: {row.reason}; verifier: {row.verifier}"
+                )
+        if baseline.product not in observation.scope.assets:
+            reasons.append("Product baseline is outside the admitted assessment scope.")
+        for change in baseline.approved_changes:
+            if (
+                approval == "recorded"
+                and applicable(change.record)
+                and change.record.stage in approval_stages
+                and change.component.kind not in baseline.excluded_kinds
+                and (
+                    change.component.id not in expected
+                    or expected[change.component.id].kind == change.component.kind
+                )
+            ):
+                expected[change.component.id] = change.component
+                changes[change.component.id] = change.id
+            else:
+                reasons.append(
+                    f"Change {change.id} has no applicable recorded approval; baseline retained. {change.record.reason}"
+                )
+        covered = {
+            row.kind for row in expected.values()
+        } | baseline.excluded_kinds.keys()
+        for kind in ProductComponentKind.__args__:
+            if kind not in covered:
+                reasons.append(
+                    f"No baseline coverage or scope omission recorded for critical category {kind}."
+                )
+    if deployment is None:
+        reasons.append("Deployment component evidence is missing.")
+    elif baseline is not None and deployment.product != baseline.product:
+        reasons.append("Observed product differs from the selected baseline product.")
+    if not observation.complete(now):
+        reasons.append(
+            "Deployment observation is stale or has incomplete assessment coverage."
+        )
+    if (baseline and baseline.omissions) or (deployment and deployment.omissions):
+        reasons.append("Critical-component scope omissions remain.")
+    observed = {row.id: row for row in deployment.components} if deployment else {}
+    rows = []
+    for component_id in dict.fromkeys([*expected, *observed]):
+        before, after = expected.get(component_id), observed.get(component_id)
+        if after is None or any(
+            not row.identity or not row.evidence_refs or row.omission_reason
+            for row in (before, after)
+            if row is not None
+        ):
+            status, reason = (
+                "missing",
+                "Critical-component identity or supporting evidence is incomplete.",
+            )
+        elif before is None:
+            status, reason = (
+                "drift",
+                "Observed component is outside the selected baseline.",
+            )
+        elif before.kind != after.kind or before.identity != after.identity:
+            status, reason = (
+                "drift",
+                "Observed identity differs from the recorded approved configuration.",
+            )
+        else:
+            status, reason = (
+                "match",
+                "Recorded component identities match under the stated verification methods.",
+            )
+        rows.append(
+            ComparedProductComponent(
+                id=component_id,
+                kind=(before or after).kind,
+                status=status,
+                reason=reason,
+                expected=before,
+                observed=after,
+                approved_change_id=changes.get(component_id),
+            )
+        )
+    if not rows:
+        reasons.append("No critical components were compared.")
+    return ProductComparison(
+        baseline_ref=baseline_ref,
+        baseline=baseline,
+        deployment=deployment,
+        status=(
+            "incomplete"
+            if reasons or any(row.status == "missing" for row in rows)
+            else "drift" if any(row.status == "drift" for row in rows) else "match"
+        ),
+        approval_status=approval,
+        components=rows,
+        reasons=reasons,
+        omissions=list(dict.fromkeys(omissions)),
+    )
+
+
 def compare_observations(
     current: Observation,
     previous: dict | None,
@@ -538,6 +816,9 @@ def compare_observations(
     now: datetime,
     baseline_unavailable: bool = False,
     baseline_ref: str | None = None,
+    product_baseline: ProductBaseline | None = None,
+    product_baseline_ref: str | None = None,
+    product_baseline_error: str | None = None,
 ) -> dict:
     """Carry unobserved findings unless both observations prove comparable coverage.
 
@@ -703,4 +984,7 @@ def compare_observations(
         counts=counts,
         coverage_status="complete" if current.complete(now) else "stale_or_partial",
         intelligence_changes=_intelligence_changes(current, previous_observation),
+        product_comparison=compare_product_deployment(
+            current, product_baseline, product_baseline_ref, product_baseline_error, now
+        ),
     ).model_dump(mode="json", by_alias=True)

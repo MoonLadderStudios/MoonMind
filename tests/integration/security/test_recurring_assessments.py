@@ -153,6 +153,7 @@ async def invoke(
         ),
         artifact_store=InMemoryArtifactStore(),
     )
+
     async def execute():
         return await TemporalSkillActivities(
             dispatcher=dispatcher, artifact_service=service
@@ -333,6 +334,246 @@ async def test_authorized_baseline_preserves_finding_rule_asset_and_provenance(
         artifact_id=summary_ref, access=access_for_test("workflow:assessment")
     )
     assert b"new: 1" in summary and b"Coverage: complete" in summary
+
+
+async def product_inputs(service):
+    """Real retained artifacts for the #5193 comparison and export boundary."""
+    from tests.unit.security.test_assessment_comparison import product_evidence, report
+
+    request, _, _ = await inputs(service)
+    baseline, deployment = product_evidence()
+    component_ref = await put(service, {"snapshot": "synthetic component identities"})
+    for component in baseline["components"] + deployment["components"]:
+        component["evidenceRefs"] = [component_ref]
+    for record in baseline["records"]:
+        record["evidenceRefs"] = [await put(service, {"record": record})]
+    observed = report(deployment=deployment, findings=False)
+    observed.update(
+        observedAt=datetime.now(UTC).isoformat(),
+        expiresAt=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
+    )
+    request.update(
+        tools=["inventory-feed", "retained-report"],
+        reportRefs=[await put(service, observed)],
+        productBaselineRef=await put(service, baseline),
+    )
+    return request, baseline, observed
+
+
+async def test_product_baseline_retry_export_retains_scope_identity_and_evidence(
+    environment,
+    monkeypatch,
+):
+    from api_service.api.routers import temporal_artifacts as routes
+
+    service = environment.service
+    request, baseline, observed = await product_inputs(service)
+    observed["deployment"]["components"][2]["identity"] = "external-paytable-changed"
+    observed["deployment"]["components"].pop()
+    observed["deployment"]["omissions"] = ["External database inaccessible"]
+    request["reportRefs"] = [await put(service, observed)]
+    link = service.link_artifact
+
+    async def unavailable(**kwargs):
+        if kwargs["execution_ref"]["link_type"].startswith("report."):
+            raise ConnectionError("publication unavailable")
+        return await link(**kwargs)
+
+    monkeypatch.setattr(service, "link_artifact", unavailable)
+    first = await invoke(service, request)
+    assert first["publicationOutcome"] == "failed"
+    saved = await read(service, first["comparisonRef"])
+    product = saved["productComparison"]
+    assert product["baselineRef"] == request["productBaselineRef"]
+    assert product["baseline"] == baseline
+    assert product["status"] == "incomplete"
+    assert product["components"][2]["status"] == "drift"
+    assert product["components"][-1]["status"] == "missing"
+    assert (
+        product["components"][2]["observed"]["identity"] == "external-paytable-changed"
+    )
+    assert product["omissions"] == ["External database inaccessible"]
+    assert request["productBaselineRef"] in await required(
+        service, first["comparisonRef"]
+    )
+    assert {r["evidenceRefs"][0] for r in baseline["records"]} <= await required(
+        service, first["comparisonRef"]
+    )
+    assert baseline["components"][0]["evidenceRefs"][0] in await required(
+        service, first["scanRef"]
+    )
+
+    def repeat_forbidden(*args):
+        raise AssertionError("completed observation repeated during report recovery")
+
+    monkeypatch.setattr(security_assessment, "observe_inventory", repeat_forbidden)
+    await environment.session.close()
+    async with environment.sessions() as session:
+        restarted = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        retry = await invoke(restarted, request)
+        assert retry["scanRef"] == first["scanRef"]
+        assert retry["comparisonRef"] == first["comparisonRef"]
+        assert retry["publicationOutcome"] == "published"
+        app = FastAPI()
+        app.include_router(routes.router)
+        app.dependency_overrides[routes._get_temporal_artifact_service] = (
+            lambda: restarted
+        )
+        app.dependency_overrides[routes.get_instance_access_optional] = (
+            lambda: OperatorAdmission(via="loopback")
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            exported = await client.get(
+                f"/api/artifacts/{retry['comparisonRef']}/download"
+            )
+            assert exported.status_code == 200
+            assert exported.json()["productComparison"] == product
+            readable = await client.get(f"/api/artifacts/{report_ref(retry)}/download")
+            assert readable.status_code == 200
+            for text in (
+                request["productBaselineRef"],
+                "external-paytable-changed",
+                "External database inaccessible",
+                "drift",
+                "missing",
+                "Unverified",
+                "fixture snapshot signature",
+                "certification",
+            ):
+                assert text in readable.text
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await read(restarted, retry["comparisonRef"], principal="workflow:other")
+
+
+async def test_product_new_baseline_reuses_scan_and_keeps_old_artifacts(
+    environment, monkeypatch
+):
+    service = environment.service
+    request, baseline, _ = await product_inputs(service)
+    first = await invoke(service, request)
+    _, original = await service.read(
+        artifact_id=first["comparisonRef"],
+        access=access_for_test("workflow:assessment"),
+    )
+    baseline["baselineId"] = "newer-approved-release"
+    for record in baseline["records"]:
+        record["baselineId"] = baseline["baselineId"]
+        record["evidenceRefs"] = [await put(service, {"record": record})]
+    request["productBaselineRef"] = await put(service, baseline)
+
+    def repeat_forbidden(*args):
+        raise AssertionError("baseline selection reran a completed scan")
+
+    monkeypatch.setattr(security_assessment, "observe_inventory", repeat_forbidden)
+    second = await invoke(service, request)
+    assert first["scanRef"] == second["scanRef"]
+    assert first["comparisonRef"] != second["comparisonRef"]
+    product = (await read(service, second["comparisonRef"]))["productComparison"]
+    assert product["status"] == "match"
+    assert product["baseline"]["baselineId"] == "newer-approved-release"
+    _, unchanged = await service.read(
+        artifact_id=first["comparisonRef"],
+        access=access_for_test("workflow:assessment"),
+    )
+    assert unchanged == original
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "denied",
+        "missing_baseline",
+        "url_only",
+        "missing_bytes",
+        "unavailable_backend",
+    ],
+)
+async def test_product_unreadable_approval_publishes_unverified_evidence(
+    environment, failure, monkeypatch
+):
+    service = environment.service
+    request, baseline, _ = await product_inputs(service)
+    approval = baseline["records"][-1]
+    if failure == "missing":
+        approval["evidenceRefs"] = ["art_01K00000000000000000000000"]
+    elif failure == "denied":
+        approval["evidenceRefs"] = [
+            await put(service, {"private": "approval"}, workflow_id="other")
+        ]
+    elif failure == "url_only":
+        approval["evidenceRefs"] = ["https://example.invalid/private-record"]
+    elif failure == "missing_bytes":
+        artifact, _ = await service.read(
+            artifact_id=approval["evidenceRefs"][0],
+            access=access_for_test("workflow:assessment"),
+        )
+        LocalTemporalArtifactStore(environment.storage_root).delete(
+            artifact.storage_key
+        )
+    elif failure == "unavailable_backend":
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactUnavailableError,
+        )
+
+        original_read = service.read
+
+        async def unavailable(**kwargs):
+            if kwargs["artifact_id"] == approval["evidenceRefs"][0]:
+                raise TemporalArtifactUnavailableError(
+                    kwargs["artifact_id"], dependency="storage", operation="read"
+                )
+            return await original_read(**kwargs)
+
+        monkeypatch.setattr(service, "read", unavailable)
+    request["productBaselineRef"] = (
+        "art_01K00000000000000000000000"
+        if failure == "missing_baseline"
+        else await put(service, baseline)
+    )
+    result = await invoke(service, request)
+    assert result["publicationOutcome"] == "published"
+    product = (await read(service, result["comparisonRef"]))["productComparison"]
+    assert product["status"] == "incomplete"
+    assert product["approvalStatus"] == "unverified"
+    assert product["reasons"]
+    assert product["externalVerification"]["status"] == "Unverified"
+    if failure != "missing_baseline":
+        assert product["baseline"]["records"][-1]["status"] == "unverified"
+        assert (
+            product["baseline"]["records"][-1]["evidenceRefs"]
+            == approval["evidenceRefs"]
+        )
+
+
+async def test_product_evidence_survives_lifecycle_backfill(environment):
+    service = environment.service
+    request, baseline, _ = await product_inputs(service)
+    result = await invoke(service, request)
+    comparison_ref = result["comparisonRef"]
+    evidence = {
+        request["productBaselineRef"],
+        baseline["components"][0]["evidenceRefs"][0],
+    }
+    evidence |= {record["evidenceRefs"][0] for record in baseline["records"]}
+    await forget_seals(environment)
+    await service.pin(
+        artifact_id=comparison_ref, principal="operator", reason="retained comparison"
+    )
+    await service.seal_admitted_assessment_root(
+        root_artifact_id=comparison_ref, access=access_for_test("workflow:assessment")
+    )
+    assert evidence <= await required(service, comparison_ref)
+    await age_everything(environment)
+    await service.sweep_lifecycle(principal="service:sweeper")
+    for ref in evidence:
+        assert await status(environment, ref) == "complete"
+        assert await read(service, ref)
 
 
 @pytest.mark.parametrize(
@@ -1176,9 +1417,10 @@ async def test_missing_baseline_bytes_publish_current_assessment(environment):
     assert result["counts"]["new"] == result["counts"]["absent_comparable"] == 0
     assert result["counts"]["observed_without_baseline"] == 1
     assert result["publicationOutcome"] == "published"
-    assert {"boundary": "baseline", "error": "TemporalArtifactBytesMissingError"} in result[
-        "diagnostics"
-    ]
+    assert {
+        "boundary": "baseline",
+        "error": "TemporalArtifactBytesMissingError",
+    } in result["diagnostics"]
 
 
 async def test_triage_dispositions_expire_into_review(environment, monkeypatch):
