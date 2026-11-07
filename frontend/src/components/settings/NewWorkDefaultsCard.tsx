@@ -17,6 +17,7 @@ const ROWS = [
   { key: 'workflow.default_provider_profile_ref', title: 'Provider profile' },
 ];
 type RowMessages = Record<string, string[]>;
+interface DraftValue { value: unknown; originalValue: unknown; valueVersion: number }
 interface ValidationIssue { key?: string; message: string }
 interface ValidationResult { accepted: boolean; issues_by_key: Record<string, ValidationIssue[]> }
 interface SettingFailure { key?: string; message?: string; details?: { issues?: ValidationIssue[] } }
@@ -25,8 +26,9 @@ export function NewWorkDefaultsCard() {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
   const catalogQuery = useQuery({ queryKey: ['settings-catalog'], queryFn: fetchCatalog });
+  const refetchCatalog = catalogQuery.refetch;
   const profilesQuery = useQuery({ queryKey: PROVIDER_PROFILE_QUERY_KEY, queryFn: fetchProviderProfiles });
-  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [draft, setDraft] = useState<Record<string, DraftValue>>({});
   const [validation, setValidation] = useState<{ signature: string; issues: RowMessages } | null>(null);
   const [errors, setErrors] = useState<RowMessages>({});
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
@@ -43,10 +45,10 @@ export function NewWorkDefaultsCard() {
     });
   }, [catalogQuery.data]);
   const changed = useMemo(() => descriptors.filter((d) =>
-    Object.hasOwn(draft, d.key) && !valuesEqual(draft[d.key], d.effective_value)), [descriptors, draft]);
+    Object.hasOwn(draft, d.key) && !valuesEqual(draft[d.key]!.value, draft[d.key]!.originalValue)), [descriptors, draft]);
   const proposal = useMemo(() => ({
-    changes: Object.fromEntries(changed.map((d) => [d.key, draft[d.key]])),
-    expected_versions: Object.fromEntries(changed.map((d) => [d.key, d.value_version])),
+    changes: Object.fromEntries(changed.map((d) => [d.key, draft[d.key]!.value])),
+    expected_versions: Object.fromEntries(changed.map((d) => [d.key, draft[d.key]!.valueVersion])),
   }), [changed, draft]);
   const signature = JSON.stringify(proposal);
   const dirty = changed.length > 0;
@@ -69,7 +71,7 @@ export function NewWorkDefaultsCard() {
       const failure = (error.detail ?? {}) as SettingFailure;
       let affected = failure.key ? [failure.key] : keys;
       if (error.status === 409) {
-        const refreshed = await catalogQuery.refetch();
+        const refreshed = await refetchCatalog();
         if (refreshed.isError) { toast.error({ title: refreshed.error.message }); return; }
         const all = Object.values(refreshed.data?.categories ?? {}).flat();
         if (!failure.key) {
@@ -77,6 +79,14 @@ export function NewWorkDefaultsCard() {
             all.find((descriptor) => descriptor.key === key)?.value_version !== proposal.expected_versions[key]);
           if (stale.length) affected = stale;
         }
+        setDraft((current) => {
+          const next = { ...current };
+          for (const key of affected) {
+            const descriptor = all.find((d) => d.key === key);
+            if (next[key] && descriptor) next[key] = { ...next[key], valueVersion: descriptor.value_version };
+          }
+          return next;
+        });
         setConflicts((current) => ({ ...current, ...Object.fromEntries(affected.map((key) => {
           const descriptor = all.find((d) => d.key === key);
           return [key, `Changed elsewhere to ${descriptor ? valueLabel(descriptor, descriptor.effective_value) : 'an unavailable value'}. Save again to replace it, or cancel.`];
@@ -94,7 +104,7 @@ export function NewWorkDefaultsCard() {
       }
     }
     toast.error({ title: message });
-  }, [catalogQuery.refetch, proposal.expected_versions, toast, valueLabel]);
+  }, [refetchCatalog, proposal.expected_versions, toast, valueLabel]);
   useEffect(() => {
     if (!dirty) return;
     const controller = new AbortController();
@@ -147,22 +157,30 @@ export function NewWorkDefaultsCard() {
   const updateDraft = (descriptor: SettingDescriptor, value: unknown, remove = false) => {
     setDraft((current) => {
       const next = { ...current };
-      if (remove || valuesEqual(value, descriptor.effective_value)) delete next[descriptor.key];
-      else next[descriptor.key] = value;
+      const baseline = current[descriptor.key] ?? {
+        originalValue: descriptor.effective_value, valueVersion: descriptor.value_version,
+      };
+      if (remove || valuesEqual(value, baseline.originalValue)) delete next[descriptor.key];
+      else next[descriptor.key] = { ...baseline, value };
       return next;
     });
     setErrors((current) => ({ ...current, [descriptor.key]: [] }));
     setConflicts((current) => { const next = { ...current }; delete next[descriptor.key]; return next; });
   };
+  const cardIssues = Object.entries(validation?.signature === signature ? validation.issues : {}).concat(Object.entries(errors))
+    .flatMap(([key, messages]) => ROWS.some((row) => row.key === key) ? [] : messages.map((message) => ({ key, message })));
 
   return (
     <section id="new-work-defaults" tabIndex={-1} aria-label="Defaults for new work"
       className="rounded-3xl border border-mm-border/80 p-5 shadow-sm space-y-4">
       <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Defaults for new work</h3>
       <p className="text-sm text-slate-600 dark:text-slate-400">Used when a launch doesn&apos;t choose a harness or profile.</p>
+      {cardIssues.map(({ key, message }, index) => <p role="alert" key={`${key}-${index}`} className="text-sm text-rose-700 dark:text-rose-400">
+        {key}: {message} <a href="/settings/instance" className="underline">View Instance settings</a>
+      </p>)}
       {catalogQuery.isLoading ? <p role="status">Loading defaults…</p> : catalogQuery.isError ? <p role="alert">{catalogQuery.error.message}</p> :
         descriptors.map((descriptor) => {
-          const value = Object.hasOwn(draft, descriptor.key) ? draft[descriptor.key] : descriptor.effective_value;
+          const value = Object.hasOwn(draft, descriptor.key) ? draft[descriptor.key]!.value : descriptor.effective_value;
           const issues = [...(validation?.signature === signature ? validation.issues[descriptor.key] ?? [] : []), ...(errors[descriptor.key] ?? [])];
           return <div key={descriptor.key} data-setting-row className="space-y-2">
             <div className="flex flex-wrap items-center gap-3">
@@ -182,7 +200,7 @@ export function NewWorkDefaultsCard() {
               </fieldset>
               <WorkflowActionsMenu triggerContent="⋯" triggerAriaLabel={`${descriptor.title} actions`} items={[
                 { id: 'history', label: 'View history', onSelect: () => setAuditKey(auditKey === descriptor.key ? null : descriptor.key) },
-                ...(canReset(descriptor) ? [{ id: 'reset', label: `Reset to default (${valueLabel(descriptor, descriptor.default_value)})`,
+                ...(canReset(descriptor) ? [{ id: 'reset', label: 'Reset to default',
                   disabledReason: busy ? 'Saving defaults' : descriptor.read_only ? descriptor.read_only_reason || 'Read-only setting' : null,
                   onSelect: () => { void reset(descriptor); } }] : []),
               ]} />
@@ -194,7 +212,7 @@ export function NewWorkDefaultsCard() {
         })}
       {dirty ? <div className="border-t border-mm-border pt-3" aria-label="Unsaved defaults">
         <ul className="space-y-1 text-sm">{changed.map((descriptor) => <li key={descriptor.key}>
-          {descriptor.title}: {valueLabel(descriptor, descriptor.effective_value)} → {valueLabel(descriptor, draft[descriptor.key])}
+          {descriptor.title}: {valueLabel(descriptor, draft[descriptor.key]!.originalValue)} → {valueLabel(descriptor, draft[descriptor.key]!.value)}
         </li>)}</ul>
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="ghost" disabled={busy} onClick={discard}>Cancel</Button>

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, renderWithClient, screen, within } from '../../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../../utils/test-utils';
 import { SettingsDraftGuardProvider } from './SettingsDraftGuard';
 import { NewWorkDefaultsCard } from './NewWorkDefaultsCard';
 import type { SettingDescriptor } from './GeneratedSettingsSection';
@@ -27,7 +27,9 @@ function catalog(): { section: string; categories: { Workflow: SettingDescriptor
 let current = catalog();
 let issues: Record<string, { message: string }[]> = {};
 let patchResponse: Response | null = null;
+let validationResponse: Response | null = null;
 let validationFailure = false;
+let inheritedValues: Record<string, unknown>;
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 let fetchSpy: MockInstance<typeof window.fetch>;
 function renderCard() {
@@ -38,7 +40,8 @@ function renderCard() {
 const changeHarness = () => fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'claude_code' } });
 const patches = () => fetchSpy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
 beforeEach(() => {
-  current = catalog(); issues = {}; patchResponse = null; validationFailure = false;
+  current = catalog(); issues = {}; patchResponse = null; validationResponse = null; validationFailure = false;
+  inheritedValues = { [runtimeKey]: 'omnigent', [profileKey]: null };
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     if (url.startsWith('/api/v1/settings/catalog')) return respond(current);
@@ -47,11 +50,18 @@ beforeEach(() => {
       { profile_id: 'disabled', runtime_id: 'codex_cli', provider_id: 'openai', enabled: false },
     ]);
     if (url === '/api/v1/settings/validate' && validationFailure) return respond({ message: 'Validation storage unavailable' }, 500);
+    if (url === '/api/v1/settings/validate' && validationResponse) {
+      const response = validationResponse;
+      validationResponse = null;
+      return response;
+    }
     if (url === '/api/v1/settings/validate') return respond({ accepted: Object.keys(issues).length === 0, issues_by_key: issues });
     if (url.startsWith('/api/v1/settings/audit')) return respond({ items: [] });
     if (init?.method === 'DELETE') {
-      current.categories.Workflow[0]!.effective_value = 'omnigent';
-      current.categories.Workflow[0]!.source = 'config_file';
+      const key = decodeURIComponent(url.split('/').at(-1)!);
+      const descriptor = current.categories.Workflow.find((item) => item.key === key)!;
+      descriptor.effective_value = inheritedValues[key];
+      descriptor.source = 'config_file';
       return respond({});
     }
     if (init?.method === 'PATCH') {
@@ -113,6 +123,46 @@ describe('NewWorkDefaultsCard', () => {
     await screen.findByText('Defaults saved');
     expect(JSON.parse(String(patches()[1]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 8 });
   });
+  it.each(['omnigent', 'claude_code'])('retains the edit baseline after a background refresh to %s', async (latest) => {
+    const { queryClient } = renderCard();
+    await screen.findByLabelText('Harness'); changeHarness();
+    current.categories.Workflow[0]!.effective_value = latest;
+    current.categories.Workflow[0]!.value_version = 8;
+    current.categories.Workflow[1]!.effective_value = 'disabled';
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] }); });
+    await waitFor(() => expect((screen.getByLabelText('Provider profile') as HTMLSelectElement).value).toBe('disabled'));
+    expect(screen.getByText('Harness: Codex → Claude Code')).toBeTruthy();
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude_code');
+    patchResponse = respond({ error: 'version_conflict', message: 'Changed elsewhere', key: runtimeKey }, 409);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const label = latest === 'omnigent' ? 'OpenCode' : 'Claude Code';
+    await screen.findByText(`Changed elsewhere to ${label}. Save again to replace it, or cancel.`);
+    expect(JSON.parse(String(patches()[0]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 3 });
+    expect(patches()).toHaveLength(1);
+    patchResponse = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText('Defaults saved');
+    expect(JSON.parse(String(patches()[1]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 8 });
+  });
+  it('keeps the version on further edits and acknowledges a validation conflict before Save', async () => {
+    const { queryClient } = renderCard();
+    await screen.findByLabelText('Harness'); changeHarness();
+    current.categories.Workflow[0]!.effective_value = 'omnigent';
+    current.categories.Workflow[0]!.value_version = 8;
+    current.categories.Workflow[1]!.effective_value = 'disabled';
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] }); });
+    await waitFor(() => expect((screen.getByLabelText('Provider profile') as HTMLSelectElement).value).toBe('disabled'));
+    validationResponse = respond({ error: 'version_conflict', key: runtimeKey, message: 'Changed elsewhere' }, 409);
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'omnigent' } });
+    await screen.findByText('Changed elsewhere to OpenCode. Save again to replace it, or cancel.');
+    const validation = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/validate'));
+    expect(JSON.parse(String(validation?.[1]?.body)).expected_versions).toEqual({ [runtimeKey]: 3 });
+    expect(patches()).toHaveLength(0);
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('omnigent');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText('Defaults saved');
+    expect(JSON.parse(String(patches()[0]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 8 });
+  });
   it('identifies only the conflicted row while preserving every draft', async () => {
     renderCard(); await screen.findByLabelText('Harness');
     await screen.findByRole('option', { name: /claude-team/ });
@@ -138,6 +188,33 @@ describe('NewWorkDefaultsCard', () => {
     expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(patches()).toHaveLength(0);
+  });
+  it('identifies off-card validation blockers and does not silently PATCH', async () => {
+    issues = { 'integrations.github.token_ref': [{ message: 'Managed secret is missing' }] };
+    renderCard(); await screen.findByLabelText('Harness'); changeHarness();
+    const error = await screen.findByText(/integrations.github.token_ref.*Managed secret is missing/);
+    expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
+    expect(error.closest('[data-setting-row]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(patches()).toHaveLength(0);
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude_code');
+  });
+  it.each([400, 423])('identifies off-card PATCH errors for HTTP %i', async (status) => {
+    renderCard(); await screen.findByLabelText('Harness'); changeHarness();
+    patchResponse = respond(status === 400 ? {
+      error: 'validation_failed', message: 'Invalid settings', details: { issues: [
+        { key: 'integrations.github.token_ref', message: 'Managed secret is missing' },
+        { key: runtimeKey, message: 'Harness is unavailable' },
+      ] },
+    } : { key: 'integrations.github.token_ref', message: 'Locked by deployment' }, status);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const error = await screen.findByText(/integrations.github.token_ref.*(Managed secret is missing|Locked by deployment)/);
+    expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
+    expect(error.closest('[data-setting-row]')).toBeNull();
+    if (status === 400) {
+      expect(screen.getByText('Harness is unavailable').closest('[data-setting-row]')).toBeTruthy();
+    }
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude_code');
   });
   it.each([400, 423])('keeps the server row error inline for HTTP %i', async (status) => {
     renderCard(); await screen.findByLabelText('Harness'); changeHarness();
@@ -173,11 +250,27 @@ describe('NewWorkDefaultsCard', () => {
     await screen.findByText('No audit events were found for this setting.');
     changeHarness();
     fireEvent.click(screen.getByRole('button', { name: 'Harness actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to default (OpenCode)' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to default' }));
     await screen.findByText('Harness reset to default');
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => url)).toEqual([`/api/v1/settings/${runtimeKey}`]);
     expect((screen.getByLabelText('Provider profile') as HTMLSelectElement).value).toBe('claude-team');
     expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('omnigent');
+  });
+  it.each([
+    { key: runtimeKey, title: 'Harness', inherited: 'claude_code', proposed: 'omnigent' },
+    { key: profileKey, title: 'Provider profile', inherited: 'claude-team', proposed: 'disabled' },
+  ])('resets $title to inherited configuration without advertising the registry default', async ({ key, title, inherited, proposed }) => {
+    inheritedValues[key] = inherited;
+    renderCard(); await screen.findByLabelText('Harness');
+    await screen.findByRole('option', { name: /claude-team/ });
+    fireEvent.change(screen.getByLabelText(title), { target: { value: proposed } });
+    fireEvent.click(screen.getByRole('button', { name: `${title} actions` }));
+    const reset = screen.getByRole('menuitem', { name: 'Reset to default' });
+    fireEvent.click(reset);
+    await screen.findByText(`${title} reset to default`);
+    expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => url)).toEqual([`/api/v1/settings/${key}`]);
+    expect((screen.getByLabelText(title) as HTMLSelectElement).value).toBe(inherited);
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
   it('protects a dirty draft on departure', async () => {
     renderCard(); await screen.findByLabelText('Harness'); changeHarness();
