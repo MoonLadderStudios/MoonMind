@@ -12,9 +12,7 @@ from moonmind.config.container_backend_settings import ContainerBackendConfigErr
 async def test_readiness_uses_existing_settings_authority(monkeypatch):
     app = FastAPI()
     app.include_router(settings_router.router, prefix="/api/v1")
-    app.dependency_overrides[settings_router.SETTINGS_CURRENT_USER_DEP] = lambda: (
-        object()
-    )
+    app.dependency_overrides[settings_router.SETTINGS_CURRENT_USER_DEP] = object
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -32,9 +30,7 @@ async def test_invalid_configuration_is_bounded(monkeypatch):
     monkeypatch.setattr(settings_router, "resolve_container_backend_settings", invalid)
     app = FastAPI()
     app.include_router(settings_router.router, prefix="/api/v1")
-    app.dependency_overrides[settings_router.SETTINGS_CURRENT_USER_DEP] = lambda: (
-        object()
-    )
+    app.dependency_overrides[settings_router.SETTINGS_CURRENT_USER_DEP] = object
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
