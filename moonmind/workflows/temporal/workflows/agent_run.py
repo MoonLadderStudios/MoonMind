@@ -285,6 +285,9 @@ OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID = (
 OMNIGENT_PROFILE_BOUND_RECONCILIATION_PATCH_ID = (
     "agent-run-omnigent-profile-bound-reconciliation-v1"
 )
+OMNIGENT_PROFILE_BOUND_CANCEL_NO_RETRY_PATCH_ID = (
+    "agent-run-omnigent-profile-bound-cancel-no-retry-v1"
+)
 LOGICAL_STEP_EXECUTION_BUDGET_PATCH_ID = "agent-run-logical-step-budget-v1"
 FINAL_PROGRESS_RECONCILIATION_PATCH_ID = "agent-run-final-progress-reconciliation-v1"
 # The canonical delivery boundary parks these provider observations as
@@ -6208,6 +6211,15 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            if is_cancelled_exception(exc) and self._workflow_patch_enabled(
+                OMNIGENT_PROFILE_BOUND_CANCEL_NO_RETRY_PATCH_ID
+            ):
+                # A cancelled Activity arrives as ActivityError, not
+                # CancelledError. Its WAIT_CANCELLATION_COMPLETED cleanup
+                # already settled the runtime binding, so a retry would only
+                # reconcile a cleaned binding and report a binding conflict in
+                # place of the cancellation. Old histories keep their retry.
+                raise
             cause = exc
             while cause is not None:
                 if getattr(cause, "non_retryable", False):

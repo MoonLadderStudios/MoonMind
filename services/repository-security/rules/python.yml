@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+rules:
+  - id: moonmind-python-dynamic-eval
+    pattern: eval($INPUT)
+    message: Dynamic evaluation can execute untrusted input. Prefer parsing data with a format-specific parser.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-95
+      license: Apache-2.0
+  - id: moonmind-python-shell-command
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.check_call(..., shell=True, ...)
+          - pattern: subprocess.check_output(..., shell=True, ...)
+    message: Shell execution can interpret attacker-controlled metacharacters. Pass an argument list with shell disabled.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-78
+      license: Apache-2.0

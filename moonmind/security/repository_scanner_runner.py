@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import signal
@@ -14,6 +15,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from moonmind.schemas.repository_scanner_models import ScannerRule
 from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanners import (
     RepositoryScan,
@@ -145,6 +147,7 @@ def scanner_commands(
         argv = [
             "opengrep",
             "scan",
+            "--disable-version-check",
             "--json",
             "--output",
             str(report_root / "scan.json"),
@@ -155,7 +158,7 @@ def scanner_commands(
         ]
         if not scan.allow_inline_suppressions:
             argv.append("--disable-nosem")
-        for rule in scan.rules:
+        for rule in scan.rules or []:
             argv.extend(["--config", rule.path])
         return {"scan": [*argv, target]}
     argv = [
@@ -180,7 +183,7 @@ def scanner_commands(
         "--exit-code=0",
         "--include-non-failures",
     ]
-    for rule in scan.rules:
+    for rule in scan.rules or []:
         argv.extend(["--config-check", rule.path])
     return {"scan": [*argv, target]}
 
@@ -263,6 +266,52 @@ def _copy_inputs(
     return assets, content_key(records), sorted(set(limitations))
 
 
+class ScannerRulesError(ValueError):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def resolve_rules(scan: RepositoryScan, root: Path) -> list[ScannerRule]:
+    """Read omitted Opengrep rules from this image and verify selected bytes."""
+    rules = scan.rules or []
+    if scan.scanner == "opengrep" and scan.rules is None:
+        manifest = root / "default/manifest.json"
+        try:
+            if (
+                manifest.is_symlink()
+                or not manifest.resolve().is_relative_to(root.resolve())
+                or manifest.stat().st_size > 128 * 1024
+            ):
+                raise ValueError("invalid manifest")
+            document = json.loads(manifest.read_bytes())
+            if not isinstance(document, dict) or document.get("schemaVersion") != 1:
+                raise ValueError("unsupported manifest")
+            rules = [ScannerRule.model_validate(row) for row in document["rules"]]
+            if not 1 <= len(rules) <= 32 or len({r.id for r in rules}) != len(rules):
+                raise ValueError("invalid rule selection")
+            if any(not (r.source and r.notice and r.languages) for r in rules):
+                raise ValueError("missing rule provenance")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise ScannerRulesError("scanner_rules_unavailable") from exc
+    for rule in rules:
+        path = root / Path(rule.path).relative_to("/opt/moonmind-scanner-rules")
+        try:
+            if (
+                not path.resolve().is_relative_to(root.resolve())
+                or path.is_symlink()
+                or not path.is_file()
+                or path.stat().st_size > scan.max_report_bytes
+            ):
+                raise OSError("unavailable rule")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ScannerRulesError("scanner_rules_unavailable") from exc
+        if digest != rule.sha256:
+            raise ScannerRulesError("scanner_rule_integrity_failed")
+    return rules
+
+
 def run_scanner(
     scan: RepositoryScan,
     *,
@@ -315,18 +364,11 @@ def run_scanner(
             metadata.assets, metadata.input_digest, metadata.limitations = _copy_inputs(
                 scan, source, stage
             )
-            for rule in scan.rules:
-                path = rules_root / Path(rule.path).relative_to(
-                    "/opt/moonmind-scanner-rules"
-                )
-                if (
-                    not path.resolve().is_relative_to(rules_root.resolve())
-                    or path.is_symlink()
-                    or path.stat().st_size > scan.max_report_bytes
-                ):
-                    raise ValueError("rule file is not admitted")
-                if hashlib.sha256(path.read_bytes()).hexdigest() != rule.sha256:
-                    raise ValueError("rule content differs from admitted identity")
+            rules = resolve_rules(scan, rules_root)
+            # Resolve against the image that actually runs, never API source or
+            # release identity. Keep the original admitted object unchanged.
+            scan = scan.model_copy(update={"rules": rules})
+            metadata.effective_rules = rules
             metadata.feed, feed_limitations = scanner_feed(
                 scan, database, cache, metadata.assets, now=datetime.now(UTC)
             )
@@ -390,7 +432,7 @@ def run_scanner(
                         rules_root
                         / Path(r.path).relative_to("/opt/moonmind-scanner-rules")
                     )
-                    for r in scan.rules
+                    for r in scan.rules or []
                 }
                 argv = [replacements.get(arg, arg) for arg in argv]
                 if mode == "history" and not metadata.git_metadata:
@@ -399,6 +441,8 @@ def run_scanner(
                 code, state = execute(argv)
                 metadata.exits[mode], metadata.states[mode] = code, state
         # Retain safe diagnostics for scanner/setup failures.
+        except ScannerRulesError as exc:
+            metadata.limitations.extend([exc.code, "scanner_prerequisite_failed"])
         except FeedSnapshotError as exc:
             # Absent, partial, corrupt or incompatible data is never coverage.
             metadata.limitations.extend([exc.code, "scanner_prerequisite_failed"])

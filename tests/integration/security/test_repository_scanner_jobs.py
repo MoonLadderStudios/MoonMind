@@ -17,6 +17,7 @@ import pytest
 from api_service.services.container_jobs import ContainerJobService
 from moonmind.config.container_backend_settings import (
     CACHE_SOURCES_ENV_KEY,
+    IMAGE_SOURCES_ENV_KEY,
     resolve_container_backend_settings,
 )
 from moonmind.schemas.container_job_models import (
@@ -197,10 +198,11 @@ raise SystemExit(2 if {failure!r} == "failure" else (1 if scanner=="gitleaks" an
     monkeypatch.setattr(subprocess, "Popen", popen)
 
 
+@pytest.mark.parametrize("defaults", [False, True])
 @pytest.mark.parametrize("scanner", ["gitleaks", "opengrep", "trivy"])
 @pytest.mark.parametrize("history", ["complete", "shallow", "missing"])
 async def test_repository_job_retains_sanitized_evidence_and_report(
-    environment, tmp_path, monkeypatch, scanner, history
+    environment, tmp_path, monkeypatch, scanner, history, defaults
 ):
     root = tmp_path / "repository"
     git = repository(root)
@@ -228,6 +230,11 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
                 "license": "MIT",
             }
         ]
+    if defaults and scanner == "opengrep":
+        from tools.ci.repository_security_image import stage_default_rules
+
+        stage_default_rules(tmp_path / "rules/default", tmp_path / "notices")
+        options = {}
     db = tmp_path / "database"
     if scanner == "trivy":
         # A refresh job's published snapshot, selected by content identity.
@@ -247,9 +254,10 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
             upstreams={"vulnerability": "artifact:art_fixture"},
             now=datetime.now(UTC),
         )
-        options.update(
-            databaseCacheRef="fixture-db", databaseDigest=snapshot.snapshot_id
-        )
+        if not defaults:
+            options.update(
+                databaseCacheRef="fixture-db", databaseDigest=snapshot.snapshot_id
+            )
     scan = RepositoryScan(
         scanner=scanner, outputDirectory=f"artifacts/scan-{MARKER}", **options
     )
@@ -258,8 +266,9 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
     # Admit through the production service, then drive the actual worker's
     # launch, process boundary and artifact ingestion with deterministic data.
     workload = build_scanner_job(scan)
-    workload.pop("imageSourceRef")
-    workload["image"] = "python:3.13"
+    if not defaults:
+        workload.pop("imageSourceRef")
+        workload["image"] = "python:3.13"
     workload["workspaceRef"] = {"kind": "sandbox", "workspaceId": "repository"}
     submission = ContainerJobSubmitRequest(
         idempotencyKey=f"issue-5040-{scanner}-{history}",
@@ -268,7 +277,26 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
     )
     owner = OwnerIdentity(principalType="user", principalId="operator")
     temporal = AsyncMock()
-    jobs = ContainerJobService(environment.session, temporal=temporal)
+    backend_settings = resolve_container_backend_settings(
+        {
+            IMAGE_SOURCES_ENV_KEY: json.dumps(
+                [{"sourceRef": "repository-security", "image": "python:3.13"}]
+            ),
+            CACHE_SOURCES_ENV_KEY: json.dumps(
+                [
+                    {
+                        "cacheRef": "scanner-db" if defaults else "fixture-db",
+                        "volumeName": "fixture-db",
+                        "target": "/opt/moonmind-scanner-db",
+                        "readOnly": True,
+                    }
+                ]
+            ),
+        }
+    )
+    jobs = ContainerJobService(
+        environment.session, temporal=temporal, backend_settings=backend_settings
+    )
     accepted = await jobs.submit(owner=owner, request=submission)
     published = {}
 
@@ -296,21 +324,7 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         command_runner=runner,
         evidence_publisher=publish,
         log_spool_root=tmp_path / "live",
-        # The deployment declares the admitted read-only database cache.
-        settings=resolve_container_backend_settings(
-            {
-                CACHE_SOURCES_ENV_KEY: json.dumps(
-                    [
-                        {
-                            "cacheRef": "fixture-db",
-                            "volumeName": "fixture-db",
-                            "target": "/opt/moonmind-scanner-db",
-                            "readOnly": True,
-                        }
-                    ]
-                )
-            }
-        ),
+        settings=backend_settings,
     )
     await backend.create_container(request)
     storage = storage_for(tmp_path, accepted.job_id)
@@ -346,6 +360,15 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
     summary_ref = published[f"{accepted.job_id}-output-summary.json"][0]
     summary = await read(environment.service, summary_ref)
     assert any(row["findings"] for row in summary["results"].values())
+    if defaults:
+        assert summary["execution"]["sourceImage"] == request.resolved_image_ref
+        if scanner == "opengrep":
+            assert all(
+                rule["license"] == "Apache-2.0" and rule["notice"]
+                for rule in summary["admission"]["rules"]
+            )
+        if scanner == "trivy":
+            assert summary["admission"]["databaseDigest"] == snapshot.snapshot_id
     partial = scanner == "gitleaks" and history != "complete"
     assert summary["coverage"] == ("partial" if partial else "complete")
     assets = sorted(

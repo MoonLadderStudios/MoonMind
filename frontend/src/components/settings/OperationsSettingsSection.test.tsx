@@ -260,6 +260,7 @@ describe('OperationsSettingsSection deployment update card', () => {
 
   it('confirms worker pause and submits operation command metadata', async () => {
     renderOperations();
+    expect(screen.getByText('Repository scanners · Unverified')).toBeTruthy();
 
     const workerCard = await screen.findByRole('region', { name: /worker operations/i });
     await within(workerCard).findByRole('button', { name: /pause workers/i });

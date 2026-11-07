@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
-from moonmind.schemas.repository_scanner_models import RepositoryScan
+from moonmind.schemas.repository_scanner_models import RepositoryScan, ScannerRule
 from moonmind.security.assessments import Contract, Finding, Items, Text, content_key
 from moonmind.security.scanner_feeds import FeedEvidence
 from moonmind.utils.logging import redact_sensitive_text
@@ -504,6 +504,8 @@ class ScannerExecution(Contract):
     )
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     feed: FeedEvidence | None = None
+    effective_rules: list[ScannerRule] | None = Field(None, max_length=32)
+    source_image: Text | None = None
 
 
 class ScannerSummary(Contract):

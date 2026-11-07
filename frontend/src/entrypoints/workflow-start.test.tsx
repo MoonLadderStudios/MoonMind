@@ -481,6 +481,7 @@ describe("WorkflowStartPage loading placeholders", () => {
           },
         });
 
+    expect(screen.getByText("Repository scanners · Unverified")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();

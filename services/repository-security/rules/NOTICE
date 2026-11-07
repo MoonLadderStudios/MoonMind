@@ -1,0 +1,11 @@
+MoonMind default Opengrep rules
+Copyright MoonLadder Studios and MoonMind contributors.
+
+These original rules are distributed under the repository's Apache License 2.0.
+Source: https://github.com/MoonLadderStudios/MoonMind/tree/main/services/repository-security/rules
+No third-party rule corpus is included.
+
+Coverage is deliberately limited to Python dynamic evaluation and shell-enabled
+subprocess calls, and JavaScript/TypeScript dynamic evaluation. These syntactic
+checks flag risky APIs, not proven exploitability. They do not establish complete
+security coverage or compliance with any framework. Review each finding in context.

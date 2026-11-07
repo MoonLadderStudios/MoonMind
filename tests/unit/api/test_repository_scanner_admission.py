@@ -123,7 +123,7 @@ async def test_admitted_legacy_scanner_job_keeps_its_nested_output_mount(tmp_pat
     [
         {"scanner": "opengrep", "rules": []},
         {"scanner": "trivy", "trivyScanners": ["secret"]},
-        {"scanner": "trivy", "trivyScanners": ["vuln"]},
+        {"scanner": "trivy", "databaseDigest": "invalid-snapshot"},
         {"inputPath": "../other"},
         {"outputDirectory": "src/../output"},
         {

@@ -1,3 +1,4 @@
+import { RepositoryScannerReadiness } from '../RepositoryScannerReadiness';
 import { Button } from '../Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1123,6 +1124,7 @@ export function OperationsSettingsSection({
 
   return (
     <div className="space-y-6">
+      <RepositoryScannerReadiness />
       <section
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
         aria-label="MoonMind update"

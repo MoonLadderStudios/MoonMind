@@ -317,6 +317,21 @@ def _scanner_observation(
             ),
             "scannerSummary": ref,
             "nativeReports": content_key(summary.native_refs),
+            "scannerImage": (
+                summary.execution.source_image
+                if summary.execution and summary.execution.source_image
+                else "unavailable"
+            ),
+            # Full licenses, notices and source URLs remain in the retained
+            # summary; identify that exact rule corpus in composed reports.
+            "scannerRules": content_key(
+                [
+                    r.model_dump(mode="json", by_alias=True)
+                    for r in admission.rules or []
+                ]
+                if admission
+                else []
+            ),
             "scannerVersion": (
                 summary.execution.version if summary.execution else "unavailable"
             ),
