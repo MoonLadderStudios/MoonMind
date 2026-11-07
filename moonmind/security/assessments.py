@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.frameworks import FrameworkAssessmentInput
+from moonmind.security.oscal_export import OscalExportRequest
 
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
@@ -428,6 +429,7 @@ class AssessmentRequest(Contract):
     review_ref: Text | None = None
     github_alerts: GitHubAlertImport | None = None
     framework: FrameworkAssessmentInput | None = None
+    oscal_export: OscalExportRequest | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):

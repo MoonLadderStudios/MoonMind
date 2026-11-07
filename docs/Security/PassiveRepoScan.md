@@ -118,6 +118,11 @@ explicit advisory feed without a source-code change. Temporal still owns
 cadence, overlap, catch-up and cancellation. The tool does not launch an agent
 or require model triage.
 
+Optional [OSCAL exports](OscalExport.md) use these native records and restricted
+report artifacts. Full assessment and remediation documents require explicit
+system/SSP, procedure, party and action context; export diagnostics leave native
+reports usable.
+
 Create a schedule with `POST /api/recurring-workflows`, using the normal
 `MoonMind.UserWorkflow` target and a step with `type: "tool"`:
 

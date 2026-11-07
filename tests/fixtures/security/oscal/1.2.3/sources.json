@@ -1,0 +1,61 @@
+{
+  "release": "1.2.3",
+  "license": "NIST public domain: https://github.com/usnistgov/OSCAL/blob/v1.2.3/LICENSE.md",
+  "schemas": [
+    {
+      "model": "catalog",
+      "url": "https://github.com/usnistgov/OSCAL/releases/download/v1.2.3/oscal_catalog_schema.json",
+      "path": "tests/fixtures/security/oscal/1.2.3/oscal_catalog_schema.json",
+      "sha256": "sha256:ab95836e9e8dfeb6fde80007f6cc76fa3192f595d427c751a3f3923c3f474fc2",
+      "schemaId": "http://csrc.nist.gov/ns/oscal/1.2.3/oscal-catalog-schema.json",
+      "bytes": 55199,
+      "outcome": "downloaded",
+      "storedSha256": "sha256:a46282da6627e1957c860b4e83dc8b3ba0ee690410637bb483c6ac43dcbaacb4",
+      "normalization": "Trailing line whitespace removed; JSON content unchanged."
+    },
+    {
+      "model": "profile",
+      "url": "https://github.com/usnistgov/OSCAL/releases/download/v1.2.3/oscal_profile_schema.json",
+      "path": "tests/fixtures/security/oscal/1.2.3/oscal_profile_schema.json",
+      "sha256": "sha256:7c5ff5a92683b6a80ce6a3474dea04e0ea8680a4ecb60702ffa08ebfc677e6cb",
+      "schemaId": "http://csrc.nist.gov/ns/oscal/1.2.3/oscal-profile-schema.json",
+      "bytes": 68516,
+      "outcome": "downloaded",
+      "storedSha256": "sha256:3037224b9da4756082713a11bd682b40d39a5cc28aa597eaba913fc8032df759",
+      "normalization": "Trailing line whitespace removed; JSON content unchanged."
+    },
+    {
+      "model": "assessment-plan",
+      "url": "https://github.com/usnistgov/OSCAL/releases/download/v1.2.3/oscal_assessment-plan_schema.json",
+      "path": "tests/fixtures/security/oscal/1.2.3/oscal_assessment-plan_schema.json",
+      "sha256": "sha256:ea687b9d0ab1d84c9cb11ee0a5e22b17956fe892ee93f5acca937bef81d23ea2",
+      "schemaId": "http://csrc.nist.gov/ns/oscal/1.2.3/oscal-ap-schema.json",
+      "bytes": 144952,
+      "outcome": "downloaded",
+      "storedSha256": "sha256:854402f0bb529564552b4041677d500b23b6fddfc08d77d3ca77c9101c031f70",
+      "normalization": "Trailing line whitespace removed; JSON content unchanged."
+    },
+    {
+      "model": "assessment-results",
+      "url": "https://github.com/usnistgov/OSCAL/releases/download/v1.2.3/oscal_assessment-results_schema.json",
+      "path": "tests/fixtures/security/oscal/1.2.3/oscal_assessment-results_schema.json",
+      "sha256": "sha256:4034e2032332dbf597e59e0646ec16c2c31df992962490371e91f47b219ff42c",
+      "schemaId": "http://csrc.nist.gov/ns/oscal/1.2.3/oscal-ar-schema.json",
+      "bytes": 152214,
+      "outcome": "downloaded",
+      "storedSha256": "sha256:d8dec85eb3589df08abf52ca2b8519545166745088f0aaff373bf706a6ca6f5f",
+      "normalization": "Trailing line whitespace removed; JSON content unchanged."
+    },
+    {
+      "model": "poam",
+      "url": "https://github.com/usnistgov/OSCAL/releases/download/v1.2.3/oscal_poam_schema.json",
+      "path": "tests/fixtures/security/oscal/1.2.3/oscal_poam_schema.json",
+      "sha256": "sha256:f4fd94487408a9589954b5b92d88965c984d4f79b85365cc574b860898759437",
+      "schemaId": "http://csrc.nist.gov/ns/oscal/1.2.3/oscal-poam-schema.json",
+      "bytes": 148253,
+      "outcome": "downloaded",
+      "storedSha256": "sha256:e1351d4c26a0d2a4ea3d3b7424bd049131e32a3938f7bc99c8c1ed48791acbbf",
+      "normalization": "Trailing line whitespace removed; JSON content unchanged."
+    }
+  ]
+}
