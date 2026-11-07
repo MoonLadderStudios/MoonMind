@@ -47,6 +47,11 @@ class ScannerRule(Contract):
     path: str = Field(pattern=r"^/opt/moonmind-scanner-rules/[A-Za-z0-9_./-]+$")
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     license: Text
+    source: Text | None = Field(None, exclude_if=lambda value: value is None)
+    version: Text | None = Field(None, exclude_if=lambda value: value is None)
+    notice: Text | None = Field(None, exclude_if=lambda value: value is None)
+    languages: Items = Field(default_factory=list, exclude_if=lambda value: not value)
+    frameworks: Items = Field(default_factory=list, exclude_if=lambda value: not value)
 
     @field_validator("path")
     @classmethod
@@ -60,7 +65,7 @@ class RepositoryScan(Contract):
     scanner: Scanner
     input_path: str = "."
     output_directory: str
-    rules: list[ScannerRule] = Field(default_factory=list, max_length=32)
+    rules: list[ScannerRule] | None = Field(None, max_length=32)
     exclusions: Items = Field(default_factory=list)
     allow_inline_suppressions: bool = False
     trivy_scanners: list[Literal["vuln", "misconfig", "secret"]] = Field(
@@ -92,27 +97,26 @@ class RepositoryScan(Contract):
 
     @model_validator(mode="after")
     def admitted_choices(self):
-        if self.scanner == "opengrep" and not self.rules:
+        if self.scanner != "opengrep" and self.rules is None:
+            self.rules = []
+        if self.scanner == "opengrep" and self.rules == []:
             raise ValueError("Opengrep requires selected licensed image rules")
-        if self.scanner == "gitleaks" and len(self.rules) > 1:
+        if self.scanner == "gitleaks" and len(self.rules or []) > 1:
             raise ValueError("Gitleaks accepts one trusted configuration")
-        if len({r.id for r in self.rules}) != len(self.rules):
+        if len({r.id for r in self.rules or []}) != len(self.rules or []):
             raise ValueError("duplicate selected rule identity")
         if len(set(self.trivy_scanners)) != len(self.trivy_scanners):
             raise ValueError("duplicate Trivy capability")
         if self.scanner == "trivy":
             if self.gitleaks_owns_secrets and "secret" in self.trivy_scanners:
                 raise ValueError("Gitleaks already owns secret scanning")
-            if "vuln" in self.trivy_scanners and not (
-                self.database_cache_ref and self.database_digest
-            ):
-                raise ValueError(
-                    "Trivy vulnerabilities require an admitted offline database"
-                )
-        if bool(self.database_cache_ref) != bool(self.database_digest):
-            raise ValueError(
-                "database cache and content identity are required together"
-            )
+            if "vuln" in self.trivy_scanners and not self.database_cache_ref:
+                # Resolve only the deployment's standard cache alias here. The
+                # worker still authorizes its mount; the runner selects and
+                # verifies the immutable current snapshot before scanning.
+                self.database_cache_ref = "scanner-db"
+        if self.database_digest and not self.database_cache_ref:
+            raise ValueError("a database identity requires its admitted cache")
         if self.input_path != "." and (
             self.input_path == self.output_directory
             or self.input_path.startswith(self.output_directory + "/")

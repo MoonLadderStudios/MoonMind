@@ -1387,6 +1387,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/repository-scanners/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Repository Scanner Readiness */
+        get: operations["get_repository_scanner_readiness_api_v1_settings_repository_scanners_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/catalog": {
         parameters: {
             query?: never;
@@ -12493,7 +12510,7 @@ export interface components {
             /** Outputdirectory */
             outputDirectory: string;
             /** Rules */
-            rules?: components["schemas"]["ScannerRule"][];
+            rules?: components["schemas"]["ScannerRule"][] | null;
             /** Exclusions */
             exclusions?: string[];
             /**
@@ -12876,6 +12893,16 @@ export interface components {
             sha256: string;
             /** License */
             license: string;
+            /** Source */
+            source?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Notice */
+            notice?: string | null;
+            /** Languages */
+            languages?: string[];
+            /** Frameworks */
+            frameworks?: string[];
         };
         /**
          * ScheduleCreatedResponse
@@ -16990,6 +17017,26 @@ export interface operations {
         };
     };
     receive_github_event_api_v1_github_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_repository_scanner_readiness_api_v1_settings_repository_scanners_readiness_get: {
         parameters: {
             query?: never;
             header?: never;

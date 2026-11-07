@@ -359,11 +359,11 @@ def copy_snapshot(root: Path, snapshot: FeedSnapshot, destination: Path) -> None
     _verify(destination, snapshot.snapshot_id, source, identity)
 
 
-def current_snapshot(root: Path) -> FeedSnapshot:
+def current_snapshot(root: Path, *, verify=True) -> FeedSnapshot:
     pointer = root / "current.json"
     if not pointer.exists():
         raise FeedSnapshotError("feed_snapshot_unavailable")
-    return load_snapshot(root, _metadata(pointer).get("snapshotId"))
+    return load_snapshot(root, _metadata(pointer).get("snapshotId"), verify=verify)
 
 
 def _write_atomic(path: Path, body: bytes) -> None:
@@ -620,7 +620,11 @@ def scanner_feed(
         return None, []
     snapshot = None
     if scan.database_cache_ref:
-        snapshot = load_snapshot(root, scan.database_digest, verify=False)
+        snapshot = (
+            load_snapshot(root, scan.database_digest, verify=False)
+            if scan.database_digest
+            else current_snapshot(root, verify=False)
+        )
         copy_snapshot(root, snapshot, destination)
     evidence = feed_evidence(
         snapshot,

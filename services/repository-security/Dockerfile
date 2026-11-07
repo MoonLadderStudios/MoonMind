@@ -8,10 +8,11 @@ RUN apt-get -o Acquire::Retries=3 update \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir 'pydantic>=2.12.5,<2.15.0' \
     && useradd --uid 1000 --create-home --home-dir /home/scanner scanner \
-    && mkdir -p /workspace /scan-output /opt/moonmind-scanner-db /opt/moonmind-scanner-rules \
-    && chown 1000:1000 /scan-output
+    && mkdir -p /workspace /scan-output /opt/moonmind-scanner-db /opt/moonmind-scanner-feeds /opt/moonmind-scanner-rules \
+    && chown 1000:1000 /scan-output /opt/moonmind-scanner-db /opt/moonmind-scanner-feeds
 
 COPY services/repository-security/resolved/bin/ /usr/local/bin/
+COPY services/repository-security/resolved/rules/ /opt/moonmind-scanner-rules/default/
 COPY services/repository-security/resolved/python/ /opt/moonmind-scanner-python/
 COPY services/repository-security/resolved/notices/ /usr/local/share/repository-security/notices/
 COPY services/repository-security/resolved/inventory.json /usr/local/share/repository-security/inventory.json

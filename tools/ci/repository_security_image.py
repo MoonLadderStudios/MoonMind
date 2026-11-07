@@ -252,6 +252,47 @@ def stage_runner(destination: Path) -> None:
         shutil.copyfile(ROOT / "moonmind" / relative, target)
 
 
+def stage_default_rules(destination: Path, notices: Path) -> dict:
+    """Package the original, redistributable baseline and identify its exact bytes."""
+    source = ROOT / "services/repository-security/rules"
+    destination.mkdir(parents=True, exist_ok=True)
+    notices.mkdir(parents=True, exist_ok=True)
+    provenance = {
+        "version": "1",
+        "source": "https://github.com/MoonLadderStudios/MoonMind/tree/main/services/repository-security/rules",
+        "license": "Apache-2.0",
+        "notice": (source / "NOTICE").read_text(),
+        "frameworks": [],
+    }
+    rules = []
+    for name, languages in (
+        ("python", ["python"]),
+        ("javascript", ["javascript", "typescript"]),
+    ):
+        path = destination / f"{name}.yml"
+        shutil.copyfile(source / path.name, path)
+        rules.append(
+            {
+                **provenance,
+                "id": f"moonmind-default-{name}",
+                "path": f"/opt/moonmind-scanner-rules/default/{path.name}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "languages": languages,
+            }
+        )
+    manifest = {
+        **provenance,
+        "schemaVersion": 1,
+        "id": "moonmind-default-opengrep",
+        "languages": ["python", "javascript", "typescript"],
+        "rules": rules,
+    }
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    shutil.copyfile(ROOT / "LICENSE", notices / "default-rules-LICENSE")
+    shutil.copyfile(source / "NOTICE", notices / "default-rules-NOTICE")
+    return manifest
+
+
 def prepare(inputs: dict, arch: str, destination: Path, evidence: Path) -> None:
     if arch not in ARCHITECTURES:
         raise ImageError("only Linux amd64 and arm64 are supported")
@@ -316,6 +357,7 @@ def prepare(inputs: dict, arch: str, destination: Path, evidence: Path) -> None:
     download(
         inventory["tools"]["opengrep"]["source"], evidence / "opengrep-source.tar.gz"
     )
+    inventory["defaultRules"] = stage_default_rules(destination / "rules", notices)
     stage_runner(destination / "python")
     (destination / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
     (notices / "sources.json").write_text(

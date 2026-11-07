@@ -551,3 +551,71 @@ def test_update_fixture_cleanup_preserves_the_original_failure_and_attempts_remo
     assert (
         "log collection unavailable" in (tmp_path / "cleanup-errors.json").read_text()
     )
+
+
+def test_default_rules_are_staged_with_complete_provenance_and_integrity(tmp_path):
+    manifest = image.stage_default_rules(tmp_path / "rules", tmp_path / "notices")
+    assert manifest["schemaVersion"] == 1
+    assert manifest["license"] == "Apache-2.0"
+    assert set(manifest["languages"]) == {"python", "javascript", "typescript"}
+    assert len(manifest["rules"]) >= 2
+    assert json.loads((tmp_path / "rules/manifest.json").read_text()) == manifest
+    for rule in manifest["rules"]:
+        path = tmp_path / "rules" / rule["path"].rsplit("/", 1)[-1]
+        assert rule["path"].startswith("/opt/moonmind-scanner-rules/default/")
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == rule["sha256"]
+        assert rule["license"] == "Apache-2.0"
+        assert rule["languages"]
+    assert (tmp_path / "notices/default-rules-LICENSE").is_file()
+    assert (tmp_path / "notices/default-rules-NOTICE").is_file()
+
+
+def test_qualification_does_not_hide_packaged_rules_with_a_fixture_mount(tmp_path):
+    argv = qualification.container("image", tmp_path, tmp_path, scratch=tmp_path)
+    mounts = [argv[i + 1] for i, value in enumerate(argv) if value == "--mount"]
+    assert not any("dst=/opt/moonmind-scanner-rules," in mount for mount in mounts)
+    assert any(
+        "dst=/opt/moonmind-scanner-rules/qualification,readonly" in mount
+        for mount in mounts
+    )
+
+
+def test_qualification_requires_all_shipped_rules_and_languages():
+    results = [
+        {"check_id": f"default.{rule}", "path": f"/workspace/{path}"}
+        for rule, path in (
+            ("moonmind-python-dynamic-eval", "app.py"),
+            ("moonmind-python-shell-command", "app.py"),
+            ("moonmind-javascript-dynamic-eval", "app.js"),
+            ("moonmind-javascript-dynamic-eval", "app.ts"),
+        )
+    ]
+    qualification.assert_default_findings({"results": results}, True)
+    qualification.assert_default_findings({"results": []}, False)
+    with pytest.raises(image.ImageError, match="packaged default rules"):
+        qualification.assert_default_findings({"results": results[:-1]}, True)
+    with pytest.raises(image.ImageError, match="packaged default rules"):
+        qualification.assert_default_findings({"results": results}, False)
+
+
+def test_fresh_cache_volume_mountpoints_are_created_and_owned_by_scanner():
+    import shlex
+
+    dockerfile = (image.ROOT / "services/repository-security/Dockerfile").read_text()
+    setup = dockerfile.split("\nCOPY", 1)[0].replace("\\\n", " ")
+    commands = [shlex.split(part.strip()) for part in setup.split("&&")]
+    required = {"/opt/moonmind-scanner-db", "/opt/moonmind-scanner-feeds"}
+    created = {
+        path
+        for command in commands
+        if command[:2] == ["mkdir", "-p"]
+        for path in command[2:]
+    }
+    owned = {
+        path
+        for command in commands
+        if command[:2] == ["chown", "1000:1000"]
+        for path in command[2:]
+    }
+    assert required <= created
+    assert required <= owned
