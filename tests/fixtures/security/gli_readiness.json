@@ -1,0 +1,39 @@
+{
+  "issueRef": "MoonLadderStudios/MoonMind#5195",
+  "standardSource": "https://gaminglabs.com/wp-content/uploads/2026/11/GLI-19-v4.0-Standards-for-Interactive-Gaming-Systems.pdf",
+  "framework": {
+    "packId": "gli-19-readiness",
+    "systemInputs": {
+      "entityName": "Synthetic operator",
+      "entityType": "operator",
+      "productType": "interactive_gaming",
+      "systems": ["casino"],
+      "jurisdictionBasis": {
+        "jurisdiction": "Synthetic public fixture, no real adoption asserted",
+        "status": "adopted",
+        "edition": "4.0",
+        "adoptedOn": "2026-11-03",
+        "effectiveOn": "2026-11-04",
+        "recordVersion": "synthetic-1",
+        "sourceRef": "fixture:adoption",
+        "reason": "Synthetic adoption solely for automated implementation acceptance"
+      }
+    },
+    "period": {"start": "2026-11-04", "end": "2026-11-07"},
+    "requirementChoices": {},
+    "evidenceRefs": []
+  },
+  "technicalEvidence": {
+    "kind": "technical_assessment",
+    "requirementIds": ["GLI-GSF-2:B"],
+    "systems": ["casino"],
+    "period": {"start": "2026-11-04", "end": "2026-11-07"},
+    "method": "observation",
+    "description": "Synthetic scoped vulnerability assessment, independent of gaming certification",
+    "provenance": {"sourceRef": "fixture:scan", "issuer": "Synthetic assessor", "version": "1", "recordedOn": "2026-11-07", "standard": "GLI-GSF-2 v1.0"},
+    "artifactRef": "fixture:evidence",
+    "evidenceType": "technical",
+    "outcome": "passed",
+    "edition": "4.0"
+  }
+}

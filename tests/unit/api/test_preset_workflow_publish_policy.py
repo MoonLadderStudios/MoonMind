@@ -47,6 +47,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "jira-breakdown-orchestrate",
         "pr-review-resolve",
         "security-ukgc-rts",
+        "security-gli-readiness",
     }
 )
 
@@ -101,8 +102,7 @@ async def _seeded_annotations(session, tmp_path) -> dict[str, dict]:
         )
     )
     return {
-        template.slug: template.annotations or {}
-        for template in result.scalars().all()
+        template.slug: template.annotations or {} for template in result.scalars().all()
     }
 
 

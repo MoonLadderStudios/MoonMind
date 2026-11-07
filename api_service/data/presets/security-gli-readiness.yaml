@@ -1,0 +1,78 @@
+slug: security-gli-readiness
+title: GLI-19 and GLI-GSF Readiness
+description: Prepare scoped interactive-gaming readiness evidence with edition, jurisdiction adoption, partner responsibilities and unresolved external verification.
+tags: [security, assessment, gli, igaming]
+requiredCapabilities: [sandbox]
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required: [assets, system_inputs, period]
+    properties:
+      assets:
+        type: array
+        title: Assessed system assets
+        items: {type: string}
+        minItems: 1
+        description: Admit the system identifiers examined by this assessment.
+      system_inputs:
+        type: object
+        title: Saved assessed business and system inputs
+        description: Record entityName, entityType (operator, rgs, ancillary_provider), productType (interactive_gaming, ancillary_service, gaming_device, event_wagering), systems and jurisdictionBasis. The jurisdiction record holds jurisdiction, status (unknown, adopted, not_adopted), edition, adoptedOn, effectiveOn, recordVersion, sourceRef and reason. Ancillary providers must record directlyAffectsGaming. Publication never implies adoption. See the GLI section of PassiveRepoScan for examples.
+        properties:
+          entityType:
+            type: string
+            enum: [operator, rgs, ancillary_provider]
+          productType:
+            type: string
+            enum: [interactive_gaming, ancillary_service, gaming_device, event_wagering]
+      period:
+        type: object
+        title: Assessment evidence period
+        required: [start, end]
+        properties:
+          start: {type: string, format: date}
+          end: {type: string, format: date}
+        description: Set start and end dates as YYYY-MM-DD. Evidence must cover each requirement's selected period.
+      requirement_choices:
+        type: object
+        title: Requirement scope and period choices
+        description: Key choices by requirement ID, for example {"GLI-GSF-2:B":{"systems":["casino"],"period":{"start":"2026-11-04","end":"2026-11-07"}}}. Omitted choices use all assessed systems and the assessment period. Record notApplicableReason for exclusions or responsibleEntity (partner) and responsibilityReason identifying the partner and agreement. Partner ownership keeps missing evidence visible.
+      evidence_refs:
+        type: array
+        title: Evidence record artifacts
+        items: {type: string}
+        description: Supply scoped evidence record artifact IDs with provenance, edition, outcome and evidenceType (technical, organizational, game_math, rng, laboratory, regulator). Link original observations through provenance.sourceRef. Clean scans leave game, operational and laboratory gaps. Laboratory evaluation and regulator approval remain separate Unverified external claims.
+      previous_assessment_ref:
+        type: [string, 'null']
+        title: Previous framework assessment
+        description: Link a retained GLI framework report for traceable edition, evidence or jurisdiction-adoption reassessment. Earlier reports remain unchanged.
+  defaults:
+    assets: []
+    system_inputs: {}
+    period: {}
+    requirement_choices: {}
+    evidence_refs: []
+    previous_assessment_ref: null
+steps:
+- type: tool
+  title: Prepare GLI readiness
+  instructions: Evaluate scoped GLI requirements and export edition, jurisdiction basis, evidence links and missing-evidence requests. This prepares readiness evidence and never certifies or approves a product.
+  tool:
+    id: security.assess
+    requiredCapabilities: [sandbox]
+    inputs:
+      scope:
+        assets: '{{ inputs.assets }}'
+      tools: []
+      budget: {baseSeconds: 60, maxSeconds: 120, progressStallSeconds: 60}
+      credentialRefs: []
+      networkRefs: []
+      framework:
+        packId: gli-19-readiness
+        systemInputs: '{{ inputs.system_inputs }}'
+        period: '{{ inputs.period }}'
+        requirementChoices: '{{ inputs.requirement_choices }}'
+        evidenceRefs: '{{ inputs.evidence_refs }}'
+        previousAssessmentRef: '{{ inputs.previous_assessment_ref }}'

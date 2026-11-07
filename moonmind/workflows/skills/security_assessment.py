@@ -764,23 +764,61 @@ class AssessmentExecution:
     ) -> tuple[str, dict] | None:
         if request.framework is None:
             return None
-        from moonmind.security.frameworks import FrameworkEvidence, load_framework_pack
-        from moonmind.security.ukgc_rts import (
-            AuditRecord,
-            UKGCSystemInputs,
-            prepare_audit,
+        from moonmind.security.frameworks import (
+            FrameworkEvidence,
+            FrameworkPack,
+            load_framework_pack,
         )
 
         selection = request.framework
         pack = load_framework_pack(selection.pack_id)
-        system = UKGCSystemInputs.model_validate(selection.system_inputs)
-        systems = {
-            s for row in system.critical_systems if row.in_scope for s in row.systems
-        }
+        if pack.id == "gli-19-readiness":
+            from moonmind.security.gli_readiness import (
+                GLIEvidence,
+                GLISystemInputs,
+                prepare_assessment,
+            )
+
+            system = GLISystemInputs.model_validate(selection.system_inputs)
+            systems = set(system.systems)
+            evidence_type, prepare = GLIEvidence, prepare_assessment
+            if selection.audit_ref:
+                raise ValueError("GLI evidence belongs in evidenceRefs")
+        else:
+            from moonmind.security.ukgc_rts import (
+                AuditRecord,
+                UKGCSystemInputs,
+                prepare_audit,
+            )
+
+            system = UKGCSystemInputs.model_validate(selection.system_inputs)
+            systems = {
+                s
+                for row in system.critical_systems
+                if row.in_scope
+                for s in row.systems
+            }
+            evidence_type, prepare = FrameworkEvidence, prepare_audit
         if not systems <= set(request.scope.assets):
             raise ValueError("Framework systems exceed admitted assessment scope")
         audit = None
         refs = list(selection.evidence_refs)
+        previous = None
+        if selection.previous_assessment_ref:
+            _, body = await self.read(selection.previous_assessment_ref)
+            previous = json.loads(body)
+            previous_pack = FrameworkPack.model_validate(
+                previous.get("pack") if isinstance(previous, dict) else None
+            )
+            if previous_pack.id != pack.id:
+                raise ValueError(
+                    "Previous assessment must be a report for the selected framework"
+                )
+            refs.append(selection.previous_assessment_ref)
+        if pack.id == "gli-19-readiness":
+            source_ref = system.jurisdiction_basis.source_ref
+            if source_ref and ARTIFACT_ID_PATTERN.fullmatch(source_ref):
+                refs.append(source_ref)
         if selection.audit_ref:
             _, body = await self.read(selection.audit_ref)
             audit = AuditRecord.model_validate_json(body)
@@ -793,9 +831,7 @@ class AssessmentExecution:
             try:
                 # The artifact owner supplies this identity, not authored JSON.
                 payload = json.loads(body)
-                evidence = FrameworkEvidence.model_validate(
-                    {**payload, "artifactRef": ref}
-                )
+                evidence = evidence_type.model_validate({**payload, "artifactRef": ref})
             except (ValueError, TypeError):
                 invalid.append(ref)
                 continue
@@ -806,17 +842,32 @@ class AssessmentExecution:
                 refs.append(evidence.reliance.review_ref)
         for ref in dict.fromkeys(refs):
             await self.digest(ref)
-        report = prepare_audit(
+        report = prepare(
             selection,
             evidence=records,
             audit=audit.model_dump(mode="json", by_alias=True) if audit else None,
         )
+        if previous is not None:
+            if previous.get("schemaVersion") != report["schemaVersion"]:
+                raise ValueError(
+                    "Previous assessment must use the selected report schema"
+                )
+            report["reassessment"] = {
+                "previousRef": selection.previous_assessment_ref,
+                "previousEdition": previous["pack"]["edition"],
+                "packChanged": previous["pack"] != report["pack"],
+                "jurisdictionBasisChanged": previous.get("jurisdictionBasis")
+                != report.get("jurisdictionBasis"),
+            }
         for ref in invalid:
+            prompt = "Supply a scoped evidence record with provenance, period, systems, control IDs and enquiry/evidence/observation method; an uploaded document alone cannot establish control coverage."
+            if pack.id == "gli-19-readiness":
+                prompt += " Include evidenceType, outcome, edition and provenance.standard (module and edition); regulator evidence also needs jurisdiction."
             report["evidenceRequests"].append(
                 {
                     "id": "evidence." + ref,
                     "artifactRef": ref,
-                    "prompt": "Supply a scoped evidence record with provenance, period, systems, control IDs and enquiry/evidence/observation method; an uploaded document alone cannot establish control coverage.",
+                    "prompt": prompt,
                 }
             )
             report["readiness"] = "incomplete"
@@ -1445,8 +1496,18 @@ class AssessmentExecution:
             outputs.update(
                 frameworkRef=framework_ref,
                 frameworkReadiness=framework_report["readiness"],
+                frameworkEdition=framework_report["pack"]["edition"],
                 evidenceRequests=framework_report["evidenceRequests"],
             )
+            if framework_report["pack"]["id"] == "gli-19-readiness":
+                outputs.update(
+                    frameworkJurisdictionBasis=framework_report["jurisdictionBasis"],
+                    frameworkScope=framework_report["systemInputs"],
+                    frameworkUnresolvedRequirements=framework_report[
+                        "unresolvedRequirements"
+                    ],
+                    externalVerification=framework_report["externalVerification"],
+                )
         try:
             summary = (
                 _summary(comparison)
@@ -1455,9 +1516,11 @@ class AssessmentExecution:
                 + _review_summary(review, review_status)
             ).encode()
             if framework:
-                from moonmind.security.ukgc_rts import render_audit_preparation
+                from moonmind.security.frameworks import render_framework_preparation
 
-                summary += ("\n" + render_audit_preparation(framework_report)).encode()
+                summary += (
+                    "\n" + render_framework_preparation(framework_report)
+                ).encode()
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
                 + ([framework_ref] if framework else [])
