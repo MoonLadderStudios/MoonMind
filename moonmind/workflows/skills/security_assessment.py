@@ -610,7 +610,8 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
                 config_ref=summary.spec_digest,
                 status=(
                     "complete"
-                    if all(
+                    if summary.status == "complete"
+                    and all(
                         r.status != "unverified" for r in summary.implementation_review
                     )
                     else "partial"

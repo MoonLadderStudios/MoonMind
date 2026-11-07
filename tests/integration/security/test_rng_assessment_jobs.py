@@ -16,6 +16,7 @@ from moonmind.config.container_backend_settings import (
     IMAGE_SOURCES_ENV_KEY,
     resolve_container_backend_settings,
 )
+from moonmind.security.rng_assessment import REVIEW_TOPICS
 from moonmind.security.workload_profiles import WORKLOAD_PROFILES_ENV_KEY
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -209,6 +210,58 @@ async def test_abrupt_job_failure_cannot_publish_clean_saved_result(
     assert result["job"]["terminalState"] == terminal
     outputs = await job.assess(ref, "rng-failure-review")
     assert outputs["coverageStatus"] == "stale_or_partial"
+
+
+@pytest.mark.parametrize(
+    "terminal,exit_code",
+    [("succeeded", 0), ("failed", 137), ("canceled", 0), ("timed_out", 137)],
+)
+async def test_review_only_job_coverage_respects_terminal_state(
+    environment, tmp_path, monkeypatch, terminal, exit_code
+):
+    job = Job(environment, tmp_path, monkeypatch)
+    spec = specification(raw=None, rawTests=[])
+    spec["implementationReview"] = [
+        {
+            "topic": topic,
+            "status": "reviewed",
+            "observation": f"Public fixture review of {topic}.",
+            "evidenceRefs": [f"fixture:review/{topic}"],
+        }
+        for topic in REVIEW_TOPICS
+    ]
+    _, argv = await job.launch(
+        "rng-review-only",
+        {"spec": "spec/spec.json"},
+        {"spec": json.dumps(spec).encode()},
+    )
+    process = job.process(argv)
+    _, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, stderr.decode()
+    ref = await job.publish(terminal_state=terminal, exit_code=exit_code)
+    result = json.loads(job.published[ref])
+    complete = terminal == "succeeded"
+    outcome = "not_requested" if complete else "incomplete"
+    assert (result["status"], result["outcome"]) == (
+        "complete" if complete else "partial",
+        outcome,
+    )
+    assert result["job"] == {"terminalState": terminal, "exitCode": exit_code}
+    assert result["raw"] is None and result["mapped"] is None
+    assert result["implementationReview"] == spec["implementationReview"]
+
+    outputs = await job.assess(ref, "rng-review-only-assessment")
+    (reviewed,) = outputs["scannerSummaries"]
+    assert (reviewed["scanner"], reviewed["summaryRef"]) == ("rng", ref)
+    assert reviewed["outcome"] == outcome
+    assert reviewed["implementationReview"] == result["implementationReview"]
+    assert reviewed["statisticalFindings"] == {}
+    assert reviewed["cryptographicSecurity"] == "unverified"
+    assert reviewed["gameFairness"] == "unverified"
+    assert reviewed["verification"] == "not_performed"
+    assert reviewed["externalClaims"][0]["authentication"] == "unverified"
+    assert reviewed["coverage"] == ("complete" if complete else "partial")
+    assert outputs["coverageStatus"] == ("complete" if complete else "stale_or_partial")
 
 
 async def test_sigkill_without_result_stays_missing(environment, tmp_path, monkeypatch):
