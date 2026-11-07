@@ -92,7 +92,7 @@ async def test_empty_audit_exports_actionable_missing_external_evidence(environm
 
 async def test_clean_scan_and_uploaded_certificate_leave_audit_gaps(environment):
     service = environment.service
-    payload, _ = await inputs(service, rules=False)
+    payload, _, _ = await inputs(service, rules=False)
     payload["framework"] = fixture()["framework"]
     payload["framework"]["systemInputs"]["criticalSystems"] = [
         dict(row, systems=["app"])
