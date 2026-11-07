@@ -62,7 +62,7 @@ def container(
         "--mount",
         f"type=bind,src={scratch},dst=/tmp",
         "--mount",
-        f"type=bind,src={FIXTURES},dst=/opt/moonmind-scanner-rules,readonly",
+        f"type=bind,src={FIXTURES},dst=/opt/moonmind-scanner-rules/qualification,readonly",
     ]
     for host, target in mounts:
         argv.extend(("--mount", f"type=bind,src={host},dst={target},readonly"))
@@ -113,6 +113,25 @@ def count_findings(scanner: str, report):
     )
 
 
+def assert_default_findings(report: dict, vulnerable: bool) -> None:
+    expected = (
+        {
+            ("moonmind-python-dynamic-eval", "app.py"),
+            ("moonmind-python-shell-command", "app.py"),
+            ("moonmind-javascript-dynamic-eval", "app.js"),
+            ("moonmind-javascript-dynamic-eval", "app.ts"),
+        }
+        if vulnerable
+        else set()
+    )
+    actual = {
+        (row["check_id"].split(".")[-1], Path(row["path"]).name)
+        for row in report["results"]
+    }
+    if actual != expected:
+        raise ImageError(f"packaged default rules: expected {expected}, got {actual}")
+
+
 def owned_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if os.getuid() == 0:
@@ -159,9 +178,13 @@ def qualify(image: str, evidence: Path) -> dict:
             "-I",
             "-c",
             """
-import errno, json, os, shutil
+import errno, hashlib, json, os, shutil
 from pathlib import Path
 assert os.getuid() == 1000
+for location in ('/opt/moonmind-scanner-db', '/opt/moonmind-scanner-feeds'):
+    status = Path(location).stat()
+    assert (status.st_uid, status.st_gid) == (1000, 1000)
+    assert status.st_mode & 0o700 == 0o700
 assert not any(k.startswith(('OPENAI_', 'ANTHROPIC_', 'AWS_', 'AZURE_', 'GOOGLE_')) or k in ('DOCKER_HOST', 'GOOGLE_APPLICATION_CREDENTIALS') for k in os.environ)
 assert not Path('/var/run/docker.sock').exists() and not Path('/run/docker.sock').exists()
 assert not any(shutil.which(tool) for tool in ('aws', 'gcloud', 'az', 'docker', 'kubectl', 'nmap', 'nuclei'))
@@ -172,7 +195,14 @@ for location in ('/workspace/forbidden', '/home/scanner/forbidden', '/usr/local/
     else: raise AssertionError(location)
 Path('/tmp/allowed').write_text('private temporary data')
 Path('/scan-output/allowed').write_text('declared output')
-print(Path('/usr/local/share/repository-security/inventory.json').read_text())
+inventory = json.loads(Path('/usr/local/share/repository-security/inventory.json').read_text())
+manifest = json.loads(Path('/opt/moonmind-scanner-rules/default/manifest.json').read_text())
+assert inventory['defaultRules'] == manifest and manifest['rules']
+for rule in manifest['rules']:
+    assert hashlib.sha256(Path(rule['path']).read_bytes()).hexdigest() == rule['sha256']
+assert Path('/usr/local/share/repository-security/notices/default-rules-LICENSE').is_file()
+assert Path('/usr/local/share/repository-security/notices/default-rules-NOTICE').is_file()
+print(json.dumps(inventory))
 """,
             scratch=scratch,
         )
@@ -202,26 +232,34 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
         for finding in (True, False):
             kind = "finding" if finding else "clean"
             (source / "app.py").write_text(
-                "eval(user_input)\n" if finding else "print('clean')\n"
+                "eval(user_input)\nimport subprocess\nsubprocess.run(user_input, shell=True)\n"
+                if finding
+                else "print('clean')\nimport subprocess\nsubprocess.run(['echo', 'clean'], shell=False)\n"
             )
+            for name in ("app.js", "app.ts"):
+                (source / name).write_text(
+                    "eval(userInput);\n" if finding else "JSON.parse(userInput);\n"
+                )
             (source / "secrets.txt").write_text(MARKER if finding else "clean control")
             before = snapshot(source, exclude_output=True)
             commands = {
                 "opengrep": [
                     "scan",
                     "--config",
-                    "/opt/moonmind-scanner-rules/opengrep.yml",
+                    "/opt/moonmind-scanner-rules/default/python.yml",
+                    "--config",
+                    "/opt/moonmind-scanner-rules/default/javascript.yml",
                     "--disable-version-check",
                     "--json",
                     "--output",
                     "/scan-output/report.json",
-                    "/workspace/app.py",
+                    "/workspace",
                 ],
                 "gitleaks": [
                     "dir",
                     "/workspace",
                     "--config",
-                    "/opt/moonmind-scanner-rules/gitleaks.toml",
+                    "/opt/moonmind-scanner-rules/qualification/gitleaks.toml",
                     "--gitleaks-ignore-path",
                     "/dev/null",
                     "--redact=100",
@@ -243,6 +281,8 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                 )
                 native = json.loads(report.read_text())
                 count = count_findings(tool, native)
+                if tool == "opengrep":
+                    assert_default_findings(native, finding)
                 if (count > 0) != finding:
                     raise ImageError(
                         f"{tool}: unexpected {kind} result: {count} findings"
@@ -284,8 +324,14 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
         for finding in (True, False):
             kind = "finding" if finding else "clean"
             (source / "app.py").write_text(
-                "eval(user_input)\n" if finding else "print('clean')\n"
+                "eval(user_input)\nimport subprocess\nsubprocess.run(user_input, shell=True)\n"
+                if finding
+                else "print('clean')\nimport subprocess\nsubprocess.run(['echo', 'clean'], shell=False)\n"
             )
+            for name in ("app.js", "app.ts"):
+                (source / name).write_text(
+                    "eval(userInput);\n" if finding else "JSON.parse(userInput);\n"
+                )
             (source / "secrets.txt").write_text(MARKER if finding else "clean control")
             (source / "requirements.txt").write_text(
                 "requests==2.19.1\n"
@@ -336,7 +382,6 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                     )
                 rule_name = {
                     "gitleaks": "gitleaks.toml",
-                    "opengrep": "opengrep.yml",
                 }.get(tool)
                 spec = {"scanner": tool, "outputDirectory": "artifacts/scan"}
                 mounts = ()
@@ -344,18 +389,18 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                     spec["rules"] = [
                         {
                             "id": "qualification",
-                            "path": "/opt/moonmind-scanner-rules/" + rule_name,
+                            "path": "/opt/moonmind-scanner-rules/qualification/"
+                            + rule_name,
                             "sha256": hashlib.sha256(
                                 (FIXTURES / rule_name).read_bytes()
                             ).hexdigest(),
                             "license": "MIT",
                         }
                     ]
-                else:
+                elif tool == "trivy":
                     spec.update(
                         trivyScanners=["vuln"],
                         databaseCacheRef="qualification-db",
-                        databaseDigest=database_digest,
                     )
                     mounts = ((cache / "feeds", "/opt/moonmind-scanner-db"),)
                 before = snapshot(source, exclude_output=True)
@@ -388,6 +433,12 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                         f"states={metadata.get('states')} exits={metadata.get('exits')}"
                     ) from error
                 metadata = json.loads((output / "execution.json").read_text())
+                if tool == "trivy" and metadata["databaseDigest"] != database_digest:
+                    raise ImageError(
+                        "default feed selection did not retain the prepared snapshot"
+                    )
+                if tool == "opengrep" and not metadata["effectiveRules"]:
+                    raise ImageError("default rule provenance was not retained")
                 if metadata["limitations"] or any(
                     v != "succeeded" for v in metadata["states"].values()
                 ):
@@ -396,9 +447,10 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                     )
                 # For Gitleaks the clean worktree still has the earlier finding in history.
                 report_name = "worktree.json" if tool == "gitleaks" else "scan.json"
-                count = count_findings(
-                    tool, json.loads((output / report_name).read_text())
-                )
+                native = json.loads((output / report_name).read_text())
+                count = count_findings(tool, native)
+                if tool == "opengrep":
+                    assert_default_findings(native, finding)
                 if (count > 0) != finding:
                     raise ImageError(f"{tool}: admitted runner {kind} assertion failed")
                 if snapshot(source, exclude_output=True) != before:
@@ -443,7 +495,8 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
         record.update(
             qualification="passed",
             sbomSha256=hashlib.sha256(sbom.read_bytes()).hexdigest(),
-            rules=snapshot(FIXTURES),
+            rules=inventory["defaultRules"],
+            qualificationRules=snapshot(FIXTURES),
         )
         record_path.write_text(json.dumps(record, indent=2) + "\n")
     return record

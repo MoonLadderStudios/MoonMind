@@ -14,15 +14,22 @@ from api_service.api.instance_access import access_principal
 from api_service.api.schemas import GitHubTokenProbeRequest
 from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
+from api_service.services.repository_scanner_readiness import (
+    repository_scanner_readiness,
+)
 from api_service.services.settings_catalog import (
     SettingsAuditResponse,
-    SettingsPreviewResponse,
-    SettingSection,
     SettingsCatalogService,
+    SettingSection,
     SettingsError,
-    SettingsValidationResponse,
+    SettingsPreviewResponse,
     SettingsValidationError,
+    SettingsValidationResponse,
     settings_error,
+)
+from moonmind.config.container_backend_settings import (
+    ContainerBackendConfigError,
+    resolve_container_backend_settings,
 )
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 
@@ -243,6 +250,22 @@ def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None
             ),
         )
     return section  # type: ignore[return-value]
+
+
+@router.get("/repository-scanners/readiness")
+async def get_repository_scanner_readiness(
+    user: Annotated[Any, Depends(SETTINGS_CURRENT_USER_DEP)],
+):
+    try:
+        return repository_scanner_readiness(resolve_container_backend_settings())
+    except ContainerBackendConfigError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "scanner_configuration_unavailable",
+                "message": "Review the deployment container backend configuration. Scanner readiness is Unverified.",
+            },
+        )
 
 
 @router.get("/catalog")
