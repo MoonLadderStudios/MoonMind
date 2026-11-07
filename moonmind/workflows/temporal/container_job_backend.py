@@ -3998,6 +3998,29 @@ class DockerContainerJobBackend:
                     )
         return buffer.getvalue(), used_files, used_bytes
 
+    async def _rgs_input_refs(
+        self, request: ContainerJobActivityRequest
+    ) -> dict[str, str]:
+        refs = {}
+        for attachment in request.request.spec.input_attachments or ():
+            if attachment.artifact_ref is not None:
+                refs[attachment.name] = attachment.artifact_ref
+                continue
+            storage = self._attachment_storage(request)
+            if storage is None:
+                raise ValueError("RGS workspace input capture is unavailable")
+            archive, _, _ = await asyncio.to_thread(
+                self._archive_directory,
+                storage.inputs / attachment.name,
+                storage.inputs.resolve(),
+                attachment.max_files,
+                attachment.max_bytes,
+            )
+            refs[attachment.name] = await self._publish_artifact(
+                request, f"{request.job_id}-input-{attachment.name}.tar.gz", archive
+            )
+        return refs
+
     async def _collect_declared_outputs(
         self, request: ContainerJobActivityRequest, delivered: Sequence[str] = ()
     ) -> list[ContainerJobArtifact]:
@@ -4015,9 +4038,51 @@ class DockerContainerJobBackend:
         raw = await asyncio.to_thread(
             self._build_output_entries, self._output_root(request), list(outputs)
         )
+        invocation = (
+            *request.request.spec.entrypoint[1:],
+            *request.request.spec.command,
+        )
+        rgs_target = "moonmind.security.rgs_target" in invocation
+        if rgs_target:
+            # A live observation's recoverable capture must be retained before
+            # publishing the report that depends on it.
+            raw.sort(key=lambda entry: entry["name"] != "capture")
+        capture_ref = None
+        rgs_input_refs = None
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and (
+                rgs_target or "moonmind.security.rgs_assessment" in invocation
+            ):
+                from moonmind.security.rgs_assessment import (
+                    RgsTraceBundle,
+                    bind_job_result,
+                )
+
+                try:
+                    if rgs_target and entry["name"] == "capture":
+                        RgsTraceBundle.model_validate_json(payload)
+                    else:
+                        if rgs_target and capture_ref is None:
+                            raise ValueError("RGS target capture was not retained")
+                        if rgs_input_refs is None:
+                            rgs_input_refs = await self._rgs_input_refs(request)
+                        input_refs = dict(rgs_input_refs)
+                        if capture_ref:
+                            input_refs["capture"] = capture_ref
+                        payload = bind_job_result(
+                            payload,
+                            str(request.terminal_state or "failed"),
+                            request.exit_code,
+                            input_refs,
+                        )
+                except ValueError:
+                    payload = None
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="invalid RGS assessment output",
+                    )
             if payload is not None and "moonmind.security.rng_assessment" in (
                 *request.request.spec.entrypoint[1:],
                 *request.request.spec.command,
@@ -4061,6 +4126,8 @@ class DockerContainerJobBackend:
             if entry["media_type"] == "application/gzip":
                 name = name.removesuffix(suffixes) + ".tar.gz"
             ref = await self._publish_artifact(request, name, payload)
+            if rgs_target and entry["name"] == "capture":
+                capture_ref = ref
             manifest.append(
                 ContainerJobArtifact(
                     name=entry["name"],

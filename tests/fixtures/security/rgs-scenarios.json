@@ -1,0 +1,634 @@
+{
+  "spec": {
+    "schemaVersion": "rgs-scenario-spec/v1",
+    "gameRef": "game:rgs-fixture",
+    "sourceRef": "fixture:rgs-contract",
+    "integrationRulesRef": "fixture:synthetic-integration-only",
+    "states": [
+      "open",
+      "locked",
+      "interrupted",
+      "finished"
+    ],
+    "initialState": "open",
+    "transitions": [
+      {
+        "event": "close",
+        "fromState": "open",
+        "toState": "locked"
+      },
+      {
+        "event": "interrupt",
+        "fromState": "locked",
+        "toState": "interrupted"
+      },
+      {
+        "event": "finish",
+        "fromState": "locked",
+        "toState": "finished"
+      },
+      {
+        "event": "finish",
+        "fromState": "interrupted",
+        "toState": "finished"
+      }
+    ],
+    "bettingClose": {
+      "event": "close",
+      "recognition": "processed",
+      "tie": "deny"
+    },
+    "cashoutClose": {
+      "event": "finish",
+      "recognition": "processed",
+      "tie": "deny"
+    },
+    "allowedStates": {
+      "wager": [
+        "open"
+      ],
+      "cashout": [
+        "locked",
+        "interrupted"
+      ],
+      "rollback": [
+        "interrupted"
+      ],
+      "settle": [
+        "finished"
+      ],
+      "reconnect": [
+        "open",
+        "locked",
+        "interrupted",
+        "finished"
+      ]
+    },
+    "interruption": {
+      "event": "interrupt",
+      "policy": "rollback"
+    },
+    "scenarios": [
+      {
+        "id": "boundaries",
+        "evidenceRefs": [
+          "fixture:boundary-inputs"
+        ],
+        "events": [
+          {
+            "event": "close",
+            "at": 5
+          },
+          {
+            "event": "finish",
+            "at": 20
+          }
+        ],
+        "initialBalances": {
+          "wallet-a": 1000
+        },
+        "wagers": [
+          {
+            "id": "first",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "second",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "third",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "fourth",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "tie",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "late",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          }
+        ],
+        "operations": [
+          {
+            "id": "wager-early",
+            "kind": "wager",
+            "transactionId": "tx-wager-early",
+            "receivedAt": 1,
+            "processedAt": 1,
+            "wagerRef": "first"
+          },
+          {
+            "id": "wager-second",
+            "kind": "wager",
+            "transactionId": "tx-wager-second",
+            "receivedAt": 2,
+            "processedAt": 2,
+            "wagerRef": "second"
+          },
+          {
+            "id": "wager-third",
+            "kind": "wager",
+            "transactionId": "tx-wager-third",
+            "receivedAt": 3,
+            "processedAt": 3,
+            "wagerRef": "third"
+          },
+          {
+            "id": "wager-fourth",
+            "kind": "wager",
+            "transactionId": "tx-wager-fourth",
+            "receivedAt": 4,
+            "processedAt": 4,
+            "wagerRef": "fourth"
+          },
+          {
+            "id": "wager-tie",
+            "kind": "wager",
+            "transactionId": "tx-wager-tie",
+            "receivedAt": 5,
+            "processedAt": 5,
+            "wagerRef": "tie"
+          },
+          {
+            "id": "wager-late",
+            "kind": "wager",
+            "transactionId": "tx-wager-late",
+            "receivedAt": 6,
+            "processedAt": 6,
+            "wagerRef": "late"
+          },
+          {
+            "id": "cash-early",
+            "kind": "cashout",
+            "transactionId": "tx-cash-early",
+            "receivedAt": 10,
+            "processedAt": 10,
+            "wagerRef": "first"
+          },
+          {
+            "id": "cash-tie",
+            "kind": "cashout",
+            "transactionId": "tx-cash-tie",
+            "receivedAt": 20,
+            "processedAt": 20,
+            "wagerRef": "second"
+          },
+          {
+            "id": "cash-late",
+            "kind": "cashout",
+            "transactionId": "tx-cash-late",
+            "receivedAt": 21,
+            "processedAt": 21,
+            "wagerRef": "third"
+          },
+          {
+            "id": "cash-reordered",
+            "kind": "cashout",
+            "transactionId": "tx-cash-reordered",
+            "receivedAt": 19,
+            "processedAt": 22,
+            "wagerRef": "fourth"
+          },
+          {
+            "id": "settle-second",
+            "kind": "settle",
+            "transactionId": "tx-settle-second",
+            "receivedAt": 23,
+            "processedAt": 23,
+            "wagerRef": "second"
+          },
+          {
+            "id": "settle-third",
+            "kind": "settle",
+            "transactionId": "tx-settle-third",
+            "receivedAt": 24,
+            "processedAt": 24,
+            "wagerRef": "third"
+          },
+          {
+            "id": "settle-fourth",
+            "kind": "settle",
+            "transactionId": "tx-settle-fourth",
+            "receivedAt": 25,
+            "processedAt": 25,
+            "wagerRef": "fourth"
+          }
+        ]
+      },
+      {
+        "id": "recovery",
+        "evidenceRefs": [
+          "fixture:recovery-inputs"
+        ],
+        "events": [
+          {
+            "event": "close",
+            "at": 5
+          },
+          {
+            "event": "interrupt",
+            "at": 15
+          },
+          {
+            "event": "finish",
+            "at": 20
+          }
+        ],
+        "initialBalances": {
+          "wallet-a": 1000
+        },
+        "wagers": [
+          {
+            "id": "first",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          },
+          {
+            "id": "second",
+            "accountRef": "wallet-a",
+            "stake": 100,
+            "cashoutCredit": 150,
+            "settlementCredit": 0
+          }
+        ],
+        "operations": [
+          {
+            "id": "wager-first",
+            "kind": "wager",
+            "transactionId": "tx-wager-first",
+            "receivedAt": 1,
+            "processedAt": 1,
+            "wagerRef": "first"
+          },
+          {
+            "id": "wager-replay",
+            "kind": "wager",
+            "transactionId": "tx-wager-first",
+            "receivedAt": 2,
+            "processedAt": 2,
+            "wagerRef": "first"
+          },
+          {
+            "id": "wager-second",
+            "kind": "wager",
+            "transactionId": "tx-wager-second",
+            "receivedAt": 3,
+            "processedAt": 3,
+            "wagerRef": "second"
+          },
+          {
+            "id": "cash-lost-ack",
+            "kind": "cashout",
+            "transactionId": "tx-cash",
+            "receivedAt": 10,
+            "processedAt": 10,
+            "wagerRef": "first"
+          },
+          {
+            "id": "cash-retry",
+            "kind": "cashout",
+            "transactionId": "tx-cash",
+            "receivedAt": 11,
+            "processedAt": 11,
+            "wagerRef": "first"
+          },
+          {
+            "id": "cash-competitor",
+            "kind": "cashout",
+            "transactionId": "tx-cash-competitor",
+            "receivedAt": 11,
+            "processedAt": 11,
+            "wagerRef": "first"
+          },
+          {
+            "id": "reconnect",
+            "kind": "reconnect",
+            "transactionId": "tx-reconnect",
+            "receivedAt": 15,
+            "processedAt": 15
+          },
+          {
+            "id": "rollback",
+            "kind": "rollback",
+            "transactionId": "tx-rollback",
+            "receivedAt": 16,
+            "processedAt": 16,
+            "wagerRef": "second"
+          },
+          {
+            "id": "rollback-replay",
+            "kind": "rollback",
+            "transactionId": "tx-rollback",
+            "receivedAt": 17,
+            "processedAt": 17,
+            "wagerRef": "second"
+          },
+          {
+            "id": "reconnect-late",
+            "kind": "reconnect",
+            "transactionId": "tx-reconnect-late",
+            "receivedAt": 22,
+            "processedAt": 22
+          }
+        ]
+      }
+    ],
+    "walletUnit": "synthetic-cent"
+  },
+  "traces": {
+    "schemaVersion": "rgs-traces/v1",
+    "sourceRef": "fixture:synthetic-rgs",
+    "traces": [
+      {
+        "scenario": "boundaries",
+        "evidenceRefs": [
+          "fixture:boundaries"
+        ],
+        "operations": [
+          {
+            "operation": "wager-early",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-second",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-third",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-fourth",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-tie",
+            "decision": "denied"
+          },
+          {
+            "operation": "wager-late",
+            "decision": "denied"
+          },
+          {
+            "operation": "cash-early",
+            "decision": "accepted"
+          },
+          {
+            "operation": "cash-tie",
+            "decision": "denied"
+          },
+          {
+            "operation": "cash-late",
+            "decision": "denied"
+          },
+          {
+            "operation": "cash-reordered",
+            "decision": "denied"
+          },
+          {
+            "operation": "settle-second",
+            "decision": "accepted"
+          },
+          {
+            "operation": "settle-third",
+            "decision": "accepted"
+          },
+          {
+            "operation": "settle-fourth",
+            "decision": "accepted"
+          }
+        ],
+        "walletEffects": [
+          {
+            "id": "effect-0",
+            "transactionId": "tx-wager-early",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-1",
+            "transactionId": "tx-wager-second",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-2",
+            "transactionId": "tx-wager-third",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-3",
+            "transactionId": "tx-wager-fourth",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-4",
+            "transactionId": "tx-cash-early",
+            "kind": "credit",
+            "accountRef": "wallet-a",
+            "amount": 150
+          }
+        ],
+        "auditEffects": [
+          {
+            "id": "effect-0",
+            "transactionId": "tx-wager-early",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-1",
+            "transactionId": "tx-wager-second",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-2",
+            "transactionId": "tx-wager-third",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-3",
+            "transactionId": "tx-wager-fourth",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-4",
+            "transactionId": "tx-cash-early",
+            "kind": "credit",
+            "accountRef": "wallet-a",
+            "amount": 150
+          }
+        ],
+        "balances": {
+          "wallet-a": 750
+        },
+        "wagerOutcomes": {
+          "first": "cashed_out",
+          "second": "settled",
+          "third": "settled",
+          "fourth": "settled",
+          "tie": "unplaced",
+          "late": "unplaced"
+        },
+        "roundState": "finished",
+        "complete": true
+      },
+      {
+        "scenario": "recovery",
+        "evidenceRefs": [
+          "fixture:recovery"
+        ],
+        "operations": [
+          {
+            "operation": "wager-first",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-replay",
+            "decision": "accepted"
+          },
+          {
+            "operation": "wager-second",
+            "decision": "accepted"
+          },
+          {
+            "operation": "cash-lost-ack",
+            "decision": "unknown",
+            "reconciledBy": "cash-retry"
+          },
+          {
+            "operation": "cash-retry",
+            "decision": "accepted"
+          },
+          {
+            "operation": "cash-competitor",
+            "decision": "denied"
+          },
+          {
+            "operation": "reconnect",
+            "decision": "accepted"
+          },
+          {
+            "operation": "rollback",
+            "decision": "accepted"
+          },
+          {
+            "operation": "rollback-replay",
+            "decision": "accepted"
+          },
+          {
+            "operation": "reconnect-late",
+            "decision": "accepted"
+          }
+        ],
+        "walletEffects": [
+          {
+            "id": "effect-0",
+            "transactionId": "tx-wager-first",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-1",
+            "transactionId": "tx-wager-second",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-2",
+            "transactionId": "tx-cash",
+            "kind": "credit",
+            "accountRef": "wallet-a",
+            "amount": 150
+          },
+          {
+            "id": "effect-3",
+            "transactionId": "tx-rollback",
+            "kind": "rollback",
+            "accountRef": "wallet-a",
+            "amount": 100
+          }
+        ],
+        "auditEffects": [
+          {
+            "id": "effect-0",
+            "transactionId": "tx-wager-first",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-1",
+            "transactionId": "tx-wager-second",
+            "kind": "debit",
+            "accountRef": "wallet-a",
+            "amount": -100
+          },
+          {
+            "id": "effect-2",
+            "transactionId": "tx-cash",
+            "kind": "credit",
+            "accountRef": "wallet-a",
+            "amount": 150
+          },
+          {
+            "id": "effect-3",
+            "transactionId": "tx-rollback",
+            "kind": "rollback",
+            "accountRef": "wallet-a",
+            "amount": 100
+          }
+        ],
+        "balances": {
+          "wallet-a": 1050
+        },
+        "wagerOutcomes": {
+          "first": "cashed_out",
+          "second": "rolled_back"
+        },
+        "roundState": "finished",
+        "complete": true
+      }
+    ]
+  }
+}
