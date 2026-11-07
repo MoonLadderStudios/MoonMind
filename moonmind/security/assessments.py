@@ -700,6 +700,47 @@ class GitHubAlertImport(Contract):
         return self
 
 
+class GitHubChangeControl(Contract):
+    """Selected read-only source population; time windows are [since, until)."""
+
+    repositories: Annotated[
+        list[
+            Annotated[
+                str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+            ]
+        ],
+        Field(min_length=1, max_length=8),
+    ]
+    environments: Annotated[list[Text], Field(min_length=1, max_length=16)]
+    since: AwareDatetime
+    until: AwareDatetime
+    requirement_ids: Annotated[list[Text], Field(max_length=64)] = Field(
+        default_factory=list
+    )
+    emergency_labels: Annotated[list[Text], Field(max_length=16)] = Field(
+        default_factory=lambda: ["emergency", "hotfix"]
+    )
+    sample_size: Annotated[int, Field(ge=1, le=100)] = 25
+    per_page: Annotated[int, Field(ge=1, le=100)] = 100
+    max_pages: Annotated[int, Field(ge=1, le=100)] = 20
+    max_requests: Annotated[int, Field(ge=1, le=1000)] = 200
+    max_items: Annotated[int, Field(ge=1, le=4096)] = 1000
+    max_bytes: Annotated[int, Field(ge=1, le=8 * 1024 * 1024)] = 4 * 1024 * 1024
+    max_seconds: Annotated[int, Field(ge=1, le=300)] = 60
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if self.since >= self.until:
+            raise ValueError("change-control period must have positive duration")
+        if len({r.lower() for r in self.repositories}) != len(self.repositories) or any(
+            part in {".", ".."} for r in self.repositories for part in r.split("/")
+        ):
+            raise ValueError("invalid or duplicate selected repository")
+        if len(set(self.environments)) != len(self.environments):
+            raise ValueError("duplicate selected environment")
+        return self
+
+
 class AssessmentRequest(Contract):
     scope: AssessmentScope
     tools: Annotated[
@@ -709,9 +750,10 @@ class AssessmentRequest(Contract):
                 "retained-report",
                 "github-alerts",
                 "identity-lifecycle",
+                "github-change-control",
             ]
         ],
-        Field(max_length=4),
+        Field(max_length=5),
     ]
     budget: ExecutionBudget
     credential_refs: Items
@@ -723,6 +765,7 @@ class AssessmentRequest(Contract):
     decisions_ref: Text | None = None
     review_ref: Text | None = None
     github_alerts: GitHubAlertImport | None = None
+    github_change_control: GitHubChangeControl | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
     framework: FrameworkAssessmentInput | None = None
     control_assessment: ControlAssessmentPlan | None = None
@@ -772,6 +815,18 @@ class AssessmentRequest(Contract):
             and self.github_alerts.max_seconds > self.budget.base_seconds
         ):
             raise ValueError("GitHub alert import must fit the base assessment budget")
+        if ("github-change-control" in self.tools) != (
+            self.github_change_control is not None
+        ):
+            raise ValueError("github-change-control requires githubChangeControl")
+        if self.github_change_control is not None:
+            selected = self.github_change_control
+            if not set(selected.repositories) <= set(self.scope.assets):
+                raise ValueError("change-control repositories exceed admitted scope")
+            if selected.max_seconds > self.budget.base_seconds:
+                raise ValueError(
+                    "change-control collection must fit the base assessment budget"
+                )
         inventory_selected = "inventory-feed" in self.tools
         if inventory_selected != bool(self.inventory_ref and self.feed_ref):
             raise ValueError("inventory-feed requires inventoryRef and feedRef")

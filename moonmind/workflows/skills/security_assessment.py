@@ -847,11 +847,15 @@ class AssessmentExecution:
         self.digests[artifact.artifact_id] = hashlib.sha256(payload).hexdigest()
         return artifact.artifact_id
 
-    async def saved(self, *, kind: str, key: str) -> tuple[str, dict] | None:
+    async def saved(
+        self, *, kind: str, key: str, latest: bool = False
+    ) -> tuple[str, dict] | None:
         artifacts = await self.service.list_for_execution(
             **self.execution, link_type=kind, access=self.access
         )
-        for artifact in reversed(artifacts):
+        # Immutable results reuse their original bytes; a checkpoint journal
+        # resumes its newest recorded budget and cursor state.
+        for artifact in artifacts if latest else reversed(artifacts):
             if (artifact.metadata_json or {}).get("subject") != key:
                 continue
             if getattr(artifact.status, "value", artifact.status) != "complete":
@@ -1136,6 +1140,28 @@ class AssessmentExecution:
         return root, report
 
     async def execute(self, request: AssessmentRequest) -> ToolResult:
+        change_control = None
+        if request.github_change_control is not None:
+            from moonmind.workflows.adapters.github_service import GitHubService
+
+            root, review_ref, report = await GitHubService().read_change_control(
+                request.github_change_control, execution=self
+            )
+            change_control = {
+                "evidenceRef": root,
+                "reviewEvidenceRef": review_ref,
+                **{
+                    key: report[key]
+                    for key in (
+                        "populationRef",
+                        "sampleRef",
+                        "coverageStatus",
+                        "counts",
+                        "limitations",
+                        "controlOperation",
+                    )
+                },
+            }
         identity = None
         if request.identity_lifecycle is not None:
             from moonmind.security.okta_evidence import collect_identity
@@ -1161,7 +1187,8 @@ class AssessmentExecution:
             framework = await self.prepare_framework(
                 request,
                 collected_evidence_refs=(
-                    [identity["reviewEvidenceRef"]] if identity else []
+                    ([identity["reviewEvidenceRef"]] if identity else [])
+                    + ([change_control["reviewEvidenceRef"]] if change_control else [])
                 ),
             )
         except (ValueError, TypeError) as exc:
@@ -1296,6 +1323,8 @@ class AssessmentExecution:
             }
         if identity:
             work_identity["identityEvidence"] = identity["evidenceRef"]
+        if change_control:
+            work_identity["githubChangeEvidence"] = change_control["evidenceRef"]
         scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
@@ -1945,6 +1974,12 @@ class AssessmentExecution:
         if identity:
             outputs["identityLifecycle"] = identity
             evidence += [identity["evidenceRef"], identity["reviewEvidenceRef"]]
+        if change_control:
+            outputs["githubChangeControl"] = change_control
+            evidence += [
+                change_control["evidenceRef"],
+                change_control["reviewEvidenceRef"],
+            ]
         if framework:
             framework_ref, framework_report = framework
             evidence.append(framework_ref)
@@ -1974,6 +2009,10 @@ class AssessmentExecution:
                 from moonmind.security.okta_evidence import render_identity_summary
 
                 summary += render_identity_summary(identity).encode()
+            if change_control:
+                from moonmind.security.github_change_control import render_summary
+
+                summary += render_summary(change_control).encode()
             if framework:
                 from moonmind.security.frameworks import render_framework_preparation
 
