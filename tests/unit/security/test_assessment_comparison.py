@@ -54,6 +54,288 @@ def compare(current, previous=None, *, decisions=(), now=NOW):
     )
 
 
+def product_evidence():
+    """Synthetic assessed-product records for MoonLadderStudios/MoonMind#5193."""
+    kinds = (
+        "artifact",
+        "game_configuration",
+        "paytable",
+        "feature_settings",
+        "critical_file",
+        "rng_configuration",
+        "external_configuration",
+        "database",
+    )
+    components = [
+        {
+            "id": kind,
+            "kind": kind,
+            "identity": f"sha256:{kind}-v1",
+            "method": "fixture snapshot signature",
+            "evidenceRefs": ["art_component"],
+            "omissionReason": None,
+        }
+        for kind in kinds
+    ]
+    record = {
+        "stage": "approved",
+        "product": "app",
+        "baselineId": "release-1",
+        "status": "available",
+        "evidenceRefs": ["art_approval"],
+        "reason": "Synthetic approval record; authenticity not established",
+        "verifier": "assessed product evidence owner",
+    }
+    baseline = {
+        "schemaVersion": "security-product-baseline/v1",
+        "product": "app",
+        "baselineId": "release-1",
+        "state": "approved",
+        "regulatorApprovalRequired": False,
+        "components": components,
+        "omissions": [],
+        "excludedKinds": {},
+        "approvedChanges": [],
+        "records": [
+            {**record, "stage": "submitted"},
+            {**record, "stage": "evaluated"},
+            {**record, "stage": "certified"},
+            record,
+        ],
+    }
+    deployment = {
+        "product": "app",
+        "deploymentId": "deployment-1",
+        "components": copy.deepcopy(components),
+        "omissions": [],
+    }
+    return baseline, deployment
+
+
+def compare_product(
+    baseline, deployment, *, previous=None, baseline_ref="art_baseline"
+):
+    from moonmind.security.assessments import (
+        Observation,
+        ProductBaseline,
+        compare_observations,
+    )
+
+    return compare_observations(
+        Observation.model_validate(report(deployment=deployment)),
+        previous,
+        now=NOW,
+        product_baseline=ProductBaseline.model_validate(baseline),
+        product_baseline_ref=baseline_ref,
+    )
+
+
+@pytest.mark.parametrize("state", ["submitted", "evaluated", "certified"])
+def test_product_digest_match_does_not_approve_submitted_or_evaluated_build(state):
+    baseline, deployment = product_evidence()
+    baseline["state"] = state
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert result["approvalStatus"] == "not_approved"
+    assert all(row["status"] == "match" for row in result["components"])
+    assert result["baseline"]["state"] == state
+    assert "certification" in result["interpretation"]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "artifact",
+        "game_configuration",
+        "paytable",
+        "feature_settings",
+        "critical_file",
+        "rng_configuration",
+        "external_configuration",
+        "database",
+    ],
+)
+def test_product_external_change_drifts_with_unchanged_image(kind):
+    baseline, deployment = product_evidence()
+    next(row for row in deployment["components"] if row["kind"] == kind)[
+        "identity"
+    ] = "changed"
+    result = compare_product(baseline, deployment)["productComparison"]
+    rows = {row["id"]: row for row in result["components"]}
+    assert result["status"] == "drift"
+    assert result["approvalStatus"] == "recorded"
+    if kind != "artifact":
+        assert rows["artifact"]["status"] == "match"
+    assert rows[kind]["status"] == "drift"
+    assert rows[kind]["observed"]["identity"] == "changed"
+    assert rows[kind]["expected"]["method"] == "fixture snapshot signature"
+
+
+def test_product_missing_critical_components_or_unrecorded_categories_are_incomplete():
+    baseline, deployment = product_evidence()
+    deployment["components"].pop()
+    deployment["omissions"] = ["External database was inaccessible"]
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert result["components"][-1]["status"] == "missing"
+    assert "External database was inaccessible" in result["omissions"]
+    baseline["components"].pop()
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert any("database" in reason for reason in result["reasons"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "unavailable",
+        "unverified",
+        "wrong_product",
+        "wrong_release",
+        "missing",
+        "regulator",
+    ],
+)
+def test_product_unavailable_or_inapplicable_approval_remains_unverified(failure):
+    baseline, deployment = product_evidence()
+    record = baseline["records"][-1]
+    if failure in {"unavailable", "unverified"}:
+        record["status"] = failure
+        record["reason"] = "Private laboratory/regulator records not supplied"
+    elif failure == "wrong_product":
+        record["product"] = "different-product"
+    elif failure == "wrong_release":
+        record["baselineId"] = "different-release"
+    elif failure == "missing":
+        baseline["records"].pop()
+    else:
+        baseline["regulatorApprovalRequired"] = True
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert result["approvalStatus"] == "unverified"
+    assert result["reasons"]
+    assert result["externalVerification"]["status"] == "Unverified"
+    assert result["externalVerification"]["verifiableBy"]
+
+
+def test_product_explicit_new_baseline_and_approved_change_preserve_history():
+    baseline, deployment = product_evidence()
+    original = compare_product(baseline, deployment)
+    before = copy.deepcopy(original)
+    newer = copy.deepcopy(baseline)
+    newer["baselineId"] = "release-2"
+    for record in newer["records"]:
+        record["baselineId"] = "release-2"
+    changed = copy.deepcopy(newer["components"][2])
+    changed["identity"] = "new-approved-paytable"
+    newer["approvedChanges"] = [
+        {
+            "id": "change-1",
+            "component": changed,
+            "record": {**newer["records"][-1], "reason": "Explicit paytable approval"},
+        }
+    ]
+    deployment["components"][2] = copy.deepcopy(changed)
+    result = compare_product(
+        newer, deployment, previous=original, baseline_ref="art_baseline2"
+    )["productComparison"]
+    assert result["status"] == "match"
+    assert result["baselineRef"] == "art_baseline2"
+    assert result["baseline"]["baselineId"] == "release-2"
+    assert result["components"][2]["approvedChangeId"] == "change-1"
+    assert original == before
+    assert baseline["components"][2]["identity"] != changed["identity"]
+    # Proposed/unapproved changes cannot replace the recorded expected identity.
+    newer["approvedChanges"][0]["record"]["stage"] = "submitted"
+    rejected = compare_product(newer, deployment)["productComparison"]
+    assert rejected["status"] == "incomplete"
+    assert rejected["components"][2]["status"] == "drift"
+    assert rejected["components"][2]["expected"] == baseline["components"][2]
+
+
+def test_product_evidence_stays_in_admitted_scope_and_rejects_duplicate_components():
+    from pydantic import ValidationError
+
+    from moonmind.security.assessments import Observation
+
+    _, deployment = product_evidence()
+    deployment["product"] = "outside-scope"
+    with pytest.raises(ValidationError, match="deployment outside assessment scope"):
+        Observation.model_validate(report(deployment=deployment))
+    deployment["product"] = "app"
+    deployment["components"].append(deployment["components"][0])
+    with pytest.raises(ValidationError, match="duplicate product component"):
+        Observation.model_validate(report(deployment=deployment))
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_product_explicit_regulator_approval_is_distinct_and_applicable(required):
+    baseline, deployment = product_evidence()
+    baseline["state"] = "regulator_approved"
+    baseline["regulatorApprovalRequired"] = required
+    baseline["records"][-1]["stage"] = "regulator_approved"
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "match"
+    assert result["approvalStatus"] == "recorded"
+    assert result["baseline"]["records"][-1]["stage"] == "regulator_approved"
+
+
+def test_product_new_component_without_identity_is_incomplete():
+    baseline, deployment = product_evidence()
+    deployment["components"].append(
+        {
+            "id": "external-feature",
+            "kind": "feature_settings",
+            "identity": None,
+            "method": "database snapshot unavailable",
+            "evidenceRefs": [],
+            "omissionReason": "Feature settings could not be read",
+        }
+    )
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert result["components"][-1]["status"] == "missing"
+
+
+def test_product_explicit_nonapplicable_scope_omission_is_reported():
+    baseline, deployment = product_evidence()
+    baseline["components"].pop()
+    deployment["components"].pop()
+    baseline["excludedKinds"] = {
+        "database": "Product has no separately stored database elements"
+    }
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "match"
+    assert result["omissions"] == [
+        "database: Product has no separately stored database elements"
+    ]
+
+
+def test_product_previous_comparison_cannot_silently_select_a_baseline():
+    baseline, deployment = product_evidence()
+    previous = compare_product(baseline, deployment)
+    result = compare(report(deployment=deployment), previous)["productComparison"]
+    assert result["baseline"] is None
+    assert result["baselineRef"] is None
+    assert result["status"] == "incomplete"
+    assert result["approvalStatus"] == "unverified"
+
+
+def test_product_reports_preserve_full_bounded_record_and_scope_reasons():
+    baseline, deployment = product_evidence()
+    baseline["records"][0].update(
+        status="unverified", reason="r" * 1024, verifier="v" * 1024
+    )
+    baseline["components"].pop()
+    deployment["components"].pop()
+    baseline["excludedKinds"] = {"database": "d" * 1024}
+    result = compare_product(baseline, deployment)["productComparison"]
+    assert result["status"] == "incomplete"
+    assert "r" * 1024 in result["reasons"][0]
+    assert "v" * 1024 in result["reasons"][0]
+    assert result["omissions"] == ["database: " + "d" * 1024]
+
+
 def test_assessment_requires_explicit_security_scope_and_bounds():
     definition = default_registry_tool_payload(name="security.assess")
     schema = definition["inputs"]["schema"]
