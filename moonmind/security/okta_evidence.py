@@ -130,7 +130,7 @@ def _project(category, rows, secret):
 
 
 def _next(response, *, origin, path, params, secret):
-    """Only an opaque cursor may vary. Provider links cannot widen the query."""
+    """Validate the cursor; System Log continuations may replace since."""
     value = response.links.get("next", {}).get("url")
     if not value:
         return None
@@ -138,6 +138,8 @@ def _next(response, *, origin, path, params, secret):
     query = parse_qs(url.query, keep_blank_values=True)
     cursor = query.pop("after", [])
     expected = {k: [str(v)] for k, v in params.items()}
+    if path == "/api/v1/logs" and "since" not in query:
+        expected.pop("since", None)
     if (
         url.scheme != "https"
         or url.netloc != origin
@@ -272,12 +274,17 @@ class _Reader:
                 break
             page["requests"] += 1
             body = bytearray()
+            query = {**params, **({"after": cursor} if cursor else {})}
+            if category == "logs" and cursor:
+                # Okta's opaque continuation replaces since. Keep the admitted
+                # until/order/limit; the saved request still owns period coverage.
+                query.pop("since", None)
             try:
                 async with asyncio.timeout(remaining):
                     async with client.stream(
                         "GET",
                         f"https://{self.selection.organisation}{path}",
-                        params={**params, **({"after": cursor} if cursor else {})},
+                        params=query,
                         headers={
                             "Authorization": "Bearer " + secret,
                             "Accept": "application/json",

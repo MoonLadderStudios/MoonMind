@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -15,12 +16,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from tests.artifact_access import access_for_test
-from tests.integration.security.test_recurring_assessments import (
-    environment,
-    invoke,
-    put,
-    read,
-)
+from tests.integration.security import test_recurring_assessments as recurring
+from tests.integration.security.test_recurring_assessments import invoke, put, read
 from tests.unit.security.test_identity_lifecycle import (
     NOW,
     ORG,
@@ -36,6 +33,7 @@ from tests.unit.security.test_identity_lifecycle import (
 from tests.unit.security.test_ukgc_rts import fixture as framework_fixture
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+environment = recurring.environment
 
 
 class Okta:
@@ -48,6 +46,9 @@ class Okta:
         bad_next=None,
         users=None,
         events=None,
+        paginate_logs=False,
+        log_next=None,
+        log_page_failures=0,
     ):
         self.requests = []
         self.deny = deny
@@ -55,6 +56,9 @@ class Okta:
         self.bad_next = bad_next
         self.users = api_users() if users is None else users
         self.events = api_events() if events is None else events
+        self.paginate_logs = paginate_logs
+        self.log_next = log_next
+        self.log_page_failures = log_page_failures
         original = httpx.AsyncClient
 
         def client(**kwargs):
@@ -103,9 +107,27 @@ class Okta:
                 ],
             )
         if req.url.path == "/api/v1/logs":
-            assert req.url.params["since"]
             assert req.url.params["until"].startswith("2026-11-06")
             assert req.url.params["sortOrder"] == "ASCENDING"
+            if req.url.params.get("after"):
+                assert "since" not in req.url.params
+                assert req.url.params["after"] == "logs-page2"
+                if self.log_page_failures:
+                    self.log_page_failures -= 1
+                    return httpx.Response(503, text=SECRET_CANARY)
+                return httpx.Response(200, json=self.events[1:])
+            assert req.url.params["since"]
+            if self.paginate_logs:
+                next_url = self.log_next or str(
+                    req.url.copy_remove_param("since").copy_set_param(
+                        "after", "logs-page2"
+                    )
+                )
+                return httpx.Response(
+                    200,
+                    json=self.events[:1],
+                    headers={"Link": f'<{next_url}>; rel="next"'},
+                )
             return httpx.Response(200, json=self.events)
         raise AssertionError(req.url.path)
 
@@ -284,6 +306,166 @@ async def test_partial_pagination_reuses_original_evidence_on_retry(
     assert await report(environment.service, retry) == original
 
 
+@pytest.mark.parametrize("repeat_since", [False, True])
+@pytest.mark.parametrize("interrupt", [False, True])
+async def test_system_log_pages_preserve_coverage_and_evidence_on_retry(
+    environment, monkeypatch, repeat_since, interrupt
+):
+    from moonmind.security import identity_lifecycle
+
+    payload = await admission(environment, monkeypatch)
+    next_url = system_log_next()
+    if repeat_since:
+        next_url = next_url.copy_set_param("since", SINCE.replace("Z", "+00:00"))
+    fake = Okta(monkeypatch, paginate_logs=True, log_next=str(next_url))
+    original_write = AssessmentExecution.write
+    saved_page = None
+
+    async def write(self, body, **kwargs):
+        nonlocal saved_page
+        ref = await original_write(self, body, **kwargs)
+        if kwargs["kind"] == "security.identity-page":
+            page = json.loads(body)
+            if page["endpoint"] == "logs" and page["page"] == 0:
+                saved_page = (ref, body)
+                if interrupt:
+                    raise asyncio.CancelledError()
+        return ref
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AssessmentExecution, "write", write)
+        if interrupt:
+            with pytest.raises(asyncio.CancelledError):
+                await invoke(environment.service, payload)
+        else:
+            outputs = await invoke(environment.service, payload)
+    monkeypatch.setattr(
+        identity_lifecycle, "utcnow", lambda: NOW + timedelta(seconds=1)
+    )
+    async with environment.sessions() as session:
+        later = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        if interrupt:
+            outputs = await invoke(later, payload, key="restart-logs")
+        identity = await report(later, outputs)
+        assert identity["coverage"]["logs"] == {
+            "status": "complete",
+            "pages": 2,
+            "records": 3,
+            "paginationComplete": True,
+            "requiredScope": "okta.logs.read",
+        }
+        assert identity["organisation"] == ORG
+        assert identity["requestedPeriod"] == {
+            "since": SINCE.replace("Z", "+00:00"),
+            "until": UNTIL.replace("Z", "+00:00"),
+        }
+        assert identity["observedAt"] == NOW.isoformat()
+        assert (
+            identity["retention"]["earliestAvailableEstimate"]
+            == (NOW - timedelta(days=90)).isoformat()
+        )
+        assert {e["id"] for e in identity["events"]} == {"log-j", "log-m", "log-l"}
+        lifecycle = {r["workforceEventId"]: r for r in identity["lifecycle"]}
+        assert lifecycle["j1"]["status"] == "event_observed"
+        assert lifecycle["m1"]["status"] == "event_observed"
+        assert lifecycle["l1"]["status"] == "policy_exception"
+        assert identity["controlOperation"] == "not_established"
+        log_pages = {
+            ref: page
+            for ref in identity["pageRefs"]
+            if (page := await read(later, ref))["endpoint"] == "logs"
+        }
+        assert {p["page"] for p in log_pages.values()} == {0, 1}
+        assert saved_page[0] in log_pages
+        _, retained = await later.read(
+            artifact_id=saved_page[0], access=access_for_test("workflow:assessment")
+        )
+        assert retained == saved_page[1]
+        assert all(e["evidenceRefs"][0] in log_pages for e in identity["events"])
+        proof = await later.dependency_proof(
+            root_artifact_id=outputs["identityLifecycle"]["evidenceRef"],
+            access=access_for_test("workflow:assessment"),
+        )
+        assert set(log_pages) <= {p.artifact_id for p in proof}
+        log_requests = [r for r in fake.requests if r.url.path == "/api/v1/logs"]
+        assert len(log_requests) == 2
+        assert log_requests[0].url.params["since"] == SINCE.replace("Z", "+00:00")
+        assert log_requests[1].url.params == system_log_next().params
+        count = len(fake.requests)
+        retry = await invoke(later, payload, key="retry-logs")
+        assert await report(later, retry) == identity
+        assert len(fake.requests) == count
+
+
+def system_log_next():
+    return httpx.URL(f"https://{ORG}/api/v1/logs").copy_merge_params(
+        {
+            "limit": 200,
+            "until": UNTIL.replace("Z", "+00:00"),
+            "sortOrder": "ASCENDING",
+            "after": "logs-page2",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        system_log_next().copy_with(scheme="http"),
+        system_log_next().copy_with(host="attacker.test"),
+        system_log_next().copy_with(path="/api/v1/users"),
+        system_log_next().copy_set_param("sortOrder", "DESCENDING"),
+        system_log_next().copy_remove_param("until"),
+        system_log_next().copy_set_param("until", "2026-11-07T00:00:00+00:00"),
+        system_log_next().copy_set_param("since", "2026-10-01T00:00:00+00:00"),
+        system_log_next().copy_set_param("limit", 1000),
+        system_log_next().copy_set_param(
+            "filter", 'eventType eq "user.lifecycle.create"'
+        ),
+        system_log_next().copy_add_param("after", "other-page"),
+        system_log_next().copy_set_param("after", SECRET_CANARY),
+    ],
+)
+async def test_system_log_continuation_cannot_widen_or_change_the_admitted_query(
+    environment, monkeypatch, link
+):
+    payload = await admission(environment, monkeypatch)
+    fake = Okta(monkeypatch, paginate_logs=True, log_next=str(link))
+    identity = await report(
+        environment.service, await invoke(environment.service, payload)
+    )
+    assert identity["coverage"]["logs"]["status"] == "unsafe_pagination"
+    assert identity["coverage"]["logs"]["paginationComplete"] is False
+    assert {e["id"] for e in identity["events"]} == {"log-j"}
+    assert "partial_pagination" in identity["limitations"]
+    assert len([r for r in fake.requests if r.url.path == "/api/v1/logs"]) == 1
+    assert all(r.url.host == ORG and r.url.scheme == "https" for r in fake.requests)
+    assert not any(
+        "after" in r.url.params for r in fake.requests if "logs" in r.url.path
+    )
+
+
+async def test_unavailable_log_page_retains_original_partial_evidence_on_retry(
+    environment, monkeypatch
+):
+    payload = await admission(environment, monkeypatch)
+    fake = Okta(monkeypatch, paginate_logs=True, log_page_failures=3)
+    outputs = await invoke(environment.service, payload)
+    original = await report(environment.service, outputs)
+    assert original["coverage"]["logs"]["status"] == "upstream_unavailable"
+    assert original["coverage"]["logs"]["paginationComplete"] is False
+    assert {e["id"] for e in original["events"]} == {"log-j"}
+    assert "partial_pagination" in original["limitations"]
+    assert len([r for r in fake.requests if r.url.path == "/api/v1/logs"]) == 4
+    count = len(fake.requests)
+    retry = await invoke(environment.service, payload, key="retry-unavailable-logs")
+    assert await report(environment.service, retry) == original
+    assert len(fake.requests) == count
+
+
 async def test_restart_after_a_saved_page_preserves_collection_window(
     environment, monkeypatch
 ):
@@ -448,6 +630,7 @@ async def test_budget_expired_after_restart_keeps_saved_evidence_and_original_re
     environment, monkeypatch
 ):
     from datetime import timedelta
+
     from moonmind.security import identity_lifecycle
 
     payload = await admission(environment, monkeypatch)

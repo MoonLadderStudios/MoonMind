@@ -27,7 +27,12 @@ These permissions are documented by Okta for [users](https://developer.okta.com/
 and the [System Log](https://developer.okta.com/docs/api/openapi/okta-management/management/tags/systemlog).
 The provider also limits visibility through the token's administrative assignments.
 The reader never follows redirects or accepts arbitrary endpoints. Pagination
-may change only the cursor within the original endpoint and query.
+keeps the original origin, endpoint, ordering, limit, and query constraints.
+For [System Log continuations](https://developer.okta.com/docs/reference/system-log-query/),
+the provider's opaque `after` cursor replaces `since` on subsequent requests;
+`until` remains fixed. Links that repeat the original `since` are also accepted,
+but requests omit it when sending `after`. The saved evidence retains the original
+admitted organisation and period across pagination and retry.
 
 The Activity worker must use the existing scoped outbound proxy. Its
 `MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES` declaration must contain the selected
