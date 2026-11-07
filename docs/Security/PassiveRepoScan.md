@@ -198,6 +198,74 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
   counts, baseline/scan artifact references and optional `productComparison`.
   Finding identity never depends on a presentation title or severity.
 
+### Requirement assessments
+
+An optional `controlAssessment.requirements` on `security.assess` evaluates an
+explicit objective checklist after native scans, comparison and interpretation.
+It publishes `security-control-assessment/v1` as `controlAssessmentRef` through
+the ordinary structured report and adds a readable requirement section. The
+comparison and framework preparation reports remain linked evidence. Framework
+readiness, mappings and an empty findings list do not themselves satisfy a
+requirement.
+
+Each requirement supplies `id`, `frameworkId`, `frameworkEdition`, `title`,
+`scope`, a date `period`, `applicability` (`applicable`, `not_applicable`, or
+`undetermined`) and `applicabilityReason`. `objectives` identify individual
+absence-of-defect checks by `id`, `description`, `source`, `tool`, and explicit
+`ruleIds`. Set `objectivesComplete: true` only when that list describes the
+whole selected requirement, and explain its basis in `objectiveBasis`.
+It defaults to false. For example, an inventory/feed objective can name the
+feed's source, `tool: inventory-feed`, and the specific advisory IDs. The
+requirement population must stay inside admitted assets and preserve the
+assessment's exclusions and repository exceptions. Optional `owner` and
+`reviewer` are attributed metadata, not MoonMind roles or authenticated opinions.
+
+Satisfaction requires every selected asset/rule check to have complete, current,
+explicitly deterministic evidence covering the declared objectives. Coverage
+rows record `evidenceMethod`; an unclassified legacy record or interpretation
+cannot become an executed check. The inventory/feed and passive source adapters
+identify their deterministic checks, as do RNG statistical diagnostics; RNG
+implementation review stays interpretation. Other unclassified adapters remain
+inconclusive for this purpose until their producer identifies the actual method.
+`allRules` does not prove an arbitrary mapped rule was installed. Conflicting,
+failed or incomplete matching observations remain visible. Observed native defects
+produce `not_satisfied`; accepted risk stays separate triage with its existing
+author, reason, review and expiry semantics.
+
+A single-date period means a point-in-time observation on that date, not
+continuous operation for a day. Multi-day operation cannot be established by
+one snapshot. Per-coverage `coverageWindows` retain each source's observation
+and expiry through aggregation and baseline reuse; refreshing an advisory feed
+does not refresh the inventory population's observation date. Its `validFrom`
+also requires the selected feed to be current. Legacy aggregated
+records without source windows remain inconclusive instead of borrowing a
+newer source's timestamp.
+
+Optional `supportingEvidence` entries name an authorized `artifactRef`,
+`method` (`agent_interpretation` or `management_assertion`), `position`
+(`supports`, `contradicts`, or `context`), `objectiveIds`, `scope`, `period`,
+`author`, `reason`, and optional `expiresAt`. These are attributed claims,
+not executed checks, and cannot replace missing native evidence. Missing,
+denied, expired, out-of-scope or contradictory required context prevents a
+satisfied conclusion. A requested unavailable `reviewRef` remains explicit.
+
+Each result separates applicability, coverage, conclusion, evidence sufficiency,
+review state, methods, exceptions, limitations and next actions. Justified
+non-applicability is not satisfaction. One artifact can support several
+requirements without sharing their conclusions. The implementation bounds
+requirements, check populations, references and evidence bytes; it performs no
+new network operations or scanner launches.
+
+Read authority, freshness and decisions are reevaluated before immutable control
+results are reused. The control artifact seals its scan, comparison and readable
+context through the existing dependency owner. Unreadable refs remain diagnostics,
+not verified dependencies; readable but invalid interpretations retain their bytes
+without becoming usable evidence. Control or publication failure preserves native
+outcomes; retries reuse completed scans. Changed conclusions do not rewrite
+historical artifacts. Independent assessor conclusions and certification remain
+Unverified; an authorized assessor can review the retained scope, objectives,
+methods and evidence without being an implementation-completion gate.
+
 For assessed gaming deployments, supply `productBaselineRef` separately from
 the finding-history `baselineRef`. It names a `security-product-baseline/v1`
 artifact with `product` (an admitted scope asset), `baselineId`, `state`,
@@ -281,8 +349,9 @@ Unavailable records remain references and diagnostics, without blocking report
 retention or export. Carried decisions keep their evidence through the baseline's
 seal, which also lets an occurrence in a later workflow seal that history
 without gaining a read of it.
-A summary seals its comparison and evidence; review and review evidence are
-optional, so they never hold retention. Missing, unauthorized, corrupt or
+A summary seals its comparison and evidence. Review evidence is optional for
+native comparisons; an explicitly requested control assessment retains its
+readable review context as a required dependency. Missing, unauthorized, corrupt or
 mismatched required evidence fails the seal, and a retry keeps an existing
 seal. While a root is pinned, unexpired or held by a saved schedule's input
 root, cleanup cannot remove what it seals; releasing the root returns that

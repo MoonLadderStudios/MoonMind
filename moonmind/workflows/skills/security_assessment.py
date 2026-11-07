@@ -17,7 +17,9 @@ from moonmind.security.assessments import (
     AdvisoryFeed,
     AssessmentRequest,
     Comparison,
+    ControlAssessment,
     Coverage,
+    CoverageWindow,
     Finding,
     Inventory,
     Observation,
@@ -137,11 +139,19 @@ def observe_inventory(
             Coverage(
                 source=feed.source,
                 tool="inventory-feed",
+                evidence_method="deterministic_check",
                 assets=assets,
                 rule_ids=[rule.id for rule in feed.rules],
                 status=inventory.status,
                 config_ref=inventory.config_ref,
                 intelligence={"feedRevision": feed.revision},
+            )
+        ],
+        coverage_windows=[
+            CoverageWindow(
+                observed_at=inventory.observed_at,
+                expires_at=min(inventory.expires_at, feed.expires_at),
+                valid_from=max(inventory.observed_at, feed.observed_at),
             )
         ],
         provenance={
@@ -192,6 +202,7 @@ def _passive_observation(
             Coverage(
                 source=native.tool_ref,
                 tool=native.tool_ref,
+                evidence_method="deterministic_check",
                 assets=[
                     path
                     for path in native.covered_files
@@ -639,6 +650,7 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
                 Coverage(
                     source="rng",
                     tool="rng",
+                    evidence_method="deterministic_check",
                     assets=[summary.game_ref],
                     rule_ids=[rule],
                     config_ref=content_key(
@@ -671,6 +683,7 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
                 tool="rng",
                 assets=[summary.game_ref],
                 rule_ids=["implementation-review"],
+                evidence_method="agent_interpretation",
                 config_ref=summary.spec_digest,
                 status=(
                     "complete"
@@ -698,7 +711,6 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
 
 
 class AssessmentExecution:
-
     def __init__(
         self,
         service: Any,
@@ -1030,6 +1042,94 @@ class AssessmentExecution:
                     ref, await self.digest(ref), True, "security.framework-input"
                 )
                 for ref in dict.fromkeys(refs)
+            ]
+
+        await self.seal(root, dependencies)
+        return root, report
+
+    async def prepare_controls(
+        self,
+        request,
+        comparison,
+        *,
+        scan_ref,
+        comparison_ref,
+        now,
+        review,
+        review_status,
+        review_readable,
+    ):
+        if request.control_assessment is None:
+            return None
+        from moonmind.security.control_assessments import assess_controls
+
+        availability, readable, total = {}, [], 0
+        refs = dict.fromkeys(
+            evidence.artifact_ref
+            for row in request.control_assessment.requirements
+            for evidence in row.supporting_evidence
+        )
+        for ref in refs:
+            try:
+                if total > _MAX_INPUT_BYTES * 2:
+                    raise ValueError("control supporting evidence exceeds byte bound")
+                _, body = await self.read(ref)
+                total += len(body)
+                if total > _MAX_INPUT_BYTES * 2:
+                    raise ValueError("control supporting evidence exceeds byte bound")
+                readable.append(ref)
+                availability[ref] = None
+            except (
+                TemporalArtifactNotFoundError,
+                TemporalArtifactAuthorizationError,
+                TemporalArtifactStateError,
+                TemporalArtifactValidationError,
+                TemporalArtifactStorageAccessError,
+                TemporalArtifactUnavailableError,
+                ToolFailure,
+                ValueError,
+            ) as exc:
+                availability[ref] = type(exc).__name__
+        report = assess_controls(
+            request.control_assessment,
+            Comparison.model_validate(comparison),
+            scan_ref=scan_ref,
+            comparison_ref=comparison_ref,
+            now=now,
+            coverage_windows=comparison["observation"].get("coverageWindows", []),
+            evidence_availability=availability,
+            review_ref=request.review_ref,
+            review_status=review_status,
+        )
+        document = report.model_dump(mode="json", by_alias=True)
+        # Reevaluate accessibility, freshness and triage on every invocation;
+        # identical effective evidence reuses its immutable original assessment.
+        key = content_key(
+            [
+                {k: v for k, v in document.items() if k != "evaluatedAt"},
+                {ref: self.digests[ref] for ref in readable},
+            ]
+        )
+        saved = await self.saved(kind="security.control-assessment", key=key)
+        if saved:
+            root, document = saved
+            report = ControlAssessment.model_validate(document)
+        else:
+            root = await self.write(
+                _json(document), kind="security.control-assessment", key=key
+            )
+
+        async def dependencies():
+            required = [scan_ref, comparison_ref, *readable]
+            if review_readable:
+                required.append(request.review_ref)
+            if review is not None:
+                required += review.evidence_refs()
+            return [
+                ArtifactDependency(
+                    ref, await self.digest(ref), True, "security.control-evidence"
+                )
+                for ref in dict.fromkeys(required)
             ]
 
         await self.seal(root, dependencies)
@@ -1545,6 +1645,23 @@ class AssessmentExecution:
             coverage = [
                 row for observation in observations for row in observation.coverage
             ]
+            coverage_windows = [
+                window
+                for item in observations
+                for window in (
+                    item.coverage_windows
+                    or [
+                        (
+                            None
+                            if item.provenance.get("assessmentWork")
+                            else CoverageWindow(
+                                observed_at=item.observed_at, expires_at=item.expires_at
+                            )
+                        )
+                    ]
+                    * len(item.coverage)
+                )
+            ]
             findings_by_id = {}
             for item in observations:
                 for finding in item.findings:
@@ -1578,6 +1695,7 @@ class AssessmentExecution:
                 if len(states) == 1 and finding_id not in findings_by_id
             }
             if scan_diagnostics or not observations:
+                coverage_windows.append(None)
                 coverage.append(
                     Coverage(
                         source="unavailable",
@@ -1607,6 +1725,7 @@ class AssessmentExecution:
                 expires_at=min((item.expires_at for item in observations), default=now),
                 findings=list(findings_by_id.values()),
                 coverage=coverage,
+                coverage_windows=coverage_windows,
                 upstream_closed=upstream_closed,
                 deployment=next(iter(deployments.values()), None),
                 provenance={
@@ -1739,6 +1858,24 @@ class AssessmentExecution:
                 diagnostics.append(
                     {"boundary": "agent-review", "error": type(exc).__name__}
                 )
+        controls = None
+        if request.control_assessment is not None:
+            try:
+                controls = await self.prepare_controls(
+                    request,
+                    comparison,
+                    scan_ref=scan_ref,
+                    comparison_ref=comparison_ref,
+                    now=now,
+                    review=review,
+                    review_status=review_status,
+                    review_readable=review_readable,
+                )
+            except Exception as exc:
+                # Control/report failures cannot erase sealed native outcomes.
+                diagnostics.append(
+                    {"boundary": "control-assessment", "error": type(exc).__name__}
+                )
         outputs = {
             "scanOutcome": work["scanOutcome"],
             "originalOutcomes": work["originalOutcomes"],
@@ -1760,6 +1897,26 @@ class AssessmentExecution:
                 productBaselineRef=request.product_baseline_ref,
                 productComparisonStatus=comparison["productComparison"]["status"],
                 productApprovalStatus=comparison["productComparison"]["approvalStatus"],
+            )
+        if request.control_assessment is not None:
+            outputs["controlAssessmentStatus"] = (
+                "completed" if controls else "unavailable"
+            )
+        if controls:
+            control_ref, control_report = controls
+            outputs.update(
+                controlAssessmentRef=control_ref,
+                controlAssessmentCounts={
+                    value: sum(
+                        row.conclusion == value for row in control_report.requirements
+                    )
+                    for value in (
+                        "satisfied",
+                        "not_satisfied",
+                        "inconclusive",
+                        "not_assessed",
+                    )
+                },
             )
         github = work.get("githubAlerts")
         if github is not None:
@@ -1783,6 +1940,8 @@ class AssessmentExecution:
                 "unverified": github["unverified"],
             }
         evidence = [scan_ref] + ([github["nativeRef"]] if github else [])
+        if controls:
+            evidence += [comparison_ref, control_ref]
         if identity:
             outputs["identityLifecycle"] = identity
             evidence += [identity["evidenceRef"], identity["reviewEvidenceRef"]]
@@ -1821,9 +1980,22 @@ class AssessmentExecution:
                 summary += (
                     "\n" + render_framework_preparation(framework_report)
                 ).encode()
+            if controls:
+                from moonmind.security.control_assessments import (
+                    render_control_assessment,
+                )
+
+                summary += render_control_assessment(control_report).encode()
+            elif request.control_assessment is not None:
+                summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
                 + ([framework_ref] if framework else [])
+                + (
+                    [control_ref]
+                    if controls
+                    else [outputs.get("controlAssessmentStatus")]
+                )
             )
             saved_summary = await self.service.list_for_execution(
                 **self.execution, link_type="report.primary", access=self.access
@@ -1886,6 +2058,12 @@ class AssessmentExecution:
                     principal=self.principal,
                     execution_ref={**self.execution, "link_type": "report.structured"},
                 )
+            if controls:
+                await self.service.link_artifact(
+                    artifact_id=control_ref,
+                    principal=self.principal,
+                    execution_ref={**self.execution, "link_type": "report.structured"},
+                )
             if review_readable:
                 await self.service.link_artifact(
                     artifact_id=request.review_ref,
@@ -1895,7 +2073,11 @@ class AssessmentExecution:
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={
-                    "artifact_id": framework_ref if framework else comparison_ref
+                    "artifact_id": (
+                        control_ref
+                        if controls
+                        else framework_ref if framework else comparison_ref
+                    )
                 },
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
