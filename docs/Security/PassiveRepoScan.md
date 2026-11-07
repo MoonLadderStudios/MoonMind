@@ -366,22 +366,22 @@ repository/environment scope:
 Include each repository in `scope.assets`. Credentials come from the existing
 run admission's `read` operation; selection never grants access to another
 repository. A hidden, denied or unadmitted selected repository remains an
-explicit coverage gap. Endpoints may require additional GitHub read permissions
-for reviews, Actions, checks, deployments and environments; the collector reports
-denials without requesting broader authority or substituting another token.
+explicit coverage gap. Rulesets and classic branch protection are collected
+separately; classic protection requires `administration:read`. Denied or missing
+reads remain coverage gaps, without broader authority or a substitute token.
 It issues only GETs and publishes no issues, PRs, comments or repository changes.
 
 The period includes `since` and excludes `until`. Closed PRs are enumerated and
 filtered by merge time; default-branch commits use commit time, which does not
 establish when a push occurred. Selected environments' deployment records and
-statuses are enumerated separately. Review/check/workflow identities link to the
-observed PR head and merge commit. A production link requires an exact observed
-merge/deployment commit match, the provider's production-environment flag, and a
-successful deployment status in the period after the merge. An approved merged
-PR alone retains an unresolved production link. Current rules, reviews and
-verification results are collection-time snapshots, not proof of historical
-control operation. Missing historical deployment statuses remain a retention
-limitation.
+statuses are enumerated separately. Status contexts, check names and workflow
+names/IDs identify verification on PR heads and merge commits. A production link
+requires a matching merge/deployment commit, the provider's production flag, and
+a successful deployment status in the period after merge. Approved merges
+without that evidence retain an unresolved production link. Rulesets, classic
+review/check requirements, reviews and verification are collection-time
+snapshots, not historical control proof. Missing historical deployment statuses
+remain a retention limitation.
 
 `perPage` (100), `maxPages` per endpoint (20), `maxRequests` (200), `maxItems`
 (1000), `maxBytes` (4 MiB) and `maxSeconds` (60) bound collection across the

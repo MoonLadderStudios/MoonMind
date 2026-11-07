@@ -141,6 +141,7 @@ class GitHub:
                     "check_runs": [
                         {
                             "id": 40,
+                            "name": "Security scan",
                             "head_sha": path.split("/")[1],
                             "status": "completed",
                             "conclusion": "success",
@@ -159,6 +160,8 @@ class GitHub:
                     "workflow_runs": [
                         {
                             "id": 50,
+                            "name": "CI",
+                            "workflow_id": 51,
                             "head_sha": req.url.params["head_sha"],
                             "run_attempt": 1,
                             "status": "completed",
@@ -185,6 +188,20 @@ class GitHub:
                         "parameters": {"required_approving_review_count": 1},
                     }
                 ],
+            )
+        if path.startswith("branches/") and path.endswith("/protection"):
+            return httpx.Response(
+                200,
+                json={
+                    "required_pull_request_reviews": {
+                        "required_approving_review_count": 2,
+                        "dismissal_restrictions": {"users": ["PRIVATE_REVIEWER"]},
+                    },
+                    "required_status_checks": {
+                        "contexts": ["ci/build", "Security scan"],
+                        "checks": [{"context": "Security scan", "app_id": 42}],
+                    },
+                },
             )
         if path == "deployments":
             assert req.url.params["environment"] == "production"
@@ -303,7 +320,14 @@ async def test_approved_merge_never_proves_production_without_successful_product
 
 @pytest.mark.parametrize(
     "deny",
-    ["", "pulls/1/reviews", "rules/branches/main", "deployments", "environments"],
+    [
+        "",
+        "pulls/1/reviews",
+        "rules/branches/main",
+        "branches/main/protection",
+        "deployments",
+        "environments",
+    ],
 )
 async def test_hidden_or_denied_endpoints_are_incomplete_not_empty_success(
     admitted, monkeypatch, deny
@@ -317,6 +341,90 @@ async def test_hidden_or_denied_endpoints_are_incomplete_not_empty_success(
     )
     assert "PRIVATE_DENIED_BODY" not in json.dumps(population)
     assert report["controlOperation"] == "not_established"
+
+
+async def test_classic_branch_protection_is_retained_without_rulesets(
+    admitted, monkeypatch
+):
+    fake = GitHub()
+    fake.overrides[("rules/branches/main", 1)] = lambda _: httpx.Response(200, json=[])
+    _, _, report = await collect(admitted, monkeypatch, fake)
+    population = await read(admitted.service, report["populationRef"])
+    coverage = population["coverage"][f"{REPO}:protection:main"]
+    assert coverage["status"] == "complete"
+    assert coverage["requiredPermission"] == "administration:read"
+    assert population["coverageStatus"] == "complete"
+    pages = [await read(admitted.service, ref) for ref in population["pageRefs"]]
+    source = next(
+        page
+        for page in pages
+        if page["sourceUrl"].endswith("/branches/main/protection")
+    )
+    assert source["query"] == {}
+    protection = source["records"][0]
+    assert protection["requiredApprovals"] == 2
+    assert protection["requiredStatusChecks"] == ["ci/build", "Security scan"]
+    assert protection["requiredChecks"] == [{"context": "Security scan", "appId": 42}]
+    assert "PRIVATE_" not in json.dumps(source)
+
+
+@pytest.mark.parametrize("response_status", [401, 404])
+async def test_unavailable_classic_protection_remains_a_coverage_gap(
+    admitted, monkeypatch, response_status
+):
+    fake = GitHub()
+    fake.overrides[("branches/main/protection", 1)] = lambda _: httpx.Response(
+        response_status, json={"message": "PRIVATE_DENIED_BODY"}
+    )
+    _, _, report = await collect(admitted, monkeypatch, fake)
+    population = await read(admitted.service, report["populationRef"])
+    coverage = population["coverage"][f"{REPO}:protection:main"]
+    assert coverage["status"] == (
+        "permission_denied" if response_status == 401 else "not_found"
+    )
+    assert not coverage["paginationComplete"]
+    assert population["coverageStatus"] == "incomplete"
+    pages = [await read(admitted.service, ref) for ref in population["pageRefs"]]
+    source = next(
+        page
+        for page in pages
+        if page["sourceUrl"].endswith("/branches/main/protection")
+    )
+    assert source["responseStatus"] == response_status
+    assert "PRIVATE_" not in json.dumps(source)
+
+
+async def test_saved_verification_retains_contexts_check_names_and_workflow_identities(
+    admitted, monkeypatch
+):
+    fake = GitHub()
+    fake.overrides[(f"commits/{MERGE}/statuses", 1)] = lambda _: httpx.Response(
+        200,
+        json=[
+            {"id": 80, "context": "ci/build", "state": "success"},
+            {"id": 81, "context": "security/scan", "state": "failure"},
+        ],
+    )
+    _, _, report = await collect(admitted, monkeypatch, fake)
+    population = await read(admitted.service, report["populationRef"])
+    verification = population["verification"][f"{REPO}:{MERGE}"]
+    assert [(s["context"], s["state"]) for s in verification["statuses"]] == [
+        ("ci/build", "success"),
+        ("security/scan", "failure"),
+    ]
+    assert verification["checks"][0]["name"] == "Security scan"
+    assert verification["workflows"][0]["name"] == "CI"
+    assert verification["workflows"][0]["workflowId"] == 51
+    assert verification["workflows"][0]["runAttempt"] == 1
+    for category, field, expected in (
+        ("statuses", "context", "ci/build"),
+        ("checks", "name", "Security scan"),
+        ("workflows", "workflowId", 51),
+    ):
+        page = await read(
+            admitted.service, verification[category][0]["evidenceRefs"][0]
+        )
+        assert page["records"][0][field] == expected
 
 
 async def test_throttling_retries_boundedly_without_duplicate_population(
@@ -552,6 +660,7 @@ async def test_verification_for_different_commit_is_a_gap_with_retained_identity
             "check_runs": [
                 {
                     "id": 40,
+                    "name": "Security scan",
                     "head_sha": DIRECT,
                     "status": "completed",
                     "conclusion": "success",

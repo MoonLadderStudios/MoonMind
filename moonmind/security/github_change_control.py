@@ -21,6 +21,7 @@ _TRANSIENT = {429, 500, 502, 503, 504}
 _PERMISSIONS = {
     "repository": "metadata:read",
     "rules": "metadata:read",
+    "protection": "administration:read",
     "pulls": "pull_requests:read",
     "associations": "pull_requests:read",
     "reviews": "pull_requests:read",
@@ -92,6 +93,14 @@ def _enum(value, choices):
     return value
 
 
+def _approvals(value):
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100
+    ):
+        raise ValueError("malformed_record")
+    return value
+
+
 def _project(category, row):
     """Keep source identities and facts, excluding bodies, logs and credentials."""
     if not isinstance(row, dict):
@@ -110,20 +119,41 @@ def _project(category, row):
     if category == "rules":
         kind = _name(row.get("type"))
         ruleset = row.get("ruleset_id")
-        approvals = row.get("parameters", {}).get("required_approving_review_count")
+        approvals = _approvals(
+            row.get("parameters", {}).get("required_approving_review_count")
+        )
         if ruleset is not None:
             _identifier(ruleset)
-        if approvals is not None and (
-            isinstance(approvals, bool)
-            or not isinstance(approvals, int)
-            or not 0 <= approvals <= 100
-        ):
-            raise ValueError("malformed_record")
         return {
             "id": content_key(row),
             "type": kind,
             "rulesetId": ruleset,
             "requiredApprovals": approvals,
+        }
+    if category == "protection":
+        reviews = row.get("required_pull_request_reviews")
+        checks = row.get("required_status_checks")
+        reviews = {} if reviews is None else reviews
+        checks = {} if checks is None else checks
+        return {
+            "id": content_key(row),
+            "requiredApprovals": _approvals(
+                reviews.get("required_approving_review_count")
+            ),
+            "requiredStatusChecks": [
+                _name(context) for context in checks.get("contexts", [])
+            ],
+            "requiredChecks": [
+                {
+                    "context": _name(check.get("context")),
+                    "appId": (
+                        _identifier(check["app_id"])
+                        if check.get("app_id") is not None
+                        else None
+                    ),
+                }
+                for check in checks.get("checks", [])
+            ],
         }
     result = {"id": _identifier(row.get("id"))}
     if category in {"pulls", "associations"}:
@@ -186,10 +216,12 @@ def _project(category, row):
         )
     elif category == "statuses":
         result.update(
-            state=_enum(row.get("state"), {"error", "failure", "pending", "success"})
+            context=_name(row.get("context")),
+            state=_enum(row.get("state"), {"error", "failure", "pending", "success"}),
         )
     else:
         result.update(
+            name=_name(row.get("name")),
             status=_enum(
                 row.get("status"),
                 {
@@ -219,6 +251,7 @@ def _project(category, row):
             headSha=_sha(row.get("head_sha")),
         )
         if category == "workflows":
+            result["workflowId"] = _identifier(row.get("workflow_id"))
             result["runAttempt"] = _identifier(row.get("run_attempt"))
     for name in ("created_at", "updated_at", "started_at", "completed_at"):
         if name in row:
@@ -639,6 +672,12 @@ async def _repository(reader, client, base, headers, repo):
             f"rules/branches/{quote(branch, safe='')}",
             category="rules",
         )
+        await endpoint(
+            f"protection:{branch}",
+            f"branches/{quote(branch, safe='')}/protection",
+            category="protection",
+            single=True,
+        )
     deployments = []
     for environment in selection.environments:
         rows = await endpoint(
@@ -772,7 +811,6 @@ async def _seal(execution, root, refs):
 async def _write_population(execution, population, key):
     body = _json(population)
     parts = []
-    document = population
     if len(body) > _POPULATION_PART_BYTES:
         for offset in range(0, len(body), _POPULATION_PART_BYTES):
             parts.append(

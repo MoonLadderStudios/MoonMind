@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.security.assessments import AssessmentRequest
+from moonmind.security.github_change_control import _project
 
 
 def request(**selection):
@@ -66,3 +67,51 @@ def test_tool_and_selection_must_match():
     payload["tools"] = []
     with pytest.raises(ValidationError):
         AssessmentRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "category,identity,expected",
+    [
+        ("statuses", {"context": "ci/build"}, {"context": "ci/build"}),
+        ("checks", {"name": "Security scan"}, {"name": "Security scan"}),
+        (
+            "workflows",
+            {"name": "CI", "workflow_id": 51},
+            {"name": "CI", "workflowId": 51},
+        ),
+    ],
+)
+def test_verification_retains_semantic_identity(category, identity, expected):
+    row = {
+        "id": 40,
+        "state": "success",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "a" * 40,
+        "run_attempt": 1,
+        **identity,
+    }
+    projected = _project(category, row)
+    assert expected.items() <= projected.items()
+
+
+@pytest.mark.parametrize(
+    "category,field",
+    [("statuses", "context"), ("checks", "name"), ("workflows", "name")],
+)
+@pytest.mark.parametrize("unsafe_name", ["invalid\nname", "ghp_" + "Z" * 36])
+def test_unsafe_verification_names_are_rejected(category, field, unsafe_name):
+    with pytest.raises(ValueError, match="malformed_record"):
+        _project(
+            category,
+            {
+                "id": 40,
+                "state": "success",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "a" * 40,
+                "run_attempt": 1,
+                "workflow_id": 51,
+                field: unsafe_name,
+            },
+        )
