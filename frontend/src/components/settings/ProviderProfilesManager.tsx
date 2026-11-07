@@ -1,4 +1,6 @@
 import { Button } from '../Button';
+import { isBrokenReferenceStatus } from '../secrets/SecretManager';
+import { secretSlugFromRef } from './ConfigurationHealthSummary';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
@@ -180,6 +182,7 @@ interface ProviderProfilesManagerProps {
    */
   profiles: ProviderProfile[];
   secretSlugs: string[];
+  secretStatusBySlug?: Record<string, string>;
   onNotice: (notice: Notice | null) => void;
   queryClient: QueryClient;
   /** Map of canonical runtime_id → default model from the boot config. */
@@ -727,7 +730,7 @@ export const PENDING_DEFAULT_INTENT_STORAGE_KEY =
   'moonmind:pending-provider-profile-default';
 
 /**
- * A deferred "use as Harness default" intent plus the Harness default that
+ * A deferred preferred-profile intent plus the preferred profile that
  * was already in place when the intent was captured. The pre-existing
  * default is not a newer operator choice: when enrollment completes and
  * that same profile is still the default, the intent PATCH replaces it.
@@ -1969,6 +1972,7 @@ function buildSavePayload(
 export function ProviderProfilesManager({
   profiles,
   secretSlugs,
+  secretStatusBySlug = {},
   onNotice,
   queryClient,
   defaultTaskModelByRuntime = {},
@@ -2087,7 +2091,7 @@ export function ProviderProfilesManager({
     setImportedVolumeObservation(null);
   };
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
-  // Create-time "use as Harness default" intent cannot be honored at creation:
+  // Create-time preferred-profile intent cannot be honored at creation:
   // guided creation stores the profile disabled with is_default=false until
   // credential validation, so the intent is persisted here and applied once
   // the readiness-completing operation (OAuth finalize or API-key enrollment)
@@ -2127,7 +2131,7 @@ export function ProviderProfilesManager({
   const applyPendingDefaultIntent = async (profileId: string): Promise<boolean> => {
     if (!pendingDefaultIntentRef.current.has(profileId)) return false;
     // A newer explicit operator choice wins: never silently override a
-    // different profile that became the Harness default after the intent was
+    // different profile that became the preferred profile after the intent was
     // captured, and never re-apply an intent the server already honored. The
     // default that already existed at capture time is the intent's target to
     // replace, not evidence of a newer choice.
@@ -2152,7 +2156,7 @@ export function ProviderProfilesManager({
       clearDefaultIntent(profileId);
       onNotice({
         level: 'error',
-        text: `Profile "${profileId}" was not made the Harness default because "${currentDefault.profile_id}" is now the default. Use Make default on the saved profile to change it.`,
+        text: `Profile "${profileId}" was not made preferred for ${formatHarnessLabel(target?.runtime_id ?? '')} because "${currentDefault.profile_id}" is now preferred. Use the Preferred profile checkbox in the saved profile editor to change it.`,
       });
       return true;
     }
@@ -2170,19 +2174,19 @@ export function ProviderProfilesManager({
         throw new Error(
           extractErrorMessage(
             errorPayload,
-            `Failed to set "${profileId}" as the Harness default.`,
+            `Failed to set "${profileId}" as preferred for ${formatHarnessLabel(target?.runtime_id ?? '')}.`,
           ),
         );
       }
       // Only cleared once the PATCH is confirmed; failure keeps the intent.
       clearDefaultIntent(profileId);
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      onNotice({ level: 'ok', text: `Profile "${profileId}" is now the Harness default.` });
+      onNotice({ level: 'ok', text: `Profile "${profileId}" is now preferred for ${formatHarnessLabel(target?.runtime_id ?? '')}.` });
       return true;
     } catch (error) {
       onNotice({
         level: 'error',
-        text: `${error instanceof Error ? error.message : `Failed to set "${profileId}" as the Harness default.`} The default was not applied — use Make default on the saved profile to retry.`,
+        text: `${error instanceof Error ? error.message : `Failed to set "${profileId}" as preferred for ${formatHarnessLabel(target?.runtime_id ?? '')}.`} The default was not applied — use the Preferred profile checkbox in the saved profile editor to retry.`,
       });
       return true;
     }
@@ -3789,7 +3793,7 @@ export function ProviderProfilesManager({
       if (createdProfile && submission.defaultIntent && !savedProfile.is_default) {
         // Creation stores the profile non-default until credential validation;
         // carry the checked intent forward to the readiness-completing step
-        // along with the Harness default already in place, so that
+        // along with the preferred profile already in place, so that
         // pre-existing default is replaced rather than mistaken for a newer
         // operator choice.
         const knownAtSave =
@@ -4600,7 +4604,7 @@ export function ProviderProfilesManager({
                     opencodeReadiness?.failureReason,
                 );
                 return (
-                <tr key={profile.profile_id} role="row">
+                <tr key={profile.profile_id} id={`provider-profile-${profile.profile_id}`} tabIndex={-1} role="row">
                   <td
                     className="px-3 py-4"
                     data-label="Profile"
@@ -4610,7 +4614,7 @@ export function ProviderProfilesManager({
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
                     {profile.is_default ? (
                       <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                        Default {formatHarnessLabel(profile.runtime_id)} profile
+                        Preferred for {formatHarnessLabel(profile.runtime_id)}
                       </div>
                     ) : null}
                     {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
@@ -4753,6 +4757,12 @@ export function ProviderProfilesManager({
                     role="cell"
                   >
                     <div className="provider-profile-status flex flex-col gap-2">
+                      {[...new Set(Object.values(profile.secret_refs ?? {}).map(secretSlugFromRef))].map((slug) =>
+                        slug && isBrokenReferenceStatus(secretStatusBySlug[slug]) ? (
+                          <p key={slug} className="text-xs text-rose-700 dark:text-rose-400">
+                            Secret {slug} is {secretStatusBySlug[slug]}. Launches will fail.
+                          </p>
+                        ) : null)}
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
@@ -5846,9 +5856,9 @@ export function ProviderProfilesManager({
 
 
 
-          {/* ── 5. Use as Harness default (readiness-gated) ── */}
+          {/* ── 5. Preferred profile (readiness-gated) ── */}
           <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Use as Harness default</legend>
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Preferred for {formatHarnessLabel(form.runtimeId)}</legend>
             {(() => {
               const readiness = editingProfile?.readiness ?? null;
               const launchReady = isEditing ? Boolean(readiness?.launch_ready) : Boolean(selectedAuthenticationCapability?.launch_ready_after_setup || selectedAuthenticationCapability?.fields.may_become_runtime_default?.value);
@@ -5863,20 +5873,20 @@ export function ProviderProfilesManager({
                       type="checkbox"
                       checked={form.isDefault}
                       disabled={assignBlocked}
-                      aria-label="Harness default"
+                      aria-label="Preferred profile"
                       onChange={(event) =>
                         setForm((current) => ({ ...current, isDefault: event.target.checked }))
                       }
                     />
-                    Use as Harness default
+                    Preferred for {formatHarnessLabel(form.runtimeId)}
                   </label>
                   {assignBlocked ? (
                     <p className="text-xs text-amber-700 dark:text-amber-300">
-                      Default assignment is disabled until launch readiness succeeds. Complete credential setup and resolve readiness blockers first.
+                      Preferred profile assignment is disabled until launch readiness succeeds. Complete credential setup and resolve readiness blockers first.
                     </p>
                   ) : demoteAllowed ? (
                     <p className="text-xs text-amber-700 dark:text-amber-300">
-                      This profile is currently the Harness default but is not launch-ready. You may clear this checkbox to demote it; re-assigning default requires launch readiness.
+                      This profile is currently preferred but is not launch-ready. You may clear this checkbox to demote it; making it preferred again requires launch readiness.
                     </p>
                   ) : (
                     <p className="text-xs text-slate-500 dark:text-slate-400">

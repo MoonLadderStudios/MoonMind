@@ -491,8 +491,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         key=_DEFAULT_RUNTIME_KEY,
         title="Default Harness",
         description=(
-            "Harness used for new work that selects neither a harness nor a "
-            "Provider Profile. Omnigent launches every harness."
+            "Harness used for new work that doesn't choose a harness or profile."
         ),
         category="Workflow",
         section="user-workspace",
@@ -1828,9 +1827,6 @@ class SettingsCatalogService:
         pending_activation: bool = False,
     ) -> dict[str, Any]:
         pending_state_by_mode: dict[str, SettingActivationState] = {
-            "next_request": "pending_next_boundary",
-            "next_workflow": "pending_next_boundary",
-            "next_launch": "pending_next_boundary",
             "worker_reload": "pending_reload",
             "process_restart": "pending_restart",
             "manual_operation": "pending_manual_operation",
@@ -1845,7 +1841,7 @@ class SettingsCatalogService:
             "manual_operation": "Use the related operation control to activate this value.",
         }
         activation_state: SettingActivationState = "active"
-        if pending_activation and entry.apply_mode != "immediate":
+        if pending_activation and entry.apply_mode in pending_state_by_mode:
             activation_state = pending_state_by_mode[entry.apply_mode]
         pending_value = None if activation_state == "active" else value
         if (

@@ -76,6 +76,9 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.depends_on == []
     assert default_runtime.audit.store_old_value is True
     assert default_runtime.title == "Default Harness"
+    assert default_runtime.description == (
+        "Harness used for new work that doesn't choose a harness or profile."
+    )
     # One option per harness; Omnigent is the backend, not a harness choice,
     # and the legacy ``codex`` alias is not a second Codex option.
     assert [(option.value, option.label) for option in default_runtime.options] == [
@@ -1180,9 +1183,9 @@ async def _instance_override_persists_and_reports_version(settings_session):
     assert effective.value == "branch"
     assert effective.source == "instance_override"
     assert effective.value_version == 1
-    assert effective.activation_state == "pending_next_boundary"
-    assert effective.active is False
-    assert effective.pending_value == "branch"
+    assert effective.activation_state == "active"
+    assert effective.active is True
+    assert effective.pending_value is None
 
     updated = await service.apply_overrides(
         changes={"workflow.default_publish_mode": "none"},
@@ -1190,10 +1193,65 @@ async def _instance_override_persists_and_reports_version(settings_session):
     )
     assert updated.values["workflow.default_publish_mode"].value == "none"
     assert updated.values["workflow.default_publish_mode"].value_version == 2
-    assert (
-        updated.values["workflow.default_publish_mode"].activation_state
-        == "pending_next_boundary"
+    assert updated.values["workflow.default_publish_mode"].activation_state == "active"
+    assert updated.values["workflow.default_publish_mode"].active is True
+    assert updated.values["workflow.default_publish_mode"].pending_value is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,state",
+    [
+        ("next_request", "active"),
+        ("next_workflow", "active"),
+        ("next_launch", "active"),
+        ("worker_reload", "pending_reload"),
+        ("process_restart", "pending_restart"),
+        ("manual_operation", "pending_manual_operation"),
+    ],
+)
+async def test_override_activation_across_read_preview_and_save_boundaries(
+    settings_session_maker, mode, state
+):
+    entry = SettingRegistryEntry(
+        key="test.activation",
+        title="Activation",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="text",
+        default_value="before",
+        order=1,
+        apply_mode=mode,
+        applies_to=("test_consumer",),
+        requires_reload=mode == "worker_reload",
+        requires_process_restart=mode == "process_restart",
     )
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(env={}, registry=(entry,), session=session)
+        preview = await service.preview_changes(
+            changes={entry.key: "after"},
+            expected_versions={entry.key: 1},
+            confirmation="Apply manual change",
+        )
+        saved = await service.apply_overrides(
+            changes={entry.key: "after"},
+            expected_versions={entry.key: 1},
+            confirmation="Apply manual change",
+        )
+        effective = await service.effective_value_async(entry.key)
+        catalog = await service.catalog_async(section="user-workspace")
+        assert preview.diffs[0].after.activation_state == state
+        for value in [
+            saved.values[entry.key],
+            effective,
+            catalog.categories["Test"][0],
+        ]:
+            assert value.activation_state == state
+            assert value.active is (state == "active")
+            assert value.pending_value == (None if state == "active" else "after")
+            assert value.apply_mode == mode
+            assert value.completion_guidance
 
 
 @pytest.mark.asyncio
@@ -1959,10 +2017,8 @@ async def _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session):
         expected_versions={"integrations.github.token_ref": 1},
     )
     assert response.values["integrations.github.token_ref"].value == "env://GITHUB_TOKEN"
-    assert (
-        response.values["integrations.github.token_ref"].pending_value
-        == "env://GITHUB_TOKEN"
-    )
+    assert response.values["integrations.github.token_ref"].pending_value is None
+    assert response.values["integrations.github.token_ref"].activation_state == "active"
 
 
 @pytest.mark.asyncio

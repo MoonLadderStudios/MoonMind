@@ -126,11 +126,11 @@ ConfigurationPage
 
 There is no `SectionSwitcher`, tab list, segmented destination control, destination radio group, or duplicate Settings sidebar.
 
-The header has an optional `Settings` or `Configuration` overline, the page title (`Providers & Secrets`, `Instance`, or `Operations`), a short description, optional deployment context, a page-scoped warning when persistence, catalog loading, authorization, or operational state is degraded, and optional authorized diagnostic or audit links.
+The header shows an optional `Configuration` overline, page title, short description, and deployment context. Page-scoped warnings explain degraded persistence, catalog loading, authorization, or operations; diagnostic and audit links appear when authorized.
 
 | Page | Status summary emphasis |
 |---|---|
-| Providers & Secrets | launch readiness, profile validity, secret and OAuth health, blocked profiles |
+| Providers & Secrets | only what blocks or degrades a launch: blocked profiles, broken bound secrets, a new-work default that can't launch, and permissions that disable an action; renders nothing when every check passes |
 | Instance | overrides, pending application, locked settings, validation diagnostics |
 | Operations | worker state, drain or pause status, queue and runtime health, pending commands |
 
@@ -154,22 +154,25 @@ On narrow viewports, saved Provider Profile, Managed Secret, and worker shard he
 
 ### 7.1 Providers & Secrets
 
-This page contains:
+This page contains, in this order:
 
-- **Defaults for new work**: the Default Harness and Default Provider Profile instance settings, also listed on Instance;
-- Provider Profiles, the durable Harness/Provider connection and launch configuration, with model and effort tier policy editing inside the normal profile editor;
-- Managed Secrets, secret health, and SecretRef role bindings and validation;
-- OAuth-backed profile lifecycle entry points;
-- provider credential health and readiness, and Harness/Provider binding diagnostics (Backend provenance lives in execution details); and
+- a problem alert, rendered only when a launch check fails (section 6);
+- Provider Profiles, the durable Harness/Provider connection and launch configuration, with model and effort tier policy editing inside the normal profile editor, OAuth-backed lifecycle entry points, and credential health, readiness, and Harness/Provider binding diagnostics (Backend provenance lives in execution details);
+- **Defaults for new work**: a compact card for the Default Harness and Default Provider Profile instance settings, which Instance also lists in full;
+- Managed Secrets, secret health, and SecretRef role bindings and validation; and
 - **Source Control** connections for repository access, kept separate from Provider Profiles.
 
-New work that selects neither a harness nor a profile uses the Default Provider Profile if set, otherwise the Default Harness (OpenCode, Codex, or Claude Code; stored `omnigent` is OpenCode on the Omnigent Backend). Launch choices take precedence. `Use as Harness default` only marks the preferred profile within its harness.
+New work that selects neither a harness nor a profile uses the Default Provider Profile if set, otherwise the Default Harness (OpenCode, Codex, or Claude Code; stored `omnigent` is OpenCode on the Omnigent Backend). Launch choices take precedence. `Preferred for <Harness>` (stored as `is_default`) only marks the preferred profile within its harness. With no Default Provider Profile set, a launch uses the Default Harness's enabled profiles ordered by preference, then priority, then profile ID.
 
-Each saved profile row shows identity, readiness, active use, and capacity problems by default. Credential source, materialization, OAuth volume and mount path, cooldown, and SecretRefs sit in that row's Details disclosure. Row actions sit in one ellipsis menu, the shared actions menu; pending or readiness-blocked actions stay listed under Unavailable with their reason, and Delete asks for confirmation. The create form opens from **Add profile** rather than staying open below the table; it shows directly only when no profile is listed. The launch-readiness summary lists a permission only when it disables an action.
+The Defaults card shows each setting's label, its control, and an ellipsis menu with View history and, while an override is in force, Reset to default. Source, activation state, affected systems, completion guidance, Details, and keys stay on Instance. A Save bar appears only when a value differs from the saved one, lists each change as old → new, and saves every changed key in one `PATCH` with expected versions. Validation issues and version conflicts show under the row they concern; success is a toast.
 
-Stored secrets is the primary Managed Secrets view; **Add secret**, Edit, and Rotate open a focused dialog that keeps errors with the draft and confirms discarding an entered value.
+Each saved profile row shows identity, readiness, active use, capacity problems, and a broken bound secret by default. Credential source, materialization, OAuth volume and mount path, cooldown, and SecretRefs sit in that row's Details disclosure. Row actions sit in one ellipsis menu, the shared actions menu; pending or readiness-blocked actions stay listed under Unavailable with their reason, and Delete asks for confirmation. The create form opens from **Add profile** rather than staying open below the table; it shows directly only when no profile is listed. The problem alert lists a permission only when it disables an action.
 
-A page-local Harness filter offers **All harnesses** plus backend-supported Harness choices. It narrows the visible profiles, while readiness counts use the full collection unless labeled as filtered. The `runtime` URL parameter and `runtime_id` API values remain the inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) describes this vocabulary and authoring defaults.
+Stored secrets is the primary Managed Secrets view; **Add secret**, Edit, and Rotate open a focused dialog that keeps errors with the draft and confirms discarding an entered value. Broken secrets load Usage automatically.
+
+Action results on this page (saved, reset, enabled, deleted) are toasts. A problem that lasts until someone fixes it appears in the problem alert and on the affected row, never as a toast.
+
+A page-local Harness filter offers **All harnesses** plus backend-supported Harness choices. It narrows the visible profiles, while the problem alert always checks the full collection; an alert link to a hidden row clears the filter first. The `runtime` URL parameter and `runtime_id` API values remain the inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) describes this vocabulary and authoring defaults.
 
 #### 7.1.1 Source Control connections
 
@@ -186,7 +189,7 @@ Each create, save, disable, enable, and assignment carries a stable `requestId`,
 
 #### 7.1.2 Provider Profile creation
 
-Creation uses one standard form with progressive disclosure, described in [ProviderProfileCreation.md](./ProviderProfileCreation.md). The visible decisions are: Profile ID (auto-suggested, reviewed before creation), Harness and Provider (backend-owned choices, Provider scoped to Harness), optional account label, authentication method and connection action, model and effort tier policy, max parallel runs, and an optional `Use as Harness default` intent when readiness permits.
+Creation uses one standard form with progressive disclosure, described in [ProviderProfileCreation.md](./ProviderProfileCreation.md). The visible decisions are: Profile ID (auto-suggested, reviewed before creation), Harness and Provider (backend-owned choices, Provider scoped to Harness), optional account label, authentication method and connection action, model and effort tier policy, max parallel runs, and an optional `Preferred for <Harness>` intent when readiness permits.
 
 - Selectors show friendly labels but submit canonical IDs. Choice discovery reuses creation-capability authority, so it works before any profile or launch-ready host exists. The Settings Harness filter can seed a permitted creation Harness but does not redefine saved ownership.
 - The Harness control submits a harness `runtime_id` (`codex_cli`, `claude_code`, `opencode`), never the Backend `omnigent`.
@@ -227,15 +230,15 @@ The page title `Operations` is distinct from any broader dropdown group with the
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, Source Control connections, OAuth state, readiness diagnostics, permitted Harness/Provider choices, profile creation capabilities and presets |
+| Providers & Secrets | Provider Profiles, Managed Secrets, Source Control connections, OAuth state, readiness, creation capabilities and presets, and the shared catalog for new-work defaults |
 | Instance | catalog descriptors, effective values, overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
-On route load, the page is resolved from the pathname and loads only what its first screen needs. Sibling-page collections are not fetched; expensive diagnostics, audit timelines, and graphs are deferred; route-level and region-level loading states are shown; and page-local filters survive browser navigation.
+Each route loads its own first-screen data, with regional loading states and URL-owned filters. Expensive diagnostics, audit timelines, and graphs load on demand.
 
-Provider creation queries are keyed to their runtime/provider/authentication identity, so a stale response cannot restore incompatible selections or authorize a submission. A failed choice query preserves unrelated profile and Managed Secret content and does not invent a manual-entry fallback the backend has not offered.
+Provider creation queries carry their runtime/provider/authentication identity to reject stale responses. Failed discovery preserves unrelated content and offers no unsupported manual-entry fallback.
 
-Generated-settings endpoints (`api_service/api/routers/settings.py`) used by Instance:
+Settings endpoints (`api_service/api/routers/settings.py`) serve Instance and the curated Defaults card:
 
 ```http
 GET    /api/v1/settings/catalog?section=user-workspace
@@ -266,13 +269,13 @@ SettingDescriptor:
   depends_on, audit, value_version, diagnostics
 ```
 
-Several fields drive specific row behavior: `active` and `pending_value` separate an applied value from an accepted-but-pending one; `affected_process_or_worker` and `completion_guidance` say what a pending change is waiting on and what completes it; the `requires_*` flags produce application warnings before and after save; `order` makes row order deterministic; `secret_role` enables role-aware SecretRef controls; `depends_on` produces dependency warnings; and `audit` decides whether an audit link is offered. The backend can add fields, but removing one the UI renders breaks these behaviors.
+Several fields drive specific row behavior: `active` and `pending_value` separate an applied value from an accepted-but-pending one; `affected_process_or_worker` and `completion_guidance` say what a pending change is waiting on and what completes it; the `requires_*` flags produce application warnings before and after save; `order` makes row order deterministic; `secret_role` enables role-aware SecretRef controls; `depends_on` produces dependency warnings; and `audit` decides whether an audit link is offered. The backend can add fields, but removing one the UI renders breaks these behaviors. Values whose apply mode is `next_request`, `next_workflow`, or `next_launch` are active from the moment they are saved; only `worker_reload`, `process_restart`, and `manual_operation` values report a pending state.
 
-Controls follow descriptor shape: toggles for booleans, selects from backend options for enums, constrained number inputs, text inputs (unless sensitivity requires a specialist control), tag editors for string lists, a safe structured editor for objects, a SecretRef picker, a Provider Profile selector backed by backend data, and a read-only value with a reason for read-only or unsupported types. A cleared number input stays empty: it means `Not set` (`null`) when the setting has no default, and is otherwise a validation error rather than a silent `0` or `null`. The Provider Profile selector lists saved profiles plus `Not set`, and keeps a saved ID that no longer matches a profile visible as not found rather than replacing it.
+Controls follow descriptors: toggles for booleans, option selects for enums, bounded number inputs, tag editors for lists, structured object editors, and role-aware SecretRef controls. Sensitive values use specialist editors; read-only or unsupported settings show a value and reason. Clearing a number means `null` only if it has no default; otherwise it is invalid, never silently `0` or `null`. The profile picker lists saved profiles and `Not set`, retaining a missing saved ID as not found.
 
-Each row shows title, description, control or value, override state when an override is in force, pending or restart-required activation, validation, diagnostics, reset when allowed, and the affected systems once. The stable key, source, apply mode, and audit link where authorized sit in the row's Details disclosure. Filtering covers text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters; filtering is never the authorization boundary.
+Each Instance row shows its title, description, control, override and activation state, validation, diagnostics, and affected systems. Details contains the key, source, apply mode, and authorized audit link; reset appears when allowed. Filtering by text, category, modification, read-only state, diagnostics, source, activation, or secrets does not confer authorization.
 
-Before save, the page shows changed keys, old and proposed values, validation, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior; the backend preview is authoritative. Drafts are keyed by setting key and cleared after a successful save, explicit discard, confirmed route departure, or incompatible catalog-version change. Drafts are not persisted to local storage, since they can contain sensitive metadata.
+Before save, the Instance page shows changed keys, old and proposed values, validation, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior; the backend preview is authoritative. Curated cards on other pages, such as Defaults for new work, show old and proposed values in their Save bar and validation under each row, and save through the same `PATCH`. Drafts are keyed by setting key and cleared after a successful save, explicit discard, confirmed route departure, or incompatible catalog-version change. Drafts are not persisted to local storage, since they can contain sensitive metadata.
 
 ### 9.1 Version conflicts
 
@@ -302,7 +305,7 @@ Generic settings never accept raw secret values. Managed Secret creation and rep
 
 Client validation may use descriptor metadata for required values, bounds, option membership, length, simple patterns, SecretRef shape, and obvious type errors; backend validation is authoritative.
 
-Source and application labels come from backend metadata (for example Default, Config, Environment, Workspace override, Provider Profile, Secret reference, Operator locked). The UI explains inherited sources and when a change applies (immediately, next request, next workflow, next launch, worker reload, process restart, or manual operation), and pending accepted values stay visible until active.
+Instance shows source and application metadata from the backend. Pending accepted values stay visible until active.
 
 ---
 
@@ -316,15 +319,15 @@ The destination links are links, not `role="tab"` or radio controls, because the
 
 ## 13. Extending Settings
 
-Adding an ordinary instance setting needs a stable backend key, explicit exposure metadata, the descriptor fields from section 9, persistence and resolution where needed, and catalog and save/reset tests. Frontend work is needed only for a new reusable control type.
+Ordinary instance settings use backend descriptors (section 9), persistence, and catalog/save/reset coverage. Curated cards reuse those descriptors and APIs; new control types need frontend work.
 
-A fourth Configuration page makes sense only for a distinct user goal with its own route identity, permission model, loading boundary, and enough durable content; a category or small group of settings stays inside an existing page.
+A distinct user goal with independent data loading may warrant another route; a small settings group belongs on an existing page.
 
 Patterns the design avoids, and why:
 
 - page-local tabs, radio cards, pills, segmented controls, sidebars, or cards repeating the three destinations, and `?section=` as page identity — they duplicate the dropdown's navigation;
 - eager loading of every configuration dataset — it breaks independent failure and page-scoped loading;
-- hard-coded React rows per setting key, frontend copies of backend defaults or validation, and frontend-only authorization filtering — the backend owns these;
+- frontend copies of defaults, validation, or authorization — the backend owns these, including on curated cards;
 - a second provider-creation wizard or duplicate Harness/Provider catalog — one form and one choice authority;
 - policy summaries inferred only from authentication-method availability, unconditional `enabled: true` for credential-required profiles, or a global fallback credential source — each misreports readiness;
 - plaintext credential inputs in generic settings, raw SecretRef JSON as the primary credential UX, freeform `clear_env_keys`, and silent fallback for broken SecretRefs — they weaken secret handling; and
@@ -334,13 +337,11 @@ Patterns the design avoids, and why:
 
 ## 14. Ownership structure
 
-**Destination registry.** Configuration is exactly three sibling destinations with the keys and routes in section 5.1. The client registry (`frontend/src/lib/dashboardRoutes.ts`) and the server destination registry agree on entries, group membership, and order; the build-time agreement test checks this, while the browser's runtime skew check compares only keys, paths and capability keys.
+**Destination registry.** Section 5.1 lists the three destinations. The client registry (`frontend/src/lib/dashboardRoutes.ts`) and server registry agree on entries, groups and order; the runtime skew check compares keys, paths and capability keys.
 
-**Route ownership.** Each destination is a route-matched component. Sharing a bundle is fine; sharing page identity is not. A page does not mount managers, panels, or loaders belonging to a sibling, and no parent component chooses among the three by internal state.
+**Route and state ownership.** Each route owns its component, loaders and local state: Harness filtering on Providers & Secrets, worker commands on Operations. Bundle sharing does not mount sibling managers or introduce internal page switching.
 
-**State ownership.** Page-scoped state lives on its page: Harness filtering on Providers & Secrets, worker command state on Operations. There is no cross-page selection state; browser navigation moves between destinations.
-
-**Component ownership.** Provider Profile create/edit belongs to Providers & Secrets, generated settings to Instance (Providers & Secrets reuses the component for its two new-work defaults), and operational commands to Operations.
+**Component ownership.** Providers & Secrets owns profile/secret editors and the compact Defaults card. Instance owns full generated rows. Both reuse catalog helpers, the profile picker and audit renderer. Operations owns commands.
 
 ### 14.1 Tests
 
