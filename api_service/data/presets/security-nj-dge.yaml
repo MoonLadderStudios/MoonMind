@@ -1,0 +1,80 @@
+slug: security-nj-dge
+title: New Jersey DGE Readiness
+description: Prepare selected casino-licensee and RGS rule evidence, independent annual assessment records and explicit approval and partner gaps. Preparation does not establish DGE approval.
+tags: [security, assessment, new-jersey, dge, igaming]
+requiredCapabilities: [sandbox]
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required: [assets, system_inputs, period]
+    properties:
+      assets:
+        type: array
+        title: Admitted system assets
+        items: {type: string}
+        minItems: 1
+        description: List the system identifiers admitted to this assessment. All system and requirement scopes must fit these assets.
+      system_inputs:
+        type: object
+        title: Saved entity and system inputs
+        description: Record entityName, entityType, systems and applicabilityBasis with licence, contract and inventory evidence. Set offersInternetGaming for a casino licensee or providesContentToOtherOperator for an RGS. annualRules may select nj.internet.annual, nj.network.annual and nj.rgs.annual; omission evaluates all three against entity scope. See the New Jersey section of PassiveRepoScan for record fields.
+        properties:
+          entityType:
+            type: string
+            enum: [casino_licensee, rgs_content_provider, unrelated_supplier]
+          annualRules:
+            type: array
+            items:
+              type: string
+              enum: [nj.internet.annual, nj.network.annual, nj.rgs.annual]
+      period:
+        type: object
+        title: Assessment evidence period
+        required: [start, end]
+        properties:
+          start: {type: string, format: date}
+          end: {type: string, format: date}
+        description: Set start and end dates as YYYY-MM-DD. Each annual record and evidence item must cover its requirement's selected period.
+      requirement_choices:
+        type: object
+        title: Requirement scope and period choices
+        description: Key choices by NJ requirement ID, for example {"nj.rgs.incidents":{"systems":["rgs"],"period":{"start":"2026-03-01","end":"2026-06-30"}}}. Omitted choices use all saved systems and the assessment period. notApplicableReason records an exclusion for review; partner ownership never supplies an inherited pass.
+      evidence_refs:
+        type: array
+        title: Evidence record artifacts
+        items: {type: string}
+        description: Supply scoped control_evidence artifacts with requirementIds, systems, period, evidence or observation method, description and provenance. Include divisionApprovalRef for controls and game releases, operatorEvidenceRef for transactions, integrations and player accounts, and incidentDisposition with notificationRef for reported events. Clean scans cannot supply independent opinions, approvals or partner evidence.
+      audit_ref:
+        type: [string, 'null']
+        title: Annual assessment records artifact
+        description: Supply kind (synthetic or external) and assessments keyed by requirementId with scope, systems, period, assessors (name, affiliation, independent, independenceRef), assessedOn, findings, correctiveActions, licenseeResponse, opinion, professionalEvidenceRef, divisionApprovalRef, reportRef and submissionRef. Missing assessor affiliation, independence, Division approval and report fields remain actionable gaps. These references identify retained evidence artifacts; MoonMind sends no regulator submission.
+  defaults:
+    assets: []
+    system_inputs: {}
+    period: {}
+    requirement_choices: {}
+    evidence_refs: []
+    audit_ref: null
+steps:
+- type: tool
+  title: Prepare New Jersey DGE readiness evidence
+  instructions: Apply selected New Jersey provisions to the recorded entity and system scope. Export annual assessment records, rule-source editions and missing evidence requests through the existing report bundle. Independent-professional and Division verification remains Unverified.
+  tool:
+    id: security.assess
+    requiredCapabilities: [sandbox]
+    inputs:
+      scope:
+        assets: '{{ inputs.assets }}'
+      tools: []
+      budget: {baseSeconds: 60, maxSeconds: 120, progressStallSeconds: 60}
+      credentialRefs: []
+      networkRefs: []
+      framework:
+        packId: nj-dge-readiness
+        systemInputs: '{{ inputs.system_inputs }}'
+        period: '{{ inputs.period }}'
+        requirementChoices: '{{ inputs.requirement_choices }}'
+        evidenceRefs: '{{ inputs.evidence_refs }}'
+        auditRef: '{{ inputs.audit_ref }}'

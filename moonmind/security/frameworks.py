@@ -139,4 +139,20 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
         from moonmind.security.ukgc_rts import UKGC_RTS_PACK
 
         return UKGC_RTS_PACK.model_copy(deep=True)
+    if pack_id == "nj-dge-readiness":
+        from moonmind.security.nj_dge import NJ_DGE_PACK
+
+        return NJ_DGE_PACK.model_copy(deep=True)
     raise ValueError(f"Unknown framework pack: {pack_id}")
+
+
+def render_framework_preparation(report: dict) -> str:
+    if report["pack"]["id"] == "nj-dge-readiness":
+        from moonmind.security.nj_dge import render_assessment
+
+        return render_assessment(report)
+    if report["pack"]["id"] == "ukgc-rts-security":
+        from moonmind.security.ukgc_rts import render_audit_preparation
+
+        return render_audit_preparation(report)
+    raise ValueError("Unknown framework report pack")

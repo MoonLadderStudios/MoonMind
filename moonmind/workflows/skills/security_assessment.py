@@ -765,27 +765,49 @@ class AssessmentExecution:
         if request.framework is None:
             return None
         from moonmind.security.frameworks import FrameworkEvidence, load_framework_pack
-        from moonmind.security.ukgc_rts import (
-            AuditRecord,
-            UKGCSystemInputs,
-            prepare_audit,
-        )
 
         selection = request.framework
         pack = load_framework_pack(selection.pack_id)
-        system = UKGCSystemInputs.model_validate(selection.system_inputs)
-        systems = {
-            s for row in system.critical_systems if row.in_scope for s in row.systems
-        }
+        if pack.id == "nj-dge-readiness":
+            from moonmind.security.nj_dge import (
+                AnnualAssessmentRecords,
+                NJEvidence,
+                NJSystemInputs,
+                prepare_assessment,
+            )
+
+            systems = set(
+                NJSystemInputs.model_validate(selection.system_inputs).systems
+            )
+            audit_type, evidence_type = AnnualAssessmentRecords, NJEvidence
+            prepare = prepare_assessment
+        else:
+            from moonmind.security.ukgc_rts import (
+                AuditRecord,
+                UKGCSystemInputs,
+                prepare_audit,
+            )
+
+            system = UKGCSystemInputs.model_validate(selection.system_inputs)
+            systems = {
+                s
+                for row in system.critical_systems
+                if row.in_scope
+                for s in row.systems
+            }
+            audit_type, evidence_type = AuditRecord, FrameworkEvidence
+            prepare = prepare_audit
         if not systems <= set(request.scope.assets):
             raise ValueError("Framework systems exceed admitted assessment scope")
         audit = None
         refs = list(selection.evidence_refs)
         if selection.audit_ref:
             _, body = await self.read(selection.audit_ref)
-            audit = AuditRecord.model_validate_json(body)
+            audit = audit_type.model_validate_json(body)
             refs.append(selection.audit_ref)
-            if audit.auditor.independence_ref:
+            if pack.id == "nj-dge-readiness":
+                refs.extend(audit.supporting_refs())
+            elif audit.auditor.independence_ref:
                 refs.append(audit.auditor.independence_ref)
         records, invalid = [], []
         for ref in selection.evidence_refs:
@@ -793,20 +815,20 @@ class AssessmentExecution:
             try:
                 # The artifact owner supplies this identity, not authored JSON.
                 payload = json.loads(body)
-                evidence = FrameworkEvidence.model_validate(
-                    {**payload, "artifactRef": ref}
-                )
+                evidence = evidence_type.model_validate({**payload, "artifactRef": ref})
             except (ValueError, TypeError):
                 invalid.append(ref)
                 continue
             records.append(evidence.model_dump(mode="json", by_alias=True))
+            if pack.id == "nj-dge-readiness":
+                refs.extend(evidence.supporting_refs())
             if ARTIFACT_ID_PATTERN.fullmatch(evidence.provenance.source_ref):
                 refs.append(evidence.provenance.source_ref)
             if evidence.reliance:
                 refs.append(evidence.reliance.review_ref)
         for ref in dict.fromkeys(refs):
             await self.digest(ref)
-        report = prepare_audit(
+        report = prepare(
             selection,
             evidence=records,
             audit=audit.model_dump(mode="json", by_alias=True) if audit else None,
@@ -1455,9 +1477,11 @@ class AssessmentExecution:
                 + _review_summary(review, review_status)
             ).encode()
             if framework:
-                from moonmind.security.ukgc_rts import render_audit_preparation
+                from moonmind.security.frameworks import render_framework_preparation
 
-                summary += ("\n" + render_audit_preparation(framework_report)).encode()
+                summary += (
+                    "\n" + render_framework_preparation(framework_report)
+                ).encode()
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
                 + ([framework_ref] if framework else [])
