@@ -272,6 +272,7 @@ def test_opengrep_command_omits_removed_metrics_option(tmp_path):
         scan, report_root=tmp_path, config=tmp_path / "config", cache=tmp_path
     )
     assert not [arg for arg in commands["scan"] if arg.startswith("--metrics")]
+    assert "--disable-version-check" in commands["scan"]
 
 
 @pytest.mark.parametrize("report_bytes", [64, 8192])
@@ -445,3 +446,17 @@ def test_opengrep_examined_assets_come_from_native_paths(incomplete):
     )
     assert result.coverage == "partial"
     assert "unsupported_or_parser_failed_inputs" in result.limitations
+
+
+def test_opengrep_without_compatible_inputs_is_not_a_clean_scan():
+    api = scanner_api()
+    native = {"results": [], "errors": [], "paths": {"scanned": []}}
+    result = api.normalize_native(
+        "opengrep",
+        json.dumps(native).encode(),
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_native",
+    )
+    assert result.coverage == "partial"
+    assert "no_inputs_examined" in result.limitations

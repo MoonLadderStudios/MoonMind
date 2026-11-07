@@ -147,6 +147,7 @@ def scanner_commands(
         argv = [
             "opengrep",
             "scan",
+            "--disable-version-check",
             "--json",
             "--output",
             str(report_root / "scan.json"),
