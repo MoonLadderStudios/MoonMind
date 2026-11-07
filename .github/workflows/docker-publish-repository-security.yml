@@ -12,6 +12,7 @@ on:
       - "moonmind/security/scanner_feeds.py"
       - "moonmind/security/image_assessment*.py"
       - "moonmind/security/assessments.py"
+      - "moonmind/security/identity_lifecycle.py"
       - "moonmind/schemas/**"
       - "moonmind/provider_profiles/model_tiers.py"
       - "moonmind/utils/logging.py"
@@ -24,6 +25,7 @@ on:
       - "moonmind/security/repository_scanner*.py"
       - "moonmind/security/scanner_feeds.py"
       - "moonmind/security/image_assessment*.py"
+      - "moonmind/security/identity_lifecycle.py"
       - ".github/workflows/docker-publish-repository-security.yml"
   workflow_dispatch:
     inputs:

@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.frameworks import FrameworkAssessmentInput
+from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
 
 Text = Annotated[
@@ -539,8 +540,15 @@ class GitHubAlertImport(Contract):
 class AssessmentRequest(Contract):
     scope: AssessmentScope
     tools: Annotated[
-        list[Literal["inventory-feed", "retained-report", "github-alerts"]],
-        Field(max_length=3),
+        list[
+            Literal[
+                "inventory-feed",
+                "retained-report",
+                "github-alerts",
+                "identity-lifecycle",
+            ]
+        ],
+        Field(max_length=4),
     ]
     budget: ExecutionBudget
     credential_refs: Items
@@ -552,6 +560,7 @@ class AssessmentRequest(Contract):
     decisions_ref: Text | None = None
     review_ref: Text | None = None
     github_alerts: GitHubAlertImport | None = None
+    identity_lifecycle: IdentityLifecycleInput | None = None
     framework: FrameworkAssessmentInput | None = None
     oscal_export: OscalExportRequest | None = None
     product_baseline_ref: Text | None = None
@@ -570,10 +579,25 @@ class AssessmentRequest(Contract):
             )
         if self.budget.progress_stall_seconds <= 0:
             raise ValueError("assessment progress stall budget must be positive")
-        # These adapters only read authorized artifacts, or GitHub through the
-        # run's admitted repository connection. Active scanner adapters must
-        # admit credentials/egress through their own existing owners.
-        if self.credential_refs or self.network_refs:
+        # Identity collection admits exactly its Secret and egress references.
+        # Other tools read artifacts or the admitted repository connection.
+        if ("identity-lifecycle" in self.tools) != (
+            self.identity_lifecycle is not None
+        ):
+            raise ValueError("identity-lifecycle requires identityLifecycle")
+        if self.identity_lifecycle is not None:
+            selected = self.identity_lifecycle
+            if self.credential_refs != [selected.secret_ref] or self.network_refs != [
+                selected.egress_policy_ref
+            ]:
+                raise ValueError("identity credentials and egress must match admission")
+            if selected.organisation not in self.scope.assets:
+                raise ValueError("identity organisation exceeds admitted scope")
+            if selected.max_seconds > self.budget.base_seconds:
+                raise ValueError(
+                    "identity collection must fit the base assessment budget"
+                )
+        elif self.credential_refs or self.network_refs:
             raise ValueError(
                 "offline assessment tools require empty credentialRefs and networkRefs"
             )
