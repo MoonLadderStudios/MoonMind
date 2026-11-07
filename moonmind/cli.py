@@ -237,8 +237,18 @@ def container_passive_scan(
 )
 def container_repository_scan(
     admission: Annotated[
-        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
-    ],
+        Path | None,
+        typer.Option("--admission", exists=True, dir_okay=False, readable=True),
+    ] = None,
+    scanner: str | None = typer.Option(
+        None,
+        "--scanner",
+        help="gitleaks, opengrep or trivy; uses image rules and prepared feeds.",
+    ),
+    snapshot: str | None = typer.Option(None, "--snapshot"),
+    output: str | None = typer.Option(None, "--output"),
+    database_cache: str | None = typer.Option(None, "--database-cache"),
+    database_digest: str | None = typer.Option(None, "--database-digest"),
     image_source: str | None = typer.Option(None, "--image-source"),
     image: str | None = typer.Option(None, "--image"),
 ) -> None:
@@ -247,9 +257,29 @@ def container_repository_scan(
     try:
         if image is not None and image_source is not None:
             raise ValueError("choose image or image-source")
-        if admission.stat().st_size > 32 * 1024:
-            raise ValueError("scanner admission exceeds the input bound")
-        scan = RepositoryScan.model_validate_json(admission.read_bytes())
+        if admission is not None:
+            if any(
+                value is not None
+                for value in (
+                    scanner,
+                    snapshot,
+                    output,
+                    database_cache,
+                    database_digest,
+                )
+            ):
+                raise ValueError("choose admission or scan options")
+            if admission.stat().st_size > 32 * 1024:
+                raise ValueError("scanner admission exceeds the input bound")
+            scan = RepositoryScan.model_validate_json(admission.read_bytes())
+        else:
+            scan = RepositoryScan(
+                scanner=scanner,
+                inputPath=snapshot if snapshot is not None else ".",
+                outputDirectory=output if output is not None else f"artifacts/{scanner}",
+                databaseCacheRef=database_cache,
+                databaseDigest=database_digest,
+            )
         workload = build_scanner_job(
             scan, image_source_ref=image_source or "repository-security"
         )
@@ -258,10 +288,9 @@ def container_repository_scan(
             workload["image"] = image
         result = run_container_job(workload)
     except (ContainerJobCliError, ValueError, OSError) as exc:
-        # Admission validation can include arbitrary supplied strings. The
-        # safe message directs the caller to the typed request, without echoing.
+        # Do not echo supplied admission strings or service diagnostics.
         typer.secho(
-            "Invalid scanner admission or container job unavailable.",
+            "Scanner unavailable. Choose --scanner gitleaks|opengrep|trivy or --admission, and check Settings Operations for image/feed authority.",
             fg=typer.colors.RED,
             err=True,
         )
@@ -271,26 +300,57 @@ def container_repository_scan(
 
 @container_app.command(
     "feed-refresh",
-    help="Refresh or import trusted Trivy feeds into a published snapshot.",
+    help="Prepare selected Trivy feeds without repository content or assessment credentials.",
 )
 def container_feed_refresh(
     admission: Annotated[
-        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
-    ],
+        Path | None,
+        typer.Option("--admission", exists=True, dir_okay=False, readable=True),
+    ] = None,
     image_source: str = typer.Option("repository-security", "--image-source"),
+    cache: str | None = typer.Option(None, "--cache"),
+    egress_policy: str | None = typer.Option(None, "--egress-policy"),
+    archive: str | None = typer.Option(
+        None,
+        "--archive",
+        help="Retained artifact ref for an offline Trivy cache tar archive.",
+    ),
+    component: list[str] | None = typer.Option(
+        None,
+        "--component",
+        help="Repeat vulnerability, java or checks. Default: vulnerability and checks.",
+    ),
+    max_age_hours: int | None = typer.Option(None, "--max-age-hours", min=1, max=8760),
 ) -> None:
     from moonmind.security.scanner_feeds import FeedRefresh, build_feed_refresh_job
 
     try:
-        if admission.stat().st_size > 32 * 1024:
-            raise ValueError("feed refresh admission exceeds the input bound")
-        refresh = FeedRefresh.model_validate_json(admission.read_bytes())
+        if admission is not None:
+            if any(
+                value is not None
+                for value in (cache, egress_policy, archive, component, max_age_hours)
+            ):
+                raise ValueError("choose admission or refresh options")
+            if admission.stat().st_size > 32 * 1024:
+                raise ValueError("feed refresh admission exceeds the input bound")
+            refresh = FeedRefresh.model_validate_json(admission.read_bytes())
+        else:
+            refresh = FeedRefresh(
+                acquisition="import" if archive else "download",
+                feedCacheRef=cache if cache is not None else "scanner-feeds",
+                egressPolicyRef=egress_policy,
+                archiveArtifactRef=archive,
+                components=(
+                    component if component is not None else ["vulnerability", "checks"]
+                ),
+                maxAgeHours=max_age_hours if max_age_hours is not None else 72,
+            )
         result = run_container_job(
             build_feed_refresh_job(refresh, image_source_ref=image_source)
         )
     except (ContainerJobCliError, ValueError, OSError) as exc:
         typer.secho(
-            "Invalid feed refresh admission or container job unavailable.",
+            "Feed preparation unavailable. Choose an authorized --egress-policy for downloads or --archive for offline import (or --admission), and check Settings Operations for cache/image authority.",
             fg=typer.colors.RED,
             err=True,
         )

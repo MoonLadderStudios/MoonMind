@@ -42,9 +42,13 @@ async def inventory_boundary(monkeypatch, tmp_path, request):
     monkeypatch.setenv("OMNIGENT_GENERIC_HOST_ENABLED", "false")
     monkeypatch.delenv("OMNIGENT_BRIDGE_CONFIG_PATH", raising=False)
     monkeypatch.setenv("OMNIGENT_API_TOKEN", "fixture-inventory-credential")
+    # The upstream belongs to this test's loopback namespace, not an egress proxy.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
     upstream = FastAPI()
     state = SimpleNamespace(
         rows=[], calls=0, fail=False, blocked=asyncio.Event(), mode="normal",
+        refresh_timeout=None,
     )
 
     @upstream.get("/v1/agents")
@@ -52,6 +56,7 @@ async def inventory_boundary(monkeypatch, tmp_path, request):
         assert request.headers["authorization"] == "Bearer fixture-inventory-credential"
         state.calls += 1
         if state.mode == "timeout":
+            state.refresh_timeout.reschedule(asyncio.get_running_loop().time())
             await state.blocked.wait()
         if state.fail:
             return JSONResponse({"error": "fixture-inventory-credential"}, status_code=503)
@@ -166,7 +171,18 @@ async def test_refresh_never_admits_unverified_or_substituted_authority(inventor
         state.fail = True
     elif fault == "timeout":
         state.mode = "timeout"
-        monkeypatch.setattr(inventory_service, "_INVENTORY_REFRESH_TIMEOUT_SECONDS", 0.05)
+
+        def controlled_timeout(seconds):
+            timeout = asyncio.timeout(seconds)
+            if seconds == inventory_service._INVENTORY_REFRESH_TIMEOUT_SECONDS:
+                state.refresh_timeout = timeout
+            return timeout
+
+        # Expire the real refresh deadline once HTTP reaches the server, so
+        # client setup and runner scheduling cannot consume the fault window.
+        monkeypatch.setattr(
+            inventory_service, "asyncio", SimpleNamespace(timeout=controlled_timeout),
+        )
     async with sessions() as session:
         with pytest.raises(HTTPException) as caught:
             async with asyncio.timeout(2):
@@ -189,6 +205,9 @@ async def test_refresh_never_admits_unverified_or_substituted_authority(inventor
             assert readiness["freshness"] == "stale"
             assert "retry submission" in projection.error
             assert "fixture-inventory-credential" not in projection.error
+            if fault == "timeout":
+                assert state.refresh_timeout.expired()
+                assert "(TimeoutError)" in projection.error
         else:
             assert readiness["ready"] is False
     assert state.calls == 1

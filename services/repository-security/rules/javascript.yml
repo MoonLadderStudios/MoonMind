@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+rules:
+  - id: moonmind-javascript-dynamic-eval
+    pattern: eval($INPUT)
+    message: Dynamic evaluation can execute untrusted input. Prefer JSON.parse for JSON data.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: CWE-95
+      license: Apache-2.0

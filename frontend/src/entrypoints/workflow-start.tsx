@@ -1,3 +1,4 @@
+import { RepositoryScannerReadiness } from '../components/RepositoryScannerReadiness';
 import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
@@ -12017,6 +12018,8 @@ function WorkflowStartPageContent({
           Provider Profile, or model to compare results with the source run.
         </p>
       ) : null}
+
+      <RepositoryScannerReadiness />
 
       <form
         id="queue-submit-form"

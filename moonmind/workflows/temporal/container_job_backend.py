@@ -4181,18 +4181,43 @@ class DockerContainerJobBackend:
                 scan.modes
             ):
                 raise ValueError("scanner execution modes differ from admission")
-            # No database means the runner recorded why; any other identity
-            # than the admitted snapshot is invalid evidence.
-            if execution.database_digest not in (None, scan.database_digest) or (
-                execution.feed is not None
-                and execution.feed.snapshot is not None
-                and execution.feed.snapshot.snapshot_id != scan.database_digest
+            # Omitted identity selects the current immutable snapshot in the
+            # admitted cache. Explicit identities still require exact evidence.
+            if execution.database_digest is not None and (
+                not scan.database_cache_ref
+                or (
+                    scan.database_digest
+                    and execution.database_digest != scan.database_digest
+                )
+                or execution.feed is None
+                or execution.feed.snapshot is None
+                or execution.feed.snapshot.snapshot_id != execution.database_digest
             ):
                 raise ValueError("scanner database differs from admission")
+            if (
+                execution.feed is not None
+                and execution.feed.snapshot is not None
+                and (execution.feed.snapshot.snapshot_id != execution.database_digest)
+            ):
+                raise ValueError("scanner database differs from execution")
+            if (
+                execution.effective_rules is not None
+                and scan.rules is not None
+                and (execution.effective_rules != scan.rules)
+            ):
+                raise ValueError("scanner rules differ from admission")
+            if (
+                scan.scanner == "opengrep"
+                and scan.rules is None
+                and not execution.effective_rules
+            ):
+                limitations.append("scanner_rules_unavailable")
+            # Image provenance comes from the worker, not scanner-controlled JSON.
+            execution.source_image = request.resolved_image_ref
             if len(execution.assets) > scan.max_files:
                 raise ValueError("scanner input exceeds admission")
             limitations.extend(execution.limitations)
-            if scan.database_digest and execution.database_digest is None:
+            if scan.database_cache_ref and execution.database_digest is None:
                 limitations.append("feed_snapshot_unavailable")
         except (ValueError, TypeError):
             execution = None
@@ -4230,8 +4255,16 @@ class DockerContainerJobBackend:
         display_scan = None
         if not unsafe_metadata:
             try:
+                effective = scan.model_dump()
+                if execution is not None:
+                    if execution.effective_rules is not None:
+                        effective["rules"] = [
+                            r.model_dump() for r in execution.effective_rules
+                        ]
+                    if execution.database_digest is not None:
+                        effective["database_digest"] = execution.database_digest
                 display_scan = RepositoryScan.model_validate(
-                    sanitizer.metadata(scan.model_dump())
+                    sanitizer.metadata(effective)
                 )
             except (ValueError, TypeError, RecursionError):
                 unsafe_metadata = True

@@ -629,7 +629,6 @@ def test_container_cli_prints_authoritative_terminal_cause(
     assert "message=deployment image source is absent" in result.output
 
 
-
 @pytest.mark.parametrize("state,exit_code", [("succeeded", 0), ("failed", 1)])
 def test_container_cli_json_preserves_result_and_exit_status(
     tmp_path, monkeypatch: pytest.MonkeyPatch, state: str, exit_code: int
@@ -787,3 +786,74 @@ def test_artifact_reader_fails_closed_at_its_page_bound() -> None:
     with pytest.raises(ContainerJobCliError, match="bounded page limit"):
         _read_artifacts(client, "container-job:" + "1" * 32, max_pages=2)
     assert client.count == 2
+
+
+@pytest.mark.parametrize("scanner", ["gitleaks", "opengrep", "trivy"])
+def test_repository_scanner_cli_uses_supported_defaults_without_json(
+    monkeypatch, scanner
+):
+    submitted = []
+
+    def run(spec):
+        submitted.append(spec)
+        return ContainerJobResult(
+            "container-job:" + "1" * 32, "succeeded", 0, None, None, None, None
+        )
+
+    monkeypatch.setattr("moonmind.cli.run_container_job", run)
+    result = CliRunner().invoke(
+        app, ["container", "repository-scan", "--scanner", scanner]
+    )
+    assert result.exit_code == 0, result.output
+    assert submitted[0]["repositoryScan"]["scanner"] == scanner
+    assert submitted[0]["imageSourceRef"] == "repository-security"
+    assert submitted[0]["networkMode"] == "none"
+    if scanner == "opengrep":
+        assert submitted[0]["repositoryScan"]["rules"] is None
+    if scanner == "trivy":
+        assert submitted[0]["repositoryScan"]["databaseCacheRef"] == "scanner-db"
+        assert submitted[0]["repositoryScan"]["databaseDigest"] is None
+
+
+def test_feed_refresh_cli_has_simple_scoped_preparation_and_preserves_components(
+    monkeypatch,
+):
+    submitted = []
+
+    def run(spec):
+        submitted.append(spec)
+        return ContainerJobResult(
+            "container-job:" + "1" * 32, "succeeded", 0, None, None, None, None
+        )
+
+    monkeypatch.setattr("moonmind.cli.run_container_job", run)
+    result = CliRunner().invoke(
+        app,
+        [
+            "container",
+            "feed-refresh",
+            "--egress-policy",
+            "feeds",
+            "--component",
+            "vulnerability",
+            "--component",
+            "java",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    spec = submitted[0]
+    assert spec["inputAttachments"] == []
+    assert not spec.get("environment")
+    assert spec["feedRefresh"]["feedCacheRef"] == "scanner-feeds"
+    assert spec["feedRefresh"]["components"] == ["vulnerability", "java"]
+    assert spec["egressPolicyRef"] == "feeds"
+
+
+def test_feed_refresh_cli_missing_egress_is_actionable_and_submits_nothing(monkeypatch):
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job", lambda *a, **k: pytest.fail("no authority")
+    )
+    result = CliRunner().invoke(app, ["container", "feed-refresh"])
+    assert result.exit_code == 1
+    assert "--egress-policy" in result.output
+    assert "--archive" in result.output
