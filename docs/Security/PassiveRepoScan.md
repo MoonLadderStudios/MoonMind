@@ -183,14 +183,45 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
   rules (`id`, `purl`, explicit `affectedVersions`). The bounded adapter matches
   exact versions; it does not guess version ranges or fetch intelligence.
 - `security-observation/v1`: native source/tool/rule/asset/instance identity,
-  evidence refs, coverage and configuration/feed provenance. The
+  evidence refs, coverage, configuration/feed provenance and optional assessed
+  product `deployment`. The
   `retained-report` tool consumes these observations through `reportRefs`; it
   also accepts this document's passive scanner JSON, using snapshot-relative
   file paths as scope assets. Native passive evidence expires for comparison
   after one day; its artifact retention follows the roots that seal it.
 - `security-comparison/v1`: the observation, retained findings, scoped triage,
-  counts and baseline/scan artifact references. Identity never depends on a
-  presentation title or severity.
+  counts, baseline/scan artifact references and optional `productComparison`.
+  Finding identity never depends on a presentation title or severity.
+
+For assessed gaming deployments, supply `productBaselineRef` separately from
+the finding-history `baselineRef`. It names a `security-product-baseline/v1`
+artifact with `product` (an admitted scope asset), `baselineId`, `state`,
+`regulatorApprovalRequired`, `components`, and supporting `records`. States
+`submitted`, `evaluated`, `certified`, `approved`, and `regulator_approved`
+remain distinct from the observed deployment; matching a submitted image
+cannot supply approval. Records bind their `stage`, `product`, and `baselineId`
+to `status`, `evidenceRefs`, `reason`, and `verifier`. Readable retained evidence
+supports a recorded comparison, not independent authentication of approval.
+Missing, denied, unreadable, or URL-only records remain Unverified with reasons.
+
+An observation's `deployment` carries `product`, `deploymentId`, `components`,
+and `omissions`. Each component has `id`, `kind`, `identity`, `method`,
+`evidenceRefs`, and optional `omissionReason`. Kinds cover artifacts, game
+configuration, paytables, feature settings, critical-file signatures, RNG
+configuration, external configuration, and database elements. Baseline
+`excludedKinds` records reasons for non-applicable categories; undeclared
+categories and missing critical evidence make the comparison incomplete.
+External settings are compared individually even when the image is unchanged.
+
+Select a newer baseline explicitly through `productBaselineRef`; it does not
+rewrite old observations or repeat a saved scan. `approvedChanges` entries name
+an `id`, replacement `component`, and scoped approval `record`. Only applicable
+recorded approvals change the expected identity; proposed changes retain the
+baseline and report the gap. Structured and readable reports retain matches,
+drift, incomplete evidence, methods, reasons, and omissions through retry and
+authorized artifact download. Identity equality establishes no system security,
+certification, regulatory approval, or compatibility, and never controls MoonMind
+launches or updates. Private lab/regulator authenticity remains Unverified.
 
 Comparisons distinguish `new`, `still_observed`, `absent_comparable`,
 `remediated_verified`, `closed_upstream` and `not_reassessed`. Absence requires
@@ -239,7 +270,10 @@ seals what it cites through the artifact
 A scan seals the input and native report bytes it read. A comparison seals its
 scan, its baseline's bytes, earlier evidence it still cites whose digest the
 baseline's seal verified, and its `decisionsRef` with the artifacts those
-decisions cite. Carried decisions keep their evidence through the baseline's
+decisions cite. Product comparisons also seal the selected product baseline
+and readable supporting records; deployment evidence is retained by the scan.
+Unavailable records remain references and diagnostics, without blocking report
+retention or export. Carried decisions keep their evidence through the baseline's
 seal, which also lets an occurrence in a later workflow seal that history
 without gaining a read of it.
 A summary seals its comparison and evidence; review and review evidence are
