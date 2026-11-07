@@ -32,6 +32,21 @@ class FrameworkRequirement(FrameworkContract):
     category: Text
     applicability: Text
     evidence_prompt: Text
+    summary: Text | None = None
+    module: Text | None = None
+    sources: Annotated[list[FrameworkSource], Field(max_length=16)] = Field(
+        default_factory=list
+    )
+    evidence_types: Strings = Field(default_factory=list)
+    responsibilities: Strings = Field(default_factory=list)
+
+
+class FrameworkModule(FrameworkContract):
+    id: Text
+    edition: Text
+    published_on: date
+    source: FrameworkSource
+    applicability: Text
 
 
 class FrameworkPack(FrameworkContract):
@@ -39,6 +54,10 @@ class FrameworkPack(FrameworkContract):
     id: Text
     title: Text
     edition: Text
+    published_on: date | None = None
+    modules: Annotated[list[FrameworkModule], Field(max_length=16)] = Field(
+        default_factory=list
+    )
     source: FrameworkSource
     guidance_sources: Strings
     requirements: Annotated[
@@ -64,6 +83,8 @@ class RequirementChoice(FrameworkContract):
     systems: Strings | None = None
     period: EvidencePeriod | None = None
     not_applicable_reason: Text | None = None
+    responsible_entity: Literal["assessed_entity", "partner"] = "assessed_entity"
+    responsibility_reason: Text | None = None
 
 
 class FrameworkAssessmentInput(FrameworkContract):
@@ -77,6 +98,7 @@ class FrameworkAssessmentInput(FrameworkContract):
         default_factory=list
     )
     audit_ref: Text | None = None
+    previous_assessment_ref: Text | None = None
 
 
 class EvidenceProvenance(FrameworkContract):
@@ -139,6 +161,10 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
         from moonmind.security.ukgc_rts import UKGC_RTS_PACK
 
         return UKGC_RTS_PACK.model_copy(deep=True)
+    if pack_id == "gli-19-readiness":
+        from moonmind.security.gli_readiness import GLI_PACK
+
+        return GLI_PACK.model_copy(deep=True)
     if pack_id == "nj-dge-readiness":
         from moonmind.security.nj_dge import NJ_DGE_PACK
 
@@ -147,6 +173,10 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
 
 
 def render_framework_preparation(report: dict) -> str:
+    if report["pack"]["id"] == "gli-19-readiness":
+        from moonmind.security.gli_readiness import render_assessment
+
+        return render_assessment(report)
     if report["pack"]["id"] == "nj-dge-readiness":
         from moonmind.security.nj_dge import render_assessment
 

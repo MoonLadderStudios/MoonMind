@@ -369,6 +369,75 @@ notification advice. It performs no submission. `prepared` means supplied
 preparation records cover the selected elements; an actual independent audit or
 private inspection remains **Unverified**. No human-role system is involved.
 
+## GLI interactive-gaming readiness
+
+Choose **GLI-19 and GLI-GSF Readiness** in Create (`security-gli-readiness`), or
+pass `framework.packId: gli-19-readiness` to `security.assess`. The preset uses
+the same evaluator, artifact authorization, comparisons and report export.
+Saved preset inputs retain assessed systems, jurisdiction basis, requirement
+choices and evidence references.
+
+The pack records [GLI-19 v4.0, revised November 3, 2026](https://gaminglabs.com/wp-content/uploads/2026/11/GLI-19-v4.0-Standards-for-Interactive-Gaming-Systems.pdf),
+GSF-1 common controls v1.1, and GSF-2 technical assessment, GSF-3 vendor controls
+and GSF-5 online controls v1.0. Each section-level readiness requirement has
+an original summary, source section, evidence category and assessed-business
+responsibility. These summaries identify the examined readiness scope; they
+do not replace the full standards or laboratory evaluation criteria.
+
+`systemInputs` records `entityName`, `entityType` (`operator`, `rgs`, or
+`ancillary_provider`), `productType` and `systems`. The system identifiers must
+fit the assessment's admitted `scope.assets`. Operators and RGS products using
+`interactive_gaming` select GLI-19 and GSF-1/2/5. Ancillary providers using
+`ancillary_service` select GSF-1/2/3 only when `directlyAffectsGaming: false`;
+unknown impact remains unresolved. [GSF-3](https://gaminglabs.com/wp-content/uploads/2024/06/GLI-GSF-3-v1.0-Gaming-Information-Security-GIS-Vendors-Audit-FINAL.pdf)
+does not automatically apply to an RGS. `gaming_device` and `event_wagering`
+require the GLI-11 and GLI-33 product profiles respectively; this pack reports
+that boundary without claiming product coverage from shared security controls.
+
+Edition publication is independent of a jurisdiction's adoption and a product's
+approval. `jurisdictionBasis` contains `jurisdiction`, `status` (`unknown`,
+`adopted`, or `not_adopted`), `edition`, `adoptedOn`, `effectiveOn`,
+`recordVersion`, `sourceRef` and an explanatory `reason`. No real jurisdiction's
+adoption is assumed. Missing provenance, a different adopted edition, or dates
+that do not cover the assessment period leave applicability incomplete. A
+record marked `not_adopted` remains visible as comparison information.
+
+Set `period.start` and `period.end`. `requirementChoices`, keyed by IDs such as
+`GLI-GSF-2:B` or `GLI-19:5.2`, can select `systems` and a different `period`.
+Omitted choices use all assessed systems and the assessment period. Explicit
+`notApplicableReason` exclusions stay visible. For partner-owned duties, set
+`responsibleEntity: partner` and `responsibilityReason` identifying the partner
+and agreement; absent evidence is still requested. These responsibilities
+describe the assessed business, not MoonMind accounts or human roles.
+
+Each `evidenceRefs` artifact uses the shared scoped evidence record: `kind`,
+`requirementIds`, `systems`, `period`, `method`, `description` and `provenance`
+(`sourceRef`, `issuer`, `version`, `recordedOn`, `standard`). GLI also requires
+`evidenceType` (`technical`, `organizational`, `game_math`, `rng`, `laboratory`,
+or `regulator`), `outcome` (`passed`, `failed`, `incomplete`) and GLI `edition`.
+`standard` identifies the cited module and edition, for example
+`GLI-GSF-2 v1.0`. Regulator evidence also names `jurisdiction`. Technical results
+use `technical_assessment` or scoped `control_evidence`; laboratory and
+regulator records use `external_audit`. An interview alone cannot satisfy a
+technical, game/RNG, laboratory or regulator requirement. Link existing security,
+game-math and RNG observations through `provenance.sourceRef`; native artifact
+references are authorized and sealed alongside the evidence record. An uploaded
+document without this scope produces a request for a usable record.
+
+Matching evidence is reported as `evidence_recorded`. A clean vulnerability
+scan cannot fill operational, mathematical, RNG or laboratory gaps. `prepared`
+means supplied evidence covers the selected readiness requirements; certification
+and jurisdiction approval remain `not_performed`. Organizational, laboratory
+and regulator verification remain **Unverified**, with the evidence owner, gap
+and next action recorded even in a complete synthetic fixture.
+
+The retained JSON and Markdown exports include edition, module selection,
+jurisdiction basis, scope, exclusions, partner responsibilities, evidence links,
+unresolved requirements and external verification. Reassessments can supply
+`previousAssessmentRef` to link the previous retained framework report. Edition,
+adoption-record and evidence changes produce new result identities while earlier
+reports remain unchanged; these assessment editions never pin an agent runtime.
+
 ## New Jersey DGE readiness
 
 Choose **New Jersey DGE Readiness** in the shared catalog, or use
