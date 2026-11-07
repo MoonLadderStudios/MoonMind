@@ -64,7 +64,8 @@ def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
             "name": name,
             "description": (
                 "Compare retained security evidence, import existing GitHub "
-                "security alerts, or reassess an inventory against an admitted "
+                "security alerts, collect scoped identity lifecycle evidence for review, "
+                "or reassess an inventory against an admitted "
                 "advisory feed."
             ),
             "inputs": {"schema": AssessmentRequest.model_json_schema(by_alias=True)},

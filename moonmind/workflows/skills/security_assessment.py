@@ -864,7 +864,7 @@ class AssessmentExecution:
         }
 
     async def prepare_framework(
-        self, request: AssessmentRequest
+        self, request: AssessmentRequest, *, collected_evidence_refs=()
     ) -> tuple[str, dict] | None:
         if request.framework is None:
             return None
@@ -920,7 +920,10 @@ class AssessmentExecution:
         if not systems <= set(request.scope.assets):
             raise ValueError("Framework systems exceed admitted assessment scope")
         audit = None
-        refs = list(selection.evidence_refs)
+        evidence_refs = list(
+            dict.fromkeys([*selection.evidence_refs, *collected_evidence_refs])
+        )
+        refs = list(evidence_refs)
         previous = None
         if selection.previous_assessment_ref:
             _, body = await self.read(selection.previous_assessment_ref)
@@ -946,7 +949,7 @@ class AssessmentExecution:
             elif audit.auditor.independence_ref:
                 refs.append(audit.auditor.independence_ref)
         records, invalid = [], []
-        for ref in selection.evidence_refs:
+        for ref in evidence_refs:
             _, body = await self.read(ref)
             try:
                 # The artifact owner supplies this identity, not authored JSON.
@@ -1018,8 +1021,34 @@ class AssessmentExecution:
         return root, report
 
     async def execute(self, request: AssessmentRequest) -> ToolResult:
+        identity = None
+        if request.identity_lifecycle is not None:
+            from moonmind.security.okta_evidence import collect_identity
+
+            try:
+                root, review_ref, report = await collect_identity(
+                    self, request.identity_lifecycle
+                )
+            except (ValueError, TypeError):
+                raise ToolFailure(
+                    "INVALID_INPUT",
+                    "Invalid identity evidence inputs or egress admission.",
+                    False,
+                ) from None
+            identity = {
+                "evidenceRef": root,
+                "reviewEvidenceRef": review_ref,
+                "counts": report["counts"],
+                "limitations": report["limitations"],
+                "controlOperation": "not_established",
+            }
         try:
-            framework = await self.prepare_framework(request)
+            framework = await self.prepare_framework(
+                request,
+                collected_evidence_refs=(
+                    [identity["reviewEvidenceRef"]] if identity else []
+                ),
+            )
         except (ValueError, TypeError) as exc:
             raise ToolFailure(
                 "INVALID_INPUT", "Invalid framework assessment inputs.", False
@@ -1150,6 +1179,8 @@ class AssessmentExecution:
                 "request": request.github_alerts.model_dump(mode="json"),
                 "execution": self.execution,
             }
+        if identity:
+            work_identity["identityEvidence"] = identity["evidenceRef"]
         scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
@@ -1737,6 +1768,9 @@ class AssessmentExecution:
                 "unverified": github["unverified"],
             }
         evidence = [scan_ref] + ([github["nativeRef"]] if github else [])
+        if identity:
+            outputs["identityLifecycle"] = identity
+            evidence += [identity["evidenceRef"], identity["reviewEvidenceRef"]]
         if framework:
             framework_ref, framework_report = framework
             evidence.append(framework_ref)
@@ -1762,6 +1796,10 @@ class AssessmentExecution:
                 + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
+            if identity:
+                from moonmind.security.okta_evidence import render_identity_summary
+
+                summary += render_identity_summary(identity).encode()
             if framework:
                 from moonmind.security.frameworks import render_framework_preparation
 
