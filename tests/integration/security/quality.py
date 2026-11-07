@@ -17,6 +17,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from tools.ci.redact_diagnostics import redact_text
+
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "tests/fixtures/security_review/quality-cases.json"
 OUTPUT = ROOT / "artifacts/integration-ci/security-quality"
@@ -155,11 +157,14 @@ class QualityRun:
                 artifact_id=ref,
                 access=ArtifactAccessContext.for_execution("assessment"),
             )
+            source_digest = "sha256:" + hashlib.sha256(body).hexdigest()
+            body = redact_text(body.decode("utf-8"))[0].encode("utf-8")
             name = f"evidence-{index}.txt"
             (directory / name).write_bytes(body)
             evidence[ref] = body
             retained[ref] = {
                 "path": name,
+                "sourceSha256": source_digest,
                 "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
                 "bytes": len(body),
             }
@@ -235,7 +240,9 @@ class QualityRun:
                 "unverifiedChecks": UNVERIFIED,
             }
         )
-        (directory / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+        (directory / "result.json").write_text(
+            redact_text(json.dumps(result, indent=2))[0] + "\n"
+        )
         # Persist failures before asserting, so a red CI run retains useful evidence.
         assert result["passed"], result["failures"]
         return result

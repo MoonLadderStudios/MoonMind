@@ -153,3 +153,44 @@ async def test_failed_quality_checks_are_recorded_as_failures(
     retained = json.loads((quality.OUTPUT / "sample/result.json").read_text())
     assert retained["passed"] is False
     assert not summarize(quality.OUTPUT, manifest)["passed"]
+
+
+@pytest.mark.asyncio
+async def test_exported_corpus_survives_ci_redaction(
+    tmp_path, monkeypatch, case, observed
+):
+    import hashlib
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from tools.ci.redact_diagnostics import redact_directory
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"cases": [{"id": "sample", "expected": case}]}))
+    output = tmp_path / "output"
+    monkeypatch.setattr(quality, "MANIFEST", manifest)
+    monkeypatch.setattr(quality, "OUTPUT", output)
+    native = json.dumps(
+        {"credentialRef": "secret:fixture-grant", "token": "fixture-sensitive-value"}
+    ).encode()
+    service = SimpleNamespace(read=AsyncMock(return_value=(None, native)))
+    await quality.QualityRun().finish(
+        service,
+        "sample",
+        observed,
+        ["native"],
+        provenance={"configuration": {"credentialRef": "secret:fixture-grant"}},
+    )
+
+    # CI scrubs the entire upload directory after the producing container exits.
+    redact_directory(output)
+
+    assert summarize(output, manifest)["passed"]
+    result = json.loads((output / "sample/result.json").read_text())
+    retained = result["retainedArtifacts"]["native"]
+    body = (output / "sample" / retained["path"]).read_bytes()
+    assert retained["sourceSha256"] == "sha256:" + hashlib.sha256(native).hexdigest()
+    assert retained["sha256"] == "sha256:" + hashlib.sha256(body).hexdigest()
+    assert retained["bytes"] == len(body)
+    assert json.loads(body)["token"] != "fixture-sensitive-value"
+    assert b"fixture-sensitive-value" not in body

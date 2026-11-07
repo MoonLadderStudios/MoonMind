@@ -23,10 +23,10 @@ PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/=]{8,}"), r"\1***REDACTED***"),
     (
         re.compile(
-            r"(?i)[\"']?(api[_-]?key|secret|token|password|private[_-]?key)[\"']?\s*[:=]\s*"
+            r"(?i)([\"']?(?:api[_-]?key|secret|token|password|private[_-]?key)[\"']?\s*[:=]\s*)"
             r"(['\"]?)([A-Za-z0-9\-._~+/=]+)\2"
         ),
-        r"\1=***REDACTED***",
+        r"\1\2***REDACTED***\2",
     ),
     (re.compile(r"xox[baprs]-[A-Za-z0-9-]{8,}"), "***REDACTED-SLACK-TOKEN***"),
     (re.compile(r"sk-(live|test)-[A-Za-z0-9]{8,}"), "***REDACTED-API-KEY***"),
@@ -51,7 +51,10 @@ def redact_directory(root: Path) -> dict[str, int]:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.is_symlink():
             continue
-        if path.suffix.lower() not in TEXT_SUFFIXES and path.name != "collection-status.txt":
+        if (
+            path.suffix.lower() not in TEXT_SUFFIXES
+            and path.name != "collection-status.txt"
+        ):
             continue
         try:
             original = path.read_text(encoding="utf-8")

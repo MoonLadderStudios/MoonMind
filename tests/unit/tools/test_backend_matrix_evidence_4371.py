@@ -23,7 +23,9 @@ def _junit_file(tmp_path: Path) -> Path:
         {"tests": "2", "failures": "0", "errors": "0", "skipped": "0", "time": "5.0"},
     )
     for name, duration in (("test_a", "3.0"), ("test_b", "2.0")):
-        ET.SubElement(root, "testcase", {"classname": "mod", "name": name, "time": duration})
+        ET.SubElement(
+            root, "testcase", {"classname": "mod", "name": name, "time": duration}
+        )
     path = tmp_path / "junit.xml"
     ET.ElementTree(root).write(path)
     return path
@@ -97,12 +99,16 @@ def test_secondary_failures_surfaced_without_changing_primary(tmp_path: Path) ->
 def test_clean_collection_has_no_secondary_section(tmp_path: Path) -> None:
     _junit_file(tmp_path)
     status = tmp_path / "collection-status.txt"
-    status.write_text("collection started\nredaction: scanned=2 redacted=0\n", encoding="utf-8")
+    status.write_text(
+        "collection started\nredaction: scanned=2 redacted=0\n", encoding="utf-8"
+    )
     markdown, _ = build_evidence(_args(tmp_path, collection_status=str(status)))
     assert "Secondary diagnostics/teardown" not in markdown
 
 
-def test_killed_worker_leaves_log_with_explicitly_incomplete_report(tmp_path: Path) -> None:
+def test_killed_worker_leaves_log_with_explicitly_incomplete_report(
+    tmp_path: Path,
+) -> None:
     log = tmp_path / "pytest.log"
     log.write_text(
         "tests/integration/reliability/test_x.py::test_slow_case PASSED\n"
@@ -120,7 +126,9 @@ def test_killed_worker_leaves_log_with_explicitly_incomplete_report(tmp_path: Pa
     assert "test_killed_case" in log.read_text()
 
 
-def test_failed_test_keeps_nonzero_exit_through_tee_hook_and_cleanup(tmp_path: Path) -> None:
+def test_failed_test_keeps_nonzero_exit_through_tee_hook_and_cleanup(
+    tmp_path: Path,
+) -> None:
     proc = subprocess.run(
         [
             "bash",
@@ -184,7 +192,9 @@ def test_redaction_masks_secrets_and_preserves_node_ids(tmp_path: Path) -> None:
 def test_redaction_scope_is_limited_to_diagnostics_dir(tmp_path: Path) -> None:
     inside = tmp_path / "diag"
     inside.mkdir()
-    (inside / "a.log").write_text("token=ghp_abcdefghijklmnop123456\n", encoding="utf-8")
+    (inside / "a.log").write_text(
+        "token=ghp_abcdefghijklmnop123456\n", encoding="utf-8"
+    )
     outside = tmp_path / "outside.log"
     outside.write_text("token=ghp_abcdefghijklmnop123456\n", encoding="utf-8")
     # redact_text is pure; redact_directory only touches the given root.
@@ -218,10 +228,13 @@ def test_workflow_pins_4371_bounds_and_wiring() -> None:
     assert "--collection-status" in summary_run
     # Secret-safe redaction runs on the test-owned root only.
     collect_run = steps["Collect reliability shard diagnostics"]["run"]
-    assert "tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }}" in collect_run
+    assert (
+        "tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }}"
+        in collect_run
+    )
     assert "env" not in collect_run.lower().split("redact")[0][-200:] or True
     assert "printenv" not in collect_run
-    assert ">> \"$GITHUB_ENV\"" not in collect_run
+    assert '>> "$GITHUB_ENV"' not in collect_run
     # Secondary failures are surfaced distinctly without altering the result.
     report_run = steps["Report secondary diagnostics failures"]["run"]
     assert "::warning::secondary diagnostics/teardown" in report_run
@@ -230,7 +243,10 @@ def test_workflow_pins_4371_bounds_and_wiring() -> None:
     # Unique suite/shard/run-attempt names and 7-day retention retained.
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pytest-${{ matrix.suite }}-attempt-${{ github.run_attempt }}" in text
-    assert "pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}" in text
+    assert (
+        "pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}"
+        in text
+    )
     assert "retention-days: 7" in text
 
 
@@ -240,7 +256,12 @@ def test_redact_helper_execution_is_fast(tmp_path: Path) -> None:
     (target / "a.log").write_text("ok line\n" * 100, encoding="utf-8")
     start = time.monotonic()
     proc = subprocess.run(
-        [sys.executable, "tools/ci/redact_diagnostics.py", "--diagnostics-dir", str(target)],
+        [
+            sys.executable,
+            "tools/ci/redact_diagnostics.py",
+            "--diagnostics-dir",
+            str(target),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -292,8 +313,7 @@ def test_summary_extracts_last_active_case_on_success(tmp_path: Path) -> None:
     _junit_file(tmp_path)
     log = tmp_path / "pytest.log"
     log.write_text(
-        "tests/unit/test_x.py::test_a PASSED\n"
-        "tests/unit/test_x.py::test_b PASSED\n",
+        "tests/unit/test_x.py::test_a PASSED\n" "tests/unit/test_x.py::test_b PASSED\n",
         encoding="utf-8",
     )
     markdown, _ = build_evidence(_args(tmp_path))
@@ -317,3 +337,17 @@ def test_explicit_secret_assignments_redact_even_short_values():
         assert count == 1
         assert "***REDACTED***" in redacted
         assert redacted != text
+
+
+def test_redaction_preserves_json_and_is_idempotent():
+    import json
+
+    original = json.dumps(
+        {"token": "tiny", "credentialRef": "secret:fixture-grant"}, indent=2
+    )
+    redacted, count = redact_text(original)
+    assert count == 2
+    result = json.loads(redacted)
+    assert result["token"] == "***REDACTED***"
+    assert result["credentialRef"] == "secret:***REDACTED***"
+    assert redact_text(redacted) == (redacted, 0)

@@ -99,7 +99,11 @@ def test_verification_retains_semantic_identity(category, identity, expected):
     "category,field",
     [("statuses", "context"), ("checks", "name"), ("workflows", "name")],
 )
-@pytest.mark.parametrize("unsafe_name", ["invalid\nname", "ghp_" + "Z" * 36])
+@pytest.mark.parametrize(
+    "unsafe_name",
+    ["invalid\nname", "ghp_" + "Z" * 36],
+    ids=["newline", "credential-shaped"],
+)
 def test_unsafe_verification_names_are_rejected(category, field, unsafe_name):
     with pytest.raises(ValueError, match="malformed_record"):
         _project(
