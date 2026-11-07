@@ -34,6 +34,7 @@ RUNNER_FILES = (
     "security/image_assessments.py",
     "security/assessments.py",
     "security/frameworks.py",
+    "security/oscal_export.py",
     "schemas/repository_scanner_models.py",
     "schemas/agent_runtime_models.py",
     "schemas/managed_session_models.py",
