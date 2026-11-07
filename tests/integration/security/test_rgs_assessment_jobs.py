@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import signal
+import tarfile
+from io import BytesIO
 
 import pytest
 
@@ -290,3 +292,79 @@ async def test_profile_cannot_substitute_an_uncaptured_trace_path(
             {"spec": "spec/spec.json", "traces": "../../not-admitted.json"},
             {"spec": b"{}"},
         )
+
+
+async def test_workspace_input_capture_is_retained_before_binding_the_report(
+    environment, tmp_path, monkeypatch
+):
+    job = Job(environment, tmp_path, monkeypatch)
+    _, argv, payloads = await launch(job, "rgs-workspace-input")
+    # Workspace and artifact attachments share this captured directory contract.
+    # Exercise collection with a workspace input whose live source is unavailable.
+    spec = job.request.request.spec
+    spec.input_attachments = [
+        (
+            attachment.model_copy(
+                update={"artifact_ref": None, "workspace_path": "lost-source"}
+            )
+            if attachment.name == "spec"
+            else attachment
+        )
+        for attachment in spec.input_attachments
+    ]
+    process = job.process(argv)
+    _, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, stderr.decode()
+    ref = await job.publish(terminal_state="succeeded", exit_code=0)
+    report = json.loads(job.published[ref])
+    input_ref = report["job"]["inputRefs"]["spec"]
+    with tarfile.open(
+        fileobj=BytesIO(job.published[input_ref]), mode="r:gz"
+    ) as archive:
+        assert archive.extractfile("spec.json").read() == payloads["spec"]
+    outputs = await job.assess(ref, "rgs-workspace-report")
+    assert outputs["scannerSummaries"][0]["outcome"] == "consistent"
+    assert input_ref in await game_jobs.recurring.required(
+        environment.service, outputs["scanRef"]
+    )
+
+
+@pytest.mark.parametrize("violations", [4096, 4097])
+async def test_large_rgs_reports_retain_bounded_findings_and_explicit_coverage(
+    environment, tmp_path, monkeypatch, violations
+):
+    job = Job(environment, tmp_path, monkeypatch)
+    _, argv, _ = await launch(job, f"rgs-many-findings-{violations}")
+    process = job.process(argv)
+    _, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, stderr.decode()
+    report_path = job.storage.outputs / OUTPUT
+    report = json.loads(report_path.read_bytes())
+    report["checks"].extend(
+        {
+            "scenario": report["spec"]["scenarios"][0]["id"],
+            "operation": f"unexpected-transaction-{index}",
+            "rule": "wallet-effect",
+            "expected": "absent",
+            "observed": "extra debit",
+            "decision": "violation",
+            "evidenceRefs": ["fixture:extra-wallet-effects"],
+        }
+        for index in range(violations)
+    )
+    report["outcome"] = "violations"
+    report_path.write_text(json.dumps(report))
+    ref = await job.publish(terminal_state="succeeded", exit_code=0)
+    outputs = await job.assess(ref, f"rgs-many-findings-report-{violations}")
+    (summary,) = outputs["scannerSummaries"]
+    assert outputs["counts"]["new"] == min(violations, 4096)
+    assert summary["outcome"] == "violations"
+    assert summary["coverage"] == ("partial" if violations > 4096 else "complete")
+    assert ("finding_import_limit" in summary["limitations"]) == (violations > 4096)
+    assert (
+        sum(
+            row["decision"] == "violation"
+            for row in json.loads(job.published[ref])["checks"]
+        )
+        == violations
+    )

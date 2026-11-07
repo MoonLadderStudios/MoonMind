@@ -36,6 +36,7 @@ from moonmind.security.rgs_assessment import (
     assess_rgs,
 )
 from moonmind.security.target_assessments import (
+    MAX_MESSAGE_BYTES,
     ScopedTargetClient,
     TargetRequest,
     TargetScope,
@@ -118,10 +119,13 @@ def _admit_plan(spec, plan, client):
 
 
 def _save(path: Path, bundle: RgsTraceBundle):
+    body = bundle.model_dump_json(by_alias=True).encode()
+    if len(body) > MAX_INPUT_BYTES:
+        raise ValueError("checkpoint exceeds input bound")
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(path.name + ".partial")
-    with staged.open("w") as output:
-        output.write(bundle.model_dump_json(by_alias=True))
+    with staged.open("wb") as output:
+        output.write(body)
         output.flush()
         os.fsync(output.fileno())
     os.replace(staged, path)
@@ -202,11 +206,23 @@ async def observe_rgs(
         if on_progress:
             on_progress(bundle)
 
+    def preflight(request):
+        cost = client.preflight(request)
+        # Leave room for a full response, its validated reconciliation trace
+        # and checkpoint metadata before handing another request to transport.
+        if (
+            len(bundle.model_dump_json(by_alias=True).encode()) + 3 * MAX_MESSAGE_BYTES
+            > MAX_INPUT_BYTES
+        ):
+            raise TargetStopped("capture_budget")
+        return cost
+
     save()
     try:
         prior_effects = False
         for row in plan.snapshots:
             previous_trace = by_scenario[row.scenario]
+            save(reserved=preflight(row.request))
             observed = await client.exchange(row.request)
             snapshot = Trace.model_validate(observed.payload)
             if snapshot.scenario != row.scenario:
@@ -255,7 +271,7 @@ async def observe_rgs(
             if any(r.operation == row.operation for r in trace.operations):
                 continue
             # Check the unchanged total budget before recording an attempt.
-            cost = client.preflight(row.request)
+            cost = preflight(row.request)
             operation = next(
                 o for o in scenarios[row.scenario].operations if o.id == row.operation
             )
@@ -293,6 +309,7 @@ async def observe_rgs(
             trace = by_scenario[row.scenario]
             if trace.complete:
                 continue
+            save(reserved=preflight(row.request))
             observed = await client.exchange(row.request)
             bundle.observations = [*(bundle.observations or []), observed]
             snapshot = Trace.model_validate(observed.payload)

@@ -109,7 +109,7 @@ class GameServer:
                     )
                 ):
                     return "denied"
-                effect = self._payment(tx, kind, wager)
+                self._payment(tx, kind, wager)
                 if request["id"] == "cash-lost-ack" and not self.wallet.receipts.get(
                     "interrupted"
                 ):

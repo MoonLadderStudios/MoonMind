@@ -9836,6 +9836,7 @@ def test_create_task_shaped_execution_forwards_operator_assessment_scope(
                 "workspacePath": "app",
                 "webRoutes": [],
                 "webExclusions": [],
+                "webMessages": {},
                 "cloudRegions": [],
             }
         ],

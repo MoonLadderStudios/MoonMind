@@ -564,6 +564,8 @@ def _game_math_observation(
 def _rgs_observation(request, summary: RgsAssessment, ref: str, created_at: datetime):
     if summary.game_ref not in request.scope.assets:
         raise ValueError("game outside admitted assessment scope")
+    violations = [row for row in summary.checks if row.decision == "violation"]
+    omitted = max(0, len(violations) - 4096)
     return Observation(
         scope=request.scope,
         observed_at=created_at,
@@ -577,8 +579,7 @@ def _rgs_observation(request, summary: RgsAssessment, ref: str, created_at: date
                 native_id=f"{row.scenario}:{row.rule}:{row.operation}",
                 evidence_refs=[ref],
             )
-            for row in summary.checks
-            if row.decision == "violation"
+            for row in violations[:4096]
         ],
         coverage=[
             Coverage(
@@ -589,13 +590,18 @@ def _rgs_observation(request, summary: RgsAssessment, ref: str, created_at: date
                 config_ref=content_key(
                     ["rgs-scenarios", summary.spec_digest, summary.traces_source_ref]
                 ),
-                status="complete" if summary.status == "complete" else "partial",
+                status=(
+                    "complete"
+                    if summary.status == "complete" and not omitted
+                    else "partial"
+                ),
             )
         ],
         provenance={
             "rgsSummary": ref,
             "rgsSpec": summary.spec_digest,
             "rgsTraces": summary.traces_digest,
+            **({"rgsFindingsOmitted": str(omitted)} if omitted else {}),
         },
     )
 
@@ -1240,7 +1246,17 @@ class AssessmentExecution:
                                         "scenarios": rgs_summary.stop_reason
                                         or rgs_summary.status
                                     },
-                                    "limitations": sorted(rgs_summary.limitations),
+                                    "limitations": sorted(
+                                        {
+                                            *rgs_summary.limitations,
+                                            *(
+                                                ["finding_import_limit"]
+                                                if "rgsFindingsOmitted"
+                                                in observation.provenance
+                                                else []
+                                            ),
+                                        }
+                                    ),
                                     "verification": rgs_summary.verification,
                                     "specDigest": rgs_summary.spec_digest,
                                     "inputDigests": rgs_summary.input_digests,

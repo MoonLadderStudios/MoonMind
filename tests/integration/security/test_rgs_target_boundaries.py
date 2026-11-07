@@ -88,6 +88,8 @@ class Target:
         self.times = []
         self.redirects = []
         self.hold_response = None
+        self.handshake_status = None
+        self.response_bytes = 0
         for identity in spec["authorizationMatrix"]["identities"]:
             token = secrets.token_urlsafe(32)
             self.secrets[identity["credentialRef"]] = token
@@ -178,6 +180,8 @@ class Target:
             return web.json_response(self.snapshot())
         token = request.headers.get("Authorization", "").removeprefix("Bearer ")
         if request.path == "/channel":
+            if self.handshake_status:
+                return web.Response(status=self.handshake_status)
             socket = web.WebSocketResponse()
             await socket.prepare(request)
             async for message in socket:
@@ -185,6 +189,8 @@ class Target:
             return socket
         payload = await request.json()
         answer = self.act(token, payload)
+        if self.response_bytes:
+            answer["diagnostic"] = "x" * self.response_bytes
         if self.hold_response is not None:
             await self.hold_response.wait()
         return web.json_response(
@@ -530,6 +536,181 @@ async def test_observer_checkpoint_prevents_repeating_confirmed_effects(tmp_path
             checkpoint_path=checkpoint,
         )
         assert target.requests == previous
+    finally:
+        await runner.cleanup()
+        target.db.close()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_websocket_handshake_denials_do_not_interrupt_planned_cases(
+    tmp_path, status
+):
+    from moonmind.security.rgs_assessment import RgsScenarioSpec
+    from moonmind.security.rgs_target import RgsTargetPlan, observe_rgs
+    from moonmind.security.target_assessments import ScopedTargetClient, TargetScope
+
+    target, runner, raw, plan, scope, credentials, proxy = await start_target(tmp_path)
+    target.handshake_status = status
+    try:
+        bundle = await observe_rgs(
+            RgsScenarioSpec.model_validate(raw),
+            RgsTargetPlan.model_validate(plan),
+            ScopedTargetClient(
+                TargetScope.model_validate(scope),
+                credential_root=credentials,
+                proxy=proxy,
+            ),
+            checkpoint_path=tmp_path / "capture.json",
+        )
+        assert bundle.collection["status"] == "complete"
+        websocket_ids = {
+            row["operation"]
+            for row in plan["operations"]
+            if row["request"]["protocol"] == "websocket"
+        }
+        trace = bundle.traces[0]
+        assert {r.operation for r in trace.operations} == {
+            row["operation"] for row in plan["operations"]
+        }
+        assert all(
+            r.decision == "denied"
+            for r in trace.operations
+            if r.operation in websocket_ids
+        )
+        assert all(
+            a.observed == "deny"
+            for a in trace.access_observations
+            if a.operation in websocket_ids
+        )
+        assert websocket_ids.isdisjoint(target.requests)
+        assert len(target.requests) > 1
+        assert {o.status for o in bundle.observations if o.protocol == "websocket"} == {
+            status
+        }
+    finally:
+        await runner.cleanup()
+        target.db.close()
+
+
+@pytest.mark.parametrize("snapshot_number", [1, 2])
+async def test_snapshot_cost_survives_host_loss_before_response_save(
+    tmp_path, snapshot_number
+):
+    from moonmind.security.rgs_assessment import RgsScenarioSpec
+    from moonmind.security.rgs_target import RgsTargetPlan, observe_rgs
+    from moonmind.security.target_assessments import ScopedTargetClient, TargetScope
+
+    target, runner, raw, plan, scope, credentials, proxy = await start_target(tmp_path)
+    try:
+        client = ScopedTargetClient(
+            TargetScope.model_validate(scope), credential_root=credentials, proxy=proxy
+        )
+        original = client.exchange
+        snapshots = 0
+
+        async def lose_host(request):
+            nonlocal snapshots
+            observed = await original(request)
+            if request.id == "snapshot":
+                snapshots += 1
+                if snapshots == snapshot_number:
+                    raise RuntimeError("host lost after snapshot transport")
+            return observed
+
+        client.exchange = lose_host
+        checkpoint = tmp_path / "capture.json"
+        spec, plan = RgsScenarioSpec.model_validate(raw), RgsTargetPlan.model_validate(
+            plan
+        )
+        with pytest.raises(RuntimeError, match="host lost"):
+            await observe_rgs(spec, plan, client, checkpoint_path=checkpoint)
+        saved = json.loads(checkpoint.read_bytes())
+        assert int(saved["collection"]["requestsSpent"]) == client.requests_sent
+        previous_requests = list(target.requests)
+        resumed = await observe_rgs(
+            spec,
+            plan,
+            ScopedTargetClient(
+                TargetScope.model_validate(scope),
+                credential_root=credentials,
+                proxy=proxy,
+            ),
+            checkpoint_path=checkpoint,
+        )
+        assert resumed.collection["status"] == "complete"
+        assert len(target.requests) == len(set(target.requests))
+        assert target.requests[: len(previous_requests)] == previous_requests
+    finally:
+        await runner.cleanup()
+        target.db.close()
+
+
+async def test_large_target_responses_stop_with_a_recoverable_capture(tmp_path):
+    from moonmind.security.rgs_assessment import (
+        MAX_INPUT_BYTES,
+        RgsScenarioSpec,
+        RgsTraceBundle,
+        assess_rgs,
+    )
+    from moonmind.security.rgs_target import RgsTargetPlan, observe_rgs
+    from moonmind.security.target_assessments import ScopedTargetClient, TargetScope
+
+    target, runner, raw, plan, scope, credentials, proxy = await start_target(tmp_path)
+    target.response_bytes = 128 * 1024
+    try:
+        operation = raw["scenarios"][0]["operations"][0]
+        request = plan["operations"][0]["request"]
+        raw["scenarios"][0]["operations"] = []
+        plan["operations"] = []
+        for index in range(70):
+            op = {**operation, "id": f"large-{index}"}
+            raw["scenarios"][0]["operations"].append(op)
+            plan["operations"].append(
+                {
+                    "scenario": raw["scenarios"][0]["id"],
+                    "operation": op["id"],
+                    "request": {
+                        **request,
+                        "id": op["id"],
+                        "payload": {
+                            **request["payload"],
+                            "id": op["id"],
+                            "operation": op,
+                        },
+                    },
+                }
+            )
+        scope["maxRequests"] = 128
+        spec, plan = RgsScenarioSpec.model_validate(raw), RgsTargetPlan.model_validate(
+            plan
+        )
+        checkpoint = tmp_path / "capture.json"
+
+        def client():
+            return ScopedTargetClient(
+                TargetScope.model_validate(scope),
+                credential_root=credentials,
+                proxy=proxy,
+            )
+
+        partial = await observe_rgs(spec, plan, client(), checkpoint_path=checkpoint)
+        assert checkpoint.stat().st_size <= MAX_INPUT_BYTES
+        assert partial.collection["stopReason"] == "capture_budget"
+        assert len(target.requests) < 70
+        assert (
+            len(
+                RgsTraceBundle.model_validate_json(checkpoint.read_bytes())
+                .traces[0]
+                .operations
+            )
+            > 0
+        )
+        assert assess_rgs(spec, partial).status == "partial"
+        requests = list(target.requests)
+        resumed = await observe_rgs(spec, plan, client(), checkpoint_path=checkpoint)
+        assert resumed.collection["stopReason"] == "capture_budget"
+        assert target.requests == requests
+        assert checkpoint.stat().st_size <= MAX_INPUT_BYTES
     finally:
         await runner.cleanup()
         target.db.close()

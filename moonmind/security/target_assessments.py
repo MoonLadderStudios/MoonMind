@@ -254,6 +254,13 @@ class ScopedTargetClient:
                             if message.type != aiohttp.WSMsgType.TEXT:
                                 raise TargetStopped("invalid_target_response")
                             status, body = 101, message.data.encode()
+        except aiohttp.WSServerHandshakeError as exc:
+            if exc.status not in {401, 403}:
+                raise TargetStopped("transport_interrupted") from exc
+            # The upgrade was denied before any message could be sent. Do not
+            # retain the server's exception text, headers or credentials.
+            status = exc.status
+            body = b'{"decision":"denied","access":"deny"}'
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise TargetStopped("transport_interrupted") from exc
         if len(body) > MAX_MESSAGE_BYTES or (secret and secret.encode() in body):
