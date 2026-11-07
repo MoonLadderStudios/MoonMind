@@ -258,8 +258,9 @@ new network operations or scanner launches.
 
 Read authority, freshness and decisions are reevaluated before immutable control
 results are reused. The control artifact seals its scan, comparison and readable
-context through the existing dependency owner. Unavailable refs remain diagnostics,
-not verified dependencies. Control or publication failure preserves native
+context through the existing dependency owner. Unreadable refs remain diagnostics,
+not verified dependencies; readable but invalid interpretations retain their bytes
+without becoming usable evidence. Control or publication failure preserves native
 outcomes; retries reuse completed scans. Changed conclusions do not rewrite
 historical artifacts. Independent assessor conclusions and certification remain
 Unverified; an authorized assessor can review the retained scope, objectives,
@@ -348,8 +349,9 @@ Unavailable records remain references and diagnostics, without blocking report
 retention or export. Carried decisions keep their evidence through the baseline's
 seal, which also lets an occurrence in a later workflow seal that history
 without gaining a read of it.
-A summary seals its comparison and evidence; review and review evidence are
-optional, so they never hold retention. Missing, unauthorized, corrupt or
+A summary seals its comparison and evidence. Review evidence is optional for
+native comparisons; an explicitly requested control assessment retains its
+readable review context as a required dependency. Missing, unauthorized, corrupt or
 mismatched required evidence fails the seal, and a retry keeps an existing
 seal. While a root is pinned, unexpired or held by a saved schedule's input
 root, cleanup cannot remove what it seals; releasing the root returns that
