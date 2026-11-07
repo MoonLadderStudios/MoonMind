@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -18,7 +18,11 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
-from moonmind.security.frameworks import EvidencePeriod, FrameworkAssessmentInput
+from moonmind.security.frameworks import (
+    EvidencePeriod,
+    FrameworkAssessmentInput,
+    FrameworkPackSelection,
+)
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
 
@@ -530,6 +534,7 @@ class ControlRequirement(Contract):
         list[ControlSupportingEvidence], Field(max_length=32)
     ] = Field(default_factory=list)
     owner: Text | None = None
+    responsibility_reason: Text | None = None
     reviewer: Text | None = None
 
     @model_validator(mode="after")
@@ -620,6 +625,9 @@ class ControlAssessment(Contract):
     requirements: Annotated[
         list[ControlRequirementResult], Field(min_length=1, max_length=64)
     ]
+    framework_pack: Annotated[dict[str, Any], Field(max_length=32)] | None = None
+    intelligence_changes: Items = Field(default_factory=list)
+    diagnostics: Items = Field(default_factory=list)
     assurance: Literal["independent_assessment_unverified"] = (
         "independent_assessment_unverified"
     )
@@ -769,11 +777,14 @@ class AssessmentRequest(Contract):
     identity_lifecycle: IdentityLifecycleInput | None = None
     framework: FrameworkAssessmentInput | None = None
     control_assessment: ControlAssessmentPlan | None = None
+    framework_pack: FrameworkPackSelection | None = None
     oscal_export: OscalExportRequest | None = None
     product_baseline_ref: Text | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):
+        if self.framework_pack is not None and self.control_assessment is not None:
+            raise ValueError("frameworkPack cannot also supply controlAssessment")
         if not self.tools and not self.review_ref and not self.framework:
             raise ValueError(
                 "assessment requires native evidence or an explicit reviewRef"

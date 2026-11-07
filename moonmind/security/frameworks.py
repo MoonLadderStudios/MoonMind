@@ -87,6 +87,30 @@ class RequirementChoice(FrameworkContract):
     responsibility_reason: Text | None = None
 
 
+class DeclaredRequirementChoice(RequirementChoice):
+    applicability: Literal["applicable", "not_applicable", "undetermined"] = (
+        "undetermined"
+    )
+    applicability_reason: Text | None = None
+
+
+class FrameworkPackSelection(FrameworkContract):
+    """An explicitly selected, retained pack, not a mutable registry alias."""
+
+    artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    pack_id: Text
+    edition: Text
+    revision: Text
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    period: EvidencePeriod
+    requirement_choices: Annotated[
+        dict[Text, DeclaredRequirementChoice], Field(max_length=64)
+    ] = Field(default_factory=dict)
+    previous_assessment_ref: (
+        Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
+    ) = None
+
+
 class FrameworkAssessmentInput(FrameworkContract):
     pack_id: Text
     system_inputs: Annotated[dict[str, Any], Field(max_length=64)]

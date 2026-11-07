@@ -496,3 +496,26 @@ def test_rng_implementation_concerns_cannot_become_deterministic_satisfaction():
     ).requirements[0]
     assert row.conclusion == "inconclusive"
     assert row.methods == ["agent_interpretation"]
+
+
+def test_declared_pack_admission_requires_exact_identity_without_parallel_plan():
+    selection = {
+        "artifactRef": "art_pack",
+        "packId": "synthetic",
+        "edition": "2026",
+        "revision": "1",
+        "sha256": "a" * 64,
+        "period": {"start": "2026-11-07", "end": "2026-11-07"},
+    }
+    request = AssessmentRequest.model_validate(
+        request_payload(controlAssessment=None, frameworkPack=selection)
+    )
+    assert request.framework_pack.revision == "1"
+    with pytest.raises(ValidationError, match="cannot also supply controlAssessment"):
+        AssessmentRequest.model_validate(request_payload(frameworkPack=selection))
+    for field in ("edition", "revision", "sha256"):
+        incomplete = {key: value for key, value in selection.items() if key != field}
+        with pytest.raises(ValidationError):
+            AssessmentRequest.model_validate(
+                request_payload(controlAssessment=None, frameworkPack=incomplete)
+            )

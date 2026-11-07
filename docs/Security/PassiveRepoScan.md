@@ -200,25 +200,18 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
 
 ### Requirement assessments
 
-An optional `controlAssessment.requirements` on `security.assess` evaluates an
-explicit objective checklist after native scans, comparison and interpretation.
-It publishes `security-control-assessment/v1` as `controlAssessmentRef` through
-the ordinary structured report and adds a readable requirement section. The
-comparison and framework preparation reports remain linked evidence. Framework
-readiness, mappings and an empty findings list do not themselves satisfy a
+`security.assess` evaluates explicit `controlAssessment.requirements` or a
+[declared framework pack](FrameworkPacks.md) after native scans and comparison.
+The ordinary report publishes `security-control-assessment/v1` as
+`controlAssessmentRef`. Mappings and an empty findings list do not satisfy a
 requirement.
 
-Each requirement supplies `id`, `frameworkId`, `frameworkEdition`, `title`,
-`scope`, a date `period`, `applicability` (`applicable`, `not_applicable`, or
-`undetermined`) and `applicabilityReason`. `objectives` identify individual
-absence-of-defect checks by `id`, `description`, `source`, `tool`, and explicit
-`ruleIds`. Set `objectivesComplete: true` only when that list describes the
-whole selected requirement, and explain its basis in `objectiveBasis`.
-It defaults to false. For example, an inventory/feed objective can name the
-feed's source, `tool: inventory-feed`, and the specific advisory IDs. The
-requirement population must stay inside admitted assets and preserve the
-assessment's exclusions and repository exceptions. Optional `owner` and
-`reviewer` are attributed metadata, not MoonMind roles or authenticated opinions.
+Requirements identify their framework/edition, title, scope, period and justified
+applicability. Each objective names explicit `source`, `tool` and `ruleIds`.
+`objectivesComplete` defaults to false; declaring a complete checklist requires
+an `objectiveBasis`. Scope cannot expand admitted assets or drop exclusions and
+repository exceptions. Optional `owner` and `reviewer` are attributed metadata,
+not MoonMind roles or authenticated opinions.
 
 Satisfaction requires every selected asset/rule check to have complete, current,
 explicitly deterministic evidence covering the declared objectives. Coverage

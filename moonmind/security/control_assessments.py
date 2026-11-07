@@ -334,6 +334,18 @@ def render_control_assessment(report: ControlAssessment) -> str:
         ),
         f"Structured native comparison: {clean(report.comparison_ref)}.",
     ]
+    if report.framework_pack:
+        pack = report.framework_pack
+        lines += [
+            f"Framework pack: {clean(pack['id'])} / {clean(pack['edition'])} / {clean(pack['revision'])}.",
+            f"Pack artifact: {clean(pack['artifactRef'])}; SHA-256: {clean(pack['sha256'])}.",
+            f"Publication: {clean(pack['publicationStatus'])}; distribution: {clean(pack['distribution'])}.",
+            *[
+                f"- Assessment intelligence: {clean(value)}"
+                for value in report.intelligence_changes
+            ],
+            *[f"- Pack limitation: {clean(value)}" for value in report.diagnostics],
+        ]
     for result in report.requirements:
         row = result.requirement
         lines += [
@@ -355,6 +367,8 @@ def render_control_assessment(report: ControlAssessment) -> str:
             lines.append(
                 f"Attributed owner: {clean(row.owner or 'unspecified')}; reviewer: {clean(row.reviewer or 'unspecified')}. These are evidence metadata, not platform roles."
             )
+        if row.responsibility_reason:
+            lines.append(f"Responsibility basis: {clean(row.responsibility_reason)}.")
         if result.unavailable_evidence_refs:
             lines.append(
                 "Unavailable references: "
