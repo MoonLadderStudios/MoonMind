@@ -18,6 +18,7 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
+from moonmind.security.frameworks import FrameworkAssessmentInput
 
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
@@ -426,10 +427,11 @@ class AssessmentRequest(Contract):
     decisions_ref: Text | None = None
     review_ref: Text | None = None
     github_alerts: GitHubAlertImport | None = None
+    framework: FrameworkAssessmentInput | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):
-        if not self.tools and not self.review_ref:
+        if not self.tools and not self.review_ref and not self.framework:
             raise ValueError(
                 "assessment requires native evidence or an explicit reviewRef"
             )

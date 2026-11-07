@@ -306,6 +306,66 @@ records closed-upstream/observed-locally and open-upstream/absent-locally
 conflicts. Secret alerts are not matched, since no shared identity survives
 sanitization.
 
+## UKGC RTS audit preparation
+
+Choose **UKGC RTS Security Audit Preparation** in the shared preset catalog or
+pass `framework` to `security.assess`. Both paths use the same scoped evaluator
+and retained report bundle. The pack selects the 44 ISO/IEC 27001:2022 controls
+listed in [RTS section 4](https://www.gamblingcommission.gov.uk/manual/remote-gambling-and-software-technical-standards/4-remote-gambling-and-software-technical-standards-rts-security-requirements),
+including cloud security (5.23) and security testing (8.29); other Annex A controls
+are not added to the RTS requirement set.
+
+The Create fields accept saved system inputs, an audit period (`start` and
+`end` dates), evidence artifact IDs, an optional audit-record artifact, and
+requirement choices keyed by control ID. Omitted choices use the full admitted
+system scope and period; a choice can set `systems`, `period`, or
+`notApplicableReason`. Exclusions stay visible for auditor review.
+
+System inputs describe `operatorName`, `businessDescription`, `licenceClass`,
+`systemIdentification`, and `criticalSystems`. Each critical-system entry names
+one category (`customer_information`, `outcome_rng`, `gambling_state`,
+`entry_exit`, or `communications`), `systems`, `inScope`, and a `rationale`.
+Record absent categories explicitly. `thirdParties` records their `name`,
+`systems`, `responsibilities`, and retained `operatorResponsibilities`.
+The system identifiers must fit the assessment's admitted `scope.assets`.
+
+Listed remote operator and host classes require annual audits. The
+[audit advice](https://www.gamblingcommission.gov.uk/licensees-and-businesses/guide/security-audit-advice)
+includes real-event betting classes beyond the testing-strategy footnote; the
+report preserves both sources. `software_supplier`, `telephone_only` and
+`trading_room` do not establish a listed annual-audit obligation. Lottery classes
+need `annualLotterySalesGbp`; the threshold is strictly greater than £250,000.
+Unknown classes or missing scope produce actionable requests, not an exemption.
+
+Each evidence artifact contains `kind`, `requirementIds`, `systems`, `period`,
+`method` (`enquiry`, `evidence`, or `observation`), a description of documents,
+staff, versions and samples, and `provenance` (`sourceRef`, `issuer`, `version`,
+`recordedOn`, `standard`). A prior `external_audit` also needs auditor-reviewed
+`reliance` with `reviewedBy`, `reason`, `reviewRef` and `validFor`. Work against
+another standard also needs an explicit `equivalenceReason`. Its coverage
+and provenance remain in the package. `iso_certificate` and
+`technical_assessment` records supply context without completing audit elements.
+An unstructured uploaded document prompts for a scoped evidence record.
+
+The optional audit artifact records auditor name, firm, background,
+qualifications, `independent` and an `independenceRef` artifact; `auditedOn`,
+`locations`, `executiveSummary`, `overallOpinion`, and `findings` with control ID,
+classification, description, management response, action owner and target date.
+Missing independence, observation, or management plans remain explicit gaps.
+Observation can use documented remote inspection; documentation alone is
+insufficient. References to retained evidence are authorized and sealed by the
+existing artifact service.
+
+`licenceGrantedOn`, `lastAuditOn` and `regulatorDueOn` record first and annual
+timing. A delayed first audit uses `operationsStartedOn` only when
+`firstAuditExtensionApproved` is recorded. Calculated six-month and annual dates
+are planning targets; the Commission-set date remains explicit. Optional request
+and receipt dates expose reporting targets. The preparation package records
+retention, seven-day response conditions and immediate major-nonconformity
+notification advice. It performs no submission. `prepared` means supplied
+preparation records cover the selected elements; an actual independent audit or
+private inspection remains **Unverified**. No human-role system is involved.
+
 ## Composable security review
 
 The resolved `security-review`, `security-investigate` and `security-remediate`

@@ -1,0 +1,75 @@
+slug: security-ukgc-rts
+title: UKGC RTS Security Audit Preparation
+description: Prepare the selected ISO 27001:2022 RTS security elements, record critical systems and independent audit evidence, and export explicit evidence gaps.
+tags: [security, assessment, ukgc, audit]
+requiredCapabilities: [sandbox]
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required: [assets, system_inputs, period]
+    properties:
+      assets:
+        type: array
+        title: Critical system assets
+        items: {type: string}
+        minItems: 1
+        description: List the admitted system identifiers used in the audit scope.
+      system_inputs:
+        type: object
+        title: Saved system and licence inputs
+        description: Record operatorName, businessDescription, licenceClass, licenceGrantedOn, regulatorDueOn, systemIdentification, criticalSystems and thirdParties. Cover customer_information, outcome_rng, gambling_state, entry_exit and communications with systems, inScope and rationale. The UKGC section of PassiveRepoScan documents the fields.
+        properties:
+          licenceClass:
+            type: string
+            enum: [remote_general_betting, remote_betting_host_real, remote_betting_host_virtual, remote_pool_betting, remote_betting_intermediary, remote_bingo, remote_game_host_bingo, remote_casino, remote_game_host_casino, remote_lottery, remote_external_lottery_manager, remote_society_lottery, software_supplier, telephone_only, trading_room]
+      period:
+        type: object
+        title: Audit evidence period
+        required: [start, end]
+        properties:
+          start: {type: string, format: date}
+          end: {type: string, format: date}
+        description: Set start and end dates as YYYY-MM-DD. Evidence must cover this period or have explicit auditor-reviewed reliance on prior external work.
+      requirement_choices:
+        type: object
+        title: Requirement scope and period choices
+        description: Key choices by selected RTS control ID, for example {"8.29":{"systems":["casino"],"period":{"start":"2026-01-01","end":"2026-12-31"}}}. Omitted controls use the complete system scope and audit period. Exclusions use notApplicableReason and remain visible for review.
+      evidence_refs:
+        type: array
+        title: Evidence record artifacts
+        items: {type: string}
+        description: Supply artifact IDs for scoped enquiry, evidence and observation records with provenance. Certificates and clean scans leave missing RTS evidence requests in the report.
+      audit_ref:
+        type: [string, 'null']
+        title: Auditor and findings artifact
+        description: Supply an audit record artifact with auditor background, qualifications, an independenceRef artifact, audit dates, locations, overallOpinion, findings and management responses. Missing independence or observation is requested explicitly.
+  defaults:
+    assets: []
+    system_inputs: {}
+    period: {}
+    requirement_choices: {}
+    evidence_refs: []
+    audit_ref: null
+steps:
+- type: tool
+  title: Prepare UKGC RTS security audit
+  instructions: Evaluate the selected RTS security elements against scoped evidence and export the preparation report with missing external evidence requests. This does not submit a report or establish an independent audit.
+  tool:
+    id: security.assess
+    requiredCapabilities: [sandbox]
+    inputs:
+      scope:
+        assets: '{{ inputs.assets }}'
+      tools: []
+      budget: {baseSeconds: 60, maxSeconds: 120, progressStallSeconds: 60}
+      credentialRefs: []
+      networkRefs: []
+      framework:
+        packId: ukgc-rts-security
+        systemInputs: '{{ inputs.system_inputs }}'
+        period: '{{ inputs.period }}'
+        requirementChoices: '{{ inputs.requirement_choices }}'
+        evidenceRefs: '{{ inputs.evidence_refs }}'
+        auditRef: '{{ inputs.audit_ref }}'
