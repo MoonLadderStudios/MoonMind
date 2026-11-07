@@ -256,7 +256,9 @@ retry owner preserves that original failure after the runtime's bounded
 same-session recovery; remaining execution time alone does not authorize another
 delivery of the parked command. Its existing reconciliation owner must establish
 the effect before any further provider mutation. Ordinary transport retries keep
-their remaining-budget behavior. The
+their remaining-budget behavior. A cancelled attempt is never retried: its
+cleanup already settled the runtime binding, so a retry could only report a
+binding conflict in place of the cancellation. The
 `agent-run-omnigent-profile-bound-reconciliation-v1` replay patch preserves the
 recorded retry for retained histories without reopening or settling their commands.
 
