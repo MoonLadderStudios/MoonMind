@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import mimetypes
 import os.path
 import tempfile
@@ -40,7 +41,11 @@ from moonmind.workflows.provider_failures import (
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
+    TemporalArtifactUnavailableError,
 )
+
+_LOGGER = logging.getLogger(__name__)
+_CHECKPOINT_LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
 _MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
@@ -1009,6 +1014,48 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
     async def write_bytes(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: bytes,
+        link_type: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        # Sealing uses nonblocking locks to avoid deadlocks between closures.
+        # Restart the whole owning transaction: retrying only seal would keep
+        # earlier locks and unpublished links alive while another writer waits.
+        for attempt in range(len(_CHECKPOINT_LOCK_RETRY_DELAYS) + 1):
+            try:
+                return await self._write_bytes_once(
+                    request=request,
+                    name=name,
+                    payload=payload,
+                    link_type=link_type,
+                    content_type=content_type,
+                )
+            except TemporalArtifactUnavailableError as exc:
+                if (
+                    exc.dependency != "authority"
+                    or exc.operation != "lock_dependencies"
+                ):
+                    raise
+                _LOGGER.warning(
+                    "Checkpoint dependency lock contention artifact_id=%s "
+                    "operation=%s attempt=%d/%d",
+                    exc.artifact_id,
+                    exc.operation,
+                    attempt + 1,
+                    len(_CHECKPOINT_LOCK_RETRY_DELAYS) + 1,
+                )
+                if attempt == len(_CHECKPOINT_LOCK_RETRY_DELAYS):
+                    raise
+                # The failed session has closed and rolled back before sleep.
+                # The identical bytes and existing-output reconciliation retain
+                # progress without recapturing work or repeating provider turns.
+                await asyncio.sleep(_CHECKPOINT_LOCK_RETRY_DELAYS[attempt])
+
+    async def _write_bytes_once(
         self,
         *,
         request: AgentExecutionRequest,

@@ -764,6 +764,13 @@ later child seals cannot redefine it. Admission, retention and recovery consume 
 proof rather than rediscovering references. Canonical task/plan pointers into the
 checkpoint's own Temporal history remain history references, not artifact dependencies.
 
+Checkpoint publication retries dependency-lock contention up to five attempts,
+closing the failed transaction before backoff (0.25, 0.5, 1 and 2 seconds).
+Each attempt reconciles the same bytes against accepted outputs before publishing;
+links and dependency seals still commit together. Other authority, access and
+integrity failures are not retried by this boundary. Exhaustion preserves the
+original error and logs the contended artifact ID and operation.
+
 Required dependencies remain protected for their root's intrinsic lifetime: expiry,
 pins, live claims, current definitions or active execution. Incoming edges alone do
 not extend lifetime, and historical plans do not retain everything forever. Missing
