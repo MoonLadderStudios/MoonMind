@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
 import pytest
-
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from typer.testing import CliRunner
@@ -123,6 +122,7 @@ class Session:
             monkeypatch.setenv(name, value)
         monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", SECRET)
         monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
+
         def artifact_service(session, *, transaction_ownership):
             assert transaction_ownership is ArtifactTransactionOwnership.CALLER
             return TemporalArtifactService(
@@ -300,6 +300,9 @@ def publisher(environment, published):
 async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     environment, tmp_path, monkeypatch
 ):
+    from tests.integration.security.quality import QualityRun, observation
+
+    quality = QualityRun()
     root = tmp_path / "repository"
     repo.repository(root)
     repo.install_fixture_process(tmp_path, "gitleaks", monkeypatch)
@@ -367,12 +370,55 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     )
     assert set(summary["nativeRefs"]) == {"history", "worktree"}
     assert any(row["findings"] for row in summary["results"].values())
+    quality.useful()
 
     await finish(backend, request, tmp_path)
     await assert_retained(environment, summary["nativeRefs"].values(), published)
     assert all(repo.MARKER.encode() not in body for body in published.values())
     summary_ref = next(
         ref for ref, body in published.items() if b'"repository-scanner/v1"' in body
+    )
+    outputs = await recurring.invoke(
+        environment.service,
+        repo.retained_assessment(
+            summary_ref, ["removed.txt", "tracked.txt", "untracked.txt"]
+        ),
+        key="quality-source-report",
+    )
+    observed = observation(
+        (
+            "vulnerable"
+            if any(row["findings"] for row in summary["results"].values())
+            else "clean"
+        ),
+        [
+            f"{finding['ruleId']}@{finding['asset'] if finding['asset'] in {'removed.txt', 'tracked.txt', 'untracked.txt'} else '[redacted]'}"
+            for row in summary["results"].values()
+            for finding in row["findings"]
+        ],
+        summary["nativeRefs"],
+        native_ref=summary_ref,
+    )
+    await quality.finish(
+        environment.service,
+        "admitted-source-vulnerable",
+        observed,
+        [
+            *published,
+            outputs["scanRef"],
+            outputs["comparisonRef"],
+            recurring.report_ref(outputs),
+        ],
+        provenance={
+            "tool": "gitleaks controlled binary transport",
+            "execution": summary["execution"],
+            "configuration": spec.repository_scan.model_dump(
+                mode="json", by_alias=True
+            ),
+            "model": None,
+            "jobId": started.job_id,
+            "topology": "CLI -> signed MCP -> admission -> Git capture -> scanner runner -> worker publication -> cleanup -> retained artifact -> security.assess -> report",
+        },
     )
     await assert_assessment_retains(
         environment,

@@ -47,6 +47,14 @@ cleanup() {
     compose "$CLEANUP_TIMEOUT" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
+    local retain_quality_source=0
+    if [[ -d "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/security-quality" ]]; then
+      if ! mkdir -p "$REPORT_DIR/security-quality" || \
+        ! cp -R "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/security-quality/." \
+          "$REPORT_DIR/security-quality/"; then
+        retain_quality_source=1
+      fi
+    fi
     for report in "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.xml \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.receipt.json \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.environment.json \
@@ -56,7 +64,12 @@ cleanup() {
         cp "$report" "$REPORT_DIR/" >/dev/null 2>&1 || true
       fi
     done
-    rm -rf "$TEMP_COMPOSE_PROJECT_DIR" >/dev/null 2>&1 || true
+    if (( retain_quality_source )); then
+      printf 'Quality evidence export failed; recoverable checkout retained at %s\n' \
+        "$TEMP_COMPOSE_PROJECT_DIR" >&2
+    else
+      rm -rf "$TEMP_COMPOSE_PROJECT_DIR" >/dev/null 2>&1 || true
+    fi
   fi
 }
 trap cleanup EXIT

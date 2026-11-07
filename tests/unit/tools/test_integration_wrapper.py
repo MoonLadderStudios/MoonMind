@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -41,6 +42,10 @@ if command[:1] == ["run"]:
             path = directory / junit.group(1)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"<testsuite failures='{int(status != 0)}'/>")
+        if config.get("write_quality"):
+            quality = directory / "artifacts/integration-ci/security-quality/sample"
+            quality.mkdir(parents=True, exist_ok=True)
+            (quality / "native.txt").write_text("actual retained fixture observation")
         raise SystemExit(status)
 
     signal.signal(signal.SIGINT, lambda *_: report(2))
@@ -280,6 +285,32 @@ def test_temporary_checkout_exports_report_before_removal(tmp_path: Path) -> Non
     report = wrapper.repo / REPORT
     assert "failures='1'" in (report / "pytest-integration-ci.xml").read_text()
     assert "test_case FAILED" in (report / "pytest-integration-ci.log").read_text()
+
+
+def test_temporary_checkout_retains_native_quality_evidence_on_failure(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+    status, _, _ = wrapper.run(run_status=1, write_quality=True)
+    assert status == 1
+    assert (
+        wrapper.repo / REPORT / "security-quality/sample/native.txt"
+    ).read_text() == "actual retained fixture observation"
+
+
+def test_failed_quality_export_keeps_the_only_recoverable_copy(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+    copier = tmp_path / "bin/cp"
+    copier.write_text(
+        '#!/bin/sh\nif [ "$1" = "-R" ]; then exit 1; fi\n'
+        f'exec "{shutil.which("cp")}" "$@"\n'
+    )
+    copier.chmod(0o755)
+    status, output, _ = wrapper.run(run_status=1, write_quality=True)
+    assert status == 1
+    directory = Path(next(call[call.index("--project-directory") + 1] for call in wrapper.calls() if "--project-directory" in call))
+    assert (directory / REPORT / "security-quality/sample/native.txt").is_file()
+    assert str(directory) in output
 
 
 def test_stuck_teardown_is_bounded_and_keeps_primary_status(wrapper: Wrapper) -> None:

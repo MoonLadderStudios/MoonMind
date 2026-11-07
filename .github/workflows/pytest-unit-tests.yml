@@ -1167,6 +1167,9 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
+      - name: Verify controlled security quality evidence
+        timeout-minutes: 1
+        run: python3 -m tests.integration.security.quality
       - name: Validate complete owner receipt
         timeout-minutes: 1
         env:

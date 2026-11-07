@@ -422,7 +422,9 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         build_scan_job_workload,
         run_passive_scan,
     )
+    from tests.integration.security.quality import QualityRun, observation
 
+    quality = QualityRun()
     service = environment.service
     workspace = job_workspace / "target"
     selected = "security-remediate" if authorized_fix else "security-investigate"
@@ -444,6 +446,7 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         mcp_tools.settings.security, "JWT_SECRET_KEY", "fixture-signing-secret"
     )
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
+
     def artifact_service(session, *, transaction_ownership):
         assert transaction_ownership is ArtifactTransactionOwnership.CALLER
         return TemporalArtifactService(
@@ -452,9 +455,7 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
             transaction_ownership=transaction_ownership,
         )
 
-    monkeypatch.setattr(
-        mcp_tools, "get_temporal_artifact_service", artifact_service
-    )
+    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", artifact_service)
     token = mint_container_job_session_capability(
         secret="fixture-signing-secret",
         owner=owner,
@@ -588,6 +589,7 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         }
         before_id, _ = await submit(test_spec, "original-hypothesis")
         before = await read(service, evidence[before_id])
+        quality.useful()
         assert before["exitCode"] != 0
         assert "AssertionError" in before["stderr"]
         fix_spec = {
@@ -671,6 +673,76 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         result["counts"]["new"] == 0
     )  # Regex absence alone did not prove the logic fix.
     assert (await read(service, result["scanRef"]))["observation"]["coverage"]
+
+    # Keep one selected harness, not a combinatorial quality matrix. Routing
+    # above remains covered for the other supported harnesses independently.
+    if harness == "codex":
+        native_ref = evidence[before_id]
+        observed = observation(
+            "vulnerable" if before["exitCode"] else "clean",
+            ["invoice-owner@app/routes.py"] if before["exitCode"] else [],
+            ["app/routes.py"],
+            native_ref=native_ref,
+            satisfied=before["exitCode"] == 0,
+        )
+        refs = [
+            *evidence.values(),
+            code_ref,
+            request["reviewRef"],
+            result["scanRef"],
+            result["comparisonRef"],
+            result["reportBundle"]["primary_report_ref"]["artifact_id"],
+        ]
+        provenance = {
+            "tool": "executable protected-access hypothesis",
+            "rule": "invoice-owner",
+            "configuration": {
+                "probe": probe,
+                "selectedSkill": selected,
+                "budgetSeconds": 60,
+                "network": "none",
+            },
+            "model": {
+                "transport": "controlled",
+                "evaluated": False,
+                "selectedName": "selected-model",
+            },
+            "jobs": list(evidence),
+            "topology": "Skill resolution/materialization -> signed MCP -> admitted scoped jobs -> executable source probe -> authorized fix or denied mutation -> retest -> artifact owner -> security.assess -> report; controlled job/harness transports",
+        }
+        if not authorized_fix:
+            false_clean = {
+                **observed,
+                "outcome": "clean",
+                "findings": [],
+                "satisfied": True,
+            }
+            false_fixed = {
+                **observed,
+                "outcome": "repaired",
+                "findings": [],
+                "satisfied": True,
+                "executionEvidence": [evidence[after_id]],
+            }
+            await quality.finish(
+                service,
+                "authorization-vulnerable",
+                observed,
+                refs,
+                provenance=provenance,
+                mutations={"false-clean": false_clean, "false-fixed": false_fixed},
+            )
+        else:
+            repaired = observation(
+                "repaired" if after["exitCode"] == 0 else "vulnerable",
+                [] if after["exitCode"] == 0 else ["invoice-owner@app/routes.py"],
+                ["app/routes.py"],
+                native_ref=evidence[after_id],
+                satisfied=after["exitCode"] == 0,
+            )
+            await quality.finish(
+                service, "authorization-repaired", repaired, refs, provenance=provenance
+            )
 
 
 ADMITTED_SCOPE = {

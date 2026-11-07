@@ -4,9 +4,7 @@
 
 ## Purpose and ownership
 
-MoonMind helps its operator investigate and improve the security of source code, dependencies, build systems, container images, cloud resources, and running applications. An assessment explains what it examined, what it could not examine, the evidence behind each finding, and what verification supports a proposed fix.
-
-The existing Omnigent agent remains responsible for reasoning. Security utilities run on demand in separate containers; they do not require a second model provider, a new agent backend, or scanner installations in the Omnigent host.
+Assessments explain examined assets, coverage gaps, finding evidence and fix verification. Omnigent owns reasoning; utilities run on demand in separate containers without another model provider or scanner installations in the agent host.
 
 | Responsibility | Owner |
 | --- | --- |
@@ -16,7 +14,7 @@ The existing Omnigent agent remains responsible for reasoning. Security utilitie
 | Tool execution, resource limits, logs, outputs, and cleanup | Existing [Container Jobs](../ManagedAgents/DockerBackendService.md) |
 | Evidence retention and operator presentation | Existing [report artifacts](../Artifacts/ReportArtifacts.md) and [artifact presentation](../Artifacts/ArtifactPresentationContract.md) |
 
-Adapters translate a tool's invocation and results into those interfaces. Scanner-specific interpretation belongs in adapters and Skills, rather than branches in generic Temporal orchestration. Deterministic scanner jobs do not acquire model capacity.
+Adapters and Skills own scanner invocation/interpretation; generic Temporal orchestration stays unchanged. Deterministic scanner jobs need no model capacity.
 
 ### Repository scanner jobs
 
@@ -68,37 +66,35 @@ Cloud and application scanners use their maintained upstream images, keeping the
 
 ### Default capabilities
 
-| Capability | Recommended tool and packaging | Intended use and qualification |
+| Capability | Tool and packaging | Coverage and limits |
 | --- | --- | --- |
-| Source security analysis | [Opengrep](https://github.com/opengrep/opengrep), official release binaries in the curated image | Selected source-pattern and taint rules. Coverage depends on the language, framework, rules, and analysis mode; syntax support alone does not establish whole-application or cross-file coverage. |
-| Exposed secrets | [Gitleaks](https://github.com/gitleaks/gitleaks), in the curated image | Separate working-tree and available Git-history scans, with full secret redaction. Gitleaks is in security-maintenance mode; keep the adapter replaceable and evaluate Betterleaks separately before adopting its interface. |
-| Dependencies, basic IaC, images, and SBOMs | [Trivy](https://trivy.dev/docs/latest/), in the curated image | Select scanners explicitly. Gitleaks owns default repository secret scanning to avoid duplicate work. An ordinary findings report is not automatically an SBOM; inventory generation is an explicit operation. |
-| Cloud posture | [Prowler CLI](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment` jobs with native JSON-OCSF evidence; see [cloud posture assessment jobs](#cloud-posture-assessment-jobs). Prowler's server, database, UI, and MCP stack are not needed. |
-| Running web applications and APIs | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment` jobs running a rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plan; see [web and API assessment jobs](#web-and-api-assessment-jobs). |
-| Contextual review | Existing Omnigent agent and security Skills | Architecture, trust boundaries, authorization and business logic, evidence validation, prioritization, proposed fixes, and retesting. Tool findings are inputs, not a prerequisite for investigation. |
+| Source analysis | [Opengrep](https://github.com/opengrep/opengrep), official binaries in the curated image | Selected pattern/taint rules; language syntax support alone establishes neither whole-application nor cross-file coverage. |
+| Exposed secrets | [Gitleaks](https://github.com/gitleaks/gitleaks), curated image | Separate worktree/history scans with full redaction. Security-maintenance mode; evaluate Betterleaks independently before replacement. |
+| Dependencies, IaC, images, SBOMs | [Trivy](https://trivy.dev/docs/latest/), curated image | Explicit scanner selection; Gitleaks owns default repository secrets. SBOM generation is an explicit operation. |
+| Cloud posture | [Prowler](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment`, native JSON-OCSF; no Prowler server/database/UI/MCP stack. |
+| Web/API | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment`, rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plans. |
+| Contextual review | Existing Omnigent agent and security Skills | Trust boundaries, authorization, business logic, evidence validation, prioritization and retesting; scanner findings are optional inputs. |
 
 Engine, rule, template, and Skill licenses are separate: ship only material whose terms permit the intended distribution and use, and deployment-provided rules keep their own terms. Adopting Opengrep does not remove restrictions on a separately obtained [Semgrep rule corpus](https://semgrep.dev/legal/rules-license).
 
 ### Conditional additions
 
-These candidates extend coverage only when their trigger occurs; until then, gaps are reported as coverage limitations.
+These tools are deferred until a measured coverage gap justifies adoption; unassessed capabilities remain coverage limitations.
 
-| Candidate | Disposition and trigger |
+| Candidate | Adoption trigger |
 | --- | --- |
-| [OSV-Scanner](https://google.github.io/osv-scanner/usage/), `ghcr.io/google/osv-scanner` | Deferred: Trivy covers manifests and lockfiles offline. Adopt for an ecosystem Trivy reports as unsupported, or for call analysis; build-assisted analysis needs separately admitted execution of untrusted build inputs. |
-| [Checkov](https://www.checkov.io/), `bridgecrew/checkov` | Deferred: Trivy `misconfig` covers common IaC checks. Adopt for a framework or cross-resource graph policy Trivy lacks. |
-| [Nuclei](https://docs.projectdiscovery.io/opensource/nuclei/running), `projectdiscovery/nuclei` | Deferred: ZAP covers admitted routes. Adopt for a known-issue template no ZAP rule covers. Template signatures establish origin, not safe impact. |
-| [zizmor](https://docs.zizmor.sh/), `ghcr.io/zizmorcore/zizmor` | Deferred: the security-review Skill reviews CI/CD configuration directly. Adopt when GitHub Actions need repeatable scanning. |
-| [Syft and Grype](https://oss.anchore.com/docs/), `anchore/syft` and `anchore/grype` | Not needed: image jobs generate and reassess SBOMs with Trivy. Reconsider to cross-check a disputed match. |
-| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | Deferred: Prowler runs IAM checks. Adopt for an IAM-policy question they leave open. No upstream image contract is assumed. |
-| [Kubescape](https://kubescape.io/docs/) | Deferred: Trivy covers Kubernetes manifests and admission has no cluster target. Adopt with one, as an ephemeral CLI rather than a cluster operator. |
-| [Trail of Bits Skills](https://github.com/trailofbits/skills) | Deferred: the security Skills cover threat modeling, logic review, investigation, and retesting. Adapt a missing procedure with attribution and redistribution obligations. |
-| [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) and [FIRST EPSS](https://www.first.org/epss/) | Deferred: triage uses local exposure evidence. Adopt as a feed snapshot when exploitation data would change decisions. |
-| Deeper commercial analysis | Deferred until a licensed tool shows a measured gap; `security-observation/v1` results already compare through `retained-report`. |
+| [OSV-Scanner](https://google.github.io/osv-scanner/usage/) | An ecosystem Trivy cannot assess, or call analysis. Build-assisted analysis requires admitted execution of untrusted inputs. |
+| [Checkov](https://www.checkov.io/) | IaC frameworks or cross-resource policies absent from Trivy. |
+| [Nuclei](https://docs.projectdiscovery.io/opensource/nuclei/running) | Known-issue templates absent from ZAP. Signatures establish origin, not safe impact. |
+| [zizmor](https://docs.zizmor.sh/) | Repeatable GitHub Actions checks beyond direct Skill review. |
+| [Syft and Grype](https://oss.anchore.com/docs/) | Cross-checking disputed Trivy inventory/matches. |
+| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | IAM-policy questions Prowler leaves open. |
+| [Kubescape](https://kubescape.io/docs/) | An admitted cluster target; use an ephemeral CLI. |
+| [Trail of Bits Skills](https://github.com/trailofbits/skills) | Missing procedures, adapted with attribution and redistribution terms. |
+| [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) / [FIRST EPSS](https://www.first.org/epss/) | Exploitation data that changes triage decisions; acquire as a feed snapshot. |
+| Commercial analysis | A licensed tool demonstrates a gap; results use `security-observation/v1` through `retained-report`. |
 
-[Strix](https://github.com/usestrix/strix), [HexStrike](https://github.com/0x4m4/hexstrike-ai), and similar agentic systems remain optional: their own agent loops would add a separate runtime contract, not just a model endpoint.
-
-An ephemeral scan does not claim continuous protection.
+[Strix](https://github.com/usestrix/strix) and [HexStrike](https://github.com/0x4m4/hexstrike-ai) remain optional separate agent runtimes. Ephemeral scans do not provide continuous protection.
 
 #### Cloud posture assessment jobs
 
@@ -171,14 +167,7 @@ Retesting links before/after inputs, findings, configuration, coverage, and regr
 
 ## Composable workflows
 
-| Workflow | Composition and result |
-| --- | --- |
-| Repository assessment | Identify assets and trust boundaries; run applicable source, secret, dependency, and IaC checks as bounded jobs; perform targeted agent review; produce evidence, coverage, and prioritized recommendations. |
-| Image and supply-chain assessment | Inspect an admitted image, supported image archive or OCI layout, or existing SBOM without a Docker socket; retain the actual image/inventory identity and generate an SBOM when requested; assess vulnerabilities and configuration with stated coverage. |
-| Cloud assessment | Admit account, regions, and checks or services; run one `cloudAssessment` job; explain permission and resource gaps; relate findings to IaC or code when evidence supports the connection. |
-| Web/API assessment | Admit origin, routes, mode, and identity; run one `webAssessment` job per identity; investigate selected findings from its retained route, identity, and coverage evidence. |
-| Investigate and repair | Combine scanner or imported findings with direct review, produce an authorized fix, run focused regression/retest work, and publish through the normal delivery path when requested. |
-| Recurring review and advisory response | Reuse existing schedules and saved Skill definitions; reassess retained authorized inputs or SBOMs with refreshed data; compare compatible evidence and explain scope or coverage changes. |
+Compose admitted repository, image/SBOM, cloud and web jobs with direct review and authorized remediation. Existing schedules and saved Skills support recurring reassessment and advisory response; retain baseline references and explain scope, rule, feed or coverage changes.
 
 GitHub ingestion (the `github-alerts` tool of `security.assess`, described in the [passive scan document](PassiveRepoScan.md#imported-github-alerts)) preserves upstream alert IDs, scanner/source identity, repository and revision scope, timestamps, and source links. Permission-denied, rate-limited, unavailable, and disabled products are explicit coverage states. Repeated imports are identifiable as the same upstream observation. Secret-alert payloads receive the same sanitization boundary as local secret findings.
 
@@ -186,14 +175,25 @@ Comparisons use retained assessment artifacts and explicit baseline references, 
 
 ## Maintenance and qualification
 
-Repository maintainers own `.github/workflows/docker-publish-repository-security.yml`, which rebuilds current stable releases and the Python/glibc base weekly and on relevant main-branch changes; pull requests qualify both native architectures without publishing. Dispatch it for an immediate rebuild; optional `opengrep_version`, `gitleaks_version`, `trivy_version`, and `base_image` inputs select explicit releases and a compatible base. No tool-version equality gate constrains later updates or operator image choices.
+`.github/workflows/docker-publish-repository-security.yml` rebuilds stable scanner releases and the Python/glibc base weekly and on relevant main changes; PRs qualify both native architectures without publishing. Dispatch inputs select explicit tool releases or a base image. Updates impose no tool-version equality gate.
 
-Acquisition requires Opengrep's Cosign signature/certificate, Trivy's Sigstore bundle or legacy signature/certificate, and Gitleaks's HTTPS release checksums (Gitleaks publishes no release signatures). Release metadata falls back to anonymous access if GitHub refuses the optional CI token; failures report the upstream URL, status, and a redacted diagnostic. Missing assets or verification material, verification errors, or failed qualification stop publication. Each native build checks versions, findings and clean runs, the admitted runner, read-only permissions, offline Trivy data, SPDX SBOM generation, and isolated update promotion. One manifest update promotes `latest` only after both architectures pass, so failed runs leave the working default unchanged.
+Acquisition verifies Opengrep's Cosign signature/certificate, Trivy's Sigstore bundle or legacy signature/certificate, and Gitleaks's HTTPS release checksums (no release signatures). A refused optional GitHub token falls back to anonymous metadata access. Missing verification material, verification errors or failed qualification stop publication with redacted upstream diagnostics. Native builds check versions, vulnerable/clean targets, the admitted runner, read-only permissions, offline feeds, SPDX generation and isolated updates. `latest` changes only after both architectures pass.
 
-The image exposes `/usr/local/share/repository-security/inventory.json` and adjacent `notices/`. Its job-owned `/tmp` stays executable because the official Opengrep release extracts a child executable there. Actions retains each architecture's tool assets/signatures, corresponding Opengrep source, inventory/base identity, image digest, SBOM, and qualification evidence for 90 days. Scanner updates use this workflow without rebuilding the Omnigent host, whose baked MoonMind CLI follows the host deployment lifecycle.
+The image's `/usr/local/share/repository-security/inventory.json` and `notices/` identify its contents. Job-owned `/tmp` stays executable because Opengrep extracts a child executable there. Actions retains tool/signature assets, Opengrep source, inventory/base identity, image digest, SBOM and qualification evidence for 90 days. Updating scanners does not rebuild the Omnigent host; its CLI follows that host's deployment lifecycle.
 
-`.github/workflows/upstream-assessment-images.yml` qualifies the default ZAP and Prowler `stable` images weekly, on relevant changes, and on dispatch with an optional operator image: the rendered ZAP plan against the local fixture application, and the rendered Prowler argv against moto. Production summaries must report findings for vulnerable fixtures and clean, complete results for repaired ones. It records the digests that ran and pins nothing, so a failure means the current `stable` release no longer fits the adapters.
+`.github/workflows/upstream-assessment-images.yml` qualifies ZAP/Prowler `stable` weekly, on relevant changes and on dispatch (with optional image overrides). It executes rendered plans/argv against a local application and moto. Summaries must detect vulnerable targets and report repaired targets clean with complete coverage. Recorded image digests identify what ran; failures diagnose adapter compatibility without pinning future launches.
 
-Hermetic journeys use fake scanners, controlled transports, and local applications instead of paid providers or production accounts. They submit through the admitted CLI and MCP paths with vulnerable, repaired, and clean fixtures, and read native reports back after cleanup. Optional external qualification is recorded as Unverified when unavailable; observed defects remain blocking.
+Hermetic CI executes the Apache-2.0 corpus in `tests/fixtures/security_review/quality-cases.json`: source, cloud, web and ownership cases, separate held-out controls, and clean, vulnerable, repaired, partial, failed-authentication, malformed-output and canceled outcomes. Cloud/ZAP/native-scanner transports and harness responses are controlled. The passive detector and access probes execute code; saved fixture presets use the catalog, admitted CLI/MCP, artifact and report owners.
 
-Measure useful coverage and investigation quality, including direct-review findings scanners miss, not detection percentages or broad benchmarks.
+With `.[tests]`, Git and POSIX, reproduce the finding-to-fix-to-retest sample:
+
+```sh
+moonmind container python-tests --timeout-seconds 240 \
+  tests/integration/security/test_assessment_quality.py \
+  tests/integration/security/test_admitted_assessment_journeys.py::test_repository_scan_cli_job_keeps_native_reports_after_cleanup \
+  tests/integration/security/test_security_skill_journey.py::test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix
+```
+
+Outside managed workflows, use `./tools/test_unit.sh --python-only` with those targets, then `python -m tests.integration.security.quality`. No live credentials or scanner downloads are needed. The managed command collects JUnit; export the sample directory separately as declared `moonmind container run --spec job.json` outputs, optionally archived. Existing CI retains `artifacts/integration-ci/security-quality`, including failed-case results and sanitized native/report bytes read after cleanup. Each `result.json` links expectations, observations, artifact IDs and file hashes. `authorization-vulnerable` reproduces cross-owner access, retains the prohibited mutation/retest and rejects false clean/fixed claims; `authorization-repaired` retains the authorized fix and passing retest. `summary.json` rejects missing cases, changed evidence and mixed execution identities.
+
+Results measure detection errors, incorrect satisfied conclusions, coverage gaps, traceability, wall/CPU seconds, time to useful result and retained bytes. Peak RSS measures the worker lifetime, not container memory. Source and clean-cloud cases compare independent repeats; other repeatability checks remain Unverified. Actual tool/rule/configuration, available image identity, revision and dependency versions describe observations without launch/update equality gates. Provider billing is unmeasured. Each result identifies Unverified live-provider, model-reasoning and professional-assurance checks with reasons, owners and feasible next checks. This controlled readiness demonstration does not confer independent professional assurance.
