@@ -35,6 +35,7 @@ from moonmind.security.passive_repo_scan import (
     parse_scan_report_json,
 )
 from moonmind.security.repository_scanners import ScannerSummary
+from moonmind.security.rng_assessment import RngAssessment
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -559,6 +560,78 @@ def _game_math_observation(
     )
 
 
+def _rng_observation(request, summary: RngAssessment, ref: str, created_at: datetime):
+    """Frequency coverage names only the performed raw or final-outcome tests."""
+    if summary.game_ref not in request.scope.assets:
+        raise ValueError("game outside admitted assessment scope")
+    coverage, findings = [], []
+    for section, run in (("raw", summary.raw), ("mapped", summary.mapped)):
+        if run is None:
+            continue
+        for row in run.results:
+            rule = f"rng-{section}-{row.test}"
+            decided = row.decision in {"anomaly", "no_anomaly_detected"}
+            coverage.append(
+                Coverage(
+                    source="rng",
+                    tool="rng",
+                    assets=[summary.game_ref],
+                    rule_ids=[rule],
+                    config_ref=content_key(
+                        ["rng", summary.spec_digest, section, row.test]
+                    ),
+                    status=(
+                        "complete"
+                        if decided and summary.status == "complete"
+                        else "partial"
+                    ),
+                )
+            )
+            if row.decision == "anomaly":
+                findings.append(
+                    Finding(
+                        source="rng",
+                        tool="rng",
+                        rule_id=rule,
+                        asset=summary.game_ref,
+                        native_id=rule,
+                        evidence_refs=[ref],
+                    )
+                )
+    # A review-only report accounts for missing reviewer evidence explicitly;
+    # diagnostic success never establishes implementation or crypto assurance.
+    if not coverage:
+        coverage.append(
+            Coverage(
+                source="rng",
+                tool="rng",
+                assets=[summary.game_ref],
+                rule_ids=["implementation-review"],
+                config_ref=summary.spec_digest,
+                status=(
+                    "complete"
+                    if all(
+                        r.status != "unverified" for r in summary.implementation_review
+                    )
+                    else "partial"
+                ),
+            )
+        )
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=findings,
+        coverage=coverage,
+        provenance={
+            "rngSummary": ref,
+            "rngSpec": summary.spec_digest,
+            "rngOutcome": summary.outcome,
+            "rngCryptographicSecurity": "unverified",
+        },
+    )
+
+
 class AssessmentExecution:
 
     def __init__(
@@ -1072,6 +1145,60 @@ class AssessmentExecution:
                                     },
                                     "limitations": sorted(game_summary.limitations),
                                     "verification": game_summary.certification,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "rng-assessment/v1":
+                            rng_summary = RngAssessment.model_validate(payload)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _rng_observation(
+                                request, rng_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "rng",
+                                    "target": rng_summary.game_ref,
+                                    "summaryRef": ref,
+                                    "nativeRefs": {"assessment": ref},
+                                    "coverage": (
+                                        "complete"
+                                        if all(
+                                            c.status == "complete"
+                                            for c in observation.coverage
+                                        )
+                                        else "partial"
+                                    ),
+                                    "outcome": rng_summary.outcome,
+                                    "execution": {
+                                        name: run.stop_reason or run.status
+                                        for name, run in (
+                                            ("raw", rng_summary.raw),
+                                            ("mapped", rng_summary.mapped),
+                                        )
+                                        if run
+                                    },
+                                    "implementationReview": [
+                                        r.model_dump(mode="json", by_alias=True)
+                                        for r in rng_summary.implementation_review
+                                    ],
+                                    "statisticalFindings": {
+                                        name: run.model_dump(mode="json", by_alias=True)
+                                        for name, run in (
+                                            ("raw", rng_summary.raw),
+                                            ("mapped", rng_summary.mapped),
+                                        )
+                                        if run
+                                    },
+                                    "externalClaims": [
+                                        r.model_dump(mode="json", by_alias=True)
+                                        for r in rng_summary.external_claims
+                                    ],
+                                    "cryptographicSecurity": rng_summary.cryptographic_security,
+                                    "gameFairness": rng_summary.game_fairness,
+                                    "limitations": sorted(rng_summary.limitations),
+                                    "verification": rng_summary.certification,
+                                    "interpretation": rng_summary.interpretation,
                                 }
                             )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
@@ -1667,6 +1794,13 @@ def _scanner_summary(summaries: list[dict]) -> str:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
+        if summary["scanner"] == "rng":
+            for key, label in (
+                ("implementationReview", "Implementation observations"),
+                ("statisticalFindings", "Statistical findings"),
+                ("externalClaims", "Externally reported claims (Unverified)"),
+            ):
+                lines.append(f"{label}: {json.dumps(summary[key], sort_keys=True)}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
