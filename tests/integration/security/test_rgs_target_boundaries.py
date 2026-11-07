@@ -656,6 +656,18 @@ async def test_missing_capture_reconciles_the_effect_owner_before_any_replay(tmp
         assert recovered.traces[0].wallet_effects
         assert recovered.collection["stopReason"] == "prior_effects_without_checkpoint"
         assert assess_rgs(spec, recovered).status == "partial"
+        recovered = await observe_rgs(
+            spec,
+            plan,
+            ScopedTargetClient(
+                TargetScope.model_validate(scope),
+                credential_root=credentials,
+                proxy=proxy,
+            ),
+            checkpoint_path=tmp_path / "replacement-host" / "capture.json",
+        )
+        assert target.requests == previous
+        assert recovered.collection["stopReason"] == "prior_effects_without_checkpoint"
         assert first_capture.exists()
         retain_target_evidence(
             "missing-checkpoint", assess_rgs(spec, recovered), recovered, target

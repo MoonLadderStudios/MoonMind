@@ -156,7 +156,10 @@ async def observe_rgs(
             raise ValueError(
                 "checkpoint belongs to another specification, plan or admitted scope"
             )
-        if bundle.collection.get("status") == "complete":
+        if (
+            bundle.collection.get("status") == "complete"
+            or bundle.collection.get("stopReason") == "prior_effects_without_checkpoint"
+        ):
             return bundle
         client.requests_sent = int(bundle.collection["requestsSpent"])
         client.started = time.monotonic() - (
