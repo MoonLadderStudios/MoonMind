@@ -374,7 +374,7 @@ describe('backend creation presets', () => {
 
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     expect(screen.queryByLabelText(/Credential source/)).toBeNull();
-    expect(screen.getByLabelText('Harness default')).toBeTruthy();
+    expect(screen.getByLabelText('Preferred profile')).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/Show advanced options/));
     expect(screen.getByText('Credential source: none')).toBeTruthy();
     expect(screen.getByText('Materialization mode: api_key_env')).toBeTruthy();
@@ -1127,7 +1127,7 @@ describe('ProviderProfilesManager form controls', () => {
     renderProviderProfilesManagerWithQuery([profile, secondaryProfile]);
 
     fireEvent.click(profileAction('Edit', 'codex-secondary'));
-    const runtimeDefaultCheckbox = screen.getByLabelText('Harness default') as HTMLInputElement;
+    const runtimeDefaultCheckbox = screen.getByLabelText('Preferred profile') as HTMLInputElement;
     expect(runtimeDefaultCheckbox.checked).toBe(false);
 
     fireEvent.click(runtimeDefaultCheckbox);
@@ -1153,8 +1153,8 @@ describe('ProviderProfilesManager form controls', () => {
 
     await waitFor(() => {
       const rows = screen.getAllByRole('row');
-      expect(rows[1]?.textContent).not.toContain('Default Codex CLI profile');
-      expect(rows[2]?.textContent).toContain('Default Codex CLI profile');
+      expect(rows[1]?.textContent).not.toContain('Preferred for Codex CLI');
+      expect(rows[2]?.textContent).toContain('Preferred for Codex CLI');
     });
   });
 
@@ -3577,7 +3577,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     const authIdx = html.indexOf('Authentication and readiness');
     const tiersIdx = html.indexOf('Model &amp; effort tiers');
     const capacityIdx = html.indexOf('Capacity');
-    const defaultIdx = html.indexOf('Use as Harness default');
+    const defaultIdx = html.indexOf('Preferred for');
     const advancedIdx = html.indexOf('Show advanced options');
     expect(identityIdx).toBeGreaterThan(-1);
     expect(authIdx).toBeGreaterThan(identityIdx);
@@ -3645,9 +3645,9 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     };
     renderProviderProfilesManager([blockedProfile]);
     fireEvent.click(profileAction('Edit'));
-    const checkbox = screen.getByLabelText('Use as Harness default') as HTMLInputElement;
+    const checkbox = screen.getByLabelText('Preferred profile') as HTMLInputElement;
     expect(checkbox.disabled).toBe(true);
-    expect(screen.getByText(/Default assignment is disabled until launch readiness succeeds/)).toBeTruthy();
+    expect(screen.getByText(/Preferred profile assignment is disabled until launch readiness succeeds/)).toBeTruthy();
   });
 
   it('allows demoting an unready default profile while blocking assignment', async () => {
@@ -3661,7 +3661,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     };
     renderProviderProfilesManager([currentDefault]);
     fireEvent.click(profileAction('Edit'));
-    const checkbox = screen.getByLabelText('Use as Harness default') as HTMLInputElement;
+    const checkbox = screen.getByLabelText('Preferred profile') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
     expect(checkbox.disabled).toBe(false);
     expect(screen.getByText(/may clear this checkbox to demote it/)).toBeTruthy();
@@ -3734,7 +3734,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
-    fireEvent.click(screen.getByLabelText('Harness default'));
+    fireEvent.click(screen.getByLabelText('Preferred profile'));
     // MoonLadderStudios/MoonMind#4002: guided continuation.
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
@@ -3833,7 +3833,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(screen.getByRole('button', { name: 'Apply reset' }));
 
     expect((screen.getByLabelText(/Cooldown after 429/) as HTMLInputElement).value).toBe('300');
-    expect((screen.getByLabelText('Use as Harness default') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('Preferred profile') as HTMLInputElement).checked).toBe(true);
   });
 
   it('Reset advanced options to recommended shows preview distinguishing concrete vs omit vs recalculated', async () => {
@@ -4935,7 +4935,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     });
     const { onNotice } = renderProviderProfilesManager();
     await fillCreateForm('default-fail-profile');
-    fireEvent.click(screen.getByLabelText('Harness default'));
+    fireEvent.click(screen.getByLabelText('Preferred profile'));
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-default-fail' } });
@@ -4962,10 +4962,10 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     const failureCall = onNotice.mock.calls
       .map(([arg]) => arg as { level: string; text: string } | null)
       .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('was not applied'));
-    expect(failureCall?.text).toContain('Make default');
+    expect(failureCall?.text).toContain('checkbox in the saved profile editor');
     expect(onNotice).not.toHaveBeenCalledWith({
       level: 'ok',
-      text: expect.stringContaining('is now the Harness default'),
+      text: expect.stringContaining('is now preferred for'),
     });
     window.localStorage.clear();
   });
@@ -5012,7 +5012,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     });
     const { onNotice } = renderProviderProfilesManagerWithQuery([currentDefault, savedNewer]);
     await fillCreateForm('newer-intent-profile');
-    fireEvent.click(screen.getByLabelText('Harness default'));
+    fireEvent.click(screen.getByLabelText('Preferred profile'));
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
@@ -5030,7 +5030,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
         level: 'ok',
-        text: expect.stringContaining('is now the Harness default'),
+        text: expect.stringContaining('is now preferred for'),
       });
     });
     // The intent's own notice owns the final slot: no enrollment notice on top.
@@ -5098,7 +5098,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH'),
     ).toBe(false);
     await fillCreateForm('newer-intent-profile');
-    fireEvent.click(screen.getByLabelText('Harness default'));
+    fireEvent.click(screen.getByLabelText('Preferred profile'));
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
@@ -5112,12 +5112,12 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
         level: 'error',
-        text: expect.stringContaining('is now the default'),
+        text: expect.stringContaining('is now preferred'),
       });
     });
     const blockedCall = onNotice.mock.calls
       .map(([arg]) => arg as { level: string; text: string } | null)
-      .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('is now the default'));
+      .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('is now preferred'));
     expect(blockedCall?.text).toContain('third-profile');
     // The newer operator choice wins: no PATCH against it, intent cleared, never undone.
     expect(
@@ -5866,5 +5866,24 @@ describe('Provider Profile row actions menu', () => {
     );
     await waitFor(() => expect(deleteCalls()).toHaveLength(1));
     expect(String(deleteCalls()[0]![0])).toBe('/api/v1/provider-profiles/codex-menu');
+  });
+});
+
+describe('bound managed-secret status', () => {
+  it.each(['disabled', 'rotated', 'missing'])('shows a %s binding in the profile Status cell', (status) => {
+    const queryClient = choicesQueryClient();
+    const profile: ProviderProfile = {
+      profile_id: 'bound-profile', runtime_id: 'claude_code', provider_id: 'anthropic',
+      credential_source: 'secret_ref', runtime_materialization_mode: 'api_key_env',
+      secret_refs: { key: 'db://api-key', other: 'env://EXTERNAL' }, max_parallel_runs: 1,
+      cooldown_after_429_seconds: 0, rate_limit_policy: 'default', enabled: true,
+    };
+    renderWithChoices(<ProviderProfilesManager profiles={[profile]} secretSlugs={['api-key']}
+      secretStatusBySlug={{ 'api-key': status, EXTERNAL: 'disabled' }} onNotice={vi.fn()} queryClient={queryClient} />);
+    const row = screen.getByText('bound-profile').closest('tr')!;
+    expect(row.id).toBe('provider-profile-bound-profile');
+    const cell = row.querySelector('.provider-profile-status') as HTMLElement;
+    expect(within(cell).getByText(`Secret api-key is ${status}. Launches will fail.`)).toBeTruthy();
+    expect(cell.textContent).not.toContain('EXTERNAL');
   });
 });

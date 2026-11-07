@@ -68,7 +68,7 @@ The router provides `GET /api/v1/settings/catalog`, `/effective`, `/effective/{k
 
 ## Activation and operations
 
-Apply mode communicates when a saved value becomes active. The current service defines `immediate`, `next_request`, `next_workflow`, `next_launch`, `worker_reload`, `process_restart`, and `manual_operation`. The UI should show current and pending values, the affected consumer, and any activation step. In particular, saving a restart-requiring value is not confirmation that a running worker adopted it.
+Apply mode communicates when a saved value becomes active. The current service defines `immediate`, `next_request`, `next_workflow`, `next_launch`, `worker_reload`, `process_restart`, and `manual_operation`. The UI should show current and pending values, the affected consumer, and any activation step. In particular, saving a restart-requiring value is not confirmation that a running worker adopted it. Values whose apply mode is `next_request`, `next_workflow`, or `next_launch` are active from the moment they are saved; only `worker_reload`, `process_restart`, and `manual_operation` values report a pending state.
 
 [Change publishing](../../api_service/services/settings_change_publisher.py), [subscribers](../../api_service/services/settings_change_subscribers.py), and [hooks](../../api_service/services/settings_change_hooks.py) own propagation. Inspect those consumers when changing application semantics; a frontend refresh alone does not update runtime configuration.
 

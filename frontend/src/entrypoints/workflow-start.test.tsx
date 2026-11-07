@@ -21530,6 +21530,35 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.steps[0].runtime).toMatchObject({ mode: "claude_code", profileId: "claude-native-only" });
   });
 
+  it("GH5235 warns inline about a blocked new-work default until a profile is explicitly chosen", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) return Promise.resolve({ ok: true, json: async () => [
+        { profile_id: "disabled-default", runtime_id: "codex_cli", enabled: false },
+        { profile_id: "healthy-choice", runtime_id: "codex_cli", enabled: true },
+      ] } as Response);
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={{ ...mockPayload, initialData: { dashboardConfig: {
+      ...mockDashboardConfig, system: { ...mockDashboardConfig.system, providerProfiles: { defaultProfileRef: "disabled-default" } },
+    } } }} />);
+    const link = await screen.findByRole("link", { name: "Fix the default" });
+    expect(link.getAttribute("href")).toBe("/settings/providers-secrets#new-work-defaults");
+    expect(link.closest("p")?.textContent).toContain("New work defaults to disabled-default, which is disabled.");
+    expect(link.closest('[aria-label="Dashboard notifications"]')).toBeNull();
+    fireEvent.change(screen.getByLabelText("Provider Profile"), { target: { value: "healthy-choice" } });
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Fix the default" })).toBeNull());
+  });
+
+  it("GH5235 removes the blocked-default warning after an explicit Harness choice", async () => {
+    renderWithClient(<WorkflowStartPage payload={{ ...mockPayload, initialData: { dashboardConfig: {
+      ...mockDashboardConfig, system: { ...mockDashboardConfig.system, providerProfiles: { defaultProfileRef: "missing-default" } },
+    } } }} />);
+    await screen.findByRole("link", { name: "Fix the default" });
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Fix the default" })).toBeNull());
+  });
+
   it("scopes the configured default Profile to a deliberately chosen Harness", async () => {
     const fallback = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -128,7 +128,7 @@ describe('Providers & Secrets defaults for new work', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the Default Harness beside the Default Provider Profile and explains precedence', async () => {
+  it('shows the compact Harness and Provider profile controls with precedence hint', async () => {
     window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     const descriptor = (key: string, title: string, extra: Record<string, unknown>) => ({
       key, title, category: 'Workflow', section: 'user-workspace', description: null,
@@ -170,13 +170,51 @@ describe('Providers & Secrets defaults for new work', () => {
     renderProvidersPage({ page: 'settings-providers-secrets', apiBase: '/api', initialData: {} });
 
     const card = await screen.findByRole('region', { name: 'Defaults for new work' });
-    const harness = (await within(card).findByLabelText('Default Harness')) as HTMLSelectElement;
+    const harness = (await within(card).findByLabelText('Harness')) as HTMLSelectElement;
     expect(harness.value).toBe('codex_cli');
     expect(harness.selectedOptions[0]?.textContent).toBe('Codex');
-    expect(within(card).getByLabelText('Default Provider Profile')).toBeTruthy();
+    expect(within(card).getByLabelText('Provider profile')).toBeTruthy();
     expect(within(card).queryByLabelText('Default Publish Mode')).toBeNull();
-    expect(card.textContent).toContain('uses the Default Provider Profile when one is set, otherwise the Default Harness');
-    expect(card.textContent).toContain('choices made when launching work always take precedence');
+    expect(card.textContent).toContain("Used when a launch doesn't choose a harness or profile.");
+    expect(card.textContent).toContain('Takes priority over the harness when set.');
+    expect(card.textContent).not.toMatch(/Instance override|Pending|Affects|Details|workflow\.default/);
+  });
+});
+
+describe('Providers & Secrets action and health integration', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('refreshes a disabled bound secret across alert, Status and Usage, focuses its row and toasts re-enabling', async () => {
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
+    let status = 'active';
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const respond = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+      if (url === '/api/v1/provider-profiles') return respond([{
+        profile_id: 'bound-profile', runtime_id: 'claude_code', provider_id: 'anthropic', enabled: true,
+        secret_refs: { key: 'db://api-key' }, max_parallel_runs: 1,
+      }]);
+      if (url === '/api/v1/secrets/api-key/status' && init?.method === 'PUT') {
+        status = JSON.parse(String(init.body)).status; return respond({});
+      }
+      if (url === '/api/v1/secrets') return respond({ items: [{ slug: 'api-key', status, details: {}, createdAt: '2026-11-06' }] });
+      if (url.endsWith('/usage')) return respond({ secretRef: 'db://api-key', usages: [
+        { consumerType: 'profile', objectName: 'bound-profile usage', reference: 'db://api-key' },
+      ] });
+      return respond({ items: [] });
+    });
+    const { queryClient } = renderProvidersPage({ page: 'settings-providers-secrets', apiBase: '/api', initialData: {} });
+    await screen.findByText('Active');
+    status = 'disabled';
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['secrets'] }); });
+    await screen.findByText('Secret api-key is disabled. Launches will fail.');
+    await screen.findByText('bound-profile usage');
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain("bound-profile can't launch because its secret api-key is disabled.");
+    fireEvent.click(within(alert).getByRole('link', { name: 'Show secret' }));
+    expect(document.activeElement?.id).toBe('managed-secret-api-key');
+    fireEvent.click(screen.getByRole('button', { name: 'Re-enable api-key' }));
+    const result = await screen.findByText('Secret re-enabled.');
+    expect(result.closest('[aria-label="Dashboard notifications"]')).toBeTruthy();
   });
 });
 
@@ -316,31 +354,34 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     expect(options.map((option) => option.value)).not.toContain('omnigent');
   });
 
-  it('shows only matching rows while the global health summary keeps every loaded profile', async () => {
+  it('keeps hidden profile problems in the alert and clears the filter before focusing the row', async () => {
+    const previous = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => String(input) === '/api/v1/provider-profiles'
+      ? Promise.resolve({ ok: true, json: async () => [codexProfile, {
+        ...claudeProfile, readiness: { status: 'blocked', summary: 'Reconnect credentials' },
+      }] } as Response) : previous(input, init));
     renderProvidersPage(payloadWithRuntimes);
-
     await screen.findByRole('heading', { name: 'Profiles' });
-
-    const healthSummary = screen.getByLabelText('Configuration health summary');
-    expect(within(healthSummary).getByText('2')).toBeTruthy();
-
     selectRuntimeFilter('codex_cli');
+    expect(within(providerProfilesTable()).queryByText('claude_minimax_team')).toBeNull();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain("claude_minimax_team can't launch");
+    fireEvent.click(within(alert).getByRole('link', { name: 'Show profile' }));
+    await waitFor(() => expect(runtimeFilterControl().value).toBe('all'));
+    await waitFor(() => expect(document.activeElement?.id).toBe('provider-profile-claude_minimax_team'));
+  });
 
-    expect(within(providerProfilesTable()).getByText('codex_minimax_team')).toBeTruthy();
-    expect(
-      within(providerProfilesTable()).queryByText('claude_minimax_team'),
-    ).toBeNull();
-    // Filtering the table must not narrow global configuration health.
-    expect(within(healthSummary).getByText('2')).toBeTruthy();
-    expect(within(healthSummary).getByText('2 enabled')).toBeTruthy();
-
-    selectRuntimeFilter('claude_code');
-
-    expect(within(providerProfilesTable()).getByText('claude_minimax_team')).toBeTruthy();
-    expect(
-      within(providerProfilesTable()).queryByText('codex_minimax_team'),
-    ).toBeNull();
-    expect(within(healthSummary).getByText('2')).toBeTruthy();
+  it('opens on profiles when healthy and orders defaults, secrets and Source Control after it', async () => {
+    renderProvidersPage(payloadWithRuntimes);
+    const profiles = (await screen.findByRole('heading', { name: 'Profiles' })).closest('section')!;
+    const defaults = screen.getByRole('region', { name: 'Defaults for new work' });
+    const secrets = screen.getByRole('heading', { name: 'Stored secrets' }).closest('section')!;
+    const source = screen.getByRole('region', { name: 'Source Control' });
+    expect(screen.queryByLabelText('Configuration health summary')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    for (const [before, after] of [[profiles, defaults], [defaults, secrets], [secrets, source]]) {
+      expect(before!.compareDocumentPosition(after!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('prefills the create form Harness from the active filter without touching an existing runtime', async () => {

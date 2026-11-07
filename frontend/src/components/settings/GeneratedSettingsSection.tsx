@@ -4,15 +4,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { responseError } from '../../lib/api/client';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
-import { fetchProviderProfiles, PROVIDER_PROFILE_QUERY_KEY } from './ProviderProfilesManager';
+import { fetchProviderProfiles, PROVIDER_PROFILE_QUERY_KEY, type ProviderProfile } from './ProviderProfilesManager';
 import { useSettingsDraftRegistration } from './SettingsDraftGuard';
 
-interface SettingOption {
+export interface SettingOption {
   value: string;
   label: string;
 }
 
-interface SettingConstraints {
+export interface SettingConstraints {
   minimum?: number | null;
   maximum?: number | null;
   min_length?: number | null;
@@ -20,19 +20,19 @@ interface SettingConstraints {
   pattern?: string | null;
 }
 
-interface SettingDiagnostic {
+export interface SettingDiagnostic {
   code: string;
   message: string;
   severity: 'info' | 'warning' | 'error';
 }
 
-interface SettingAuditPolicy {
+export interface SettingAuditPolicy {
   store_old_value: boolean;
   store_new_value: boolean;
   redact: boolean;
 }
 
-interface SettingDescriptor {
+export interface SettingDescriptor {
   key: string;
   title: string;
   description?: string | null;
@@ -67,7 +67,7 @@ interface SettingDescriptor {
   diagnostics: SettingDiagnostic[];
 }
 
-interface SettingsCatalogResponse {
+export interface SettingsCatalogResponse {
   section: string;
   categories: Record<string, SettingDescriptor[]>;
 }
@@ -79,7 +79,7 @@ interface PendingChange {
   message?: string;
 }
 
-interface SettingsAuditEvent {
+export interface SettingsAuditEvent {
   id: string;
   event_type: string;
   key: string;
@@ -93,7 +93,7 @@ interface SettingsAuditEvent {
   created_at?: string | null;
 }
 
-interface SettingsAuditResponse {
+export interface SettingsAuditResponse {
   items: SettingsAuditEvent[];
 }
 
@@ -169,7 +169,7 @@ function activationStateLabel(activationState: string): string {
   return ACTIVATION_STATE_LABELS[activationState] ?? activationState.replaceAll('_', ' ');
 }
 
-function displayValue(value: unknown): string {
+export function displayValue(value: unknown): string {
   if (value === null || value === undefined) {
     return 'Not set';
   }
@@ -236,7 +236,7 @@ function enumerableKeys(value: object): Array<string | symbol> {
     .sort((left, right) => String(left).localeCompare(String(right)));
 }
 
-function valuesEqual(left: unknown, right: unknown, seen = new WeakMap<object, WeakSet<object>>()): boolean {
+export function valuesEqual(left: unknown, right: unknown, seen = new WeakMap<object, WeakSet<object>>()): boolean {
   if (Object.is(left, right)) {
     return true;
   }
@@ -348,11 +348,11 @@ function hasBrokenSecretRef(descriptor: SettingDescriptor): boolean {
   );
 }
 
-function canReset(descriptor: SettingDescriptor): boolean {
+export function canReset(descriptor: SettingDescriptor): boolean {
   return descriptor.source === 'instance_override';
 }
 
-async function fetchCatalog(): Promise<SettingsCatalogResponse> {
+export async function fetchCatalog(): Promise<SettingsCatalogResponse> {
   const response = await fetch('/api/v1/settings/catalog?section=user-workspace', {
     headers: { Accept: 'application/json' },
   });
@@ -362,7 +362,7 @@ async function fetchCatalog(): Promise<SettingsCatalogResponse> {
   return response.json();
 }
 
-async function fetchSettingAudit(key: string): Promise<SettingsAuditResponse> {
+export async function fetchSettingAudit(key: string): Promise<SettingsAuditResponse> {
   const query = new URLSearchParams({ key });
   const response = await fetch(`/api/v1/settings/audit?${query.toString()}`, {
     headers: { Accept: 'application/json' },
@@ -409,6 +409,65 @@ function displayAuditValue(
     return 'Not recorded by policy';
   }
   return displayValue(value);
+}
+
+export function SettingAuditHistory({ descriptor, query }: {
+  descriptor: SettingDescriptor;
+  query: { isLoading: boolean; isError: boolean; error: unknown; data?: SettingsAuditResponse | undefined };
+}) {
+  return (
+    <div>
+      {query.isLoading ? (
+        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400" role="status">
+          Loading audit history...
+        </p>
+      ) : query.isError ? (
+        <p className="mt-4 text-sm text-rose-700 dark:text-rose-400" role="alert">
+          {sanitizeError(query.error)} Generated settings remain available.
+        </p>
+      ) : query.data?.items.length ? (
+        <ol className="mt-4 space-y-3">
+          {query.data.items.map((event) => (
+            <li
+              key={event.id}
+              className="rounded-2xl border border-slate-200 p-4 text-sm dark:border-slate-800"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-900 dark:text-white">
+                  {event.event_type.replaceAll('.', ' ').replaceAll('_', ' ')}
+                </span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {formatAuditTimestamp(event.created_at)}
+                </span>
+              </div>
+              <dl className="mt-3 grid gap-2 text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">Previous value</dt>
+                  <dd>{displayAuditValue(event, event.old_value, descriptor.audit.store_old_value)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">New value</dt>
+                  <dd>{displayAuditValue(event, event.new_value, descriptor.audit.store_new_value)}</dd>
+                </div>
+              </dl>
+              {event.reason ? (
+                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Reason: {event.reason}</p>
+              ) : null}
+              {event.actor_user_id ? (
+                <p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
+                  Actor: {event.actor_user_id}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+          No audit events were found for this setting.
+        </p>
+      )}
+    </div>
+  );
 }
 
 interface GeneratedSettingsSectionProps {
@@ -626,55 +685,7 @@ export function GeneratedSettingsSection({
             </Button>
           </div>
 
-          {auditQuery.isLoading ? (
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400" role="status">
-              Loading audit history...
-            </p>
-          ) : auditQuery.isError ? (
-            <p className="mt-4 text-sm text-rose-700 dark:text-rose-400" role="alert">
-              {sanitizeError(auditQuery.error)} Generated settings remain available.
-            </p>
-          ) : auditQuery.data?.items.length ? (
-            <ol className="mt-4 space-y-3">
-              {auditQuery.data.items.map((event) => (
-                <li
-                  key={event.id}
-                  className="rounded-2xl border border-slate-200 p-4 text-sm dark:border-slate-800"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-semibold text-slate-900 dark:text-white">
-                      {event.event_type.replaceAll('.', ' ').replaceAll('_', ' ')}
-                    </span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {formatAuditTimestamp(event.created_at)}
-                    </span>
-                  </div>
-                  <dl className="mt-3 grid gap-2 text-slate-600 dark:text-slate-300 sm:grid-cols-2">
-                    <div>
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">Previous value</dt>
-                      <dd>{displayAuditValue(event, event.old_value, selectedAuditDescriptor.audit.store_old_value)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">New value</dt>
-                      <dd>{displayAuditValue(event, event.new_value, selectedAuditDescriptor.audit.store_new_value)}</dd>
-                    </div>
-                  </dl>
-                  {event.reason ? (
-                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Reason: {event.reason}</p>
-                  ) : null}
-                  {event.actor_user_id ? (
-                    <p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
-                      Actor: {event.actor_user_id}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              No audit events were found for this setting.
-            </p>
-          )}
+          <SettingAuditHistory descriptor={selectedAuditDescriptor} query={auditQuery} />
         </section>
       ) : null}
 
@@ -914,13 +925,19 @@ export function GeneratedSettingsSection({
   );
 }
 
+export function providerProfileOptionLabel(profile: ProviderProfile): string {
+  return `${profile.profile_id} · ${formatHarnessLabel(profile.runtime_id)} / ${profile.provider_label || profile.provider_id}${profile.enabled === false ? ' (disabled)' : ''}`;
+}
+
 /** Chooses a saved Provider Profile ID; a value with no matching profile stays visible. */
-function ProviderProfilePicker({
+export function ProviderProfilePicker({
   descriptor,
+  id,
   value,
   onChange,
 }: {
   descriptor: SettingDescriptor;
+  id?: string;
   value: unknown;
   onChange: (descriptor: SettingDescriptor, value: string | boolean) => void;
 }) {
@@ -934,6 +951,7 @@ function ProviderProfilePicker({
   return (
     <div className="space-y-1">
       <select
+        id={id}
         aria-label={descriptor.title}
         className={settingFieldClassName()}
         value={current}
@@ -942,9 +960,7 @@ function ProviderProfilePicker({
         <option value="">Not set</option>
         {profiles.map((profile) => (
           <option key={profile.profile_id} value={profile.profile_id}>
-            {profile.profile_id} · {formatHarnessLabel(profile.runtime_id)} /{' '}
-            {profile.provider_label || profile.provider_id}
-            {profile.enabled === false ? ' (disabled)' : ''}
+            {providerProfileOptionLabel(profile)}
           </option>
         ))}
         {missing ? (
