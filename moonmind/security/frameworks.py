@@ -165,12 +165,20 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
         from moonmind.security.gli_readiness import GLI_PACK
 
         return GLI_PACK.model_copy(deep=True)
+    if pack_id == "nj-dge-readiness":
+        from moonmind.security.nj_dge import NJ_DGE_PACK
+
+        return NJ_DGE_PACK.model_copy(deep=True)
     raise ValueError(f"Unknown framework pack: {pack_id}")
 
 
 def render_framework_preparation(report: dict) -> str:
     if report["pack"]["id"] == "gli-19-readiness":
         from moonmind.security.gli_readiness import render_assessment
+
+        return render_assessment(report)
+    if report["pack"]["id"] == "nj-dge-readiness":
+        from moonmind.security.nj_dge import render_assessment
 
         return render_assessment(report)
     if report["pack"]["id"] == "ukgc-rts-security":

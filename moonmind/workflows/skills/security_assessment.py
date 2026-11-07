@@ -784,6 +784,19 @@ class AssessmentExecution:
             evidence_type, prepare = GLIEvidence, prepare_assessment
             if selection.audit_ref:
                 raise ValueError("GLI evidence belongs in evidenceRefs")
+        elif pack.id == "nj-dge-readiness":
+            from moonmind.security.nj_dge import (
+                AnnualAssessmentRecords,
+                NJEvidence,
+                NJSystemInputs,
+                prepare_assessment,
+            )
+
+            systems = set(
+                NJSystemInputs.model_validate(selection.system_inputs).systems
+            )
+            audit_type, evidence_type = AnnualAssessmentRecords, NJEvidence
+            prepare = prepare_assessment
         else:
             from moonmind.security.ukgc_rts import (
                 AuditRecord,
@@ -798,7 +811,8 @@ class AssessmentExecution:
                 if row.in_scope
                 for s in row.systems
             }
-            evidence_type, prepare = FrameworkEvidence, prepare_audit
+            audit_type, evidence_type = AuditRecord, FrameworkEvidence
+            prepare = prepare_audit
         if not systems <= set(request.scope.assets):
             raise ValueError("Framework systems exceed admitted assessment scope")
         audit = None
@@ -821,9 +835,11 @@ class AssessmentExecution:
                 refs.append(source_ref)
         if selection.audit_ref:
             _, body = await self.read(selection.audit_ref)
-            audit = AuditRecord.model_validate_json(body)
+            audit = audit_type.model_validate_json(body)
             refs.append(selection.audit_ref)
-            if audit.auditor.independence_ref:
+            if pack.id == "nj-dge-readiness":
+                refs.extend(audit.supporting_refs())
+            elif audit.auditor.independence_ref:
                 refs.append(audit.auditor.independence_ref)
         records, invalid = [], []
         for ref in selection.evidence_refs:
@@ -836,6 +852,8 @@ class AssessmentExecution:
                 invalid.append(ref)
                 continue
             records.append(evidence.model_dump(mode="json", by_alias=True))
+            if pack.id == "nj-dge-readiness":
+                refs.extend(evidence.supporting_refs())
             if ARTIFACT_ID_PATTERN.fullmatch(evidence.provenance.source_ref):
                 refs.append(evidence.provenance.source_ref)
             if evidence.reliance:
