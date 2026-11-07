@@ -4018,6 +4018,28 @@ class DockerContainerJobBackend:
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and "moonmind.security.rgs_assessment" in (
+                *request.request.spec.entrypoint[1:],
+                *request.request.spec.command,
+            ):
+                from moonmind.security.rgs_assessment import bind_job_result
+
+                try:
+                    payload = bind_job_result(
+                        payload,
+                        str(request.terminal_state or "failed"),
+                        request.exit_code,
+                        {
+                            attachment.name: attachment.artifact_ref
+                            for attachment in request.request.spec.input_attachments
+                        },
+                    )
+                except ValueError:
+                    payload = None
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="invalid RGS assessment output",
+                    )
             if payload is not None and "moonmind.security.rng_assessment" in (
                 *request.request.spec.entrypoint[1:],
                 *request.request.spec.command,

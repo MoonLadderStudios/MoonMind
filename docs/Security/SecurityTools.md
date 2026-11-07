@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-The [passive repository scan](PassiveRepoScan.md), repository scanner jobs, Trivy feed snapshots, image and SBOM jobs, cloud posture jobs, web and API assessment jobs, [game math assessments](GameMathAssessment.md), [RNG reviews and bounded diagnostics](RngAssessment.md), imported GitHub alerts, the security Skills, and recurring `security.assess` comparisons are implemented. The conditional tools are not installed.
+[Passive repository scans](PassiveRepoScan.md), repository scanner jobs, Trivy feeds, image/SBOM jobs, cloud and web/API jobs, [game math](GameMathAssessment.md), [RNG reviews](RngAssessment.md), [RGS trace assertions](RgsAssessment.md), GitHub alerts, security Skills, and recurring `security.assess` comparisons are implemented. Conditional tools are not installed.
 
 ## Purpose and ownership
 

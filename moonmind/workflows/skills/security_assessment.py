@@ -35,6 +35,7 @@ from moonmind.security.passive_repo_scan import (
     parse_scan_report_json,
 )
 from moonmind.security.repository_scanners import ScannerSummary
+from moonmind.security.rgs_assessment import RgsAssessment
 from moonmind.security.rng_assessment import RngAssessment
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import redact_sensitive_text
@@ -556,6 +557,45 @@ def _game_math_observation(
             "gameMathSource": summary.provenance.source_ref,
             "gameMathApproval": summary.provenance.approval_ref or "unavailable",
             "gameMathOutcome": summary.outcome,
+        },
+    )
+
+
+def _rgs_observation(request, summary: RgsAssessment, ref: str, created_at: datetime):
+    if summary.game_ref not in request.scope.assets:
+        raise ValueError("game outside admitted assessment scope")
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=[
+            Finding(
+                source="rgs-scenarios",
+                tool="rgs-scenarios",
+                rule_id=row.rule,
+                asset=summary.game_ref,
+                native_id=f"{row.scenario}:{row.rule}:{row.operation}",
+                evidence_refs=[ref],
+            )
+            for row in summary.checks
+            if row.decision == "violation"
+        ],
+        coverage=[
+            Coverage(
+                source="rgs-scenarios",
+                tool="rgs-scenarios",
+                assets=[summary.game_ref],
+                rule_ids=sorted({row.rule for row in summary.checks}),
+                config_ref=content_key(
+                    ["rgs-scenarios", summary.spec_digest, summary.traces_source_ref]
+                ),
+                status="complete" if summary.status == "complete" else "partial",
+            )
+        ],
+        provenance={
+            "rgsSummary": ref,
+            "rgsSpec": summary.spec_digest,
+            "rgsTraces": summary.traces_digest,
         },
     )
 
@@ -1168,6 +1208,43 @@ class AssessmentExecution:
                                     },
                                     "limitations": sorted(game_summary.limitations),
                                     "verification": game_summary.certification,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "rgs-assessment/v1":
+                            rgs_summary = RgsAssessment.model_validate(payload)
+                            if rgs_summary.job:
+                                for input_ref in rgs_summary.job.input_refs.values():
+                                    await self.read(input_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _rgs_observation(
+                                request, rgs_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "rgs-scenarios",
+                                    "target": rgs_summary.game_ref,
+                                    "summaryRef": ref,
+                                    "nativeRefs": {
+                                        "assessment": ref,
+                                        **(
+                                            rgs_summary.job.input_refs
+                                            if rgs_summary.job
+                                            else {}
+                                        ),
+                                    },
+                                    "coverage": observation.coverage[0].status,
+                                    "outcome": rgs_summary.outcome,
+                                    "execution": {
+                                        "scenarios": rgs_summary.stop_reason
+                                        or rgs_summary.status
+                                    },
+                                    "limitations": sorted(rgs_summary.limitations),
+                                    "verification": rgs_summary.verification,
+                                    "specDigest": rgs_summary.spec_digest,
+                                    "inputDigests": rgs_summary.input_digests,
+                                    "retest": rgs_summary.retest,
                                 }
                             )
                         elif payload.get("schemaVersion") == "rng-assessment/v1":
