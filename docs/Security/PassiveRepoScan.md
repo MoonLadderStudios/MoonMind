@@ -369,6 +369,64 @@ notification advice. It performs no submission. `prepared` means supplied
 preparation records cover the selected elements; an actual independent audit or
 private inspection remains **Unverified**. No human-role system is involved.
 
+## New Jersey DGE readiness
+
+Choose **New Jersey DGE Readiness** in the shared catalog, or use
+`framework.packId: nj-dge-readiness` with `security.assess`. Saved presets,
+requirement-specific systems/periods, evidence requests, and restricted JSON and
+Markdown exports use the same path as the UKGC pack. No submission is transmitted.
+
+Set `systemInputs.entityName`, `entityType`, `systems` and `applicabilityBasis`.
+The basis identifies the licence, content contract and system inventory used to
+choose scope. `casino_licensee` needs `offersInternetGaming` for
+`nj.internet.annual` ([13:69O-1.2(q)](https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-1-2));
+`nj.network.annual` applies to casino-licensee networks
+([13:69D-2.4(e)](https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69D-2-4)).
+For `rgs_content_provider`, `nj.rgs.annual` applies only when
+`providesContentToOtherOperator` is true
+([13:69O-3.1(a)(4)](https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1)).
+`unrelated_supplier` inherits none of these annual obligations. Missing activity
+inputs leave applicability Unverified. Omitted `annualRules` evaluates all three;
+an explicit list limits the annual rules selected, with unselected rules visible.
+These are annual system-integrity and security assessments, not an expressly
+specified penetration-test-only obligation.
+
+`auditRef` names an artifact containing `kind` (`synthetic` or `external`) and
+`assessments`. Each entry has an annual `requirementId`, `scope`, `systems`,
+`period`, `assessors` (each with `name`, `affiliation`, `independent` and an
+`independenceRef` artifact), `assessedOn`, `findings` (an explicit empty list means
+none), `correctiveActions`, `licenseeResponse` and `opinion`. Record why corrective
+action is unnecessary when appropriate. `professionalEvidenceRef`,
+`divisionApprovalRef`, `reportRef` and `submissionRef` identify evidence of
+professional suitability, approval of the selected assessor, the report and its
+annual submission. Missing fields are requested individually; a clean scan
+cannot supply an independent professional opinion.
+
+Other requirement IDs are `nj.rgs.internal-controls`, `nj.rgs.games-releases`,
+`nj.rgs.incidents`, `nj.rgs.transactions`, `nj.rgs.integration` and
+`nj.partner.player-accounts`. Evidence artifacts use the scoped record fields
+described above, with `kind: control_evidence` and method `evidence` or
+`observation`. Add `divisionApprovalRef` for controls and games/releases,
+`operatorEvidenceRef` for transactions, integration and partner-owned accounts,
+and `incidentDisposition` (`events_reported` or `no_reportable_incidents`).
+Reported incidents also need a `notificationRef` covering operator and Division
+notifications. Identify the partner and responsibility boundary in the evidence
+description. Certificates, technical assessments and generic audit records never
+supply these missing approvals or partner records. All supporting artifact
+references are authorized and retained with the report.
+
+Reports snapshot the selected source publications, amendment notes, review date,
+entity basis, systems, periods and evidence. The source snapshot is not a DGE
+technical-standard version. The [DGE rule index](https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/)
+and [Technical Services Bureau](https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/slot-laboratory-tsb/)
+remain references for current codification and guidance; direct retrieval was
+unavailable at the recorded review. Source completeness and GLI adoption remain
+Unverified: the historical CHAPTER69O PDF alone is insufficient, and no newest
+GLI edition is assumed adopted. Later source or evidence updates create a new
+preparation without changing retained reports. `prepared` describes recorded
+evidence coverage. Private assessor, customer/operator and Division verification
+remains **Unverified**, including for complete synthetic fixtures.
+
 ## Composable security review
 
 The resolved `security-review`, `security-investigate` and `security-remediate`

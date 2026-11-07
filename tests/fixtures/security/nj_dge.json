@@ -1,0 +1,215 @@
+{
+  "profiles": {
+    "casino_licensee": {
+      "entityName": "Synthetic casino",
+      "entityType": "casino_licensee",
+      "offersInternetGaming": true,
+      "systems": [
+        "casino"
+      ],
+      "applicabilityBasis": "Synthetic casino license and network inventory"
+    },
+    "rgs_content_provider": {
+      "entityName": "Synthetic RGS",
+      "entityType": "rgs_content_provider",
+      "providesContentToOtherOperator": true,
+      "systems": [
+        "rgs"
+      ],
+      "applicabilityBasis": "Synthetic content contract with a separate Internet operator"
+    },
+    "unrelated_supplier": {
+      "entityName": "Synthetic unrelated supplier",
+      "entityType": "unrelated_supplier",
+      "systems": [
+        "vendor"
+      ],
+      "applicabilityBasis": "Synthetic tooling vendor; no RGS operations or casino licence"
+    }
+  },
+  "framework": {
+    "packId": "nj-dge-readiness",
+    "systemInputs": {
+      "entityName": "Synthetic RGS",
+      "entityType": "rgs_content_provider",
+      "providesContentToOtherOperator": true,
+      "systems": [
+        "rgs"
+      ],
+      "applicabilityBasis": "Synthetic content contract with a separate Internet operator"
+    },
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    },
+    "requirementChoices": {}
+  },
+  "evidence": [
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.rgs.internal-controls"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "divisionApprovalRef": "art_synthetic_division_approval"
+    },
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.rgs.games-releases"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "divisionApprovalRef": "art_synthetic_division_approval"
+    },
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.rgs.incidents"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "incidentDisposition": "events_reported",
+      "notificationRef": "art_synthetic_incident_notice"
+    },
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.rgs.transactions"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "operatorEvidenceRef": "art_synthetic_operator_evidence"
+    },
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.rgs.integration"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "operatorEvidenceRef": "art_synthetic_operator_evidence"
+    },
+    {
+      "kind": "control_evidence",
+      "requirementIds": [
+        "nj.partner.player-accounts"
+      ],
+      "systems": [
+        "rgs"
+      ],
+      "period": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "method": "evidence",
+      "description": "Synthetic scoped records, examination and responsibility evidence",
+      "provenance": {
+        "sourceRef": "synthetic:record",
+        "issuer": "Synthetic evidence owner",
+        "version": "fixture-1",
+        "recordedOn": "2026-12-31"
+      },
+      "operatorEvidenceRef": "art_synthetic_operator_evidence"
+    }
+  ],
+  "audit": {
+    "kind": "synthetic",
+    "assessments": [
+      {
+        "requirementId": "nj.rgs.annual",
+        "systems": [
+          "rgs"
+        ],
+        "period": {
+          "start": "2026-01-01",
+          "end": "2026-12-31"
+        },
+        "scope": "RGS production and backup system integrity and security",
+        "assessors": [
+          {
+            "name": "Synthetic assessor",
+            "affiliation": "Synthetic independent firm",
+            "independent": true,
+            "independenceRef": "art_synthetic_independence"
+          }
+        ],
+        "assessedOn": "2026-12-31",
+        "findings": [],
+        "correctiveActions": "None recommended in this synthetic fixture",
+        "licenseeResponse": "Synthetic licensee acknowledges no findings",
+        "opinion": "Synthetic independent system integrity and security opinion",
+        "professionalEvidenceRef": "art_synthetic_professional_basis",
+        "divisionApprovalRef": "art_synthetic_assessor_approval",
+        "reportRef": "art_synthetic_annual_report",
+        "submissionRef": "art_synthetic_submission_receipt"
+      }
+    ]
+  }
+}
