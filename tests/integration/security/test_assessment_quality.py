@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
+from copy import deepcopy
 
 import pytest
 
 from api_service.services.presets.catalog import PresetCatalogService
+from moonmind.security.assessments import FINDING_STATES
 from moonmind.security.passive_repo_scan import run_passive_scan
+from moonmind.workflows.skills import security_assessment
 from tests.integration.security import test_admitted_assessment_journeys as admitted
 from tests.integration.security import test_cloud_assessment_jobs as cloud
 from tests.integration.security import test_recurring_assessments as recurring
@@ -25,6 +29,66 @@ def case(case_id):
     return next(
         row for row in json.loads(MANIFEST.read_text())["cases"] if row["id"] == case_id
     )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "dropped-finding",
+        "dropped-coverage",
+        "false-clean",
+        "false-fixed",
+        "false-report",
+    ],
+)
+async def test_quality_rejects_corrupted_assessment(
+    environment, tmp_path, monkeypatch, corruption
+):
+    from tests.integration.security import quality
+
+    # Rejected probes must not replace the real corpus run's retained result.
+    monkeypatch.setattr(quality, "OUTPUT", tmp_path / "rejected-assessments")
+    if corruption in {"dropped-finding", "dropped-coverage"}:
+        original = security_assessment._passive_observation
+
+        def corrupt(*args, **kwargs):
+            result = original(*args, **kwargs).model_copy(deep=True)
+            if corruption == "dropped-finding":
+                result.findings = []
+            else:
+                result.coverage[0].assets = []
+            return result
+
+        monkeypatch.setattr(security_assessment, "_passive_observation", corrupt)
+    elif corruption in {"false-clean", "false-fixed"}:
+        original = security_assessment.compare_observations
+
+        def corrupt(*args, **kwargs):
+            result = deepcopy(original(*args, **kwargs))
+            result["counts"]["new"] = 0
+            if corruption == "false-clean":
+                result["findings"] = []
+            else:
+                for row in result["findings"]:
+                    row.update(
+                        state="remediated_verified", verification="retest_passed"
+                    )
+                result["counts"]["remediated_verified"] = len(result["findings"])
+            return result
+
+        monkeypatch.setattr(security_assessment, "compare_observations", corrupt)
+    else:
+        original = security_assessment._summary
+
+        def corrupt(comparison):
+            comparison = deepcopy(comparison)
+            comparison["counts"]["new"] = 0
+            return original(comparison)
+
+        monkeypatch.setattr(security_assessment, "_summary", corrupt)
+
+    with pytest.raises(AssertionError):
+        await test_source_quality(environment, tmp_path, "source-vulnerable")
 
 
 async def report(service, summary_ref, assets, key, tmp_path):
@@ -66,12 +130,120 @@ async def report(service, summary_ref, assets, key, tmp_path):
         service, expanded["steps"][0]["tool"]["inputs"], key=key
     )
     assert outputs["publicationOutcome"] == "published", outputs["diagnostics"]
-    return [
+    refs = [
         preset_ref,
         outputs["scanRef"],
         outputs["comparisonRef"],
         recurring.report_ref(outputs),
     ]
+    native = await recurring.read(service, summary_ref)
+    work = await recurring.read(service, outputs["scanRef"])
+    comparison = await recurring.read(service, outputs["comparisonRef"])
+    assessed = comparison["observation"]
+    assert assessed == work["observation"]
+    assert comparison["baselineStatus"] == "initial"
+    assert comparison["decisions"] == []
+    assert all(row["state"] == "new" for row in comparison["findings"])
+    findings = [row["finding"] for row in comparison["findings"]]
+    assert findings == assessed["findings"]
+
+    if native.get("toolRef"):
+        actual = source_facts(native, summary_ref)
+        labels = [f"{row['ruleId']}@{row['asset']}" for row in findings]
+        expected_assets = native["coveredFiles"]
+        complete = native["verdict"] != "incomplete"
+        assert all(
+            row["source"] == row["tool"] == native["toolRef"]
+            and row["evidenceRefs"] == [summary_ref]
+            for row in findings
+        )
+    else:
+        # Native identities connect assessment findings to the oracle's route or
+        # resource labels. Equality also catches changed rules, assets or citations.
+        assert sorted(map(canonical, findings)) == sorted(
+            map(canonical, native["result"]["findings"])
+        )
+        expected_assets = native["result"]["examinedAssets"]
+        complete = native["status"] == "complete" and bool(expected_assets)
+        if native["schemaVersion"] == "cloud-posture/v1":
+            native["qualitySummaryRef"] = summary_ref
+            actual = cloud_facts(native)
+            by_id = {row["findingUid"]: row for row in native["findings"]}
+            labels = [
+                f"{row['ruleId']}@{uid}"
+                for row in findings
+                for uid in by_id[row["nativeId"]]["resourceUids"]
+            ]
+        else:
+            actual = web_facts(native, summary_ref)
+            by_id = {row["findingId"]: row for row in native["findings"]}
+            labels = [
+                f"{row['finding']['ruleId']}@{by_id[row['findingId']]['route']}"
+                for row in comparison["findings"]
+            ]
+
+    assert sorted(set(labels)) == actual["findings"]
+    covered_assets = {asset for row in assessed["coverage"] for asset in row["assets"]}
+    assert covered_assets == set(expected_assets)
+    assert all(row["status"] == "complete" for row in assessed["coverage"]) == complete
+    coverage_status = "complete" if complete else "stale_or_partial"
+    assert comparison["coverageStatus"] == outputs["coverageStatus"] == coverage_status
+    assert work["scanOutcome"] == ("completed" if complete else "incomplete")
+    counts = {state: len(findings) if state == "new" else 0 for state in FINDING_STATES}
+    counts["review_required"] = 0
+    assert comparison["counts"] == outputs["counts"] == counts
+    _, body = await service.read(
+        artifact_id=refs[-1], access=recurring.access_for_test("workflow:assessment")
+    )
+    text = body.decode()
+    assert f"Coverage: {coverage_status}. Baseline: initial." in text.splitlines()
+    reported_counts = re.findall(r"^- ([a-z ]+): (\d+)$", text, re.MULTILINE)
+    assert sorted(reported_counts) == sorted(
+        (name.replace("_", " "), str(count)) for name, count in counts.items()
+    )
+    actual.update(
+        findings=sorted(set(labels)),
+        satisfied=complete and not findings,
+        evidenceByFinding={
+            label: [
+                *actual["executionEvidence"],
+                outputs["scanRef"],
+                outputs["comparisonRef"],
+                refs[-1],
+            ]
+            for label in labels
+        },
+        executionEvidence=[
+            *actual["executionEvidence"],
+            summary_ref,
+            outputs["scanRef"],
+            outputs["comparisonRef"],
+            refs[-1],
+        ],
+    )
+    if actual["outcome"] in {"clean", "vulnerable"}:
+        actual["outcome"] = "vulnerable" if findings else "clean"
+    if native.get("toolRef"):
+        actual["covered"] = sorted(covered_assets)
+    return actual, refs
+
+
+def canonical(finding):
+    return json.dumps(finding, sort_keys=True)
+
+
+def source_facts(payload, native_ref):
+    return observation(
+        {
+            "finding_present": "vulnerable",
+            "clean_with_coverage": "clean",
+            "incomplete": "partial",
+        }[payload["verdict"]],
+        [f"{row['category']}@sample.py" for row in payload["findings"]],
+        payload["coveredFiles"],
+        native_ref=native_ref,
+        satisfied=payload["verdict"] == "clean_with_coverage",
+    )
 
 
 @pytest.mark.parametrize(
@@ -86,30 +258,23 @@ async def test_source_quality(environment, tmp_path, case_id):
     run.useful()
     ref = await recurring.put(environment.service, native)
 
-    def facts(payload, native_ref):
-        return observation(
-            {
-                "finding_present": "vulnerable",
-                "clean_with_coverage": "clean",
-                "incomplete": "partial",
-            }[payload["verdict"]],
-            [f"{row['category']}@sample.py" for row in payload["findings"]],
-            payload["coveredFiles"],
-            native_ref=native_ref,
-            satisfied=payload["verdict"] == "clean_with_coverage",
-        )
-
-    observed = facts(native, ref)
     # Independent detector execution, not a replayed/cached observation.
     repeated_native = run_passive_scan(source).to_payload()
     repeat_ref = await recurring.put(environment.service, repeated_native)
-    reports = await report(environment.service, ref, ["sample.py"], case_id, tmp_path)
+    observed, reports = await report(
+        environment.service, ref, ["sample.py"], case_id, tmp_path
+    )
+    repeat_path = tmp_path / "repeat"
+    repeat_path.mkdir()
+    repeated, repeat_reports = await report(
+        environment.service, repeat_ref, ["sample.py"], case_id + "-repeat", repeat_path
+    )
     await run.finish(
         environment.service,
         case_id,
         observed,
-        [ref, repeat_ref, *reports],
-        repeat=facts(repeated_native, repeat_ref),
+        [ref, repeat_ref, *reports, *repeat_reports],
+        repeat=repeated,
         provenance={
             "tool": native["toolRef"],
             "rules": "outbound-scan plus prefixed credential assignments",
@@ -171,18 +336,18 @@ async def test_cloud_quality(environment, tmp_path, monkeypatch, provider, outco
     job_ids = [accepted.job_id]
     names = cloud.artifact_names(harness, accepted)
     summary["qualitySummaryRef"] = names["summary"]["artifactRef"]
-    observed = cloud_facts(summary)
     # Follow the production workflow order and read artifacts after job removal.
     await admitted.finish(seen["backend"], seen["request"], tmp_path)
     harness.assert_no_seed()
     refs = [row["artifactRef"] for row in names.values() if row.get("artifactRef")]
-    refs += await report(
+    observed, reports = await report(
         environment.service,
         names["summary"]["artifactRef"],
         [f"aws:{cloud.ACCOUNT}"],
         case_id,
         tmp_path,
     )
+    refs += reports
     repeat = None
     if outcome == "clean":
         again, _, _, accepted = await harness.run(
@@ -191,13 +356,22 @@ async def test_cloud_quality(environment, tmp_path, monkeypatch, provider, outco
         job_ids.append(accepted.job_id)
         repeat_names = cloud.artifact_names(harness, accepted)
         again["qualitySummaryRef"] = repeat_names["summary"]["artifactRef"]
-        repeat = cloud_facts(again)
         await admitted.finish(seen["backend"], seen["request"], tmp_path)
         refs += [
             row["artifactRef"]
             for row in repeat_names.values()
             if row.get("artifactRef")
         ]
+        repeat_path = tmp_path / "repeat"
+        repeat_path.mkdir()
+        repeat, repeat_reports = await report(
+            environment.service,
+            repeat_names["summary"]["artifactRef"],
+            [f"aws:{cloud.ACCOUNT}"],
+            case_id + "-repeat",
+            repeat_path,
+        )
+        refs += repeat_reports
     await run.finish(
         environment.service,
         case_id,
@@ -266,17 +440,17 @@ async def test_web_quality(environment, tmp_path, monkeypatch, target, outcome):
     summary, _, _, accepted, _ = await harness.run(request, case_id)
     run.useful()
     names = web.artifact_names(harness, accepted)
-    observed = web_facts(summary, names["summary"]["artifactRef"])
     await admitted.finish(harness.backend, harness.request, tmp_path)
     harness.assert_no_secret()
     refs = [row["artifactRef"] for row in names.values() if row.get("artifactRef")]
-    refs += await report(
+    observed, reports = await report(
         environment.service,
         names["summary"]["artifactRef"],
         [web.origin(app)],
         case_id,
         tmp_path,
     )
+    refs += reports
     await run.finish(
         environment.service,
         case_id,
