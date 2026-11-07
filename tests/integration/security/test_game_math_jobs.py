@@ -156,6 +156,9 @@ async def owned(environment, payload: bytes) -> str:
 class Job:
     """One admitted profile job, launched up to ``docker create``."""
 
+    profile_ref = "game-math"
+    result_schema = b'"game-math-assessment/v1"'
+
     def __init__(self, environment, tmp_path, monkeypatch):
         self.environment, self.tmp_path = environment, tmp_path
         self.monkeypatch = monkeypatch
@@ -190,7 +193,7 @@ class Job:
                     "source": {"source": "workflow", "workflowId": "assessment"},
                     "spec": {
                         "workloadProfile": {
-                            "profileRef": "game-math",
+                            "profileRef": self.profile_ref,
                             "mode": "evaluate",
                             "arguments": arguments,
                         },
@@ -258,7 +261,7 @@ class Job:
         return next(
             ref
             for ref, body in self.published.items()
-            if b'"game-math-assessment/v1"' in body
+            if self.result_schema in body
         )
 
     async def assess(self, ref: str, key: str) -> dict:

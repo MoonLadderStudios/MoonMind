@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-This describes MoonMind's security program. The [passive repository scan](PassiveRepoScan.md), repository scanner jobs, Trivy feed snapshots, image and SBOM jobs, cloud posture jobs, web and API assessment jobs, [game math assessments](GameMathAssessment.md), imported GitHub alerts, the security Skills, and recurring `security.assess` comparisons are implemented. The conditional tools are not installed.
+The [passive repository scan](PassiveRepoScan.md), repository scanner jobs, Trivy feed snapshots, image and SBOM jobs, cloud posture jobs, web and API assessment jobs, [game math assessments](GameMathAssessment.md), [RNG reviews and bounded diagnostics](RngAssessment.md), imported GitHub alerts, the security Skills, and recurring `security.assess` comparisons are implemented. The conditional tools are not installed.
 
 ## Purpose and ownership
 

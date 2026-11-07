@@ -4018,6 +4018,25 @@ class DockerContainerJobBackend:
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and "moonmind.security.rng_assessment" in (
+                *request.request.spec.entrypoint[1:],
+                *request.request.spec.command,
+            ):
+                # A completed file alone cannot erase a failed job (including
+                # a kill after the CLI wrote it). Revalidate before exporting;
+                # seeds, state and raw samples are outside this result contract.
+                from moonmind.security.rng_assessment import bind_job_result
+
+                try:
+                    payload = bind_job_result(
+                        payload, str(request.terminal_state or "failed"), request.exit_code
+                    )
+                except ValueError:
+                    payload = None
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="invalid RNG assessment output",
+                    )
             if payload is not None and delivered:
                 payload = _without_delivered(payload, entry["media_type"], delivered)
                 if payload is None:
