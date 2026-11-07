@@ -345,6 +345,71 @@ records closed-upstream/observed-locally and open-upstream/absent-locally
 conflicts. Secret alerts are not matched, since no shared identity survives
 sanitization.
 
+### GitHub change-control periods
+
+Select `github-change-control` in `security.assess` with an explicit period and
+repository/environment scope:
+
+```json
+{
+  "githubChangeControl": {
+    "repositories": ["owner/repository"],
+    "environments": ["production"],
+    "since": "2026-11-01T00:00:00Z",
+    "until": "2026-11-06T00:00:00Z",
+    "requirementIds": ["CC8.1", "8.32"],
+    "sampleSize": 25
+  }
+}
+```
+
+Include each repository in `scope.assets`. Credentials come from the existing
+run admission's `read` operation; selection never grants access to another
+repository. A hidden, denied or unadmitted selected repository remains an
+explicit coverage gap. Endpoints may require additional GitHub read permissions
+for reviews, Actions, checks, deployments and environments; the collector reports
+denials without requesting broader authority or substituting another token.
+It issues only GETs and publishes no issues, PRs, comments or repository changes.
+
+The period includes `since` and excludes `until`. Closed PRs are enumerated and
+filtered by merge time; default-branch commits use commit time, which does not
+establish when a push occurred. Selected environments' deployment records and
+statuses are enumerated separately. Review/check/workflow identities link to the
+observed PR head and merge commit. A production link requires an exact observed
+merge/deployment commit match, the provider's production-environment flag, and a
+successful deployment status in the period after the merge. An approved merged
+PR alone retains an unresolved production link. Current rules, reviews and
+verification results are collection-time snapshots, not proof of historical
+control operation. Missing historical deployment statuses remain a retention
+limitation.
+
+`perPage` (100), `maxPages` per endpoint (20), `maxRequests` (200), `maxItems`
+(1000), `maxBytes` (4 MiB) and `maxSeconds` (60) bound collection across the
+selection. `maxSeconds` must fit the assessment's base budget. Each response is
+bounded to 512 KiB. Retries reserve requests and bytes before sending; after an
+interrupted exchange the reserved bytes remain charged unless its saved page
+can reconcile the response. Restart reuses saved pages, the original deadline
+and consumed budgets. Throttling/transient retries are bounded to three attempts
+per page; lengthy throttles, missing pages, unavailable endpoints and exhausted
+bounds produce incomplete coverage while retaining collected evidence.
+
+The restricted report retains a separate source population and deterministic
+sample with its population reference, selection rationale and coverage limits.
+Exceptions explain emergency labels, unresolved reviews/deployments, deployments
+without a period PR and possible direct pushes; an absent PR association alone
+cannot prove a direct push. Source pages retain query scope, collection time,
+identities and timestamps, excluding PR/review bodies and workflow logs. Artifact
+dependency seals retain the sample, population and sources together. The
+population stores verification once per repository/commit, referenced by changes
+and deployments. Above 4 MiB it is retained as ordered binary parts through a
+`github-change-control-population-manifest/v1` artifact; concatenate `partRefs`
+to read the complete population, including every source page reference. The emitted
+`FrameworkEvidence` record carries caller-selected SOC 2/ISO control IDs and feeds
+the existing framework preparation path as `technical_assessment` evidence;
+collection does not establish compliance. Live-account and historical-population
+comparisons require a separately authorized read-only account and known source
+period; synthetic integration covers the supported implementation journey.
+
 ## UKGC RTS audit preparation
 
 Choose **UKGC RTS Security Audit Preparation** in the shared preset catalog or

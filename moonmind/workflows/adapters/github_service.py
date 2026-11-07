@@ -988,6 +988,18 @@ class GitHubService:
                 client, api_base=api_base, headers=headers, request=request
             )
 
+    async def read_change_control(self, request: Any, *, execution: Any):
+        """Read a selected period using existing repository and artifact authority.
+
+        No credential fallback or new repository operation is admitted here.
+        Observed commit identities are evidence, never installation selections.
+        """
+        from moonmind.security.github_change_control import collect_period
+
+        if not str(execution.execution.get("workflow_id") or "").strip():
+            raise ValueError("An admitted workflow is required for period collection")
+        return await collect_period(self, execution, request)
+
     async def _repository_reader(
         self,
         repository: str,
