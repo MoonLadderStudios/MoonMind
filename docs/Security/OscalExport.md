@@ -68,7 +68,8 @@ owner and pass its ID as `contextRef`. The typed contract is
   descriptive parties, not MoonMind accounts or permission grants.
 - `procedures`: `id`, native `controlId`, `objective`, `methods` (`EXAMINE`,
   `INTERVIEW`, `TEST`), nonempty `steps`, admitted `assets`, and
-  `responsibleParty` UUID.
+  `responsibleParty` UUID. Full objectives stay in prose and activity
+  descriptions; task titles collapse whitespace to one line.
 - `findingTargets`: a map from native finding ID to `procedureId`, explicit
   `status` (`satisfied` or `not-satisfied`) and recorded `reason`.
 - `remediations`: `id`, `findingId`, `riskStatement`, `description`, explicit

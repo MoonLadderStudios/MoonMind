@@ -218,6 +218,29 @@ def test_complete_documents_validate_against_official_release(model):
     validate_document(model, docs[model])
 
 
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+def test_multiline_objectives_preserve_prose_in_valid_exports(line_break):
+    objective = (
+        "Assess the recorded access review."
+        + line_break
+        + "Confirm the recorded revocations."
+    )
+
+    def change(context):
+        context["procedures"][0]["objective"] = objective
+
+    docs, _ = documents(change)
+    for model in MODELS:
+        validate_document(model, docs[model])
+    plan = docs["assessment-plan"]["assessment-plan"]
+    assert plan["tasks"][0]["title"] == (
+        "Assess the recorded access review. Confirm the recorded revocations."
+    )
+    definitions = plan["local-definitions"]
+    assert definitions["objectives-and-methods"][0]["parts"][0]["prose"] == objective
+    assert definitions["activities"][0]["description"] == objective
+
+
 def test_supported_semantics_and_references():
     docs, (comparison, report, context, ssp) = documents()
     catalog = docs["catalog"]["catalog"]

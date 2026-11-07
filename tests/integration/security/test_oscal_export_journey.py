@@ -72,9 +72,17 @@ async def export_request(service):
     return request, context
 
 
-async def test_restricted_export_download_retry_and_retention(environment):
+@pytest.mark.parametrize("multiline_objective", [False, True])
+async def test_restricted_export_download_retry_and_retention(
+    environment, multiline_objective
+):
     service = environment.service
     request, context = await export_request(service)
+    if multiline_objective:
+        context["procedures"][0][
+            "objective"
+        ] = "Assess the recorded access review.\nConfirm the recorded revocations."
+        request["oscalExport"]["contextRef"] = await put(service, context)
     result = await invoke(service, request)
     assert result["oscalExport"]["status"] == "exported", result.get("oscalExport")
     exports = result["oscalExport"]["artifacts"]
@@ -89,6 +97,22 @@ async def test_restricted_export_download_retry_and_retention(environment):
             await service.read(
                 artifact_id=ref, access=access_for_test("workflow:unrelated")
             )
+    plan = (await read(service, exports["assessment-plan"]))["assessment-plan"]
+    objective = context["procedures"][0]["objective"]
+    assert (
+        plan["local-definitions"]["objectives-and-methods"][0]["parts"][0]["prose"]
+        == objective
+    )
+    assert plan["local-definitions"]["activities"][0]["description"] == objective
+    results = (await read(service, exports["assessment-results"]))["assessment-results"]
+    assert results["import-ap"]["href"] == (
+        "urn:moonmind:artifact:" + exports["assessment-plan"]
+    )
+    assert await read(service, result["comparisonRef"])
+    _, native = await service.read(
+        artifact_id=report_ref(result), access=access_for_test("operator")
+    )
+    assert b"finding" in native.lower()
     artifacts = await service.list_for_execution(
         namespace="default",
         workflow_id="assessment",

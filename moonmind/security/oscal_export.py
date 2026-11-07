@@ -408,7 +408,7 @@ class OscalAdapter:
                 {
                     "uuid": self.uid("task:" + p.id),
                     "type": "action",
-                    "title": p.objective,
+                    "title": " ".join(p.objective.split()),
                     "associated-activities": [
                         {
                             "activity-uuid": self.uid("activity:" + p.id),
