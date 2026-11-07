@@ -718,7 +718,7 @@ def _render_value(
                 # as "false". Keep actual boolean/numeric rendering below.
                 if isinstance(native, str):
                     return native
-                if isinstance(native, (dict, list)):
+                if native is None or isinstance(native, (dict, list)):
                     return native
                 rendered = str(native)
             else:
@@ -3185,6 +3185,33 @@ class PresetCatalogService:
                 resolved[name] = raw_value
                 continue
             field_schema = definition.get("schema")
+            if isinstance(field_schema, dict) and field_schema.get("type") == "array":
+                item_schema = field_schema.get("items") or {}
+                valid = isinstance(raw_value, list)
+                if valid:
+                    valid = (
+                        len(raw_value) >= field_schema.get("minItems", 0)
+                        and len(raw_value)
+                        <= field_schema.get("maxItems", len(raw_value))
+                        and all(
+                            _value_matches_input_schema(item_schema, item)
+                            for item in raw_value
+                        )
+                    )
+                if not valid or _contains_secret_like_value(raw_value):
+                    raise PresetValidationError(
+                        f"Input '{name}' must be an array matching its item schema without secret-like values.",
+                        errors=[
+                            {
+                                "path": f"preset.inputs.{name}",
+                                "message": f"{definition.get('label') or name} must match its array schema.",
+                                "code": "invalid_type",
+                                "recoverable": True,
+                            }
+                        ],
+                    )
+                resolved[name] = list(raw_value)
+                continue
             if isinstance(field_schema, dict) and field_schema.get("type") == "object":
                 if not isinstance(raw_value, dict):
                     raise PresetValidationError(

@@ -685,7 +685,98 @@ class AssessmentExecution:
             "outcome": "complete" if imported.complete(observed_at) else "incomplete",
         }
 
+    async def prepare_framework(
+        self, request: AssessmentRequest
+    ) -> tuple[str, dict] | None:
+        if request.framework is None:
+            return None
+        from moonmind.security.frameworks import FrameworkEvidence, load_framework_pack
+        from moonmind.security.ukgc_rts import (
+            AuditRecord,
+            UKGCSystemInputs,
+            prepare_audit,
+        )
+
+        selection = request.framework
+        pack = load_framework_pack(selection.pack_id)
+        system = UKGCSystemInputs.model_validate(selection.system_inputs)
+        systems = {
+            s for row in system.critical_systems if row.in_scope for s in row.systems
+        }
+        if not systems <= set(request.scope.assets):
+            raise ValueError("Framework systems exceed admitted assessment scope")
+        audit = None
+        refs = list(selection.evidence_refs)
+        if selection.audit_ref:
+            _, body = await self.read(selection.audit_ref)
+            audit = AuditRecord.model_validate_json(body)
+            refs.append(selection.audit_ref)
+            if audit.auditor.independence_ref:
+                refs.append(audit.auditor.independence_ref)
+        records, invalid = [], []
+        for ref in selection.evidence_refs:
+            _, body = await self.read(ref)
+            try:
+                # The artifact owner supplies this identity, not authored JSON.
+                payload = json.loads(body)
+                evidence = FrameworkEvidence.model_validate(
+                    {**payload, "artifactRef": ref}
+                )
+            except (ValueError, TypeError):
+                invalid.append(ref)
+                continue
+            records.append(evidence.model_dump(mode="json", by_alias=True))
+            if ARTIFACT_ID_PATTERN.fullmatch(evidence.provenance.source_ref):
+                refs.append(evidence.provenance.source_ref)
+            if evidence.reliance:
+                refs.append(evidence.reliance.review_ref)
+        for ref in dict.fromkeys(refs):
+            await self.digest(ref)
+        report = prepare_audit(
+            selection,
+            evidence=records,
+            audit=audit.model_dump(mode="json", by_alias=True) if audit else None,
+        )
+        for ref in invalid:
+            report["evidenceRequests"].append(
+                {
+                    "id": "evidence." + ref,
+                    "artifactRef": ref,
+                    "prompt": "Supply a scoped evidence record with provenance, period, systems, control IDs and enquiry/evidence/observation method; an uploaded document alone cannot establish control coverage.",
+                }
+            )
+            report["readiness"] = "incomplete"
+        key = content_key(
+            {
+                "request": selection.model_dump(mode="json", by_alias=True),
+                "pack": pack.model_dump(mode="json", by_alias=True),
+                "evidence": {ref: self.digests[ref] for ref in sorted(set(refs))},
+            }
+        )
+        saved = await self.saved(kind="security.framework", key=key)
+        if saved:
+            root, report = saved
+        else:
+            root = await self.write(_json(report), kind="security.framework", key=key)
+
+        async def dependencies():
+            return [
+                ArtifactDependency(
+                    ref, await self.digest(ref), True, "security.framework-input"
+                )
+                for ref in dict.fromkeys(refs)
+            ]
+
+        await self.seal(root, dependencies)
+        return root, report
+
     async def execute(self, request: AssessmentRequest) -> ToolResult:
+        try:
+            framework = await self.prepare_framework(request)
+        except (ValueError, TypeError) as exc:
+            raise ToolFailure(
+                "INVALID_INPUT", "Invalid framework assessment inputs.", False
+            ) from exc
         now = datetime.now(UTC)
         refs = [*request.report_refs]
         if request.inventory_ref:
@@ -1220,6 +1311,14 @@ class AssessmentExecution:
                 "unverified": github["unverified"],
             }
         evidence = [scan_ref] + ([github["nativeRef"]] if github else [])
+        if framework:
+            framework_ref, framework_report = framework
+            evidence.append(framework_ref)
+            outputs.update(
+                frameworkRef=framework_ref,
+                frameworkReadiness=framework_report["readiness"],
+                evidenceRequests=framework_report["evidenceRequests"],
+            )
         try:
             summary = (
                 _summary(comparison)
@@ -1227,8 +1326,13 @@ class AssessmentExecution:
                 + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
+            if framework:
+                from moonmind.security.ukgc_rts import render_audit_preparation
+
+                summary += ("\n" + render_audit_preparation(framework_report)).encode()
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
+                + ([framework_ref] if framework else [])
             )
             saved_summary = await self.service.list_for_execution(
                 **self.execution, link_type="report.primary", access=self.access
@@ -1285,6 +1389,12 @@ class AssessmentExecution:
                     principal=self.principal,
                     execution_ref={**self.execution, "link_type": link_type},
                 )
+            if framework:
+                await self.service.link_artifact(
+                    artifact_id=framework_ref,
+                    principal=self.principal,
+                    execution_ref={**self.execution, "link_type": "report.structured"},
+                )
             if review_readable:
                 await self.service.link_artifact(
                     artifact_id=request.review_ref,
@@ -1293,7 +1403,9 @@ class AssessmentExecution:
                 )
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
-                structured_ref={"artifact_id": comparison_ref},
+                structured_ref={
+                    "artifact_id": framework_ref if framework else comparison_ref
+                },
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",

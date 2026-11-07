@@ -46,6 +46,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "jira-breakdown-implement",
         "jira-breakdown-orchestrate",
         "pr-review-resolve",
+        "security-ukgc-rts",
     }
 )
 
