@@ -63,7 +63,8 @@ def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
         return {
             "name": name,
             "description": (
-                "Compare retained security evidence, import existing GitHub "
+                "Compare retained security evidence, assess explicit requirement objectives, "
+                "import existing GitHub "
                 "security alerts, collect scoped identity lifecycle evidence for review, "
                 "or reassess an inventory against an admitted "
                 "advisory feed."

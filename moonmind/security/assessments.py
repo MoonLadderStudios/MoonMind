@@ -18,7 +18,7 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
-from moonmind.security.frameworks import FrameworkAssessmentInput
+from moonmind.security.frameworks import EvidencePeriod, FrameworkAssessmentInput
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
 
@@ -216,6 +216,14 @@ class Coverage(Contract):
     all_rules: bool = False
     config_ref: Text
     status: CoverageStatus
+    # Coverage alone cannot turn interpretations or unclassified legacy reports
+    # into executed control checks.
+    evidence_method: Literal[
+        "deterministic_check",
+        "agent_interpretation",
+        "management_assertion",
+        "unclassified",
+    ] = "unclassified"
     # Feed, rule, and tool identity that interpreted the inputs. A difference
     # here explains a changed result without implying the subject changed.
     intelligence: Annotated[dict[Text, Text], Field(max_length=16)] = Field(
@@ -351,12 +359,23 @@ class ProductComparison(Contract):
     )
 
 
+class CoverageWindow(Contract):
+    observed_at: AwareDatetime
+    expires_at: AwareDatetime
+    valid_from: AwareDatetime | None = None
+
+
 class Observation(Contract):
     schema_version: Literal["security-observation/v1"] = "security-observation/v1"
     scope: AssessmentScope
     observed_at: AwareDatetime
     expires_at: AwareDatetime
     coverage: Annotated[list[Coverage], Field(min_length=1, max_length=64)]
+    # Per-coverage source windows survive aggregation and baseline reuse. Empty
+    # means a legacy record; a null entry is an explicitly unknown source window.
+    coverage_windows: Annotated[list[CoverageWindow | None], Field(max_length=64)] = (
+        Field(default_factory=list)
+    )
     findings: Annotated[list[Finding], Field(max_length=4096)]
     provenance: Annotated[dict[Text, Text], Field(min_length=1, max_length=64)]
     # Finding IDs the source itself reports closed, such as a GitHub alert
@@ -368,6 +387,8 @@ class Observation(Contract):
 
     @model_validator(mode="after")
     def validate_findings(self):
+        if self.coverage_windows and len(self.coverage_windows) != len(self.coverage):
+            raise ValueError("coverage observation windows must align with coverage")
         ids = [finding.finding_id for finding in self.findings]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate native finding identity")
@@ -460,6 +481,148 @@ class Comparison(Contract):
         if len(set(ids)) != len(ids):
             raise ValueError("duplicate baseline finding identity")
         return self
+
+
+class ControlObjective(Contract):
+    """One explicit absence-of-defect check, not an inferred control mapping."""
+
+    id: Text
+    description: Text
+    source: Text
+    tool: Text
+    rule_ids: Annotated[list[Text], Field(min_length=1, max_length=32)]
+
+    @model_validator(mode="after")
+    def unique_rules(self):
+        if len(set(self.rule_ids)) != len(self.rule_ids):
+            raise ValueError("duplicate control objective rule")
+        return self
+
+
+class ControlSupportingEvidence(Contract):
+    """Attributed context claims; they cannot replace executed objective checks."""
+
+    artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    method: Literal["agent_interpretation", "management_assertion"]
+    position: Literal["supports", "contradicts", "context"]
+    objective_ids: Annotated[list[Text], Field(min_length=1, max_length=32)]
+    scope: AssessmentScope
+    period: EvidencePeriod
+    author: Text
+    reason: Text
+    expires_at: AwareDatetime | None = None
+
+
+class ControlRequirement(Contract):
+    id: Text
+    framework_id: Text
+    framework_edition: Text
+    title: Text
+    scope: AssessmentScope
+    period: EvidencePeriod
+    applicability: Literal["applicable", "not_applicable", "undetermined"]
+    applicability_reason: Text
+    # A selected rule or partial crosswalk is not a full requirement checklist.
+    objectives_complete: bool = False
+    objective_basis: Text
+    objectives: Annotated[list[ControlObjective], Field(max_length=32)]
+    supporting_evidence: Annotated[
+        list[ControlSupportingEvidence], Field(max_length=32)
+    ] = Field(default_factory=list)
+    owner: Text | None = None
+    reviewer: Text | None = None
+
+    @model_validator(mode="after")
+    def validate_objectives(self):
+        ids = [objective.id for objective in self.objectives]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate control objective identity")
+        if len(self.scope.assets) > 256:
+            raise ValueError("control requirement population exceeds the bound")
+        for evidence in self.supporting_evidence:
+            if set(evidence.objective_ids) - set(ids):
+                raise ValueError("supporting evidence names an unknown objective")
+        return self
+
+
+class ControlAssessmentPlan(Contract):
+    requirements: Annotated[
+        list[ControlRequirement], Field(min_length=1, max_length=64)
+    ]
+
+    @model_validator(mode="after")
+    def bounded_unique_requirements(self):
+        keys = [
+            (row.framework_id, row.framework_edition, row.id)
+            for row in self.requirements
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate framework requirement identity")
+        cells = sum(
+            len(row.scope.assets) * len(objective.rule_ids)
+            for row in self.requirements
+            for objective in row.objectives
+        )
+        if cells > 16384:
+            raise ValueError("control assessment check population exceeds the bound")
+        refs = {
+            e.artifact_ref for r in self.requirements for e in r.supporting_evidence
+        }
+        if len(refs) > 64:
+            raise ValueError("control supporting evidence exceeds the reference bound")
+        return self
+
+
+class ControlObjectiveResult(Contract):
+    id: Text
+    outcome: Literal["passed", "failed", "inconclusive", "not_assessed"]
+    coverage: Literal["complete", "partial", "blocked", "not_assessed"]
+    checked_cells: int
+    required_cells: int
+    finding_ids: Items
+    configuration_refs: Items
+    limitations: Items
+
+
+class ControlRequirementResult(Contract):
+    requirement: ControlRequirement
+    conclusion: Literal["satisfied", "not_satisfied", "inconclusive", "not_assessed"]
+    coverage: Literal["complete", "partial", "blocked", "not_assessed"]
+    evidence_sufficiency: Literal[
+        "sufficient", "insufficient", "stale", "contradictory", "not_assessed"
+    ]
+    review_state: Literal["automated", "review_required", "not_assessed"]
+    methods: Annotated[
+        list[
+            Literal[
+                "deterministic_check", "agent_interpretation", "management_assertion"
+            ]
+        ],
+        Field(max_length=3),
+    ]
+    objectives: Annotated[list[ControlObjectiveResult], Field(max_length=32)]
+    exceptions: Annotated[list[ComparedDecision], Field(max_length=4096)]
+    evidence_refs: Items
+    unavailable_evidence_refs: Items
+    limitations: Items
+    next_actions: Items
+
+
+class ControlAssessment(Contract):
+    schema_version: Literal["security-control-assessment/v1"] = (
+        "security-control-assessment/v1"
+    )
+    evaluated_at: AwareDatetime
+    scan_ref: Text
+    comparison_ref: Text
+    review_ref: Text | None = None
+    review_status: Text
+    requirements: Annotated[
+        list[ControlRequirementResult], Field(min_length=1, max_length=64)
+    ]
+    assurance: Literal["independent_assessment_unverified"] = (
+        "independent_assessment_unverified"
+    )
 
 
 class InventoryComponent(Contract):
@@ -562,6 +725,7 @@ class AssessmentRequest(Contract):
     github_alerts: GitHubAlertImport | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
     framework: FrameworkAssessmentInput | None = None
+    control_assessment: ControlAssessmentPlan | None = None
     oscal_export: OscalExportRequest | None = None
     product_baseline_ref: Text | None = None
 
@@ -617,6 +781,20 @@ class AssessmentRequest(Contract):
             )
         if ("retained-report" in self.tools) != bool(self.report_refs):
             raise ValueError("retained-report requires reportRefs")
+        if self.control_assessment:
+            for requirement in self.control_assessment.requirements:
+                if set(requirement.scope.assets) - set(self.scope.assets):
+                    raise ValueError(
+                        "control requirement exceeds admitted assessment scope"
+                    )
+                if not set(self.scope.exclusions) <= set(requirement.scope.exclusions):
+                    raise ValueError("control requirement drops admitted exclusions")
+                if set(requirement.scope.repository_exceptions) != set(
+                    self.scope.repository_exceptions
+                ):
+                    raise ValueError(
+                        "control requirement must preserve admitted repository exceptions"
+                    )
         return self
 
 
