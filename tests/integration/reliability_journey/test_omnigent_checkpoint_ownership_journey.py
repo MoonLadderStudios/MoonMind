@@ -87,8 +87,10 @@ async def test_runtime_can_publish_beside_restored_verifier(
     )
     assert (workspace / "artifacts/pr.json").stat().st_uid == 1000
     assert (workspace / "artifacts/verify.json").read_bytes() == data
+    # Execute from the selected workspace, without traversing pytest's
+    # root-owned temporary ancestors after the subprocess drops to UID 1000.
     executed = subprocess.run(
-        [str(workspace / "tools/verify.sh")],
+        ["./tools/verify.sh"],
         cwd=workspace,
         user=1000,
         group=1000,
