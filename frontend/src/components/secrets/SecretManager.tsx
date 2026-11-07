@@ -1,5 +1,5 @@
 import { Button } from '../Button';
-import { FormEvent, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
@@ -130,6 +130,7 @@ export function SecretManager({
   const [rotatePromptOpen, setRotatePromptOpen] = useState(false);
   const [rotatePromptSlug, setRotatePromptSlug] = useState('');
   const [rotatePromptVal, setRotatePromptVal] = useState('');
+  const automaticUsageAttempts = useRef(new Set<string>());
   const [usageBySlug, setUsageBySlug] = useState<Record<string, SecretUsageResponse>>({});
   const [usageLoadingSlug, setUsageLoadingSlug] = useState<string | null>(null);
   const [usageErrorBySlug, setUsageErrorBySlug] = useState<Record<string, string>>({});
@@ -360,7 +361,7 @@ export function SecretManager({
     }
   };
 
-  const loadUsage = async (targetSlug: string) => {
+  const loadUsage = useCallback(async (targetSlug: string) => {
     setUsageLoadingSlug(targetSlug);
     setUsageErrorBySlug((current) => {
       const next = { ...current };
@@ -382,7 +383,17 @@ export function SecretManager({
     } finally {
       setUsageLoadingSlug(null);
     }
-  };
+  }, [onNotice]);
+
+  useEffect(() => {
+    for (const secret of secrets) {
+      const identity = `${secret.slug}:${secret.status}`;
+      if (!isBrokenReferenceStatus(secret.status) || secret.usages || usageBySlug[secret.slug] ||
+          automaticUsageAttempts.current.has(identity)) continue;
+      automaticUsageAttempts.current.add(identity);
+      void loadUsage(secret.slug);
+    }
+  }, [secrets, usageBySlug, loadUsage]);
 
   const renderUsages = (secret: SecretMetadata) => {
     const loadedUsage = usageBySlug[secret.slug];
@@ -476,7 +487,7 @@ export function SecretManager({
                   </tr>
                 ) : (
                   secrets.map((secret) => (
-                    <tr key={secret.slug}>
+                    <tr key={secret.slug} id={`managed-secret-${secret.slug}`} tabIndex={-1}>
                       <td data-label="Secret slug" className="px-2 py-4 font-mono font-bold text-slate-900 dark:text-white">
                         {secret.slug}
                       </td>

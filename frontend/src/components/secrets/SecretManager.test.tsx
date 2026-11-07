@@ -286,7 +286,6 @@ describe('SecretManager', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await expectRequest(encoded, 'DELETE');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View usage' }));
     await expectRequest(`${encoded}/usage`);
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
@@ -436,5 +435,32 @@ describe('SecretManager', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
+  });
+});
+
+describe('broken secret automatic Usage', () => {
+  function show(status = 'disabled') {
+    const client = new QueryClient();
+    return render(<QueryClientProvider client={client}><SecretManager queryClient={client} onNotice={vi.fn()}
+      secrets={[{ slug: 'api-key', status, details: {}, createdAt: '2026-11-06' }]} /></QueryClientProvider>);
+  }
+  it.each(['disabled', 'rotated', 'missing'])('loads Usage without a click for %s secrets and anchors the row', async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      secretRef: 'db://api-key', usages: [{ consumerType: 'profile', objectName: 'bound-profile', reference: 'db://api-key' }],
+    }) });
+    vi.stubGlobal('fetch', fetchMock);
+    show(status);
+    const consumer = await screen.findByText('bound-profile');
+    expect(consumer.closest('tr')?.id).toBe('managed-secret-api-key');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/api-key/usage');
+  });
+  it('keeps a Usage error visible and does not retry on rerender', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ detail: 'Usage unavailable' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    show();
+    await screen.findByText('Usage unavailable');
+    fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

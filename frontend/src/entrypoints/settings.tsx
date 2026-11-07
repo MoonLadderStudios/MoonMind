@@ -1,6 +1,6 @@
 import { Button } from '../components/Button';
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
-import { useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
@@ -8,9 +8,11 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageHeader } from '../components/dashboard/PageHeader';
 import { SecretManager } from '../components/secrets/SecretManager';
-import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
+import { ConfigurationAlert, healthTargetId, type HealthTarget } from '../components/settings/ConfigurationHealthSummary';
+import { NewWorkDefaultsCard } from '../components/settings/NewWorkDefaultsCard';
+import { useDashboardToast } from '../components/dashboard/DashboardToast';
 import {
-  GeneratedSettingsSection,
+  GeneratedSettingsSection, fetchCatalog,
 } from '../components/settings/GeneratedSettingsSection';
 import {
   OperationsSettingsSection,
@@ -34,7 +36,6 @@ import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
-const NEW_WORK_DEFAULT_KEYS = ['workflow.default_runtime', 'workflow.default_provider_profile_ref'] as const;
 
 interface Notice {
   level: 'ok' | 'error';
@@ -103,7 +104,17 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
   const queryClient = useQueryClient();
   const { requestDeparture } = useSettingsDraftGuard();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const toast = useDashboardToast();
+  const onNotice = useCallback((notice: Notice | null) => {
+    if (notice) (notice.level === 'ok' ? toast.success : toast.error)({ title: notice.text });
+  }, [toast]);
+  const [focusTarget, setFocusTarget] = useState<HealthTarget | null>(null);
+  const catalogQuery = useQuery({ queryKey: ['settings-catalog'], queryFn: fetchCatalog });
+  const catalogDescriptors = Object.values(catalogQuery.data?.categories ?? {}).flat();
+  const newWorkDefaults = {
+    runtime: catalogDescriptors.find((d) => d.key === 'workflow.default_runtime')?.effective_value as string | null ?? null,
+    profileRef: catalogDescriptors.find((d) => d.key === 'workflow.default_provider_profile_ref')?.effective_value as string | null ?? null,
+  };
   const runtimeSystemConfig = settingsInitialData(payload).runtimeConfig?.system ?? {};
   const defaultTaskModelByRuntime = runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
   const supportedRuntimes = runtimeSystemConfig.supportedRuntimes ?? [];
@@ -152,9 +163,9 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
           (profile) => profile.runtime_id === providerProfileRuntimeFilter,
         );
 
-  const selectRuntime = (runtimeId: string | undefined) => {
+  const selectRuntime = (runtimeId: string | undefined, afterSelection?: () => void) => {
     const nextRuntime = runtimeId ?? ALL_RUNTIMES_FILTER_VALUE;
-    if (nextRuntime === providerProfileRuntimeFilter) return;
+    if (nextRuntime === providerProfileRuntimeFilter) { afterSelection?.(); return; }
     requestDeparture(() => {
       setSearchParams((current) => {
         const next = new URLSearchParams(current);
@@ -162,39 +173,43 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         else next.set('runtime', nextRuntime);
         return next;
       });
-      setNotice(null);
+      afterSelection?.();
     }, 'Change the Harness filter? Your unsaved Provider Profile draft will be discarded.', [
       PROVIDER_PROFILE_DRAFT_ID,
     ]);
   };
+
+  const navigateToProblem = (target: HealthTarget) => {
+    const profile = allProviderProfiles.find((p) => p.profile_id === target.id);
+    if (target.kind === 'profile' && providerProfileRuntimeFilter !== ALL_RUNTIMES_FILTER_VALUE &&
+        profile?.runtime_id !== providerProfileRuntimeFilter) {
+      selectRuntime(undefined, () => setFocusTarget(target));
+    } else setFocusTarget(target);
+  };
+  useEffect(() => {
+    if (!focusTarget) return;
+    const element = document.getElementById(healthTargetId(focusTarget));
+    if (element) {
+      element.scrollIntoView?.({ block: 'center' });
+      element.focus({ preventScroll: true });
+      setFocusTarget(null);
+    }
+  }, [focusTarget, providerProfileRuntimeFilter]);
 
   return (
     <SettingsPageFrame
       title="Providers & Secrets"
       description="Manage Provider Profiles and the secrets they use. Secret values are never shown after they are saved."
     >
-      <ConfigurationHealthSummary
+      <ConfigurationAlert
+        newWorkDefaults={newWorkDefaults}
+        onNavigate={navigateToProblem}
         providerProfiles={allProviderProfiles}
         secrets={secretsQuery.data?.items ?? []}
-        isLoading={providerProfilesQuery.isLoading || secretsQuery.isLoading}
-        isError={providerProfilesQuery.isError || secretsQuery.isError}
+        isLoading={providerProfilesQuery.isLoading || secretsQuery.isLoading || catalogQuery.isLoading}
+        isError={providerProfilesQuery.isError || secretsQuery.isError || catalogQuery.isError}
         canWriteProviderProfiles
         canRunGithubTokenProbe
-      />
-
-      <NoticeBanner notice={notice} />
-
-      <GeneratedSettingsSection
-        keys={NEW_WORK_DEFAULT_KEYS}
-        title="Defaults for new work"
-        description={
-          <p>
-            New work that selects neither a harness nor a Provider Profile uses the Default
-            Provider Profile when one is set, otherwise the Default Harness. Within a harness,
-            the profile marked as that harness&apos;s default in Profiles is preferred. Harness
-            and profile choices made when launching work always take precedence.
-          </p>
-        }
       />
 
       {providerProfilesQuery.isLoading ? (
@@ -207,7 +222,8 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         <ProviderProfilesManager
           profiles={visibleProviderProfiles}
           secretSlugs={(secretsQuery.data?.items ?? []).map((secret) => secret.slug)}
-          onNotice={setNotice}
+          secretStatusBySlug={Object.fromEntries((secretsQuery.data?.items ?? []).map((secret) => [secret.slug, secret.status]))}
+          onNotice={onNotice}
           queryClient={queryClient}
           defaultTaskModelByRuntime={defaultTaskModelByRuntime}
           selectedRuntimeId={providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE ? undefined : providerProfileRuntimeFilter}
@@ -215,6 +231,8 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
           onSelectRuntimeId={selectRuntime}
         />
       )}
+
+      <NewWorkDefaultsCard />
 
       {secretsQuery.isLoading ? (
         <LoadingPlaceholder surface="settings" region="managed secrets" variant="table" density="compact" preserveContext />
@@ -225,12 +243,12 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       ) : (
         <SecretManager
           secrets={secretsQuery.data?.items ?? []}
-          onNotice={setNotice}
+          onNotice={onNotice}
           queryClient={queryClient}
         />
       )}
 
-      <SourceControlConnections canRunProbe onNotice={setNotice} />
+      <SourceControlConnections canRunProbe onNotice={onNotice} />
     </SettingsPageFrame>
   );
 }

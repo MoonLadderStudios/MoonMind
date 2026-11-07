@@ -97,7 +97,7 @@ Model & effort tiers
 
 Capacity and selection
   Max parallel runs
-  Use as Harness default
+  Preferred for <Harness>
 
 [ ] Show advanced options
     Credential bindings, volumes, rate limits, routing, and launch shaping
@@ -194,9 +194,9 @@ about. Its initial value comes from the backend creation preset; the generic
 fallback is `1` only where the contract permits it. An OAuth home backed by an
 exclusive mutable identity may lock it to `1` with an explanation.
 
-### 2.7 Harness default selection
+### 2.7 Preferred profile selection
 
-`Use as Harness default` (`is_default`) is visible selection intent. It never
+`Preferred for <Harness>` (`is_default`) is visible selection intent. It never
 makes a disabled or not-launch-ready profile the default, stays scoped to
 `runtime_id`, and does not select a Backend or the instance Default Harness. When creation includes credential
 setup, the default is assigned only after readiness succeeds; otherwise the
@@ -314,7 +314,7 @@ options to recommended`.
 | Authentication method | Guided choice | Backend capabilities |
 | `model_tiers`, `default_model_tier` | Core policy, backend-supplied initial tiers | Backend tier capabilities |
 | `max_parallel_runs` | Capacity input | Backend preset; baseline `1` |
-| `is_default` | Optional intent when readiness permits | User choice plus backend normalization |
+| `is_default` | Optional `Preferred for <Harness>` intent when readiness permits | User choice plus backend normalization |
 | Credential readiness | Status and setup action | Backend validation and activation |
 
 ### 4.2 Advanced fields

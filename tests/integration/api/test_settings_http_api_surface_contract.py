@@ -352,3 +352,71 @@ async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
         "launch_blocker": True,
         "blocks": ["launch", "readiness"],
     }
+
+
+async def test_new_work_defaults_save_reload_conflict_and_reset(settings_http_api_db):
+    keys = ("workflow.default_runtime", "workflow.default_provider_profile_ref")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        proposal = {
+            "changes": {keys[0]: "claude_code", keys[1]: None},
+            "expected_versions": {key: 1 for key in keys},
+            "reason": "Updated from Providers & Secrets.",
+        }
+        validated = await client.post("/api/v1/settings/validate", json=proposal)
+        assert validated.status_code == 200
+        assert validated.json()["accepted"] is True
+        preview = await client.post("/api/v1/settings/preview", json=proposal)
+        assert preview.status_code == 200
+        assert all(
+            row["after"]["activation_state"] == "active"
+            for row in preview.json()["diffs"]
+        )
+        saved = await client.patch("/api/v1/settings", json=proposal)
+        assert saved.status_code == 200
+        for key in keys:
+            value = saved.json()["values"][key]
+            assert value["activation_state"] == "active"
+            assert value["active"] is True
+            assert value["pending_value"] is None
+            assert value["apply_mode"] in {"next_workflow", "next_launch"}
+
+        updated = await client.patch(
+            "/api/v1/settings",
+            json={
+                "changes": {keys[0]: "codex_cli"},
+                "expected_versions": {
+                    keys[0]: saved.json()["values"][keys[0]]["value_version"]
+                },
+            },
+        )
+        assert updated.status_code == 200
+        stale = await client.patch("/api/v1/settings", json=proposal)
+        assert stale.status_code == 409
+        assert stale.json()["error"] == "version_conflict"
+        catalog = await client.get("/api/v1/settings/catalog?section=user-workspace")
+        assert catalog.status_code == 200
+        rows = {
+            row["key"]: row
+            for group in catalog.json()["categories"].values()
+            for row in group
+        }
+        assert rows[keys[0]]["effective_value"] == "codex_cli"
+        assert rows[keys[1]]["effective_value"] is None
+        for key in keys:
+            effective = await client.get(f"/api/v1/settings/effective/{key}")
+            assert effective.status_code == 200
+            assert (
+                effective.json()["activation_state"]
+                == rows[key]["activation_state"]
+                == "active"
+            )
+            assert effective.json()["pending_value"] is None
+            reset = await client.delete(f"/api/v1/settings/{key}")
+            assert reset.status_code == 200
+            assert reset.json()["source"] != "instance_override"
+        audit = await client.get("/api/v1/settings/audit", params={"key": keys[0]})
+        assert any(
+            event["reason"] == proposal["reason"] for event in audit.json()["items"]
+        )

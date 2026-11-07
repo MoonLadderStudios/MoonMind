@@ -1,3 +1,4 @@
+import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -614,6 +615,7 @@ interface RuntimeCommandPreviewState {
 }
 
 interface ProviderProfile {
+  readiness?: Exclude<NewWorkDefaultProfile["readiness"], undefined>;
   profile_id: string;
   runtime_id?: string;
   execution_selection?: {
@@ -6806,6 +6808,11 @@ function WorkflowStartPageContent({
   const submittedOmnigentAgentProfileDigest = selectedOmnigentAgentProfileVersion?.digest;
   // Profile inventory is independent of transient host/catalog readiness.
   const activeProviderProfiles: ProviderProfile[] = providerProfilesQuery.data || [];
+  const blockedNewWorkDefault = pageMode.mode === "create" && !providerProfileAuthored &&
+    !harnessChoice && !runtimeAuthored && providerProfilesQuery.isSuccess
+    ? newWorkDefaultProblem({
+      runtime: defaultRuntime, profileRef: configuredDefaultProviderProfileRef,
+    }, activeProviderProfiles) : null;
 
   useEffect(() => {
     const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
@@ -13458,6 +13465,13 @@ function WorkflowStartPageContent({
           ) : null}
 
           </div>
+
+          {blockedNewWorkDefault ? (
+            <p className="small text-amber-700 dark:text-amber-300" id="queue-new-work-default-warning">
+              {blockedNewWorkDefault.message} Pick a profile, or{' '}
+              <a href="/settings/providers-secrets#new-work-defaults">Fix the default</a>.
+            </p>
+          ) : null}
 
           {providerOptions.length > 0 || providerProfile ? (
             <div id="queue-provider-profile-wrap">

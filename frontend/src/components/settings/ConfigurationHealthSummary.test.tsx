@@ -1,224 +1,111 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  ConfigurationHealthSummary,
-  summarizeConfigurationHealth,
-  type ConfigurationHealthSummaryProps,
+  ConfigurationAlert, summarizeConfigurationHealth, secretSlugFromRef,
+  type ConfigurationAlertProps,
 } from './ConfigurationHealthSummary';
 import type { ProviderProfile } from './ProviderProfilesManager';
 
 function makeProfile(overrides: Partial<ProviderProfile> = {}): ProviderProfile {
   return {
-    profile_id: 'profile-1',
-    runtime_id: 'claude',
-    provider_id: 'anthropic',
-    provider_label: 'Anthropic',
-    credential_source: 'managed_secret',
-    runtime_materialization_mode: 'ephemeral',
-    secret_refs: {},
-    max_parallel_runs: 1,
-    cooldown_after_429_seconds: 0,
-    rate_limit_policy: 'default',
-    enabled: true,
-    is_default: false,
-    ...overrides,
+    profile_id: 'profile-1', runtime_id: 'claude_code', provider_id: 'anthropic',
+    provider_label: 'Anthropic', credential_source: 'managed_secret',
+    runtime_materialization_mode: 'ephemeral', secret_refs: {}, max_parallel_runs: 1,
+    cooldown_after_429_seconds: 0, rate_limit_policy: 'default', enabled: true,
+    is_default: false, ...overrides,
   };
 }
-
-function renderSummary(props: Partial<ConfigurationHealthSummaryProps> = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ConfigurationHealthSummary
-        providerProfiles={props.providerProfiles ?? []}
-        secrets={props.secrets ?? []}
-        isLoading={props.isLoading ?? false}
-        isError={props.isError ?? false}
-        canWriteProviderProfiles={props.canWriteProviderProfiles ?? true}
-        canRunGithubTokenProbe={props.canRunGithubTokenProbe ?? true}
-      />
-    </QueryClientProvider>,
-  );
+const defaults = { runtime: 'claude_code', profileRef: null };
+function renderAlert(props: Partial<ConfigurationAlertProps> = {}) {
+  return render(<ConfigurationAlert providerProfiles={[makeProfile()]} secrets={[]}
+    newWorkDefaults={defaults} canWriteProviderProfiles canRunGithubTokenProbe {...props} />);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
 describe('summarizeConfigurationHealth', () => {
-  it('reports ready when an enabled default profile and healthy secrets are present', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [makeProfile({ is_default: true })],
-      secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
-    });
-
-    expect(summary.level).toBe('ready');
-    expect(summary.providerProfileCount).toBe(1);
-    expect(summary.enabledProviderProfileCount).toBe(1);
-    expect(summary.hasDefaultProfile).toBe(true);
-    expect(summary.managedSecretCount).toBe(1);
-    expect(summary.brokenSecretCount).toBe(0);
-    expect(summary.warnings).toHaveLength(0);
+  it('accepts an enabled nonpreferred fallback and healthy bound secrets', () => {
+    expect(summarizeConfigurationHealth({ newWorkDefaults: defaults,
+      providerProfiles: [makeProfile({ secret_refs: { key: 'db://api-key' } })],
+      secrets: [{ slug: 'api-key', status: 'active' }],
+    })).toEqual({ level: 'ready', warnings: [] });
   });
-
-  it('blocks when there are no provider profiles', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [],
-      secrets: [],
+  it.each(['disabled', 'missing', 'blocked'])('blocks a %s explicit default', (problem) => {
+    const profile = makeProfile({ enabled: problem !== 'disabled',
+      ...(problem === 'blocked' ? { readiness: { status: 'blocked', summary: 'Credentials expired' } as NonNullable<ProviderProfile['readiness']> } : {}),
     });
-
+    const summary = summarizeConfigurationHealth({ newWorkDefaults: { ...defaults, profileRef: 'profile-1' },
+      providerProfiles: problem === 'missing' ? [] : [profile], secrets: [],
+    });
     expect(summary.level).toBe('blocked');
-    expect(summary.warnings.map((w) => w.id)).toContain('no-provider-profiles');
+    expect(summary.warnings[0]!.target).toEqual({ kind: 'defaults', id: 'new-work-defaults' });
+    expect(summary.warnings[0]!.message).toMatch(/New work defaults to profile-1/);
   });
-
-  it('flags a missing default profile as a warning', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [makeProfile({ is_default: false })],
-      secrets: [],
-    });
-
-    expect(summary.level).toBe('warning');
-    expect(summary.hasDefaultProfile).toBe(false);
-    expect(summary.warnings.find((w) => w.id === 'no-default-profile')?.message).toBe(
-      'No default provider profile is set. Workflows without an explicit profile have no provider profile to fall back to.',
-    );
+  it('blocks native fallback without an enabled profile', () => {
+    const summary = summarizeConfigurationHealth({ newWorkDefaults: defaults,
+      providerProfiles: [makeProfile({ enabled: false })], secrets: [] });
+    expect(summary.warnings[0]!.message).toBe('New work defaults to Claude Code, which has no enabled profile.');
   });
-
-  it('blocks on broken secret references bound by an enabled profile', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [
-        makeProfile({
-          is_default: true,
-          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
-        }),
-      ],
-      secrets: [
-        { slug: 'OPENAI_API_KEY', status: 'active' },
-        { slug: 'GH_TOKEN', status: 'invalid' },
-      ],
+  it('does not require an OpenCode profile', () => {
+    expect(summarizeConfigurationHealth({ newWorkDefaults: { runtime: 'omnigent', profileRef: null },
+      providerProfiles: [], secrets: [] })).toEqual({ level: 'ready', warnings: [] });
+  });
+  it.each(['disabled', 'rotated', 'deleted', 'invalid', 'missing'])('links a bound %s secret to its row', (status) => {
+    const summary = summarizeConfigurationHealth({ newWorkDefaults: defaults,
+      providerProfiles: [makeProfile({ secret_refs: { key: 'db://api-key' } })],
+      secrets: [{ slug: 'api-key', status }],
     });
-
     expect(summary.level).toBe('blocked');
-    expect(summary.brokenSecretCount).toBe(1);
-    expect(summary.warnings.map((w) => w.id)).toContain('broken-secret-refs');
+    expect(summary.warnings[0]!.message).toBe(`profile-1 can't launch because its secret api-key is ${status}.`);
+    expect(summary.warnings[0]!.target).toEqual({ kind: 'secret', id: 'api-key' });
   });
-
-  it('does not block on broken secrets that no enabled profile references', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [
-        makeProfile({
-          is_default: true,
-          secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
-        }),
-        // Disabled profile binding the broken secret must not block launches.
-        makeProfile({
-          profile_id: 'profile-2',
-          enabled: false,
-          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
-        }),
-      ],
-      secrets: [
-        { slug: 'OPENAI_API_KEY', status: 'active' },
-        { slug: 'GH_TOKEN', status: 'invalid' },
-      ],
-    });
-
-    expect(summary.level).toBe('ready');
-    // The broken secret is still surfaced as a metric, just not a blocker.
-    expect(summary.brokenSecretCount).toBe(1);
-    expect(summary.warnings.map((w) => w.id)).not.toContain('broken-secret-refs');
+  it('does not block on broken secrets unused by an enabled profile', () => {
+    expect(summarizeConfigurationHealth({ newWorkDefaults: defaults,
+      providerProfiles: [makeProfile(), makeProfile({ profile_id: 'disabled', enabled: false, secret_refs: { key: 'db://api-key' } })],
+      secrets: [{ slug: 'api-key', status: 'invalid' }],
+    })).toEqual({ level: 'ready', warnings: [] });
   });
-
+  it('checks the actually selected fallback in preference, priority, then ID order', () => {
+    const blocked = { status: 'blocked', summary: 'Credentials expired' } as NonNullable<ProviderProfile['readiness']>;
+    const profiles = [makeProfile({ profile_id: 'z', priority: 10 }),
+      makeProfile({ profile_id: 'a', priority: 5, readiness: blocked })];
+    const get = () => summarizeConfigurationHealth({ newWorkDefaults: defaults, providerProfiles: profiles, secrets: [] });
+    expect(get().warnings.filter((w) => w.target.kind === 'defaults')).toHaveLength(0);
+    profiles[1]!.is_default = true;
+    expect(get().warnings.some((w) => w.target.kind === 'defaults')).toBe(true);
+    profiles[1]!.is_default = false;
+    profiles[1]!.priority = 10;
+    expect(get().warnings.some((w) => w.target.kind === 'defaults')).toBe(true);
+  });
+  it('does not treat environment or file references as managed secrets', () => {
+    expect(secretSlugFromRef('env://API_KEY')).toBeNull();
+    expect(secretSlugFromRef('file:///keys/api')).toBeNull();
+    expect(secretSlugFromRef('db://api-key')).toBe('api-key');
+    expect(secretSlugFromRef('api-key')).toBe('api-key');
+  });
 });
 
-describe('ConfigurationHealthSummary', () => {
-  it('renders the health summary with sample data: counts, default, and readiness badge', async () => {
-    renderSummary({
-      providerProfiles: [
-        makeProfile({ profile_id: 'p1', is_default: true }),
-        makeProfile({ profile_id: 'p2', enabled: false }),
-      ],
-      secrets: [
-        { slug: 'OPENAI_API_KEY', status: 'active' },
-        { slug: 'ANTHROPIC_API_KEY', status: 'active' },
-      ],
-    });
-
-    expect(
-      screen.getByRole('region', { name: /Configuration health summary/i }),
-    ).toBeTruthy();
-    expect(screen.getByText('Provider profiles')).toBeTruthy();
-    // 2 profiles, 1 enabled
-    expect(screen.getByText('1 enabled')).toBeTruthy();
-    expect(screen.getByText('Managed secrets')).toBeTruthy();
-    expect(screen.getByText('All references healthy')).toBeTruthy();
-    expect(screen.getByText('Configured')).toBeTruthy();
+describe('ConfigurationAlert', () => {
+  it.each([{}, { isLoading: true }, { isError: true }])('renders nothing when healthy, loading or failed: %j', (state) => {
+    const { container } = renderAlert(state);
+    expect(container.innerHTML).toBe('');
   });
-
-  it('highlights missing/invalid defaults in the warning list', () => {
-    renderSummary({
-      providerProfiles: [
-        makeProfile({
-          is_default: false,
-          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
-        }),
-      ],
-      secrets: [{ slug: 'GH_TOKEN', status: 'missing' }],
-    });
-
-    const warnings = screen.getByRole('list', { name: /Configuration warnings/i });
-    expect(warnings.textContent).toMatch(/No default provider profile is set/i);
-    expect(warnings.textContent).toMatch(/broken state/i);
-    expect(screen.getByText('Missing')).toBeTruthy();
-    expect(screen.getByText('1 broken')).toBeTruthy();
+  it('shows concrete blockers before permission notes and provides corrective links', () => {
+    const navigate = vi.fn();
+    renderAlert({ providerProfiles: [makeProfile({ secret_refs: { key: 'db://api-key' } })],
+      secrets: [{ slug: 'api-key', status: 'disabled' }], canWriteProviderProfiles: false, onNavigate: navigate });
+    const alert = screen.getByRole('alert');
+    expect(alert.className).toContain('rose');
+    const lines = screen.getAllByRole('listitem');
+    expect(lines[0]!.textContent).toMatch(/api-key is disabled/);
+    expect(lines.at(-1)?.textContent).toMatch(/provider_profiles.write/);
+    const link = screen.getByRole('link', { name: 'Show secret' });
+    expect(link.getAttribute('href')).toBe('#managed-secret-api-key');
+    fireEvent.click(link);
+    expect(navigate).toHaveBeenCalledWith({ kind: 'secret', id: 'api-key' });
   });
-
-  it('shows the read-only state when provider profile writes are disabled', () => {
-    renderSummary({
-      providerProfiles: [makeProfile({ is_default: true })],
-      canWriteProviderProfiles: false,
-      canRunGithubTokenProbe: true,
-    });
-
-    expect(screen.getByText(/Provider profile writes disabled/i)).toBeTruthy();
-    expect(screen.getByText(/provider_profiles\.write/i)).toBeTruthy();
-    expect(screen.getAllByText(/Read-only/i).length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('shows why the permission-disabled GitHub token probe is unavailable', () => {
-    renderSummary({
-      providerProfiles: [makeProfile({ is_default: true })],
-      canWriteProviderProfiles: true,
-      canRunGithubTokenProbe: false,
-    });
-
-    expect(screen.getByText(/GitHub token probe unavailable/i)).toBeTruthy();
-    expect(screen.getByText(/settings\.effective\.read/i)).toBeTruthy();
-  });
-
-  it('omits the permissions footer when every action is allowed', () => {
-    renderSummary({
-      providerProfiles: [makeProfile({ is_default: true })],
-      canWriteProviderProfiles: true,
-      canRunGithubTokenProbe: true,
-    });
-
-    expect(screen.queryByText(/^Permissions$/i)).toBeNull();
-    expect(screen.queryByText(/writes enabled/i)).toBeNull();
-    expect(screen.queryByText(/probe available/i)).toBeNull();
-  });
-
-  it('renders a loading state without querying', () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-
-    renderSummary({ isLoading: true });
-
-    expect(screen.getByText(/Loading configuration health/i)).toBeTruthy();
+  it('renders a permission-only warning without healthy metrics', () => {
+    renderAlert({ canRunGithubTokenProbe: false });
+    expect(screen.getByRole('alert').className).toContain('amber');
+    expect(screen.getByText(/settings.effective.read/)).toBeTruthy();
+    expect(screen.queryByText('Default profile')).toBeNull();
   });
 });
