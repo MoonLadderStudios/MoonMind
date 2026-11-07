@@ -1896,6 +1896,16 @@ class AssessmentExecution:
             outputs["diagnostics"].append(
                 {"boundary": "report-publication", "error": type(exc).__name__}
             )
+        if request.oscal_export is not None:
+            from moonmind.workflows.skills.security_oscal import export_assessment
+
+            outputs["oscalExport"] = await export_assessment(
+                self,
+                request=request,
+                comparison=comparison,
+                comparison_ref=comparison_ref,
+                framework=framework,
+            )
         return ToolResult(status="COMPLETED", outputs=outputs)
 
 

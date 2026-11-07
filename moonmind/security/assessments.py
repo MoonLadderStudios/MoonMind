@@ -20,6 +20,7 @@ from pydantic.alias_generators import to_camel
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.frameworks import FrameworkAssessmentInput
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
+from moonmind.security.oscal_export import OscalExportRequest
 
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
@@ -561,6 +562,7 @@ class AssessmentRequest(Contract):
     github_alerts: GitHubAlertImport | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
     framework: FrameworkAssessmentInput | None = None
+    oscal_export: OscalExportRequest | None = None
     product_baseline_ref: Text | None = None
 
     @model_validator(mode="after")
