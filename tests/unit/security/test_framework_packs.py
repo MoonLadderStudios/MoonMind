@@ -451,3 +451,52 @@ def test_effective_date_transition_never_substitutes_an_edition():
                 retained_pack_metadata(
                     pack, artifact_ref="art_pack", sha256="a" * 64, now=now
                 )
+
+
+@pytest.mark.parametrize("length", [1024, 1025])
+def test_declared_requirement_title_matches_evaluator_text_bound(length):
+    data = payload()
+    data["requirements"][0]["title"] = "x" * length
+    if length > 1024:
+        with pytest.raises(ValueError, match="title"):
+            load(data)
+    else:
+        plan, _ = compile(load(data))
+        assert plan.requirements[0].title == "x" * length
+
+
+@pytest.mark.parametrize(
+    "field", ["applicabilityReason", "notApplicableReason", "responsibilityReason"]
+)
+@pytest.mark.parametrize("length", [1024, 1025])
+def test_declared_choice_reasons_match_evaluator_text_bound(field, length):
+    from moonmind.security.frameworks import DeclaredRequirementChoice
+
+    choice = {field: "x" * length}
+    if length > 1024:
+        with pytest.raises(ValueError):
+            DeclaredRequirementChoice.model_validate(choice)
+    else:
+        admitted = DeclaredRequirementChoice.model_validate(choice)
+        plan, _ = compile(load(), choices={"R1": admitted})
+        row = plan.requirements[0]
+        assert (
+            row.responsibility_reason
+            if field == "responsibilityReason"
+            else row.applicability_reason
+        ) == "x" * length
+
+
+def test_legacy_framework_text_bounds_are_unchanged():
+    from moonmind.security.frameworks import FrameworkRequirement, RequirementChoice
+
+    requirement = payload()["requirements"][0]
+    for field in ["objectives", "objectivesComplete", "objectiveBasis"]:
+        requirement.pop(field)
+    requirement["title"] = "x" * 4096
+    assert len(FrameworkRequirement.model_validate(requirement).title) == 4096
+    choice = RequirementChoice(
+        not_applicable_reason="x" * 4096, responsibility_reason="x" * 4096
+    )
+    assert len(choice.not_applicable_reason) == 4096
+    assert len(choice.responsibility_reason) == 4096

@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.frameworks import (
+    AssessmentText,
     EvidencePeriod,
     FrameworkAssessmentInput,
     FrameworkPackSelection,
@@ -26,9 +27,7 @@ from moonmind.security.frameworks import (
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
 
-Text = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
-]
+Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
 Evidence = Annotated[list[Text], Field(min_length=1, max_length=64)]
 CoverageStatus = Literal[

@@ -176,3 +176,43 @@ async def test_lost_history_is_reported_without_rewriting_current_evidence(envir
     assert report["intelligenceChanges"] == []
     assert report["frameworkPack"]["previousAssessmentStatus"] == "unavailable"
     assert any("comparison is Unverified" in row for row in report["diagnostics"])
+
+
+@pytest.mark.parametrize("fault", ["missing_bytes", "expired"])
+async def test_old_evidence_loss_does_not_block_current_pack_assessment(
+    environment, fault
+):
+    from datetime import timedelta
+
+    from moonmind.workflows.temporal.artifacts import LocalTemporalArtifactStore
+
+    service = environment.service
+    old_request = await select_pack(service, await inputs(service))
+    first = await recurring.invoke(service, old_request)
+    old_input, _ = await service.read(
+        artifact_id=old_request["inventoryRef"],
+        access=recurring.access_for_test("workflow:assessment"),
+    )
+    if fault == "missing_bytes":
+        LocalTemporalArtifactStore(environment.storage_root).delete(
+            old_input.storage_key
+        )
+    else:
+        from api_service.db.models import TemporalArtifact
+
+        row = await environment.session.get(
+            TemporalArtifact, old_request["inventoryRef"]
+        )
+        row.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await environment.session.commit()
+    request = await select_pack(service, await inputs(service))
+    request["frameworkPack"]["previousAssessmentRef"] = first["controlAssessmentRef"]
+    result = await recurring.invoke(service, request)
+    assert result["controlAssessmentStatus"] == "completed", result
+    assert result["publicationOutcome"] == "published"
+    report = await recurring.read(service, result["controlAssessmentRef"])
+    assert report["requirements"][0]["conclusion"] == "satisfied"
+    assert report["frameworkPack"]["previousAssessmentStatus"] == "available"
+    proof = await recurring.required(service, result["controlAssessmentRef"])
+    assert first["controlAssessmentRef"] in proof
+    assert old_request["inventoryRef"] not in proof

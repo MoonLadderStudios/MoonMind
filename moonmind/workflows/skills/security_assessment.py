@@ -1228,18 +1228,24 @@ class AssessmentExecution:
             required = [scan_ref, comparison_ref, *readable]
             if framework_pack_context is not None:
                 required.append(request.framework_pack.artifact_ref)
-                if framework_pack_context["previousRef"]:
-                    required.append(framework_pack_context["previousRef"])
             if review_readable:
                 required.append(request.review_ref)
             if review is not None:
                 required += review.evidence_refs()
-            return [
+            entries = [
                 ArtifactDependency(
                     ref, await self.digest(ref), True, "security.control-evidence"
                 )
                 for ref in dict.fromkeys(required)
             ]
+            if framework_pack_context and framework_pack_context["previousRef"]:
+                # Only the prior report's retained pack metadata contributes to
+                # this comparison. Its old scan closure is not current evidence.
+                ref = framework_pack_context["previousRef"]
+                entries.append(
+                    ArtifactDependency(ref, await self.digest(ref), True, BASELINE_ROLE)
+                )
+            return entries
 
         await self.seal(root, dependencies)
         return root, report

@@ -17,6 +17,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from moonmind.security.assessments import ControlObjective
 from moonmind.security.frameworks import (
+    AssessmentText,
     DeclaredRequirementChoice,
     EvidencePeriod,
     FrameworkContract,
@@ -67,6 +68,7 @@ class PackObjective(ControlObjective):
 
 class PackRequirement(FrameworkRequirement):
     id: Identifier
+    title: AssessmentText
     summary: Text
     sources: Annotated[list[PackSource], Field(max_length=16)] = Field(
         default_factory=list
@@ -79,7 +81,7 @@ class PackRequirement(FrameworkRequirement):
         default_factory=list
     )
     objectives_complete: bool = False
-    objective_basis: Annotated[str, StringConstraints(min_length=1, max_length=1024)]
+    objective_basis: AssessmentText
 
     @model_validator(mode="after")
     def unique_objectives(self):

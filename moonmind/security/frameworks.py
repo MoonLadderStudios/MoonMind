@@ -12,6 +12,11 @@ Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)
 ]
 Strings = Annotated[list[Text], Field(max_length=256)]
+# Declared framework inputs that flow into the control evaluator share its bound.
+# Legacy framework narrative fields retain their wider original contract.
+AssessmentText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
+]
 
 
 class FrameworkContract(BaseModel):
@@ -91,7 +96,9 @@ class DeclaredRequirementChoice(RequirementChoice):
     applicability: Literal["applicable", "not_applicable", "undetermined"] = (
         "undetermined"
     )
-    applicability_reason: Text | None = None
+    applicability_reason: AssessmentText | None = None
+    not_applicable_reason: AssessmentText | None = None
+    responsibility_reason: AssessmentText | None = None
 
 
 class FrameworkPackSelection(FrameworkContract):
