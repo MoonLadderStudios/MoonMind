@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from fractions import Fraction
 
 import pytest
 from pydantic import ValidationError
@@ -119,7 +120,9 @@ def test_cooperative_stops_preserve_completed_raw_observations(rng, stop_reason)
     def progress(stage):
         stopped.append(stage)
 
-    clock = lambda: 2.0 if stopped and stop_reason == "time_budget" else 0.0
+    def clock():
+        return 2.0 if stopped and stop_reason == "time_budget" else 0.0
+
     result = evaluate(
         rng,
         raw=[bytes(range(256)) * 128],
@@ -143,6 +146,52 @@ def test_no_diagnostics_is_valid_implementation_review_only(rng):
     assert result.raw is None and result.mapped is None
     assert result.outcome == "not_requested"
     assert result.cryptographic_security == "unverified"
+
+
+@pytest.mark.parametrize("decimal_places", [36, 62])
+def test_decimal_probabilities_survive_cli_and_report_round_trip(
+    rng, tmp_path, decimal_places
+):
+    probabilities = {
+        "0": "0." + "3" * decimal_places,
+        "1": "0." + "6" * (decimal_places - 1) + "7",
+    }
+    spec = specification(
+        amount=2048,
+        mapped=True,
+        raw=None,
+        rawTests=[],
+        expectedOutcomes=probabilities,
+    )
+    source = tmp_path / "spec.json"
+    source.write_text(json.dumps(spec))
+    outcomes = tmp_path / "outcomes.txt"
+    outcomes.write_text("0\n1\n" * 1024)
+    output = tmp_path / "result.json"
+
+    assert (
+        rng.main(
+            [
+                "--spec",
+                str(source),
+                "--outcomes",
+                str(outcomes),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    report = rng.RngAssessment.model_validate_json(output.read_bytes())
+    assert report.status == "complete"
+    assert report.mapped.processed_amount == 2048
+    assert report.mapped.results[0].expected_distribution == {
+        key: str(Fraction(value)) for key, value in probabilities.items()
+    }
+    bound = rng.RngAssessment.model_validate_json(
+        rng.bind_job_result(output.read_bytes(), "succeeded", 0)
+    )
+    assert bound.mapped == report.mapped
 
 
 @pytest.mark.parametrize(

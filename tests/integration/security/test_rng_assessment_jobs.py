@@ -59,6 +59,21 @@ PROFILE = {
 }
 
 
+@pytest.fixture(
+    params=[0, 1, 2],
+    ids=["module-in-command", "module-split", "module-in-entrypoint"],
+)
+def rng_invocation(request, monkeypatch):
+    module_args = ["-m", "moonmind.security.rng_assessment"]
+    split = request.param
+    monkeypatch.setitem(PROFILE, "entrypoint", ["python", *module_args[:split]])
+    monkeypatch.setitem(
+        PROFILE["modes"][0],
+        "argv",
+        [*module_args[split:], *PROFILE["modes"][0]["argv"]],
+    )
+
+
 class Job(game_jobs.Job):
     profile_ref = "rng-review"
     result_schema = b'"rng-assessment/v1"'
@@ -101,7 +116,7 @@ class Job(game_jobs.Job):
 
 
 async def test_profile_rng_to_retained_report_preserves_separate_claims(
-    environment, tmp_path, monkeypatch
+    environment, tmp_path, monkeypatch, rng_invocation
 ):
     job = Job(environment, tmp_path, monkeypatch)
     spec = specification(mapped=True)
@@ -123,6 +138,7 @@ async def test_profile_rng_to_retained_report_preserves_separate_claims(
         },
     )
     assert create[create.index("--network") + 1] == "none"
+    assert argv[:2] == ["-m", "moonmind.security.rng_assessment"]
     assert create[create.index("--memory") + 1] == "512m"
     assert float(create[create.index("--cpus") + 1]) == 1
     process = job.process(argv)
@@ -193,7 +209,7 @@ async def test_sigterm_preserves_completed_raw_diagnostics(
     [("failed", 137), ("failed", 1), ("canceled", 137), ("timed_out", 137)],
 )
 async def test_abrupt_job_failure_cannot_publish_clean_saved_result(
-    environment, tmp_path, monkeypatch, terminal, exit_code
+    environment, tmp_path, monkeypatch, terminal, exit_code, rng_invocation
 ):
     job = Job(environment, tmp_path, monkeypatch)
     _, argv = await job.launch(
@@ -217,7 +233,7 @@ async def test_abrupt_job_failure_cannot_publish_clean_saved_result(
     [("succeeded", 0), ("failed", 137), ("canceled", 0), ("timed_out", 137)],
 )
 async def test_review_only_job_coverage_respects_terminal_state(
-    environment, tmp_path, monkeypatch, terminal, exit_code
+    environment, tmp_path, monkeypatch, terminal, exit_code, rng_invocation
 ):
     job = Job(environment, tmp_path, monkeypatch)
     spec = specification(raw=None, rawTests=[])
@@ -294,7 +310,7 @@ async def test_sigkill_without_result_stays_missing(environment, tmp_path, monke
 
 
 async def test_protected_fields_in_invalid_output_never_reach_artifact_export(
-    environment, tmp_path, monkeypatch
+    environment, tmp_path, monkeypatch, rng_invocation
 ):
     job = Job(environment, tmp_path, monkeypatch)
     _, argv = await job.launch(

@@ -21,13 +21,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import (
-    AfterValidator,
-    Field,
-    StringConstraints,
-    ValidationError,
-    model_validator,
-)
+from pydantic import AfterValidator, Field, ValidationError, model_validator
 
 from moonmind.security.assessments import Contract, Text, content_key
 from moonmind.security.game_math import Ident, Probability
@@ -174,9 +168,9 @@ class Diagnostic(Contract):
     counts: Annotated[
         dict[Ident, Annotated[int, Field(ge=0)]], Field(min_length=1, max_length=256)
     ]
+    # Canonical fractions can be longer than the admitted decimal spelling.
     expected_distribution: Annotated[
-        dict[Ident, Annotated[str, StringConstraints(max_length=64)]],
-        Field(min_length=1, max_length=256),
+        dict[Ident, str], Field(min_length=1, max_length=256)
     ]
     significance: Annotated[float, Field(gt=0, lt=1, allow_inf_nan=False)]
     statistic: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None

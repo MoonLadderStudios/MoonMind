@@ -4018,9 +4018,9 @@ class DockerContainerJobBackend:
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
-            if (
-                payload is not None
-                and "moonmind.security.rng_assessment" in request.request.spec.entrypoint
+            if payload is not None and "moonmind.security.rng_assessment" in (
+                *request.request.spec.entrypoint[1:],
+                *request.request.spec.command,
             ):
                 # A completed file alone cannot erase a failed job (including
                 # a kill after the CLI wrote it). Revalidate before exporting;
