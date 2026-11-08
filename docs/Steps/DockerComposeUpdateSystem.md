@@ -194,9 +194,9 @@ Interrupted Activities retain recovery owners and budgets; completed effects are
 not repeated.
 
 Renames require all target consumers and surviving installed consumers selected
-together. Label-aware helpers prepare them; the capable controller retains
-ownership through installation before handing off, including on rollback. Legacy
-controllers cannot perform renames. Keep the artifacts fleet marker on a combined
+together. Label-aware helpers prepare them. Before installation, handoff requires
+a topology-capable controller; rollback to an older controller waits until
+installation is confirmed. Legacy controllers cannot perform renames. Keep the artifacts fleet marker on a combined
 worker while rollback to them is supported. Helpers refuse label-only consumers
 when their controller lacks topology support.
 
@@ -260,7 +260,7 @@ Host endpoint and project follow installed controller identity; `--compose-proje
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
-**Handoff.** Storage transfer precedes handoff; journal topology changes retain the capable controller until installation. The managed controller's `controller-handoff` one-off replaces it, releases its lock, and the replacement resumes after the one-off exits. Only that operation may be open; each attempt group hands off once. Older controllers enter through `--omnigent-select`. Missing `active-journal-transition` or `unversioned-routing-cutover` capabilities refuse mutation and direct the operator to `./tools/update-moonmind.sh`.
+**Handoff.** Storage transfer precedes handoff; journal topology changes require a capable owner until installation. The managed controller's `controller-handoff` one-off replaces it, releases its lock, and the replacement resumes after the one-off exits. Only that operation may be open; each attempt group hands off once. Older controllers enter through `--omnigent-select`. Missing `active-journal-transition` or `unversioned-routing-cutover` capabilities refuse mutation and direct the operator to `./tools/update-moonmind.sh`.
 
 Handoff shares one monotonic deadline within the caller's 300-second allowance, reserving recovery time. Subprocesses consume the remaining budget. Linux process groups are terminated, killed if necessary, and reaped before recovery reconciles known running or stopped candidates, including created replacements, and attempts saved-configuration restoration. New replacements require zero restarts; recovery permits history only with stable identity, restart count, start time and healthy state. Receipts retain the original failure and distinguish verified restoration from failed or unverified recovery. An available controller can continue applying, including targets predating handoff.
 

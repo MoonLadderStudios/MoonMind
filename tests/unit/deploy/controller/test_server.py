@@ -751,7 +751,7 @@ def test_journal_rename_rejects_partial_target_selection_before_fencing(
         )
 
 
-def test_topology_handoff_waits_for_confirmed_installation(
+def test_topology_handoff_probes_capability_before_installation(
     controller_path, tmp_path, monkeypatch
 ):
     record, server = load("record"), load("server")
@@ -760,16 +760,19 @@ def test_topology_handoff_waits_for_confirmed_installation(
     store.record_journal_transition(
         operation["operationId"], {"requiresTopologySupport": True}
     )
+
     calls = []
-    monkeypatch.setattr(
-        server,
-        "run_omnigent_step",
-        lambda *args, **kwargs: calls.append(kwargs["phase"]) or {"status": "current"},
-    )
+    def step(*args, **kwargs):
+        calls.append(kwargs.get("required_capability"))
+        return {
+            "status": "unsupported" if kwargs.get("required_capability") else "current"
+        }
+
+    monkeypatch.setattr(server, "run_omnigent_step", step)
     server.hand_off_to_requested_controller(
         store, operation, runner=None, overlay="overlay"
     )
-    assert calls == []
+    assert calls == ["journal-consumer-topology"]
     store.confirm_installed(
         operation["operationId"],
         image=operation["desired"]["image"],
@@ -778,7 +781,7 @@ def test_topology_handoff_waits_for_confirmed_installation(
     server.hand_off_to_requested_controller(
         store, store.load(operation["operationId"]), runner=None, overlay="overlay"
     )
-    assert calls == ["controller-handoff"]
+    assert calls == ["journal-consumer-topology", None]
 
 
 def test_journal_preparation_uses_installed_source_for_rollback_and_restart(
@@ -3415,6 +3418,10 @@ def test_managed_journal_rename_hands_off_only_after_install_and_on_restart(
 
     def step(store, operation, **kwargs):
         phase = kwargs["phase"]
+        if phase == "controller-handoff" and kwargs.get("required_capability"):
+            assert store.load(operation["operationId"])["installed"] is None
+            phases.append("controller-handoff-probe")
+            return {"status": receipt}
         phases.append(phase)
         if phase == "controller-handoff":
             assert store.load(operation["operationId"])["installed"] is not None
@@ -3438,9 +3445,15 @@ def test_managed_journal_rename_hands_off_only_after_install_and_on_restart(
         lambda *args, **kwargs: {"status": "verification-pending"},
     )
     server.production_apply(store, operation)
-    assert phases == ["journal-prepare", "up", "controller-handoff"]
+    assert phases == [
+        "controller-handoff-probe",
+        "journal-prepare",
+        "up",
+        "controller-handoff",
+    ]
     server.production_apply(store, store.load(operation["operationId"]))
     assert phases == [
+        "controller-handoff-probe",
         "journal-prepare",
         "up",
         "controller-handoff",
@@ -3449,8 +3462,9 @@ def test_managed_journal_rename_hands_off_only_after_install_and_on_restart(
 
 
 @pytest.mark.parametrize("supported", [False, True])
+@pytest.mark.parametrize("phase", ["journal-prepare", "controller-handoff"])
 def test_journal_helper_capability_is_checked_before_calling_old_code(
-    controller_path, tmp_path, supported
+    controller_path, tmp_path, supported, phase
 ):
     import os
     import subprocess
@@ -3474,7 +3488,7 @@ def test_journal_helper_capability_is_checked_before_calling_old_code(
     (package / "deployment_release.py").write_text(
         "from pathlib import Path\n"
         + ("JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED = True\n" if supported else "")
-        + "async def controller_journal_cli(phase, payload):\n"
+        + f"async def {server.CAPABILITY_STEPS[phase][0]}(phase, payload):\n"
         + f"    Path({str(called)!r}).touch()\n"
         + '    print(\'MOONMIND_OMNIGENT_RESULT={"status":"prepared"}\')\n'
         + "    return 0\n"
@@ -3503,7 +3517,7 @@ def test_journal_helper_capability_is_checked_before_calling_old_code(
         operation,
         runner=Runner(),
         overlay="overlay",
-        phase="journal-prepare",
+        phase=phase,
         helper_image="sha256:helper",
         required_capability="journal-consumer-topology",
     )

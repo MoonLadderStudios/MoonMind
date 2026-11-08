@@ -2086,16 +2086,22 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
     """
     operation_id = operation["operationId"]
     current = store.load(operation_id)
-    if (current.get("journalTransition") or {}).get(
+    needs_topology_support = (current.get("journalTransition") or {}).get(
         "requiresTopologySupport"
-    ) and not current.get("installed"):
-        # A rollback can request a controller that cannot map source names to
-        # target names. Keep this capable owner through fencing, retries and
-        # target recovery, then let the requested controller verify installation.
-        return
+    ) and not current.get("installed")
+    # A capable requested controller may take over before apply as usual. An
+    # older rollback controller must not own fencing/recovery across a rename;
+    # the one-off checks support before invoking its handoff function.
     try:
         receipt = run_omnigent_step(
-            store, operation, runner=runner, overlay=overlay, phase="controller-handoff"
+            store,
+            operation,
+            runner=runner,
+            overlay=overlay,
+            phase="controller-handoff",
+            required_capability=(
+                "journal-consumer-topology" if needs_topology_support else None
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - the running controller still applies
         receipt = {
