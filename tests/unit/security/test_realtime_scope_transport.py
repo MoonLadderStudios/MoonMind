@@ -113,6 +113,16 @@ async def fixture_server(mode="normal", signalr=False):
 
     async def handler(request):
         state["paths"].append(request.path)
+        if request.path == "/identity":
+            identity = (
+                request.headers.get("Authorization", "").removeprefix("Bearer token-")
+                or "anon"
+            )
+            return web.json_response({"identity": identity})
+        if mode.startswith("refuse-"):
+            _, stage, status = mode.split("-")
+            if request.path == ("/negotiate" if stage == "negotiation" else "/ws"):
+                return web.Response(status=int(status), text="Private gateway refusal")
         if mode == "redirect-upgrade" and request.path == "/ws":
             raise web.HTTPFound("http://redirected.test/elsewhere")
         if (
@@ -538,5 +548,85 @@ def test_direct_scope_mutation_during_rate_wait_is_refused():
             with pytest.raises(PermissionError, match="scope changed"):
                 await task
             assert not state["sends"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "protocol,stage",
+    [
+        ("websocket", "upgrade"),
+        ("signalr-json", "upgrade"),
+        ("signalr-json", "negotiation"),
+    ],
+)
+@pytest.mark.parametrize("status", [401, 403])
+def test_named_transport_refusal_never_manufactures_application_denial(
+    protocol, stage, status
+):
+    async def run():
+        async with fixture_server(
+            f"refuse-{stage}-{status}", signalr=protocol == "signalr-json"
+        ) as (proxy, state):
+            scope = realtime_scope(protocol)
+            client = ScopedTargetClient(scope, proxy=proxy)
+            observation = await client.exchange(request_for(scope))
+            assert observation.status == status
+            assert observation.payload == {}
+            assert observation.transcript == client.transport_transcript
+            assert not state["sends"]
+            assert "Private gateway refusal" not in observation.model_dump_json()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "protocol,stage",
+    [
+        ("websocket", "upgrade"),
+        ("signalr-json", "upgrade"),
+        ("signalr-json", "negotiation"),
+    ],
+)
+@pytest.mark.parametrize("status", [401, 403])
+def test_named_transport_refusal_is_inconclusive_with_verified_identity(
+    tmp_path, protocol, stage, status
+):
+    from moonmind.security.application_access import (
+        JsonAssertion,
+        assess_application_access,
+    )
+    from moonmind.security.application_access_target import observe_application_access
+    from tests.unit.security.test_realtime_application_access import (
+        admitted_scope,
+        selected_realtime,
+    )
+
+    async def run():
+        selected = selected_realtime(protocol, "other")
+        selected.cases[0].deny_assertions = [
+            JsonAssertion(id="denied", path="access", value="deny")
+        ]
+        (tmp_path / "other").write_text("token-other")
+        async with fixture_server(
+            f"refuse-{stage}-{status}", signalr=protocol == "signalr-json"
+        ) as (proxy, state):
+            client = ScopedTargetClient(
+                admitted_scope(selected), proxy=proxy, credential_root=tmp_path
+            )
+            capture = await observe_application_access(
+                selected, client, checkpoint_path=tmp_path / "capture"
+            )
+            assert state["paths"].count("/identity") == 2
+            assert not state["sends"]
+        observation = capture.bundle.observations[0]
+        assert observation.status == status
+        report = assess_application_access(selected, capture.bundle)
+        assert report.cases[0].outcome == "inconclusive"
+        assert report.status == "partial"
+        assert (
+            "Private gateway refusal"
+            not in capture.model_dump_json() + report.model_dump_json()
+        )
 
     asyncio.run(run())

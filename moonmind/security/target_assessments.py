@@ -405,7 +405,13 @@ class ScopedTargetClient:
             # The upgrade was denied before any message could be sent. Do not
             # retain the server's exception text, headers or credentials.
             status = exc.status
-            body = b'{"decision":"denied","access":"deny"}'
+            # A gateway refusal supplies no application-policy response. Keep
+            # the historical synthetic denial only for legacy RGS requests.
+            body = (
+                b"{}"
+                if request.realtime_case_ref is not None
+                else b'{"decision":"denied","access":"deny"}'
+            )
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise TargetStopped("transport_interrupted") from (
                 None if request.realtime_case_ref else exc
@@ -545,7 +551,9 @@ class ScopedTargetClient:
                     raise PermissionError("target redirects are not admitted")
                 body = await receive_body(response)
                 if response.status in {401, 403}:
-                    return response.status, b'{"decision":"denied","access":"deny"}'
+                    # Negotiation refusal is transport evidence, not an
+                    # assertion that the requested application action was denied.
+                    return response.status, b"{}"
                 if response.status != 200:
                     raise TargetStopped("unsupported_signalr_negotiation")
                 try:
