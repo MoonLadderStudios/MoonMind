@@ -1462,6 +1462,7 @@ async def _verified_temporal_parent_identity(
     parent_workflow_id: str | None = None,
     parent_run_id: str | None = None,
     parent_temporal_run_id: str | None = None,
+    require_operator_workflow: bool = False,
 ) -> tuple[str, str] | None:
     """Delegate only to this exact Activity run's server-recorded parent.
 
@@ -1506,6 +1507,15 @@ async def _verified_temporal_parent_identity(
                 or not record.parent_namespace_id
             ):
                 return None
+            if require_operator_workflow:
+                from moonmind.workflows.temporal.workflow_registry import (
+                    workflow_projection_scope,
+                )
+
+                # Missing source rows are expected for registered operator
+                # children, not permission to skip an unavailable product owner.
+                if workflow_projection_scope(record.type.name) != "operator":
+                    return None
             namespace = await client.workflow_service.describe_namespace(
                 DescribeNamespaceRequest(namespace=info.namespace),
                 timeout=timedelta(seconds=10),
@@ -6327,6 +6337,7 @@ class TemporalAgentRuntimeActivities:
         if self._session_factory is None:
             return
         from api_service.services.assessment_model_delivery import (
+            AssessmentProcessingSourceMissing,
             assessment_processing_for_execution,
             processing_source_error,
             require_model_delivery,
@@ -6340,18 +6351,42 @@ class TemporalAgentRuntimeActivities:
         identity = None
         try:
             identity = temporal_activity.info()
-            async with self._session_factory() as session:
-                try:
-                    processing = await assessment_processing_for_execution(
-                        session, identity.workflow_id, identity.workflow_run_id,
-                    )
-                except TemporalArtifactStateError:
-                    # Legacy AgentRun Activities have no canonical API row.
-                    # Only server-recorded ancestry may nominate their parent.
-                    parent = await _verified_temporal_parent_identity(info=identity)
-                    if parent is None:
-                        raise
-                    processing = await assessment_processing_for_execution(session, *parent)
+            current = identity
+            seen: set[tuple[str, str]] = set()
+            # Legacy controls run in AgentSession -> AgentRun -> UserWorkflow.
+            # Each hop uses the exact server-recorded run, never request hints.
+            async with asyncio.timeout(30), self._session_factory() as session:
+                for depth in range(8):
+                    key = (current.workflow_id, current.workflow_run_id)
+                    if not all(key) or key in seen:
+                        raise TemporalArtifactStateError(
+                            "Admitted assessment ancestry could not be verified; evidence is preserved."
+                        )
+                    seen.add(key)
+                    try:
+                        processing = await assessment_processing_for_execution(
+                            session, *key
+                        )
+                    except AssessmentProcessingSourceMissing:
+                        # An invalid/stale/denied source must not be skipped in
+                        # favor of a less restricted ancestor.
+                        if depth == 7:
+                            raise TemporalArtifactStateError(
+                                "Admitted assessment ancestry exceeds the verification bound; evidence is preserved."
+                            ) from None
+                        parent = await _verified_temporal_parent_identity(
+                            info=current,
+                            require_operator_workflow=True,
+                        )
+                        if parent is None:
+                            raise
+                        current = SimpleNamespace(
+                            namespace=identity.namespace,
+                            workflow_id=parent[0],
+                            workflow_run_id=parent[1],
+                        )
+                    else:
+                        break
             require_model_delivery(processing, profile_ref=profile_ref)
         except TemporalArtifactUnavailableError as exc:
             raise exc from None

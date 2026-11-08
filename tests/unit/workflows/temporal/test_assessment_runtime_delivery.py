@@ -129,7 +129,7 @@ async def test_legacy_child_uses_verified_parent_source(monkeypatch):
     )
     with pytest.raises(TemporalArtifactError, match="disabled"):
         await activities.agent_runtime_launch(_tier_policy_launch_payload())
-    ancestry.assert_awaited_once_with(info=identity)
+    ancestry.assert_awaited_once_with(info=identity, require_operator_workflow=True)
     assert session.get.await_args.args[1] == "source"
     launcher.launch.assert_not_awaited()
 

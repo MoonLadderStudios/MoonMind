@@ -18,6 +18,12 @@ from moonmind.workflows.temporal.artifacts import (
 )
 
 
+class AssessmentProcessingSourceMissing(TemporalArtifactStateError):
+    """No admitted source exists here; a verified parent may own this child."""
+
+    code = "TemporalArtifactStateError"
+
+
 def processing_from_source(source: Any) -> tuple[dict | None, dict | None]:
     return processing_from_parameters(source.parameters or {})
 
@@ -136,7 +142,11 @@ async def assessment_context_for_execution(
                 if service is not None
                 else await session.get(TemporalExecutionRecord, workflow_id)
             )
-        if projection is not None and projection.run_id == run_id:
+        if projection is None:
+            raise AssessmentProcessingSourceMissing(
+                "Admitted assessment processing context is unavailable; evidence is preserved."
+            )
+        if projection.run_id == run_id:
             from moonmind.workflows.temporal.service import TemporalExecutionService
 
             source = await (

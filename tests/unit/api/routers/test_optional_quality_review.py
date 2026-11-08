@@ -470,3 +470,31 @@ async def test_review_receipt_hash_matches_exact_delivered_json(review_api, fiel
         assert row["transformedSha256"] == actual_digest
         assert row["sha256"] == row["readSha256"] == hashlib.sha256(body).hexdigest()
         assert row["transformationVersion"] == observed["transformation"]["version"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    ["&canyon-meadow-lantern", "canyon>meadow<lantern", "`canyon-meadow-lantern"],
+    ids=["leading-ampersand", "embedded-angle", "leading-backtick"],
+)
+async def test_optional_review_masks_complete_plaintext_credentials(review_api, value):
+    import json
+
+    artifacts = review_api[4]
+    body = f"src/check.py:42\nPASSWORD={value}\nresult=observed".encode()
+    artifact = artifacts.get_metadata.return_value[0]
+    artifact.size_bytes, artifact.sha256 = len(body), hashlib.sha256(body).hexdigest()
+    artifacts.read_chunks.side_effect = lambda **_kw: (artifact, iter([body]))
+    response = await _submit(review_api)
+    assert response.status_code == 201, response.text
+    workflow = review_api[3].await_args.kwargs["payload"]["payload"]["workflow"]
+    observed = json.loads(workflow["instructions"].split("\n", 1)[1])["artifacts"][0]
+    safe = "src/check.py:42\nPASSWORD=[REDACTED]\nresult=observed"
+    assert observed["untrustedContent"] == safe
+    assert (
+        observed["transformation"]["sha256"]
+        == hashlib.sha256(safe.encode()).hexdigest()
+    )
+    assert observed["sha256"] == hashlib.sha256(body).hexdigest()
+    assert "canyon" not in workflow["instructions"]

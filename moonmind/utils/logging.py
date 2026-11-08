@@ -22,11 +22,24 @@ _CLOUD_TOKEN_PATTERN = re.compile(
 )
 _SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b", re.IGNORECASE)
 _COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b((?:set-)?cookie\s*:)\s*[^\r\n]+")
-_SECRET_ASSIGNMENT_PATTERN = re.compile(
+_SECRET_ASSIGNMENT_HEAD = (
     r"(?i)(?<![A-Z0-9_.-])(?P<quote>\\*[\"'])?"
     r"(?P<key>[A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|(?:api|access|private|secret)[_-]?key|credential)"
     r"[A-Z0-9_.-]{0,80})(?(quote)(?P=quote))(?P<separator>\s*[:=]\s*)"
-    r"(?P<value>\\*\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?|[^\s,;&\"'<>`]+)"
+)
+_QUOTED_SECRET_VALUE = r"\\*\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?"
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    _SECRET_ASSIGNMENT_HEAD
+    + r"(?P<value>"
+    + _QUOTED_SECRET_VALUE
+    + r"|(?(quote)[^\s,;}]+|\S+))"
+)
+_URL_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    _SECRET_ASSIGNMENT_HEAD
+    + r"(?P<value>[^\s&#]+)"
+)
+_SECRET_URL_CONTEXT_PATTERN = re.compile(
+    r"(?i)(?:\b[a-z][a-z0-9+.-]{0,31}://|(?<![a-z0-9_.-])/)(?=\S)"
 )
 # The portable retry record carries a public audit marker, not a credential.
 # Accept only its exact JSON string grammar; poster/account/history checks
@@ -215,6 +228,69 @@ def _redact_secret_assignment(match: re.Match[str]) -> str:
     return f"{quote}{key}{quote}{match.group('separator')}{replacement}"
 
 
+
+def _redact_secret_assignments(text: str) -> str:
+    # Plaintext punctuation belongs to the credential. Only actual URL
+    # contexts use query delimiters, and a URL used as a secret stays secret.
+    output = []
+    cursor = scan = 0
+    while (context := _SECRET_URL_CONTEXT_PATTERN.search(text, scan)) is not None:
+        end = context.end()
+        enclosing = text[context.start() - 1] if context.start() else ""
+        while end < len(text) and not text[end].isspace():
+            # Quotes inside query values are credential data. Only a closing
+            # enclosing string/markup delimiter bounds this URL context.
+            if (
+                enclosing in {"\"", "'", "`"}
+                and text[end] == enclosing
+                and text[end - 1] != "\\"
+            ):
+                following = text[end + 1:end + 2]
+                if not following or following.isspace() or following in ">,;}]":
+                    break
+            end += 1
+        scan = end
+        value = text[context.start():end]
+        if value.startswith("/") and "?" not in value:
+            continue
+        enclosing_assignment = next(
+            (
+                match
+                for match in _SECRET_ASSIGNMENT_PATTERN.finditer(
+                    text, cursor, context.end()
+                )
+                if match.start() < context.start() < match.end()
+            ),
+            None,
+        )
+        if enclosing_assignment is not None:
+            # Resolve the full value only after identifying its owner. This
+            # avoids rescanning later URL fields as part of an earlier value.
+            complete = _SECRET_ASSIGNMENT_PATTERN.match(
+                text, enclosing_assignment.start()
+            )
+            end = complete.end()
+            output.append(
+                _SECRET_ASSIGNMENT_PATTERN.sub(
+                    _redact_secret_assignment, text[cursor:end]
+                )
+            )
+            cursor = scan = end
+            continue
+        output.append(
+            _SECRET_ASSIGNMENT_PATTERN.sub(
+                _redact_secret_assignment, text[cursor:context.start()]
+            )
+        )
+        output.append(
+            _URL_SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, value)
+        )
+        cursor = end
+    output.append(
+        _SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, text[cursor:])
+    )
+    return "".join(output)
+
 def redact_sensitive_text(text: str | None) -> str:
     """Scrub common credential-shaped values from browser/artifact text."""
 
@@ -226,7 +302,7 @@ def redact_sensitive_text(text: str | None) -> str:
     redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
     redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
     redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED_USERINFO]@", redacted)
-    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, redacted)
+    redacted = _redact_secret_assignments(redacted)
     redacted = _redact_auth_paths(redacted)
     return redacted
 

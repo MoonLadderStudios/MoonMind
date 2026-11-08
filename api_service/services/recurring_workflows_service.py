@@ -1419,7 +1419,6 @@ class RecurringWorkflowsService:
             TemporalArtifactNotFoundError,
             TemporalArtifactRepository,
             TemporalArtifactService,
-            schedule_input_artifact_ids,
         )
         from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
@@ -1429,28 +1428,18 @@ class RecurringWorkflowsService:
                 artifacts = self._artifact_service or TemporalArtifactService(
                     TemporalArtifactRepository(self._session)
                 )
-                from api_service.db.models import TemporalArtifactRedactionLevel
-
-                selected = schedule_input_artifact_ids(
-                    {"initialParameters": initial_parameters}
+                # Only the original start owns the complete direct selection,
+                # including input/plan pointers outside initial parameters.
+                # Legacy starts without a saved revision acquire no new rights.
+                await artifacts.readmit_scheduled_inputs(
+                    artifact_ids=None,
+                    execution=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=workflow_id,
+                        run_id=info.workflow_run_id,
+                        link_type="input.execution_plan",
+                    ),
                 )
-                restricted = any(
-                    [
-                        (await artifacts._repository.get_artifact(ref)).redaction_level
-                        is TemporalArtifactRedactionLevel.RESTRICTED
-                        for ref in sorted(selected)
-                    ]
-                )
-                if restricted:
-                    await artifacts.readmit_scheduled_inputs(
-                        artifact_ids=None,
-                        execution=ExecutionRef(
-                            namespace=info.namespace,
-                            workflow_id=workflow_id,
-                            run_id=info.workflow_run_id,
-                            link_type="input.execution_plan",
-                        ),
-                    )
             return await readmit_frozen_execution_plan(
                 db_session=self._session,
                 artifact_service=self._artifact_service,

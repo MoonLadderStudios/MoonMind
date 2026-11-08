@@ -117,16 +117,17 @@ async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
     protected = await _seed_journal_tombstones(
         pg_maker, 3, deleted_at=now - HORIZON * 3
     )
-    await _seed_journal_tombstones(pg_maker, 120, deleted_at=now - HORIZON * 2)
+    purgeable = await _seed_journal_tombstones(
+        pg_maker, 120, deleted_at=now - HORIZON * 2
+    )
     recent = await _seed_journal_tombstones(pg_maker, 5, deleted_at=now)
     async with pg_maker() as session:
-        session.add_all(
+        session.add(
             TemporalArtifactPin(
-                id=uuid4(), artifact_id=artifact_id, pinned_by_principal="operator"
+                id=uuid4(), artifact_id=protected[0], pinned_by_principal="operator"
             )
-            for artifact_id in protected[:2]
         )
-        # A sealed chunk of a live journal is still recovery data.
+        # Both members of a sealed journal pair remain recovery data.
         session.add(
             OmnigentBridgeSession(
                 bridge_session_id="bridge-active",
@@ -138,7 +139,13 @@ async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
                 omnigent_endpoint_ref="endpoint",
                 host_type="proxy",
                 status="active",
-                metadata_={SEALED_JOURNAL_CHUNKS_KEY: [{"rawEventsRef": protected[2]}]},
+                metadata_={
+                    SEALED_JOURNAL_CHUNKS_KEY: [
+                        {"raw": protected[1], "normalized": protected[2]},
+                        # An incomplete pair does not protect unrelated metadata.
+                        {"raw": purgeable[0]},
+                    ]
+                },
             )
         )
         await session.commit()
@@ -160,6 +167,11 @@ async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
         retained = len(protected) + len(recent)
         assert await _count(session, TemporalArtifact) == retained
         assert await _count(session, TemporalArtifactLink) == retained
+        remaining = set(
+            (await session.scalars(select(TemporalArtifact.artifact_id))).all()
+        )
+        assert remaining == set(protected + recent)
+        assert remaining.isdisjoint(purgeable)
 
 
 async def test_tombstone_with_an_in_flight_pin_is_skipped_and_retained(

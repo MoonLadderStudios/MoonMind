@@ -898,3 +898,39 @@ async def test_structured_authorization_values_never_reach_metadata_only_preview
             artifact_id=source.artifact_id, access=access_for_test("owner")
         )
     )[1] == native
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["&canyon-meadow-lantern", "canyon<meadow>lantern", "`canyon-meadow-lantern"],
+    ids=["leading-ampersand", "embedded-angle", "leading-backtick"],
+)
+async def test_plaintext_preview_masks_complete_punctuation_credentials(
+    evidence_service, value
+):
+    service, _ = evidence_service
+    native = f"src/check.py:42\nPASSWORD={value}\nresult=observed".encode()
+    source = await put(service, native, "text/plain")
+    reader = access_for_test("workflow:metadata-only")._with_verified_inputs(
+        [source.artifact_id]
+    )
+    _, _, _, policy = await service.get_metadata(
+        artifact_id=source.artifact_id, access=reader
+    )
+    assert not policy.raw_access_allowed
+    _, preview = await service.read(
+        artifact_id=policy.default_read_ref.artifact_id, access=reader
+    )
+    assert (
+        b"canyon" not in preview
+        and b"meadow" not in preview
+        and b"lantern" not in preview
+    )
+    assert b"src/check.py:42" in preview and b"result=observed" in preview
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(artifact_id=source.artifact_id, access=reader)
+    assert (
+        await service.read(
+            artifact_id=source.artifact_id, access=access_for_test("owner")
+        )
+    )[1] == native
