@@ -270,7 +270,7 @@ class ImageAssessment(Contract):
         ]
 
 
-WebMode = Literal["baseline", "api", "active"]
+WebMode = Literal["baseline", "api", "active", "known-issues"]
 HttpMethod = Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 #: The scope action class each mode needs. Network permission reaches the
 #: target; only these classes authorize what is done to the application.
@@ -278,6 +278,7 @@ WEB_ACTION_CLASSES: dict[str, str] = {
     "baseline": "web-passive",
     "api": "web-api",
     "active": "web-active",
+    "known-issues": "web-known-issue",
 }
 _ORIGIN = re.compile(
     r"^https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}"
@@ -403,11 +404,15 @@ class WebAssessment(Contract):
 
     ``baseline`` crawls and checks passively; ``api`` imports an admitted
     definition and checks passively; ``active`` adds the active scanner and
-    is the only mode that sends attack payloads. One job tests at most one
+    sends general attack payloads. ``known-issues`` emits only selected fixed
+    HTTP recipes without discovery or credentials. One job tests at most one
     identity, so every observation is attributable to it.
     """
 
     mode: WebMode
+    template_ids: list[Literal["nextjs-middleware-bypass"]] = Field(
+        default_factory=list, max_length=1
+    )
     assessment_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
     origin: str
     routes: list[WebRoute] = Field(min_length=1, max_length=32)
@@ -428,6 +433,17 @@ class WebAssessment(Contract):
     output_directory: str = "web-assessment"
     max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
     timeout_seconds: int = Field(900, ge=300, le=3600)
+
+    @model_validator(mode="before")
+    @classmethod
+    def curated_defaults(cls, value):
+        if (
+            isinstance(value, dict)
+            and value.get("mode") == "known-issues"
+            and "discovery" not in value
+        ):
+            return {**value, "discovery": []}
+        return value
 
     _origin = field_validator("origin")(web_origin)
 
@@ -476,7 +492,21 @@ class WebAssessment(Contract):
             and not admitted(api.endpoint_path, "POST")
         ):
             raise ValueError("GraphQL endpoint must accept admitted POST requests")
-        if self.mode != "api" and not self.discovery:
+        if self.mode == "known-issues":
+            if (
+                not self.template_ids
+                or self.discovery
+                or self.identity
+                or api is not None
+            ):
+                raise ValueError(
+                    "known-issue templates require explicit IDs, anonymous requests and no discovery or API input"
+                )
+            if len(set(self.start_paths)) != len(self.start_paths):
+                raise ValueError("duplicate known-issue target path")
+        elif self.template_ids:
+            raise ValueError("template IDs require known-issues mode")
+        if self.mode not in {"api", "known-issues"} and not self.discovery:
             raise ValueError("crawling modes need a discovery method")
         # Intensity is chosen explicitly and never inferred or upgraded.
         if (self.mode == "active") != (self.active_strength is not None):

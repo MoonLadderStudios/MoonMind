@@ -66,6 +66,7 @@ SPEC = {
 class App(BaseHTTPRequestHandler):
     sessions: dict[str, str] = {}
     posted: list[str] = []
+    known_issue_requests: list[tuple[str, str, str | None]] = []
     server_version = "fixture"
     sys_version = ""
 
@@ -110,7 +111,33 @@ class App(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         path = url.path
-        if path == "/":
+        if path in {"/middleware", "/fixed/middleware", "/middleware/redirect"}:
+            self.known_issue_requests.append(
+                (self.command, self.path, self.headers.get("X-Middleware-Subrequest"))
+            )
+            probe = self.headers.get("X-Middleware-Subrequest")
+            if path == "/middleware/redirect" and probe:
+                self._send(
+                    302,
+                    "",
+                    headers={"Location": "http://outside.example.test/private"},
+                    hardened=True,
+                )
+            elif path == "/middleware" and probe:
+                self._page(
+                    "protected", "<p>Protected fixture content api_key=synthetic-known-issue-payload</p>", hardened=True
+                )
+            else:
+                self._send(
+                    307,
+                    "Sign in required",
+                    headers={
+                        "X-Nextjs-Redirect": "/login",
+                        "Set-Cookie": "secret=synthetic-known-issue-cookie; HttpOnly",
+                    },
+                    hardened=True,
+                )
+        elif path == "/":
             self._page(
                 "home",
                 '<a href="/search?q=hello">search</a> '
@@ -139,7 +166,9 @@ class App(BaseHTTPRequestHandler):
             if self._user() is None:
                 self._send(302, "", headers={"Location": "/login"})
             else:
-                self._page("account", '<a href="/account/settings?tab=main">settings</a>')
+                self._page(
+                    "account", '<a href="/account/settings?tab=main">settings</a>'
+                )
         elif path == "/account/settings":
             if self._user() is None:
                 self._send(302, "", headers={"Location": "/login"})
@@ -186,7 +215,9 @@ class App(BaseHTTPRequestHandler):
         token = secrets.token_hex(16)
         self.sessions[token] = user
         self._send(
-            302, "", headers={"Location": "/account", "Set-Cookie": f"sid={token}; Path=/"}
+            302,
+            "",
+            headers={"Location": "/account", "Set-Cookie": f"sid={token}; Path=/"},
         )
 
 

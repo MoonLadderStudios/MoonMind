@@ -14147,7 +14147,8 @@ export interface components {
          *
          *     ``baseline`` crawls and checks passively; ``api`` imports an admitted
          *     definition and checks passively; ``active`` adds the active scanner and
-         *     is the only mode that sends attack payloads. One job tests at most one
+         *     sends general attack payloads. ``known-issues`` emits only selected fixed
+         *     HTTP recipes without discovery or credentials. One job tests at most one
          *     identity, so every observation is attributable to it.
          */
         WebAssessment: {
@@ -14155,7 +14156,9 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "baseline" | "api" | "active";
+            mode: "baseline" | "api" | "active" | "known-issues";
+            /** Templateids */
+            templateIds?: "nextjs-middleware-bypass"[];
             /** Assessmentref */
             assessmentRef?: string | null;
             /** Origin */
