@@ -38,7 +38,6 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
-    TemporalArtifactAuthorizationError,
 )
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
@@ -517,17 +516,17 @@ async def test_4636_schedule_artifact_cutoff_and_saved_reference_survive_restart
             )
             target = deepcopy(definition.target)
             target["initialParameters"]["workflow"]["title"] = "Unrelated saved edit"
-            # A direct service call without the router's admitted operator
-            # cannot adopt an unlinked legacy system-owned artifact.
+            # Without the router's admitted operator, a saved definition cannot
+            # authorize a changed target or adopt its unlinked legacy input.
             before = deepcopy(definition.target)
+            before_root = definition.input_artifact_root_id
             with pytest.raises(
-                RecurringWorkflowValidationError, match="Cannot retain schedule input"
-            ) as rejected:
+                RecurringWorkflowValidationError,
+                match="saved definition cannot read artifact outside its admitted target",
+            ):
                 await service.update_definition(definition, target=target)
-            assert isinstance(
-                rejected.value.__cause__, TemporalArtifactAuthorizationError
-            )
             assert definition.target == before
+            assert definition.input_artifact_root_id == before_root
             adapter.update_schedule.assert_not_awaited()
             await service.update_definition(
                 definition,
