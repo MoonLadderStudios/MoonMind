@@ -161,11 +161,27 @@ async def inspect_owned(name, owner):
     return rows[0]
 
 
+# The controller checks this before invoking a requested release's helper.
+JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED = True
+
+
+def _legacy_journal_consumer(config, labels):
+    env = dict(item.split("=", 1) for item in config.get("Env", ()) if "=" in item)
+    return env.get("TEMPORAL_WORKER_FLEET") in (
+        "agent_runtime",
+        "artifacts",
+    ) or labels.get("com.docker.compose.service") in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-artifacts",
+    )
+
+
 async def _journal_consumers(project):
     """Observe the selected project's real writers and retention sweepers.
 
-    Worker names can be overridden in Compose. The installed fleet environment
-    identifies the Activity owners; service names cover older standard images.
+    Explicit labels identify consumers independently of service or fleet names.
+    Retain name/fleet fallback only while upgrades from unlabeled releases are
+    supported; an explicit label always overrides that legacy discovery.
     One-offs are consumers too and are never silently excluded.
     """
     identifiers = (await docker(
@@ -183,10 +199,11 @@ async def _journal_consumers(project):
         labels = config.get("Labels") or {}
         if labels.get("com.docker.compose.project") != project:
             raise RuntimeError("Journal consumer observation escaped the selected project")
-        env = dict(item.split("=", 1) for item in config.get("Env", ()) if "=" in item)
-        if env.get("TEMPORAL_WORKER_FLEET") not in ("agent_runtime", "artifacts") and labels.get("com.docker.compose.service") not in (
-            "temporal-worker-agent-runtime", "temporal-worker-artifacts",
-        ):
+        if "moonmind.journal-consumer" in labels:
+            selected = labels["moonmind.journal-consumer"] == "true"
+        else:
+            selected = _legacy_journal_consumer(config, labels)
+        if not selected:
             continue
         state = row.get("State") or {}
         if not row.get("Id") or not isinstance(state.get("Running"), bool):
@@ -319,8 +336,23 @@ async def controller_journal_cli(phase, payload):
     if phase not in ("journal-prepare", "journal-quiesce"):
         raise ValueError("Unknown controller journal transition phase")
     async with _deployment_lock():
+        project = str(payload["target"]["project"])
+        capabilities = payload.get("controllerCapabilities") or ()
+        if "journal-consumer-topology" not in capabilities:
+            # An older controller cannot recover a consumer it never recognized.
+            # Refuse before fencing or compacting, while allowing releases that
+            # retain the legacy fleet marker for old-controller compatibility.
+            for row in await _journal_consumers(project):
+                config = row.get("Config") or {}
+                if not _legacy_journal_consumer(config, config.get("Labels") or {}):
+                    raise RuntimeError(
+                        "Refusing journal transition: the installed controller "
+                        "does not provide journal-consumer-topology for an installed "
+                        "label-only consumer. Bootstrap the updated deployment "
+                        "controller before retrying; no journal consumer was stopped."
+                    )
         receipt = await prepare_journal_transition(
-            str(payload["target"]["project"]), compact=phase == "journal-prepare"
+            project, compact=phase == "journal-prepare"
         )
     print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
           file=sys.stderr, flush=True)

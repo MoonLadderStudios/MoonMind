@@ -483,6 +483,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
+      moonmind.journal-consumer: "true"
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
@@ -689,6 +690,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
+      moonmind.journal-consumer: "true"
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - MOONMIND_RUNTIME_RESOURCES_FILE=${MOONMIND_RUNTIME_RESOURCES_FILE:-}

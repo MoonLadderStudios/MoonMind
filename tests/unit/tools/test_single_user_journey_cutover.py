@@ -522,6 +522,7 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
                     "output": json.dumps(
                         {
                             "services": {
+                                **{service: {} for service in services},
                                 "api": {
                                     "environment": {
                                         "MOONMIND_PUBLIC_BASE_URL": api_base,

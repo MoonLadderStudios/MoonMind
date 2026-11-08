@@ -38,6 +38,11 @@ class Runner:
             return {"exit": 0, "output": NEW_ID}
         if args[:2] == ("docker", "run"):
             return {"exit": 0, "stdout": json.dumps({"services": {name: {"image": "${MOONMIND_IMAGE}"} for name in SERVICES}})}
+        if args[-3:] == ("config", "--format", "json"):
+            return {
+                "exit": 0,
+                "stdout": json.dumps({"services": {name: {} for name in SERVICES}}),
+            }
         if args[-2:] == ("config", "--services"):
             return {"exit": 0, "stdout": "\n".join(SERVICES)}
         if args[:2] == ("docker", "inspect"):
