@@ -71,8 +71,9 @@ def test_only_explicit_revision_refs_receive_admission_and_schedule_retention():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", [False, True])
 async def test_imported_document_is_readable_before_start_and_idempotency_does_not_expand_access(
-    artifacts, monkeypatch
+    artifacts, monkeypatch, restricted
 ):
     saved = await _api_context(artifacts, monkeypatch)
     policy = await _put(
@@ -91,6 +92,16 @@ async def test_imported_document_is_readable_before_start_and_idempotency_does_n
         link_type="",
         content_type="text/plain",
     )
+    if restricted:
+        from api_service.db.models import (
+            TemporalArtifact,
+            TemporalArtifactRedactionLevel,
+        )
+
+        async with artifacts() as session:
+            document = await session.get(TemporalArtifact, policy)
+            document.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            await session.commit()
     observed = []
 
     async def start_workflow(**kwargs):
@@ -153,6 +164,58 @@ async def test_imported_document_is_readable_before_start_and_idempotency_does_n
         assert policy in {link.artifact_id for link in links}
         assert other not in {link.artifact_id for link in links}
         assert adapter.start_workflow.call_count == 1
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, response.workflow_id
+        )
+        await service.create_execution(
+            workflow_type=source.workflow_type.value,
+            owner_id=source.owner_id,
+            owner_type=source.owner_type.value,
+            title=None,
+            input_artifact_ref=source.input_ref,
+            plan_artifact_ref=source.plan_ref,
+            manifest_artifact_ref=source.manifest_ref,
+            failure_policy=None,
+            initial_parameters=source.parameters,
+            idempotency_key="org-fresh-rerun",
+            _recovery_artifact_source=source,
+        )
+        assert adapter.start_workflow.call_count == 2
+        assert observed == [b"Synthetic policy", b"Synthetic policy"]
+        if restricted:
+            from sqlalchemy import delete
+
+            from moonmind.workflows.temporal.service import (
+                TemporalExecutionValidationError,
+            )
+
+            await session.execute(
+                delete(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == source.workflow_id,
+                    TemporalArtifactLink.artifact_id == policy,
+                    TemporalArtifactLink.link_type == "input.artifact.raw",
+                )
+            )
+            await session.commit()
+            with pytest.raises(
+                TemporalExecutionValidationError, match="current source read access"
+            ):
+                await service.create_execution(
+                    workflow_type=source.workflow_type.value,
+                    owner_id=source.owner_id,
+                    owner_type=source.owner_type.value,
+                    title=None,
+                    input_artifact_ref=source.input_ref,
+                    plan_artifact_ref=source.plan_ref,
+                    manifest_artifact_ref=source.manifest_ref,
+                    failure_policy=None,
+                    initial_parameters=source.parameters,
+                    idempotency_key="org-revoked-rerun",
+                    _recovery_artifact_source=source,
+                )
+            assert adapter.start_workflow.call_count == 2
 
 
 @pytest.mark.asyncio

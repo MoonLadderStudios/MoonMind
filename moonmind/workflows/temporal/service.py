@@ -2910,6 +2910,41 @@ class TemporalExecutionService:
                 except (OmnigentArtifactError, TemporalArtifactError) as exc:
                     raise TemporalExecutionValidationError(str(exc)) from exc
             if _recovery_artifact_source is not None:
+                from moonmind.security.organisational_evidence import (
+                    organisational_evidence_refs,
+                )
+
+                # A fresh rerun carries only still-authorized recorded evidence,
+                # including restricted raw rights that input.recovery alone
+                # cannot convey. Neither an edited ref nor a revoked source
+                # grant can manufacture new access.
+                await self._session.flush()
+                source_evidence = set(
+                    organisational_evidence_refs(
+                        _workflow_payload(_recovery_artifact_source.parameters or {})
+                    )
+                )
+                requested_evidence = set(
+                    organisational_evidence_refs(_workflow_payload(params))
+                )
+                if inherited_evidence := source_evidence & requested_evidence:
+                    artifacts = TemporalArtifactService(
+                        TemporalArtifactRepository(self._session),
+                        transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                    )
+                    try:
+                        await artifacts.delegate_read_access(
+                            artifact_ids=inherited_evidence,
+                            workflow_id=workflow_id,
+                            namespace=self._namespace,
+                            access=ArtifactAccessContext.for_execution(
+                                _recovery_artifact_source.workflow_id
+                            ),
+                        )
+                    except TemporalArtifactError:
+                        raise TemporalExecutionValidationError(
+                            "Organisational evidence recovery requires current source read access."
+                        ) from None
                 # Recovery inherits the admitted source inputs and retained step
                 # evidence, but has a new execution identity. Commit their links
                 # with the destination record before Temporal can launch it.
