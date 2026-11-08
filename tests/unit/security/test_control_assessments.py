@@ -519,3 +519,172 @@ def test_declared_pack_admission_requires_exact_identity_without_parallel_plan()
             AssessmentRequest.model_validate(
                 request_payload(controlAssessment=None, frameworkPack=incomplete)
             )
+
+
+def organisational_request(**changes):
+    return {
+        "id": "policy",
+        "category": "policy",
+        "purpose": "design",
+        "description": "Supply the adopted access policy",
+        "owner": "Operations",
+        "revisions": [
+            {
+                "artifactRef": "art_policy",
+                "kind": "document",
+                "source": "controlled fixture",
+                "collectedAt": NOW.isoformat(),
+                "expiresAt": (NOW + timedelta(days=30)).isoformat(),
+                "period": {"start": "2026-11-01", "end": "2026-11-30"},
+                "population": ["app"],
+                "sensitivity": "internal",
+                "review": {
+                    "outcome": "accepted",
+                    "purpose": "design",
+                    "reviewer": "Operator",
+                    "reason": "Reviewed policy design only",
+                    "reviewedAt": NOW.isoformat(),
+                    "period": {"start": "2026-11-07", "end": "2026-11-07"},
+                    "population": ["app"],
+                },
+            }
+        ],
+        **changes,
+    }
+
+
+def test_organisational_requests_are_reviewed_per_purpose_and_missing_stays_gap():
+    report = evaluate(
+        requirements=[
+            requirement(
+                organisationalEvidence=[
+                    organisational_request(),
+                    organisational_request(
+                        id="training",
+                        category="training",
+                        purpose="occurrence",
+                        revisions=[],
+                    ),
+                ]
+            )
+        ],
+        availability={"art_policy": None},
+    )
+    row = report.requirements[0]
+    assert row.conclusion == "inconclusive"
+    assert [item.state for item in row.organisational_evidence] == [
+        "accepted",
+        "requested",
+    ]
+    assert "art_policy" in row.evidence_refs
+    assert row.organisational_evidence[1].limitations
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"kind": "management_assertion"},
+        {"kind": "generated_draft"},
+        {"population": ["other"]},
+        {"expiresAt": NOW.isoformat()},
+        {"collectedAt": (NOW + timedelta(days=1)).isoformat()},
+        {"period": {"start": "2026-10-01", "end": "2026-10-30"}},
+        {"review": None},
+    ],
+)
+def test_organisational_review_cannot_promote_insufficient_evidence(change):
+    evidence = organisational_request()
+    evidence["revisions"][0].update(change)
+    row = evaluate(
+        requirements=[requirement(organisationalEvidence=[evidence])],
+        availability={"art_policy": None},
+    ).requirements[0]
+    assert row.conclusion == "inconclusive"
+    assert row.organisational_evidence[0].state != "accepted"
+
+
+def test_document_design_acceptance_does_not_prove_occurrence():
+    evidence = organisational_request(purpose="occurrence")
+    row = evaluate(
+        requirements=[requirement(organisationalEvidence=[evidence])],
+        availability={"art_policy": None},
+    ).requirements[0]
+    assert row.organisational_evidence[0].state == "insufficient"
+
+
+def test_superseded_refs_and_reviews_are_preserved_and_not_reused_as_current():
+    evidence = organisational_request()
+    evidence["revisions"].append(
+        {**evidence["revisions"][0], "artifactRef": "art_replacement", "review": None}
+    )
+    row = evaluate(
+        requirements=[requirement(organisationalEvidence=[evidence])],
+        availability={"art_policy": None, "art_replacement": None},
+    ).requirements[0]
+    assert row.organisational_evidence[0].superseded_refs == ["art_policy"]
+    assert row.organisational_evidence[0].state == "supplied"
+    assert set(row.evidence_refs) >= {"art_policy", "art_replacement"}
+    assert (
+        row.requirement.organisational_evidence[0].revisions[0].review.outcome
+        == "accepted"
+    )
+
+
+def test_organisational_acceptance_is_requirement_local_and_report_readable():
+    from moonmind.security.control_assessments import render_control_assessment
+
+    evidence = organisational_request()
+    report = evaluate(
+        requirements=[
+            requirement(organisationalEvidence=[evidence]),
+            requirement(
+                id="other-period",
+                period={"start": "2026-11-06", "end": "2026-11-07"},
+                organisationalEvidence=[evidence],
+            ),
+        ],
+        availability={"art_policy": None},
+    )
+    assert report.requirements[0].organisational_evidence[0].state == "accepted"
+    assert report.requirements[1].organisational_evidence[0].state == "insufficient"
+    rendered = render_control_assessment(report)
+    assert "art_policy" in rendered
+    assert "design" in rendered
+    assert "Attributed review by Operator" in rendered
+    assert "Gap:" in rendered
+
+
+def test_organisational_revisions_share_reference_bound_and_unique_identity():
+    from moonmind.security.assessments import ControlAssessmentPlan
+
+    evidence = organisational_request()
+    evidence["revisions"].append(evidence["revisions"][0])
+    with pytest.raises(ValidationError, match="immutable artifact reference"):
+        ControlAssessmentPlan(
+            requirements=[requirement(organisationalEvidence=[evidence])]
+        )
+    requests = [organisational_request(id=str(i)) for i in range(9)]
+    for i, item in enumerate(requests):
+        item["revisions"] = [
+            {**item["revisions"][0], "artifactRef": f"art_{i}_{j}"} for j in range(8)
+        ]
+    with pytest.raises(ValidationError, match="reference bound"):
+        ControlAssessmentPlan(
+            requirements=[requirement(organisationalEvidence=requests)]
+        )
+
+
+def test_operational_record_cannot_cover_events_after_collection():
+    evidence = organisational_request(purpose="occurrence")
+    revision = evidence["revisions"][0]
+    revision["kind"] = "operational_record"
+    revision["review"]["purpose"] = "occurrence"
+    row = evaluate(
+        requirements=[requirement(organisationalEvidence=[evidence])],
+        availability={"art_policy": None},
+    ).requirements[0]
+    assert row.organisational_evidence[0].state == "insufficient"
+    assert any(
+        "after collection" in value
+        for value in row.organisational_evidence[0].limitations
+    )

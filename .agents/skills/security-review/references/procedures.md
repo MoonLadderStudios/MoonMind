@@ -56,3 +56,18 @@ retry only the incomplete phase within the original budget. Keep readable native
 coverage and failures available without inference. Unavailable checks remain
 Unverified with a concrete next check and capable owner. Live model quality and
 deployment checks are optional evidence, never a mandatory paid or human gate.
+
+## Review organisational evidence
+
+For an admitted `security.assess` requirement, inspect imported document or
+structured-evidence artifacts through existing authorized reads. Record each
+request's purpose, source, collection/expiry, covered period and population,
+sensitivity and owner label in `organisationalEvidence`. Cite the revision in a
+purpose-specific review reason; scope the review's period and population to what
+was actually inspected. Missing documents, incomplete populations, conflicting
+dates and unavailable records remain explicit gaps. Policy design is not adoption
+or operation: generated policies, SoA drafts, proposed minutes and management
+assertions cannot prove an event happened. Append replacement revisions without
+removing prior refs/reviews, and retain existing privacy/model-delivery limits.
+The native assessment reports request state and sufficiency; this Skill does not
+create external signoff or grant authority to publish evidence.

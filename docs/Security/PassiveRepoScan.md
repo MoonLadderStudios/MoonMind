@@ -244,8 +244,8 @@ satisfied conclusion. A requested unavailable `reviewRef` remains explicit.
 
 Each result separates applicability, coverage, conclusion, evidence sufficiency,
 review state, methods, exceptions, limitations and next actions. Justified
-non-applicability is not satisfaction. One artifact can support several
-requirements without sharing their conclusions. The implementation bounds
+non-applicability is not satisfaction. [Organisational requests](FrameworkPacks.md#organisational-evidence-requests-and-imports)
+support scoped artifact reuse. The implementation bounds
 requirements, check populations, references and evidence bytes; it performs no
 new network operations or scanner launches.
 

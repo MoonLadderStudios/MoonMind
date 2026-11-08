@@ -25,6 +25,8 @@ from moonmind.security.frameworks import (
     EvidencePeriod,
     FrameworkAssessmentInput,
     FrameworkPackSelection,
+    OrganisationalEvidenceRequest,
+    OrganisationalEvidenceResult,
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
@@ -521,6 +523,9 @@ class ControlSupportingEvidence(Contract):
 
 
 class ControlRequirement(Contract):
+    organisational_evidence: Annotated[
+        list[OrganisationalEvidenceRequest], Field(max_length=32)
+    ] = Field(default_factory=list)
     id: Text
     framework_id: Text
     framework_edition: Text
@@ -542,6 +547,9 @@ class ControlRequirement(Contract):
 
     @model_validator(mode="after")
     def validate_objectives(self):
+        request_ids = [item.id for item in self.organisational_evidence]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("duplicate organisational evidence request identity")
         ids = [objective.id for objective in self.objectives]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate control objective identity")
@@ -573,12 +581,27 @@ class ControlAssessmentPlan(Contract):
         )
         if cells > 16384:
             raise ValueError("control assessment check population exceeds the bound")
-        refs = {
-            e.artifact_ref for r in self.requirements for e in r.supporting_evidence
-        }
+        refs = set(self.evidence_refs())
         if len(refs) > 64:
             raise ValueError("control supporting evidence exceeds the reference bound")
         return self
+
+    def evidence_refs(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    e.artifact_ref
+                    for r in self.requirements
+                    for e in r.supporting_evidence
+                ]
+                + [
+                    revision.artifact_ref
+                    for r in self.requirements
+                    for request in r.organisational_evidence
+                    for revision in request.revisions
+                ]
+            )
+        )
 
 
 class ControlObjectiveResult(Contract):
@@ -593,6 +616,9 @@ class ControlObjectiveResult(Contract):
 
 
 class ControlRequirementResult(Contract):
+    organisational_evidence: list[OrganisationalEvidenceResult] = Field(
+        default_factory=list
+    )
     requirement: ControlRequirement
     conclusion: Literal["satisfied", "not_satisfied", "inconclusive", "not_assessed"]
     coverage: Literal["complete", "partial", "blocked", "not_assessed"]
@@ -603,10 +629,13 @@ class ControlRequirementResult(Contract):
     methods: Annotated[
         list[
             Literal[
-                "deterministic_check", "agent_interpretation", "management_assertion"
+                "deterministic_check",
+                "agent_interpretation",
+                "management_assertion",
+                "document_review",
             ]
         ],
-        Field(max_length=3),
+        Field(max_length=4),
     ]
     objectives: Annotated[list[ControlObjectiveResult], Field(max_length=32)]
     exceptions: Annotated[list[ComparedDecision], Field(max_length=4096)]

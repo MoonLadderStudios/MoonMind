@@ -2433,6 +2433,7 @@ class TemporalExecutionService:
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
         _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
         _admitted_execution_plan: PersistedOmnigentExecutionPlan | None = None,
+        _assessment_evidence_access: ArtifactAccessContext | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2852,6 +2853,34 @@ class TemporalExecutionService:
         if remediation_link is not None:
             self._session.add(remediation_link)
         try:
+            if _assessment_evidence_access is not None:
+                from moonmind.security.organisational_evidence import (
+                    organisational_evidence_refs,
+                )
+
+                # Exact Tool inputs and trusted request access, never agent-image
+                # attachments or model-delivery grants. Win the create identity
+                # before adding any rights, in the same caller-owned transaction.
+                await self._session.flush()
+                evidence_refs = organisational_evidence_refs(_workflow_payload(params))
+                artifacts = TemporalArtifactService(
+                    TemporalArtifactRepository(self._session),
+                    transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                )
+                try:
+                    await artifacts.delegate_read_access(
+                        artifact_ids=evidence_refs,
+                        workflow_id=workflow_id,
+                        namespace=self._namespace,
+                        access=_assessment_evidence_access,
+                    )
+                except TemporalArtifactError:
+                    raise TemporalExecutionValidationError(
+                        "Organisational evidence could not be admitted. Verify current artifact access and retry."
+                    ) from None
+                record.artifact_refs = list(
+                    dict.fromkeys([*record.artifact_refs, *evidence_refs])
+                )
             if _admitted_execution_plan is not None:
                 # The canonical unique create identity chooses the winner
                 # before it may delegate. Competing same-key API requests use

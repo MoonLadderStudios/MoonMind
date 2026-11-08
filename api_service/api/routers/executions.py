@@ -12978,6 +12978,12 @@ async def _create_execution_from_workflow_request(
         if frozen_rollout:
             initial_parameters["runtimeProviderTarget"] = dict(frozen_rollout)
 
+    from moonmind.security.organisational_evidence import organisational_evidence_refs
+
+    try:
+        evidence_input_refs = organisational_evidence_refs(normalized_task_for_planner)
+    except (TypeError, ValueError):
+        raise _invalid_workflow_request("Invalid organisational evidence inputs.") from None
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
         # Single-user (#4351): ordinary operator creates are instance-owned
@@ -13016,6 +13022,7 @@ async def _create_execution_from_workflow_request(
             scheduled_for=scheduled_for_dt,
             _workflow_id=reserved_workflow_id,
             _admitted_execution_plan=persisted_omnigent_plan,
+            **({"_assessment_evidence_access": access} if evidence_input_refs else {}),
         )
     except ProviderProfileRuntimeMismatchError as exc:
         # Provider Profiles are runtime-owned: the shared invariant is
