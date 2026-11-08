@@ -49,7 +49,7 @@ def _state_dir(explicit: Any) -> Path:
     import os
 
     candidate = _string(explicit) or os.environ.get(
-        # Durable default: temporal-worker-integrations only mounts the
+        # Durable default: temporal-worker-core persists state on the
         # moonmind_secrets volume (/app/var/secrets), so state under
         # var/artifacts is discarded on worker recreate precisely when
         # restart recovery is needed.

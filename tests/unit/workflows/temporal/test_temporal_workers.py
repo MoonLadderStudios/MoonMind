@@ -93,7 +93,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
         AGENT_RUNTIME_FLEET,
         DEPLOYMENT_FLEET,
     }
-    assert topologies[WORKFLOW_FLEET].service_name == "temporal-worker-workflow"
+    assert topologies[WORKFLOW_FLEET].service_name == "temporal-worker-core"
     assert topologies[ARTIFACTS_FLEET].required_secrets == (
         "TEMPORAL_ARTIFACT_S3_ENDPOINT",
         "TEMPORAL_ARTIFACT_S3_BUCKET",
