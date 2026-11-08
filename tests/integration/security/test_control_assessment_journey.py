@@ -354,6 +354,17 @@ async def test_organisational_import_review_replacement_and_access_retry(
     assert "document_review" in original["methods"]
     proof = await recurring.required(service, first["controlAssessmentRef"])
     assert {policy, assertion} <= proof
+    from tests.artifact_access import access_for_test
+
+    _, readable = await service.read(
+        artifact_id=recurring.report_ref(first),
+        access=access_for_test("workflow:assessment"),
+    )
+    readable = readable.decode("utf-8")
+    assert policy in readable
+    assert "requested" in readable and "insufficient" in readable
+    assert "Policy design" in readable or "policy design" in readable
+    assert "not independent verification" in readable
 
     replacement = await recurring.put(
         service, {"policy": "Replacement synthetic policy"}
