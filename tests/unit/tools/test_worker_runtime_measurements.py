@@ -107,7 +107,10 @@ def test_log_evidence_separates_loop_callbacks_and_activation_deadlocks_without_
         ]
     )
     result = measurement.parse_worker_log(text)
-    assert result["asyncioSlowCallbacks"] == {
+    assert {
+        key: result["asyncioSlowCallbacks"][key]
+        for key in ("count", "maxSeconds", "aboveHalfSecond")
+    } == {
         "count": 2,
         "maxSeconds": 1.5,
         "aboveHalfSecond": 1,
@@ -378,4 +381,52 @@ def test_comparison_refuses_incomplete_or_unmatched_conditions(mismatch):
     else:
         candidate["workers"]["0"][mismatch] = "different"
     with pytest.raises(ValueError):
+        measurement.compare_reports(baseline, candidate)
+
+
+def test_callback_events_keep_only_bounded_numeric_evidence():
+    prefix = "2026-11-08T08:00:00.250000123Z "
+    text = "\n".join(
+        prefix + f"Executing <Task private-secret-{index}> took 0.600 seconds"
+        for index in range(103)
+    )
+    result = measurement.parse_worker_log(
+        text, phase_started_at="2026-11-08T08:00:00+00:00"
+    )["asyncioSlowCallbacks"]
+    assert result["count"] == 103
+    assert result["aboveHalfSecond"] == 103
+    assert len(result["events"]) == 100
+    assert result["omittedEvents"] == 3
+    assert result["events"][0] == {
+        "emittedAtUnixSeconds": 1794124800.25,
+        "durationSeconds": 0.6,
+        "estimatedCrossesPhaseStart": True,
+    }
+    assert "private" not in str(result)
+
+
+def test_callback_event_boundary_and_missing_timestamp_are_explicit():
+    result = measurement.parse_worker_log(
+        "2026-11-08T08:00:01Z Executing <Handle private> took 0.200 seconds\n"
+        "Executing <Task private> took 0.700 seconds\n"
+        "2026-99-99T08:00:01Z Executing <Task private> took 0.800 seconds",
+        phase_started_at="2026-11-08T08:00:00+00:00",
+    )["asyncioSlowCallbacks"]
+    assert result["events"][0]["estimatedCrossesPhaseStart"] is False
+    for event in result["events"][1:]:
+        assert event["emittedAtUnixSeconds"] is None
+        assert event["estimatedCrossesPhaseStart"] is None
+    assert result["omittedEvents"] == 0
+    assert "private" not in str(result)
+
+
+def test_comparison_allows_restart_without_resource_samples():
+    baseline, candidate = report("separate"), report("combined")
+    assert "restart" in measurement.PHASES
+    assert "post_restart_workload" in measurement.PHASES
+    for item in (baseline, candidate):
+        item["summary"]["restart"] = {"samples": 1, "unavailableSamples": 1}
+    measurement.compare_reports(baseline, candidate)
+    candidate["summary"].pop("post_restart_workload")
+    with pytest.raises(ValueError, match="post_restart_workload"):
         measurement.compare_reports(baseline, candidate)

@@ -1,7 +1,8 @@
 """Bounded, read-only evidence from disposable worker comparison journeys.
 
-Only numeric resource observations and diagnostic counts are retained. Raw worker
-logs, environment maps, task representations and Docker inspect are never saved.
+Only numeric resource observations, callback timing and diagnostic counts are
+retained. Raw worker logs, environment maps, task representations and Docker
+inspect are never saved.
 """
 
 from __future__ import annotations
@@ -20,7 +21,17 @@ from pathlib import Path
 
 FLEETS = ("workflow", "artifacts", "llm", "integrations")
 SERVICES = tuple(f"temporal-worker-{fleet}" for fleet in FLEETS)
-PHASES = ("startup", "cold_idle", "workload", "warm_idle")
+PHASES = (
+    "startup",
+    "cold_idle",
+    "workload",
+    "restart",
+    "post_restart_workload",
+    "warm_idle",
+)
+# Restart can finish between samples or temporarily have no running worker.
+RESOURCE_PHASES = ("cold_idle", "workload", "post_restart_workload", "warm_idle")
+MAX_CALLBACK_EVENTS = 100
 INSPECT_FORMAT = (
     '{{$debug := false}}{{range .Config.Env}}{{$parts := split . "="}}'
     '{{if eq (index $parts 0) "PYTHONASYNCIODEBUG"}}{{if gt (len .) 19}}'
@@ -89,11 +100,45 @@ def comparison_override(model, *, combined, debug):
     return {"services": result}
 
 
-def parse_worker_log(text):
-    callbacks = [
-        float(value)
-        for value in re.findall(r"Executing .+ took (\d+(?:\.\d+)?) seconds", text)
-    ]
+def parse_worker_log(text, *, phase_started_at=None):
+    # Docker's timestamp describes emission, not an exact callback end time.
+    # Retain no task representation, name, arguments or arbitrary source paths.
+    callbacks, events = [], []
+    phase_start = (
+        datetime.fromisoformat(phase_started_at).timestamp()
+        if phase_started_at
+        else None
+    )
+    for line in text.splitlines():
+        callback = re.search(r"Executing .+ took (\d+(?:\.\d+)?) seconds", line)
+        if not callback:
+            continue
+        duration = float(callback[1])
+        callbacks.append(duration)
+        if len(events) >= MAX_CALLBACK_EVENTS:
+            continue
+        timestamp = re.match(
+            r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)\s", line
+        )
+        emitted_at = None
+        if timestamp:
+            try:
+                emitted_at = datetime.fromisoformat(
+                    timestamp[1].replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                pass
+        events.append(
+            {
+                "emittedAtUnixSeconds": emitted_at,
+                "durationSeconds": duration,
+                "estimatedCrossesPhaseStart": (
+                    emitted_at - duration < phase_start
+                    if emitted_at is not None and phase_start is not None
+                    else None
+                ),
+            }
+        )
     lag = [
         float(value)
         for value in re.findall(
@@ -106,6 +151,8 @@ def parse_worker_log(text):
             "count": len(callbacks),
             "maxSeconds": max(callbacks, default=None),
             "aboveHalfSecond": sum(value >= 0.5 for value in callbacks),
+            "events": events,
+            "omittedEvents": len(callbacks) - len(events),
         },
         "workflowActivationDeadlocks": sum(
             "TMPRL1101" in line or "Potential deadlock detected" in line
@@ -198,7 +245,7 @@ def compare_reports(baseline, candidate):
         ):
             raise ValueError("worker comparison is missing an expected topology")
         conditions.append({tuple(worker[key] for key in limits) for worker in workers})
-        for phase in PHASES[1:]:
+        for phase in RESOURCE_PHASES:
             summary = report.get("summary", {}).get(phase, {})
             if not all(
                 key in summary
@@ -451,7 +498,9 @@ def record(args):
                     cid,
                     timeout=min(20, remaining),
                 )
-                evidence[phase] = parse_worker_log(text)
+                evidence[phase] = parse_worker_log(
+                    text, phase_started_at=boundaries[phase]
+                )
             except (
                 OSError,
                 subprocess.SubprocessError,

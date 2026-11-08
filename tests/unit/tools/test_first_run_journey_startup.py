@@ -75,6 +75,10 @@ entry = {
                   for index, item in enumerate(args[:-1])
                   if item == "-f" and args[index + 1].endswith(".json")],
 }
+phase_file = Path(os.environ["FIRST_RUN_3938_LOG_DIR"]) / "fresh/state/measurement-phase"
+entry["measurement_phase"] = (
+    next(reversed(json.loads(phase_file.read_text())), None) if phase_file.exists() else None
+)
 with calls.open("a") as output:
     output.write(json.dumps(entry) + "\n")
 if startup:
@@ -663,7 +667,37 @@ def test_worker_comparison_runs_same_journey_with_measured_topology(journey, top
     )
     assert report["topology"] == topology
     assert "Unverified" in report["normalUseObservation"]
-    assert set(report["phaseStartedAt"]) >= {"workload", "warm_idle"}
+    assert list(report["phaseStartedAt"]) == [
+        "startup",
+        "cold_idle",
+        "workload",
+        "restart",
+        "post_restart_workload",
+        "warm_idle",
+        "stop",
+    ]
+    restart_calls = [
+        call for call in journey.calls() if call["command"][:1] == ["restart"]
+    ]
+    assert restart_calls and all(
+        call["measurement_phase"] == "restart" for call in restart_calls
+    )
+    restarted_wait = [
+        call
+        for call in journey.calls()
+        if call["command"][:1] == ["up"]
+        and "300" in call["command"]
+        and call["command"][-1] == "temporal-worker-workflow"
+    ]
+    assert restarted_wait and all(
+        call["measurement_phase"] == "restart" for call in restarted_wait
+    )
+    probe_calls = [
+        call
+        for call in journey.calls()
+        if call["command"][:6] == ["exec", "-T", "api", "python", "-", "--project"]
+    ]
+    assert probe_calls[0]["measurement_phase"] == "post_restart_workload"
     assert not any(
         "secret" in key.lower()
         for worker in report["workers"].values()

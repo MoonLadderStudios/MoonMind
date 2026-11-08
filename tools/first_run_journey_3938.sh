@@ -712,8 +712,10 @@ require_controller_conversion() {
 
 restart_workflow_worker() {
   echo "Restarting the workflow worker with work in flight..."
+  worker_measurement_phase restart
   compose restart temporal-worker-workflow 2>&1 | redact | tail -n 5
   compose up -d --wait --wait-timeout 300 temporal-worker-workflow 2>&1 | redact | tail -n 5
+  worker_measurement_phase post_restart_workload
 }
 
 # The provider process is controlled using the same session-driver seam as the

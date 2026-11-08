@@ -103,8 +103,14 @@ The integration artifact retains sampled startup, cold-idle, workload and
 warmed-idle memory, container counts, host capacity, worker image identities and
 resource limits. Log summaries separately count asyncio slow callbacks, event-loop
 lag warnings and Temporal workflow-activation deadlocks without retaining task
-contents. Missing or truncated diagnostics remain visible. A comparison refuses
-unmatched conditions or absent phase measurements. These short controlled
+contents. The journey separates the restart-through-readiness window from
+post-restart workload; readiness does not establish that lazy initialization is
+finished. Each phase retains at most 100 numeric callback emission timestamps
+and durations, with an omitted-event count. A boundary-crossing flag estimates
+whether emission time minus duration precedes the phase start; log emission is
+not an exact callback-end timestamp. Missing or truncated diagnostics remain
+visible. A comparison refuses unmatched conditions or absent workload/idle
+measurements; restart may have no running-worker samples. These short controlled
 journeys do not establish one-to-two-day normal-use safety; record that gap
 separately from measured memory savings or passing functional checks.
 
