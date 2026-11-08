@@ -5305,7 +5305,7 @@ class TemporalIntegrationActivities:
         task_queue = str(request.get("taskQueue") or "").strip()
         url = str(
             os.environ.get("TEMPORAL_WORKFLOW_READINESS_URL")
-            or "http://temporal-worker-workflow:8080/readyz"
+            or "http://temporal-worker-core:8080/readyz"
         ).strip()
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:

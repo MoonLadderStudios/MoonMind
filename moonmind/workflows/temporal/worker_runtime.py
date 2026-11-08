@@ -3383,8 +3383,9 @@ async def main_async(*, fleet: str | None = None) -> None:
     except BridgeConfigError as exc:
         raise SystemExit(f"invalid Omnigent bridge configuration: {exc}") from exc
     topologies = describe_configured_workers(fleet=fleet)
+    service_names = {topology.service_name for topology in topologies}
     service_name = (
-        topologies[0].service_name if len(topologies) == 1 else "temporal-worker-multi"
+        topologies[0].service_name if len(service_names) == 1 else "temporal-worker-multi"
     )
     log_fields = default_log_fields_from_env()
     log_fields["worker_fleet"] = ",".join(topology.fleet for topology in topologies)

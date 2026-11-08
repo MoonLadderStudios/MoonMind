@@ -400,7 +400,7 @@ def format_stale_code_message(stale: Sequence[WorkerCodeFreshness]) -> str:
 def _worker_name_from_url(url: str) -> str:
     """Derive a worker name from an unnamed readiness URL's hostname.
 
-    A bare URL such as ``http://temporal-worker-workflow:8080/readyz``
+    A bare URL such as ``http://temporal-worker-core:8080/readyz``
     names its Compose service in the hostname, which restart planning can
     map back to a service. Falling back to the URL itself would hand a
     URL to ``docker compose restart`` as the service name and always fail
