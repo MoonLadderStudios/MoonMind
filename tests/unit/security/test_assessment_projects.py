@@ -184,3 +184,43 @@ def test_settings_normalizes_supported_aliases_for_shared_ui_and_api():
     assert normalized["artifactRefs"] == ["art_report"]
     assert "artifact_refs" not in normalized
     assert normalized["dataClassification"] == "internal"
+
+
+@pytest.mark.parametrize("metadata_key", ["assessmentProject", "assessment_project"])
+@pytest.mark.parametrize("clear", [False, True])
+def test_assessment_defaults_visit_root_and_steps_and_canonicalize_metadata(
+    metadata_key, clear
+):
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    stale = {"credentialRefs": ["db://missing"]}
+    root = {"id": " security.assess ", "inputs": {metadata_key: stale}}
+    step = {"name": " security.assess ", "args": {metadata_key: stale}}
+    workflow = {"tool": root, "steps": [{"type": "skill", "skill": step}]}
+    apply_assessment_defaults(workflow, None if clear else snapshot)
+    for tool in (root, step):
+        for field in ("inputs", "args"):
+            inputs = tool.get(field, {})
+            assert "assessment_project" not in inputs
+            if clear or field == "args":
+                assert "assessmentProject" not in inputs
+        if not clear:
+            assert tool["inputs"]["assessmentProject"] == snapshot.model_dump(
+                mode="json", by_alias=True
+            )
+            assert tool["inputs"]["scope"]["assets"] == ["shop-staging"]
+            assert (
+                tool["inputs"]["credentialRefs"] == tool["inputs"]["networkRefs"] == []
+            )
+
+
+@pytest.mark.parametrize("shape", ["root", "step"])
+def test_assessment_defaults_reject_conflicting_security_selector_aliases(shape):
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    node = {"tool": {"id": "security.assess", "name": "other", "inputs": {}}}
+    workflow = node if shape == "root" else {"steps": [{"type": "tool", **node}]}
+    with pytest.raises(ValueError, match="matching id and name"):
+        apply_assessment_defaults(workflow, snapshot)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Iterator, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
@@ -245,8 +246,60 @@ def resolve_assessment_project(
     return AssessmentProjectSnapshot.model_validate({**value, "digest": _digest(value)})
 
 
+ASSESSMENT_PROJECT_INPUT_KEYS = ("assessmentProject", "assessment_project")
+
+
+def assessment_input_selectors(
+    workflow: Mapping[str, Any],
+) -> Iterator[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    """Select assessment inputs exactly where root/ordered-step admission does.
+
+    Root Skills prefer tool then skill, with name before id. Ordered steps
+    prefer their explicit Skill then the legacy tool fallback, with id before
+    name. Conflicting security aliases are rejected rather than allowing an
+    opaque serialized adapter to reinterpret the same selector differently.
+    """
+    steps = workflow.get("steps")
+    nodes = (
+        [
+            (workflow, True),
+            *((step, False) for step in steps if isinstance(step, Mapping)),
+        ]
+        if isinstance(steps, list)
+        else [(workflow, True)]
+    )
+    for node, is_root in nodes:
+        tool = node.get("tool") if isinstance(node.get("tool"), Mapping) else None
+        skill = node.get("skill") if isinstance(node.get("skill"), Mapping) else None
+        for candidate in (tool, skill):
+            if candidate is None:
+                continue
+            aliases = {
+                str(candidate.get(key) or "").strip() for key in ("id", "name")
+            } - {""}
+            if "security.assess" in aliases and len(aliases) > 1:
+                raise ValueError(
+                    "Use matching id and name values for a security.assess selector."
+                )
+        if is_root:
+            selected = tool or skill
+            keys = ("name", "id")
+        else:
+            selected = (
+                tool
+                if str(node.get("type") or "").strip().lower() == "tool"
+                else (skill if skill is not None else tool)
+            )
+            keys = ("id", "name")
+        if selected is None:
+            continue
+        identity = str(selected.get(keys[0]) or selected.get(keys[1]) or "").strip()
+        if identity == "security.assess":
+            yield node, selected
+
+
 def apply_assessment_defaults(
-    workflow: dict[str, Any], snapshot: AssessmentProjectSnapshot
+    workflow: dict[str, Any], snapshot: AssessmentProjectSnapshot | None
 ) -> None:
     """Fill absent comparison inputs; candidates do not create collection jobs.
 
@@ -254,28 +307,30 @@ def apply_assessment_defaults(
     choice. Credential and network candidates are context only: their actual
     grants still belong to existing execution/job admission.
     """
-    config = snapshot.configuration
-    for step in workflow.get("steps", []) or [workflow]:
-        if not isinstance(step, dict):
+    for step, tool in assessment_input_selectors(workflow):
+        if not isinstance(step, dict) or not isinstance(tool, dict):
             continue
-        tool = (
-            step.get("skill")
-            if isinstance(step.get("skill"), dict)
-            else step.get("tool")
-        )
-        if (
-            not isinstance(tool, dict)
-            or (tool.get("id") or tool.get("name")) != "security.assess"
-        ):
+        # Both Pydantic spellings are accepted input. Remove stale metadata
+        # from every existing input alias before freezing the canonical one.
+        for values in (step.get("inputs"), tool.get("inputs"), tool.get("args")):
+            if isinstance(values, dict):
+                for key in ASSESSMENT_PROJECT_INPUT_KEYS:
+                    values.pop(key, None)
+        if snapshot is None:
             continue
-        authored = tool.get("inputs", tool.get("args", {}))
-        overrides = step.get("inputs", {})
-        if not isinstance(authored, dict) or not isinstance(overrides, dict):
+        config = snapshot.configuration
+        authored = tool.get("inputs")
+        if not isinstance(authored, dict):
+            authored = tool.get("args", {})
+        overrides = step.get("inputs")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        if not isinstance(authored, dict):
             continue
         # Match the ordinary normalizer: step inputs override selector inputs.
         inputs = {**authored, **overrides}
         tool["inputs"] = inputs
-        if "inputs" in step:
+        if isinstance(step.get("inputs"), dict):
             step["inputs"] = inputs
         inputs.setdefault(
             "scope",

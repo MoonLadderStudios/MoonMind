@@ -23876,3 +23876,115 @@ def test_assessment_project_edit_rejects_new_input_artifact_context_mismatch(
     assert response.status_code == 422, response.text
     assert "Rebuild the input artifact from the reviewed draft" in response.text
     service.update_execution.assert_not_awaited()
+
+
+def _assessment_selector_workflow(shape, selector, snapshot, *, metadata_key="assessmentProject"):
+    inputs = {
+        "scope": {"assets": ["checkout"], "exclusions": []},
+        "tools": [], "reviewRef": "art_review",
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 30},
+        "credentialRefs": [], "networkRefs": [], metadata_key: snapshot,
+    }
+    selected = {**selector, "inputs": inputs}
+    workflow = {"instructions": "Compare checkout", "runtime": {"mode": "codex"}}
+    if shape == "root":
+        workflow["tool"] = selected
+        workflow["steps"] = [{"instructions": "Keep the unrelated step"}]
+    elif shape == "root_skill":
+        workflow["tool"] = {}
+        workflow["skill"] = selected
+    else:
+        step = {"instructions": "Compare checkout"}
+        if shape == "tool_step":
+            step.update(type=" TOOL ", tool=selected)
+        elif shape == "skill_step":
+            step.update(type="skill", skill=selected)
+        else:
+            step["tool"] = selected
+        workflow["steps"] = [step]
+    return workflow
+
+
+@pytest.mark.parametrize("shape", ["root", "root_skill", "tool_step", "skill_step", "fallback_step"])
+@pytest.mark.parametrize("variant", ["conflicting_alias", "snake_metadata"])
+@pytest.mark.parametrize("serialized", [False, True])
+def test_assessment_project_selector_cannot_hide_unadmitted_metadata(
+    client, shape, variant, serialized,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    selector = {"id": "security.assess", "name": "other"} if variant == "conflicting_alias" else {"id": " security.assess "}
+    workflow = _assessment_selector_workflow(shape, selector,
+        _assessment_project_snapshot(credentialRefs=["db://missing"]),
+        metadata_key="assessment_project" if variant == "snake_metadata" else "assessmentProject")
+    parameters = {"workflow": workflow}
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters}
+        if serialized else {"type": "workflow", "payload": parameters})
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_assessment_project"
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("shape", ["root", "root_skill", "tool_step", "skill_step", "fallback_step"])
+@pytest.mark.parametrize("clear", [False, True])
+@pytest.mark.parametrize("metadata_key", ["assessmentProject", "assessment_project"])
+def test_assessment_project_selector_defaults_and_clear_are_canonical(
+    client, shape, clear, metadata_key,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    snapshot = _assessment_project_snapshot()
+    workflow = _assessment_selector_workflow(shape, {"id": " security.assess "},
+        _assessment_project_snapshot(credentialRefs=["db://missing"]), metadata_key=metadata_key)
+    response = test_client.post("/api/executions", json={"type": "workflow", "payload": {
+        "assessmentProject": None if clear else snapshot, "workflow": workflow,
+    }})
+    assert response.status_code == 201, response.text
+    admitted = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
+    node = admitted if shape.startswith("root") else admitted["steps"][0]
+    selector = node.get("tool") or node["skill"]
+    for inputs in (selector["inputs"], node.get("inputs", {})):
+        assert "assessment_project" not in inputs
+        if clear:
+            assert "assessmentProject" not in inputs
+        elif inputs:
+            assert inputs["assessmentProject"] == snapshot
+
+
+@pytest.mark.parametrize("shape", ["root", "tool_step", "skill_step", "fallback_step"])
+@pytest.mark.parametrize("metadata_key", ["assessmentProject", "assessment_project"])
+@pytest.mark.parametrize("context", ["unbound", "matched", "clear"])
+def test_assessment_project_artifact_selector_metadata_aliases(
+    client, monkeypatch, shape, metadata_key, context,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    snapshot = _assessment_project_snapshot()
+    selected = None if context == "clear" else snapshot
+    artifact_source = {} if context == "unbound" else {"assessmentProject": selected}
+    retained = _build_original_workflow_input_snapshot_payload(
+        source_kind="create", payload=artifact_source,
+        task_payload=_assessment_selector_workflow(shape,
+            {"id": "security.assess", "name": " security.assess "}, selected,
+            metadata_key=metadata_key),
+    )
+    body = json.dumps(retained).encode()
+    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, body)))
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
+    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", AsyncMock(return_value=""))
+    parameters = {"workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}}}
+    if context != "unbound":
+        parameters["assessmentProject"] = selected
+    response = test_client.post("/api/executions", json={
+        "workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters,
+        "inputArtifactRef": "art_input",
+    })
+    if context == "unbound":
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "invalid_assessment_project"
+        service.create_execution.assert_not_awaited()
+    else:
+        assert response.status_code == 201, response.text
+    assert json.dumps(retained).encode() == body
+    artifact_service.read.assert_awaited_once()

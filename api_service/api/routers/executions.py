@@ -8129,19 +8129,24 @@ def _admitted_assessment_scope_parameter(
 
 
 def _assessment_project_input_metadata(workflow: Mapping[str, Any]) -> list[Any]:
-    steps = workflow.get("steps")
-    nodes = [workflow, *(steps if isinstance(steps, list) else [])]
+    from moonmind.security.assessment_projects import (
+        ASSESSMENT_PROJECT_INPUT_KEYS,
+        assessment_input_selectors,
+    )
+
     values = []
-    for step in nodes:
-        if not isinstance(step, Mapping):
-            continue
-        for field in ("tool", "skill"):
-            tool = step.get(field)
-            if not isinstance(tool, Mapping) or _tool_payload_name(tool) != "security.assess":
-                continue
+    try:
+        for step, tool in assessment_input_selectors(workflow):
             for inputs in (step.get("inputs"), tool.get("inputs"), tool.get("args")):
-                if isinstance(inputs, Mapping) and inputs.get("assessmentProject") is not None:
-                    values.append(inputs["assessmentProject"])
+                if isinstance(inputs, Mapping):
+                    for key in ASSESSMENT_PROJECT_INPUT_KEYS:
+                        if inputs.get(key) is not None:
+                            values.append(inputs[key])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_assessment_project", "message": str(exc)},
+        ) from exc
     return values
 
 
@@ -8178,7 +8183,8 @@ async def _validate_assessment_project_parameter(
     workflow = _workflow_payload_from_parameters(parameters)
     if workflow.get("steps") is not None and not isinstance(workflow["steps"], list):
         raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
-    if "assessmentProject" not in parameters and _assessment_project_input_metadata(workflow):
+    metadata = _assessment_project_input_metadata(workflow)
+    if "assessmentProject" not in parameters and metadata:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -8213,25 +8219,16 @@ def _apply_assessment_project_defaults(
     steps = workflow.get("steps")
     if steps is not None and not isinstance(steps, list):
         raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
-    if snapshot is not None:
+    resolved = AssessmentProjectSnapshot.model_validate(snapshot) if snapshot is not None else None
+    try:
         apply_assessment_defaults(
-            workflow, AssessmentProjectSnapshot.model_validate(snapshot)
+            workflow, resolved
         )
-    else:
-        # Clearing a selection removes its report label without rewriting the
-        # operator's now-authored scope, tools or bounded comparison inputs.
-        for step in [workflow, *(steps or [])]:
-            if not isinstance(step, dict):
-                continue
-            for field in ("tool", "skill"):
-                tool = step.get(field)
-                if not isinstance(tool, dict) or _tool_payload_name(tool) != "security.assess":
-                    continue
-                for input_field in ("inputs", "args"):
-                    if isinstance(tool.get(input_field), dict):
-                        tool[input_field].pop("assessmentProject", None)
-                if isinstance(step.get("inputs"), dict):
-                    step["inputs"].pop("assessmentProject", None)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_assessment_project", "message": str(exc)},
+        ) from exc
 
 
 def _validate_runtime_tier_intent_for_submit(
