@@ -17,13 +17,25 @@ async def run_runtime_command(
     timeout_seconds: float | None = None,
     output_limit_bytes: int | None = None,
     on_output: Callable[[str, bytes], Awaitable[None]] | None = None,
+    binary_stdout_limit_bytes: int | None = None,
 ) -> tuple[int, bytes, bytes]:
     """Run one trusted command with cancellation, timeout, redaction, and bounds.
 
     The caller retains command-specific error classification.  This shared layer
     owns process termination so cancelled or timed-out activities cannot leave a
     CLI child running, and ensures retained command output is safe for evidence.
+    Bounded binary stdout is only for parsers of framed trusted data; callers
+    must validate it and sanitize parsed diagnostics before publication. It is
+    never streamed to an output callback. Stderr remains redacted text.
     """
+
+    if binary_stdout_limit_bytes is not None:
+        if type(binary_stdout_limit_bytes) is not int or binary_stdout_limit_bytes <= 0:
+            raise ValueError("binary stdout requires a positive byte bound")
+        if on_output is not None:
+            raise ValueError("binary stdout cannot be streamed as diagnostic text")
+        if output_limit_bytes is None:
+            output_limit_bytes = 65536
 
     process = await asyncio.create_subprocess_exec(
         *argv,
@@ -63,7 +75,8 @@ async def run_runtime_command(
         async def publish(safe: bytes) -> None:
             retain(retained, safe)
             try:
-                await on_output(name, safe)
+                if on_output is not None:
+                    await on_output(name, safe)
             except Exception:
                 pass  # Auxiliary evidence cannot change command success.
 
@@ -150,8 +163,36 @@ async def run_runtime_command(
         await process.wait()
         return stdout, stderr
 
+    async def read_binary_stdout() -> bytes:
+        retained = bytearray()
+        while chunk := await process.stdout.read(8192):
+            if len(retained) + len(chunk) > binary_stdout_limit_bytes:
+                raise RuntimeError("binary stdout exceeds its byte bound")
+            retained.extend(chunk)
+        return bytes(retained)
+
+    async def communicate_binary() -> tuple[bytes, bytes]:
+        if process.stdin is not None:
+            process.stdin.write(input_bytes or b"")
+            await process.stdin.drain()
+            process.stdin.close()
+        readers = [
+            asyncio.create_task(read_binary_stdout()),
+            asyncio.create_task(read_stream("stderr", process.stderr)),
+        ]
+        try:
+            stdout, stderr = await asyncio.gather(*readers)
+            await process.wait()
+            return stdout, stderr
+        finally:
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+
     communication_task = asyncio.create_task(
-        process.communicate(input=input_bytes)
+        communicate_binary()
+        if binary_stdout_limit_bytes is not None
+        else process.communicate(input=input_bytes)
         if on_output is None
         else communicate_progress()
     )
@@ -163,15 +204,28 @@ async def run_runtime_command(
             stdout, stderr = await asyncio.wait_for(
                 communication, timeout=timeout_seconds
             )
-    except (TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError, RuntimeError):
         if process.returncode is None:
             process.kill()
-        await process.wait()
         communication_task.cancel()
         await asyncio.gather(communication_task, return_exceptions=True)
+
+        # A full pipe can keep asyncio's process transport paused after kill.
+        # Join readers first, then discard remaining bytes before waiting; none
+        # of these failure-path bytes are retained or published as diagnostics.
+        async def discard(reader):
+            while await reader.read(8192):
+                pass
+
+        await asyncio.gather(discard(process.stdout), discard(process.stderr))
+        await process.wait()
         raise
 
-    return int(process.returncode or 0), sanitize(stdout), sanitize(stderr)
+    return (
+        int(process.returncode or 0),
+        stdout if binary_stdout_limit_bytes is not None else sanitize(stdout),
+        sanitize(stderr),
+    )
 
 
 __all__ = ["run_runtime_command"]

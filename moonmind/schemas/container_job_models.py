@@ -16,6 +16,7 @@ from pydantic import (
     StrictStr,
     field_validator,
     model_validator,
+    model_serializer,
 )
 
 from moonmind.schemas.workload_models import (
@@ -32,6 +33,7 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocator,
 )
 from moonmind.utils.logging import redact_sensitive_text
+from moonmind.security.native_network import NativeNetworkSelection
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
     FeedRefresh,
@@ -469,6 +471,16 @@ class WorkloadProfileSelection(ContractModel):
     assessment_ref: str | None = Field(
         None, alias="assessmentRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
     )
+    native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
+
+    @model_serializer(mode="wrap")
+    def _legacy_native_shape(self, handler):
+        value = handler(self)
+        if self.native_network is None:
+            value.pop("nativeNetwork", None)
+            value.pop("native_network", None)
+        return value
+
     # None keeps the serialized shape of profile jobs admitted before slots.
     credentials: list[WorkloadCredentialSelection] | None = Field(None, max_length=8)
 

@@ -326,7 +326,7 @@ async def persisted_assessment_scope(session, record, request, *, bind=True):
     return scope
 
 
-async def assessment_reserved_budget(session, scope):
+async def assessment_reserved_budget(session, scope, *, include_native=False):
     """Count admitted reservations without reauthorizing historical actions."""
     spec = ContainerJobRecord.request_json["spec"]
     refs = [
@@ -352,6 +352,10 @@ async def assessment_reserved_budget(session, scope):
         )
     ).all()
     count = seconds = 0
+    native_reserved = dict.fromkeys(
+        ("max_connections", "max_bytes", "max_connections_per_second", "max_concurrent_connections"),
+        0,
+    )
     for record in rows:
         request = ContainerJobSubmitRequest.model_validate(
             {**record.request_json, "source": record.source_json}
@@ -362,6 +366,12 @@ async def assessment_reserved_budget(session, scope):
         # and counting must neither rebind old jobs nor refund their budgets.
         count += 1
         seconds += request.spec.timeout_seconds
+        profile = request.spec.workload_profile
+        if profile is not None and profile.native_network is not None:
+            for name in native_reserved:
+                native_reserved[name] += getattr(profile.native_network.limits, name)
+    if include_native:
+        return count, seconds, native_reserved
     return count, seconds
 
 

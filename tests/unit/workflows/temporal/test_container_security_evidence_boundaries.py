@@ -32,6 +32,7 @@ from moonmind.schemas.container_job_models import (
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -149,6 +150,77 @@ async def test_scoped_publisher_preserves_exact_raw_consumers_and_safe_preview(
             access=other,
         )
         assert b"synthetic-publisher-canary" not in safe and b"aws:fixture" in safe
+
+
+async def test_restricted_native_receipt_round_trip_rechecks_current_raw_access(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", session_factory)
+    async with session_factory() as session:
+        job = await setup_job(session, tmp_path)
+        name = f"{job.request.job_id}-native-egress-final.json"
+        raw = (
+            b'{\n  "coverage": "partial",\n'
+            b'  "nativeNetwork": {"attempts": 1},\n'
+            b'  "gatewayRef": "gateway-fixture",\n'
+            b'  "notes": "apiKey=synthetic-native-receipt-canary"\n}\n'
+        )
+        ref = await job.activity.run(
+            worker_runtime._container_job_evidence_publisher(job.service),
+            job.request,
+            name,
+            raw,
+        )
+        recover = worker_runtime._container_job_evidence_reconciler(job.service)
+        assert await job.activity.run(recover, job.request, name) == (ref, raw)
+        artifact = await job.service._repository.get_artifact(ref)
+        assert artifact.redaction_level is TemporalArtifactRedactionLevel.RESTRICTED
+        assert artifact.sha256 == hashlib.sha256(raw).hexdigest()
+        assert artifact.size_bytes == len(raw)
+        assert artifact.created_by_principal == f"user:{job.owner.principal_id}"
+        assert artifact.metadata_json["container_job_id"] == job.request.job_id
+        assert artifact.metadata_json["name"] == name
+        assert artifact.metadata_json["ownership_digest"] == hashlib.sha256(
+            job.request.ownership_token.encode()
+        ).hexdigest()
+
+        producer = container_job_workflow_id(job.record.job_id)
+        links = await job.service._repository.list_links(ref)
+        await session.delete(
+            next(
+                link
+                for link in links
+                if link.link_type == "input.artifact.raw"
+                and link.workflow_id == producer
+                and link.run_id == "job-run"
+            )
+        )
+        await session.commit()
+
+        async def list_current_receipts():
+            return await job.service.list_for_execution(
+                namespace="default",
+                workflow_id=producer,
+                run_id="job-run",
+                link_type="output.artifact",
+                access=ArtifactAccessContext.for_activity(),
+            )
+
+        # Output metadata remains visible, but cannot replace a revoked raw
+        # grant or authorize the reconciler to use a sanitized preview instead.
+        assert ref in {
+            item.artifact_id
+            for item in await job.activity.run(list_current_receipts)
+        }
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await job.activity.run(recover, job.request, name)
+        assert (
+            await job.service.read(
+                artifact_id=ref, access=access_for_test("workflow:assessment")
+            )
+        )[1] == raw
 
 
 @pytest.mark.parametrize("mutation", ["owner", "source", "activity", "scope_removed"])

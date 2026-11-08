@@ -194,8 +194,9 @@ address. This [Docker bridge option](https://docs.docker.com/engine/network/driv
 avoids depending on a newer gateway-mode name. The network
 may contain only its admitted targets and this lease's proxy. MoonMind
 control services, host gateways, metadata, and other assessment peers do not
-satisfy this boundary. External private networks and native TCP/UDP tools
-are unsupported; report their coverage gap instead of widening access.
+satisfy this boundary. External private networks, UDP and raw-packet transports
+remain unsupported. Native TCP requires the additional bounded authority below;
+a scanner image or command cannot grant it.
 
 The existing egress owner leases the installed gateway image for each job,
 with a new internal isolated workload bridge and an owned outbound bridge.
@@ -212,7 +213,7 @@ file with external DNS disabled, preventing rebinding between validation
 and connection. Global IPv6 answers may coexist with IPv4; prohibited answers
 or IPv6-only destinations fail admission.
 
-Recovery reuses an existing proxy's saved address snapshot and identity. Once
+HTTP(S) recovery reuses an existing proxy's saved address snapshot and identity. Once
 the create receipt is recorded, proxy loss fails closed. If create was
 interrupted before its receipt and the proxy is lost, retry revalidates the
 same deployment policy and DNS answers; the address snapshot may change.
@@ -239,6 +240,73 @@ Chromium requests. Required integration CI additionally runs
 `tools/test_scoped_egress.sh` against disposable `moonmind-test-*` resources
 through the real job backend. Managed workflows run the socket-free tests
 through the container-job service; they do not receive a Docker socket.
+
+### Bounded native TCP
+
+A native job uses an assessment-stamped `workloadProfile` selection with
+`nativeNetwork`, not a generic bridge job or a caller-supplied command. The
+reviewed assessment target, deployment workload profile and deployment egress
+policy each declare the allowed `nativeNetwork` authority. A job selects an
+exact subset and lower limits; missing or changed authority fails admission
+and worker revalidation. Native and HTTP(S) destinations cannot share one
+lease, so an unmetered HTTP tunnel is not an alternate route.
+
+The operation is `tcp-connect`. Each target declares `hosts`, `ports`,
+`exclusions`, `purpose: live-target`, and optional explicit private-container
+route references. Hosts are exact DNS names, canonical IPv4 addresses or
+bounded canonical IPv4 CIDRs. Expansion is limited before enumeration, and
+address-port products are bounded. Serialized gateway configuration and scope
+snapshots are capped at 90 KiB before base64 transport, so long names or large
+exclusion/resolution sets can require smaller selections even below the
+1,024-endpoint limit. Oversized declarations fail authoring; oversized resolved
+snapshots fail before lease allocation, without silently substituting targets.
+Wildcards, shortened/octal addresses, IPv6, IPv4-mapped IPv6 and prohibited
+control routes are refused. Exclusions survive
+narrowed selections and apply to resolved addresses as well as authored names.
+A hostname, banner or returned address never grants another target.
+
+`limits` requires `maxConnections`, `maxBytes`, `maxConnectionsPerSecond`,
+`maxConcurrentConnections` and `maxDurationSeconds`. One native target block
+may contain several target sets. Its assessment limits cap allocations across
+jobs; each job's immutable selection reserves its connection, byte, rate and
+concurrency allowance through existing serialized assessment admission. Exact
+submission replay does not charge again. Completed, canceled and failed jobs
+keep their reservations, so lost or uncertain traffic cannot refill a budget.
+Duration remains bounded by the selected job limit and original assessment
+expiry. Smaller per-job allocations leave room for later jobs.
+
+The existing scoped-egress lease runs a bounded CONNECT gateway for these
+jobs. It accepts only the pinned workload client and exact admitted
+host/IP:port authorities. Public names resolve once to validated IPv4
+addresses; private targets use the inspected labeled container's identity and
+address. Every DNS answer and exclusion is checked before the snapshot is
+pinned. The gateway never resolves a client-supplied name or follows a target
+suggestion. The workload stays on the same internal bridge with no direct
+route, including when a tool ignores proxy settings.
+
+Connection attempts are reserved before dialing, including failed dials.
+Forwarded bytes in both directions are charged before writes. The gateway
+also enforces active-connection and connection-start limits, bounded headers,
+connect/idle timeouts and the original absolute deadline. These are transport
+limits, not application-message or vulnerability conclusions. Use a fixed
+profile whose actual client explicitly supports CONNECT; this does not make
+raw-packet scanners, UDP tools or arbitrary port discovery supported.
+
+A worker restart can reuse the same live gateway and counters. A durable
+job-owned startup marker prevents a restarted gateway process from recreating
+its allowance. Losing the gateway while that state exists fails closed rather
+than reconstructing counters or resolving a new target. The marker and bounded
+counter evidence live outside tmpfs and are inaccessible to the workload.
+Owned cleanup closes reachability before retaining final counters and removes
+only that lease's resources. If reading or publishing the evidence fails,
+cleanup retains the stopped gateway and state for recovery. A never-started
+gateway can be removed only after its unchanged identity and an empty state
+directory prove no traffic was possible; it does not receive invented counters.
+Retained evidence records effective policy, resolution/target identities,
+allocations, counters and denials; unavailable enforcement evidence is an
+explicit coverage gap. Connection IO errors remain separate transport
+diagnostics with partial coverage, rather than evidence of a scope violation.
+Actual policy or budget denials and nonzero tool exits still fail the job.
 
 ### Bounded HTTPS TLS inspection
 

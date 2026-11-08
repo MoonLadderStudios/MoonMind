@@ -465,7 +465,25 @@ class ContainerJobService:
                     # may already own its one reservation.
                     existing = await self.repository.find_exact_replay(owner=owner, request=request)
                     if existing is None:
-                        jobs, seconds = await assessment_reserved_budget(self._session, scope)
+                        jobs, seconds, native_reserved = await assessment_reserved_budget(
+                            self._session, scope, include_native=True
+                        )
+                        profile = request.spec.workload_profile
+                        if profile is not None and profile.native_network is not None:
+                            authority = next(
+                                (target.native_network for target in scope.targets
+                                 if target.native_network is not None),
+                                None,
+                            )
+                            if authority is None or any(
+                                native_reserved[name]
+                                + getattr(profile.native_network.limits, name)
+                                > getattr(authority.limits, name)
+                                for name in native_reserved
+                            ):
+                                raise AssessmentAuthorizationDenied(
+                                    "assessment native network budget is exhausted"
+                                )
                         if jobs >= scope.max_jobs or (
                             scope.engagement is not None
                             and seconds + request.spec.timeout_seconds > scope.engagement.max_total_job_seconds

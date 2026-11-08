@@ -46,6 +46,7 @@ from moonmind.schemas.repository_scanner_models import (
     web_origin,
     web_route,
 )
+from moonmind.security.native_network import NativeNetworkSelection, require_native_subset
 from moonmind.security.realtime_scope import RealtimeScope
 
 WORKLOAD_PROFILES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_WORKLOAD_PROFILES"
@@ -234,6 +235,16 @@ class ProfileCredential(_Model):
 
 
 class WorkloadProfile(_Model):
+    native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        value = handler(self)
+        if self.native_network is None:
+            value.pop("nativeNetwork", None)
+            value.pop("native_network", None)
+        return value
+
     profile_ref: str = Field(alias="profileRef", pattern=_REF)
     image_source_ref: str = Field(alias="imageSourceRef", pattern=_REF)
     entrypoint: tuple[str, ...] = Field((), max_length=32)
@@ -253,6 +264,8 @@ class WorkloadProfile(_Model):
 
     @model_validator(mode="after")
     def _unambiguous(self) -> "WorkloadProfile":
+        if self.native_network is not None and self.network_mode != "bridge":
+            raise ValueError("native profiles require scoped bridge egress")
         if len({mode.name for mode in self.modes}) != len(self.modes):
             raise ValueError("profile mode names must be unique")
         if len({item.name for item in self.configuration_exceptions}) != len(
@@ -345,6 +358,14 @@ def resolve_profile_job(spec, profiles):
         return spec
     profile = _profile(profiles, selection.profile_ref)
     mode = profile.mode(selection.mode)
+    if selection.native_network is not None:
+        if selection.assessment_ref is None:
+            raise ValueError("native selections require stamped assessment authority")
+        require_native_subset(selection.native_network, profile.native_network)
+        if selection.native_network.limits.max_duration_seconds > spec.timeout_seconds:
+            raise ValueError("native duration exceeds job timeout")
+    elif profile.native_network is not None:
+        raise ValueError("native profiles require an explicit native selection")
     inputs = frozenset(item.name for item in spec.input_attachments or ())
     if not inputs:
         raise ValueError("workload profile jobs read captured input attachments")
@@ -477,10 +498,14 @@ class AssessmentTarget(_Model):
         default_factory=dict, alias="webMessages", max_length=32
     )
     realtime: RealtimeScope | None = None
+    native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
 
     @model_serializer(mode="wrap")
     def _legacy_shape(self, handler):
         value = handler(self)
+        if self.native_network is None:
+            value.pop("nativeNetwork", None)
+            value.pop("native_network", None)
         if self.realtime is None:
             value.pop("realtime", None)
         return value
@@ -511,11 +536,12 @@ class AssessmentTarget(_Model):
             self.artifact_ref,
             self.web_origin,
             self.cloud_account,
+            self.native_network,
         ]
         if sum(item is not None for item in named) != 1:
             raise ValueError(
                 "exactly one of workspacePath, artifactRef, webOrigin or "
-                "cloudAccount is required"
+                "cloudAccount or nativeNetwork is required"
             )
         if (self.web_origin is not None) != bool(self.web_routes):
             raise ValueError("web origins, and only they, admit routes")
@@ -681,6 +707,12 @@ class AdmittedAssessmentScope(_Model):
     grants: tuple[CredentialGrant, ...] = Field((), max_length=16)
     engagement: AssessmentEngagement | None = None
 
+    @model_validator(mode="after")
+    def _single_native_budget(self):
+        if sum(target.native_network is not None for target in self.targets) > 1:
+            raise ValueError("an assessment admits at most one native network budget")
+        return self
+
     @field_validator("exclusions")
     @classmethod
     def _normalized_exclusions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -724,6 +756,15 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         or not spec.input_attachments
     ):
         return False
+    if selection.native_network is not None:
+        authority = next(
+            (t.native_network for t in scope.targets if t.native_network is not None),
+            None,
+        )
+        try:
+            require_native_subset(selection.native_network, authority)
+        except ValueError:
+            return False
     paths = [t.workspace_path for t in scope.targets if t.workspace_path is not None]
     artifacts = {t.artifact_ref for t in scope.targets if t.artifact_ref is not None}
     for item in spec.input_attachments:

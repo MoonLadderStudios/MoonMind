@@ -12,7 +12,16 @@ import re
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+
+from moonmind.security.native_network import NativeNetworkSelection
 
 EGRESS_POLICIES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES"
 
@@ -80,10 +89,23 @@ class ScopedEgressPolicy(_PolicyModel):
     allowed_image_source_refs: tuple[str, ...] = Field(
         alias="allowedImageSourceRefs", min_length=1, max_length=32
     )
-    destinations: tuple[ScopedDestination, ...] = Field(min_length=1, max_length=64)
+    destinations: tuple[ScopedDestination, ...] = Field((), max_length=64)
+    native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        value = handler(self)
+        if self.native_network is None:
+            value.pop("nativeNetwork", None)
+            value.pop("native_network", None)
+        return value
 
     @model_validator(mode="after")
     def unambiguous_authority(self):
+        if bool(self.destinations) == (self.native_network is not None):
+            raise ValueError(
+                "egress requires either HTTP destinations or bounded native authority, never both"
+            )
         if any(not v.strip() or len(v) > 255 for v in self.allowed_workflow_ids):
             raise ValueError("egress workflow grants must be explicit")
         if any(not re.fullmatch(_REF, v) for v in self.allowed_image_source_refs):
@@ -114,7 +136,7 @@ def parse_egress_policies(raw: str | None) -> tuple[ScopedEgressPolicy, ...]:
         return policies
     except (ValueError, TypeError) as exc:
         raise ValueError(
-            "deployment egress policy is invalid; only HTTP(S) is supported"
+            "deployment egress policy is invalid"
         ) from exc
 
 

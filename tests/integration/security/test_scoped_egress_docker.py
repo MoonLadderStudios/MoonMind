@@ -140,7 +140,29 @@ async def test_real_scoped_launch_connections_and_owned_lifecycle(monkeypatch):
             if code == 0:
                 return
             await asyncio.sleep(0.2)
-        pytest.fail("scoped HTTP fixture did not become ready")
+        # Preserve the failed process and readiness diagnostics before owned
+        # teardown. A startup timeout alone cannot distinguish a slow import
+        # from a crashed fixture, and must not be reported as a passing retry.
+        _, stdout, stderr = await runner(("logs", name))
+        _, state, state_error = await runner(
+            ("inspect", "--format", "{{json .State}}", name)
+        )
+        evidence = root / "artifacts/integration-ci/scoped-egress"
+        evidence.mkdir(parents=True, exist_ok=True)
+        diagnostic = {
+            "fixture": name,
+            "state": state.decode(errors="replace"),
+            "stateError": state_error.decode(errors="replace"),
+            "stdout": stdout.decode(errors="replace"),
+            "stderr": stderr.decode(errors="replace"),
+        }
+        (evidence / f"{name}-startup-failure.json").write_text(
+            json.dumps(diagnostic, indent=2)
+        )
+        pytest.fail(
+            "scoped HTTP fixture did not become ready: "
+            + json.dumps(diagnostic)[-4000:]
+        )
 
     try:
         # Exercise the unchanged installed-gateway attestation with real config,
@@ -409,7 +431,10 @@ print(json.dumps({'crossAssessmentPeerChecks':peer_checks}))
             (host, transport)
             for host in (peer_address, peer_hostname)
             for transport in (
-                "admitted-proxy", "direct-socket", "no-proxy-override", "alternate-proxy"
+                "admitted-proxy",
+                "direct-socket",
+                "no-proxy-override",
+                "alternate-proxy",
             )
         }
         # A reconstructed worker reuses the exact selected lease and snapshot.

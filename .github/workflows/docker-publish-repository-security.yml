@@ -15,6 +15,7 @@ on:
       - "moonmind/security/evidence_exports.py"
       - "moonmind/security/tls_assessment*.py"
       - "moonmind/security/egress_policy.py"
+      - "moonmind/security/native_network.py"
       - "moonmind/security/assessments.py"
       - "moonmind/security/identity_lifecycle.py"
       - "moonmind/schemas/**"
@@ -33,6 +34,7 @@ on:
       - "moonmind/security/evidence_exports.py"
       - "moonmind/security/tls_assessment*.py"
       - "moonmind/security/egress_policy.py"
+      - "moonmind/security/native_network.py"
       - "moonmind/security/identity_lifecycle.py"
       - ".github/workflows/docker-publish-repository-security.yml"
   workflow_dispatch:

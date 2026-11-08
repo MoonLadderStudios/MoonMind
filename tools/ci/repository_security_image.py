@@ -38,6 +38,7 @@ RUNNER_FILES = (
     "security/tls_assessments.py",
     "security/tls_assessment_runner.py",
     "security/egress_policy.py",
+    "security/native_network.py",
     "security/frameworks.py",
     "security/identity_lifecycle.py",
     "security/oscal_export.py",
