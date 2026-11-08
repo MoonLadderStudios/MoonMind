@@ -188,10 +188,15 @@ def test_zap_image_assesses_vulnerable_and_hardened_routes(tmp_path, route, expe
     )
     print(f"ZAP {summary.execution.version}: {summary.model_dump_json()[:2000]}")
     assert summary.execution.version, "ZAP report did not name its version"
+    expected_routes = [f"GET {route}"]
+    if expected in {"general", "general-active"}:
+        # A real 307 redirects the general spider to a local, admitted login
+        # page. The curated requestor must still send only its exact pair.
+        expected_routes.append("GET /middleware/login")
     assert (summary.execution.plan, summary.coverage.tested_routes) == (
         "completed",
-        [f"GET {route}"],
-    )
+        expected_routes,
+    ), summary.model_dump(mode="json")
     if expected in {"match", "negative", "incomplete"}:
         assert summary.coverage.templates[0].outcome == expected
         assert summary.status == ("partial" if expected == "incomplete" else "complete")

@@ -909,6 +909,12 @@ def summarize_web_assessment(
     identity = a.identity
     actor = identity.name if identity is not None else "anonymous"
 
+    # Execution-wide failures invalidate every negative. Route-local failures
+    # below must not erase independent, supported observations on other routes.
+    template_execution_incomplete = (
+        bool(limits) or stopped_early or execution.version is None
+    )
+
     # Coverage from the messages ZAP actually exchanged.
     discovered, tested, unreachable, inaccessible = set(), set(), set(), set()
     denied, challenges = set(), set()
@@ -1080,9 +1086,7 @@ def summarize_web_assessment(
             outcome, reason, indices = known_issue_templates.observe(
                 a.origin, path, entries
             )
-            if outcome == "negative" and (
-                limits or stopped_early or execution.version is None
-            ):
+            if outcome == "negative" and template_execution_incomplete:
                 outcome, reason = "incomplete", "execution_incomplete"
             if not messages_ref:
                 outcome, reason = "incomplete", "retained_messages_unavailable"

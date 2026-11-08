@@ -111,7 +111,9 @@ class App(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         path = url.path
-        if path in {"/middleware", "/fixed/middleware", "/middleware/redirect"}:
+        if path == "/middleware/login":
+            self._page("sign in", "<p>Sign in required</p>", hardened=True)
+        elif path in {"/middleware", "/fixed/middleware", "/middleware/redirect"}:
             self.known_issue_requests.append(
                 (self.command, self.path, self.headers.get("X-Middleware-Subrequest"))
             )
@@ -125,14 +127,17 @@ class App(BaseHTTPRequestHandler):
                 )
             elif path == "/middleware" and probe:
                 self._page(
-                    "protected", "<p>Protected fixture content api_key=synthetic-known-issue-payload</p>", hardened=True
+                    "protected",
+                    "<p>Protected fixture content api_key=synthetic-known-issue-payload</p>",
+                    hardened=True,
                 )
             else:
                 self._send(
                     307,
                     "Sign in required",
                     headers={
-                        "X-Nextjs-Redirect": "/login",
+                        "X-Nextjs-Redirect": "/middleware/login",
+                        "Location": "/middleware/login",
                         "Set-Cookie": "secret=synthetic-known-issue-cookie; HttpOnly",
                     },
                     hardened=True,

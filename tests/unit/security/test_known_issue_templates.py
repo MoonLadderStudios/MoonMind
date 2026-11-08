@@ -324,3 +324,62 @@ process.stdout.write(JSON.stringify(result));
     assert guarded[1] == {"url": ORIGIN + "/admin", "headers": {"x-nextjs-data": "1"}}
     assert guarded[2]["url"] == ORIGIN + "/admin"
     assert "request-denied.moonmind.invalid" in guarded[3]["url"]
+
+
+@pytest.mark.parametrize("status,outcome", [(200, "match"), (307, "negative")])
+def test_repeated_nonmatcher_response_headers_are_valid(status, outcome):
+    rows = native_entries(status)
+    for row in rows:
+        row["response"]["headers"].extend(
+            [
+                {"name": "Set-Cookie", "value": "[REDACTED]"},
+                {"name": "Set-Cookie", "value": "[REDACTED]"},
+                {"name": "Vary", "value": "Accept"},
+                {"name": "Vary", "value": "Accept-Encoding"},
+            ]
+        )
+    assert summarize(rows).coverage.templates[0].outcome == outcome
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("bad_status", [200, 403])
+def test_per_route_negative_is_independent_of_other_route_failure(reverse, bad_status):
+    paths = ["/public", "/fixed"]
+    if reverse:
+        paths.reverse()
+    entries = []
+    for path in paths:
+        rows = native_entries(307)
+        for row in rows:
+            row["request"]["url"] = ORIGIN + path
+        if path == "/public":
+            for row in rows:
+                row["response"]["status"] = bad_status
+        entries.extend(rows)
+    result = summarize_web_assessment(
+        admission(routes=[{"path": "/", "methods": ["GET"]}], startPaths=paths),
+        report=b'{"@version":"2.17.0","site":[]}',
+        messages=json.dumps({"log": {"entries": entries}}).encode(),
+        passive_report=None,
+        passive_messages=None,
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_report",
+        messages_ref="art_messages",
+    )
+    assert result.status == "partial"
+    assert {row.route: row.outcome for row in result.coverage.templates} == {
+        "/public": "incomplete",
+        "/fixed": "negative",
+    }
+
+
+@pytest.mark.parametrize(
+    "name", ["x-nextjs-redirect", "x-middleware-rewrite", "location"]
+)
+def test_ambiguous_repeated_matcher_headers_still_refuse_coverage(name):
+    rows = native_entries(200)
+    rows[0]["response"]["headers"].extend(
+        [{"name": name, "value": "/login"}, {"name": name, "value": "/different"}]
+    )
+    assert summarize(rows).coverage.templates[0].outcome == "incomplete"

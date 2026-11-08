@@ -31,7 +31,7 @@ TEMPLATE = {
             "headers": ["X-Nextjs-Data:1", "X-Middleware-Subrequest:" + SUBREQUEST],
         },
     ],
-    "matcher": "middleware-307-login-to-200/v2",
+    "matcher": "middleware-307-login-to-200/v3",
 }
 
 
@@ -51,20 +51,31 @@ def requests(origin: str, paths: list[str]) -> list[dict]:
 def observe(origin: str, path: str, entries: list[dict]) -> tuple[str, str, list[int]]:
     """Compare exact anonymous requests, never infer coverage from exit status."""
 
-    def headers(message):
+    response_fields = {
+        "location",
+        "x-nextjs-redirect",
+        "x-nextjs-rewrite",
+        "x-middleware-redirect",
+        "x-middleware-rewrite",
+    }
+
+    def headers(message, *, response=False):
         rows = message.get("headers", [])
         if not isinstance(rows, list) or any(not isinstance(h, dict) for h in rows):
             return None
         values = {}
         for h in rows:
             name, value = h.get("name"), h.get("value")
-            if (
-                not isinstance(name, str)
-                or not isinstance(value, str)
-                or name.lower() in values
-            ):
+            if not isinstance(name, str) or not isinstance(value, str):
                 return None
-            values[name.lower()] = value
+            name = name.lower()
+            # Repeated Set-Cookie/Vary fields are legitimate and do not
+            # affect this matcher. Preserve ambiguity checks for its inputs.
+            if response and name not in response_fields:
+                continue
+            if name in values:
+                return None
+            values[name] = value
         return values
 
     rows = [
@@ -93,11 +104,14 @@ def observe(origin: str, path: str, entries: list[dict]) -> tuple[str, str, list
             or post.get("text")
         ):
             return "incomplete", "unexpected_request", [i for i, _ in rows]
-        if not isinstance(res.get("status"), int) or headers(res) is None:
+        if (
+            not isinstance(res.get("status"), int)
+            or headers(res, response=True) is None
+        ):
             return "incomplete", "malformed_response", [i for i, _ in rows]
         responses.append(res)
     baseline, probe = responses
-    bh, ph = headers(baseline), headers(probe)
+    bh, ph = headers(baseline, response=True), headers(probe, response=True)
     redirect = next(
         (
             bh[k]
