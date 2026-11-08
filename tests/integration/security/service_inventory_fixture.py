@@ -56,12 +56,14 @@ class InventoryFixture:
                 writer.write(b"unadmitted endpoint was reached\r\n")
                 await writer.drain()
         except (OSError, TimeoutError, asyncio.IncompleteReadError):
+            # Probes may stop before fixture responses when their budget expires.
             pass
         finally:
             writer.close()
             try:
                 await writer.wait_closed()
             except OSError:
+                # Peer resets during bounded probe cleanup are already terminal.
                 pass
             self.tasks.discard(task)
 

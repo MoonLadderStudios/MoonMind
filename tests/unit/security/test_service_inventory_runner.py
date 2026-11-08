@@ -113,6 +113,7 @@ async def fixture(tmp_path, peers, **changes):
                     await release.wait()
                 await writer.drain()
             except (OSError, asyncio.IncompleteReadError):
+                # Bounded probes and cancellation intentionally close fixture peers.
                 pass
             finally:
                 writer.transport.abort()

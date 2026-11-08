@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 from pydantic import ValidationError
 
+from moonmind.security import service_inventory as module
 from moonmind.security.native_network import NativeNetworkSelection
 from moonmind.security.service_inventory import (
     MAX_SERVICE_INVENTORY_EXECUTION_BYTES,
@@ -481,8 +482,6 @@ def test_plan_transport_rejects_corrupt_noncanonical_or_oversized_arguments(argu
 
 
 def test_plan_output_size_is_checked_before_execution(monkeypatch):
-    import moonmind.security.service_inventory as module
-
     assert MAX_SERVICE_INVENTORY_PLAN_BYTES < 128 * 4096 * 3 // 4
     monkeypatch.setattr(module, "MAX_SERVICE_INVENTORY_PLAN_BYTES", 10)
     with pytest.raises(ValueError, match="plan.*bound"):
