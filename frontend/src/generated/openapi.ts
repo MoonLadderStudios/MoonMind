@@ -13172,6 +13172,37 @@ export interface components {
             /** Diagnostics */
             diagnostics?: components["schemas"]["SecretUsageDiagnosticResponse"][];
         };
+        /**
+         * ServiceInventoryOptions
+         * @description Probe choices specialize native ports, never grant target authority.
+         */
+        ServiceInventoryOptions: {
+            /**
+             * Bannerports
+             * @default []
+             */
+            bannerPorts: number[];
+            /**
+             * Httpheadports
+             * @default []
+             */
+            httpHeadPorts: number[];
+            /**
+             * Connecttimeoutseconds
+             * @default 5
+             */
+            connectTimeoutSeconds: number;
+            /**
+             * Probetimeoutseconds
+             * @default 2
+             */
+            probeTimeoutSeconds: number;
+            /**
+             * Maxbannerbytes
+             * @default 1024
+             */
+            maxBannerBytes: number;
+        };
         /** SessionPolicy */
         SessionPolicy: {
             /** Create */
@@ -14518,6 +14549,7 @@ export interface components {
             /** Assessmentref */
             assessmentRef?: string | null;
             nativeNetwork?: components["schemas"]["NativeNetworkSelection"] | null;
+            serviceInventory?: components["schemas"]["ServiceInventoryOptions"] | null;
             /** Credentials */
             credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };

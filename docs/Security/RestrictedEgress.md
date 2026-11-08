@@ -304,9 +304,72 @@ gateway can be removed only after its unchanged identity and an empty state
 directory prove no traffic was possible; it does not receive invented counters.
 Retained evidence records effective policy, resolution/target identities,
 allocations, counters and denials; unavailable enforcement evidence is an
-explicit coverage gap. Connection IO errors remain separate transport
-diagnostics with partial coverage, rather than evidence of a scope violation.
-Actual policy or budget denials and nonzero tool exits still fail the job.
+explicit coverage gap. Fixed pre-tunnel responses distinguish observed dial
+refusal, timeout and unreachable routes from enforcement denials. Unknown IO
+errors and legacy IO receipts remain partial transport diagnostics, not proof
+of a closed service or scope violation. Actual policy or budget denials and
+nonzero tool exits still fail the job.
+
+### Bounded service inventory
+
+`moonmind container service-inventory --admission inventory.json` submits a
+`workloadProfile` selection through the existing Container Job client. The
+admission file names `profileRef`, `mode`, `nativeNetwork` and `serviceInventory`;
+it does not supply an image, command or network route. The signed assessment
+scope still supplies authority. Its profile, `service-inventory` action class,
+network policy and native targets must all admit the selection.
+
+The deployment profile uses entrypoint `["python"]` and mode argv
+`["-I", "-m", "moonmind.security.service_inventory_runner"]`, with action class
+`service-inventory`. Admission appends the fixed output directory and bounded
+canonical plan chunks. Its outputs are `service-inventory-execution` at
+`service-inventory/execution.json` and `service-inventory-summary` at
+`service-inventory/summary.json`. This specialization uses `inputAttachments: []`
+and mounts no workspace data. The signed workspace reference still identifies
+the submitting session. Extra arguments, selected configuration exceptions,
+credentials, profile environment, caches and alternative output paths are
+rejected. Generic profile jobs still require captured inputs.
+
+Every selected endpoint receives a TCP-connect observation. `serviceInventory`
+may add disjoint `bannerPorts` and `httpHeadPorts`, each drawn only from the
+selected native ports. A banner probe reads a bounded passive sample; an HTTP
+probe sends only `HEAD /` with a fixed Host header and does not follow redirects
+or authenticate. Both use the same admitted connection. Defaults are a
+five-second connect wait, two-second probe wait and 1,024 captured bytes;
+`connectTimeoutSeconds`, `probeTimeoutSeconds` and `maxBannerBytes` can narrow
+or select values within their schema bounds. The effective sample cap may be
+smaller to keep the complete serialized evidence within 8 MiB. Truncation and
+unperformed work remain visible. A plan must fit the 96 KiB inventory transport
+bound as well as the native authority bounds; targets are never trimmed to fit.
+
+The runner only connects to the enforced proxy. It shares the original lease
+deadline, start rate, concurrency and byte budgets, performs no automatic
+retries, and checkpoints completed observations atomically. A fixed CONNECT
+close-on-EOF hint releases a completed probe's tunnel; ordinary native clients
+retain TCP half-close. Closure waits at most two seconds within the original
+expiry and discards at most 64 KiB of in-flight data, without decoding or retaining
+it as observations. The gateway still accounts for all forwarded payload bytes.
+Restarting does not restart a saved inventory or refill an assessment allocation.
+Cancellation, a later failed probe and job failure can leave useful retained
+observations, but cannot turn an incomplete run into complete coverage.
+
+Reachability and probe results are separate: an open socket remains observed
+open if its banner is delayed, empty or malformed. Refusal, timeout,
+unreachable, denied, untested and unknown transport failures remain distinct.
+Only the gateway's fixed response before tunnel establishment supplies a dial
+outcome; peer text afterward cannot forge it. Banners and service/version
+claims are sanitized, bounded and explicitly unverified, not vulnerabilities
+or authority to inspect a neighbor.
+
+Collection retains native observations, trusted lease evidence and a compact
+summary. `security.assess` rereads retained evidence before comparison. Missing
+attestation or reduced coverage is explicit. Matching complete reachability
+may compare open and refused observations; timeout, denial, unknown or missing
+results do not prove absence. Changed probes, pinned target identity or a
+narrower scope preserve prior observations rather than silently clearing them.
+Selected exports support validated summary copies; native execution and lease
+attestation schemas are explicitly withheld. Exporting changes neither retained
+bytes nor access grants.
 
 ### Bounded HTTPS TLS inspection
 

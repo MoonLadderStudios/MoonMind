@@ -8,7 +8,11 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from moonmind.security.native_tcp_gateway import NativeTCPConfig, NativeTCPGateway
+from moonmind.security.native_tcp_gateway import (
+    CONNECT_FAILURES,
+    NativeTCPConfig,
+    NativeTCPGateway,
+)
 
 
 def config(port, **changes):
@@ -98,7 +102,7 @@ async def test_connect_echo_and_persistent_restart_refusal(tmp_path):
 async def test_reject_without_dial(tmp_path, wire_request):
     async with fixture(tmp_path) as (gateway, port):
         reader, writer = await connect(gateway, port, wire_request)
-        assert await reader.read() == b""
+        assert await reader.read() == CONNECT_FAILURES["denied"]
         assert gateway.snapshot()["attempts"] == 0
         writer.close()
         await writer.wait_closed()
@@ -113,9 +117,9 @@ async def test_failed_attempt_counts(tmp_path):
     gateway = NativeTCPGateway(config(port, maxConnections=1), state_directory=tmp_path)
     await gateway.start()
     try:
-        for _ in range(2):
+        for outcome in ("refused", "denied"):
             reader, writer = await connect(gateway, port)
-            assert await reader.read() == b""
+            assert await reader.read() == CONNECT_FAILURES[outcome]
             writer.close()
             await writer.wait_closed()
         assert gateway.snapshot()["attempts"] == 1
@@ -185,7 +189,9 @@ async def test_concurrency_and_sliding_start_rate(tmp_path, limit, category):
         await first.readuntil(b"\r\n\r\n")
         second, w2 = await connect(gateway, port)
         try:
-            assert await second.read() == b""
+            assert await second.read() == (
+                CONNECT_FAILURES["denied"] if category == "rate" else b""
+            )
         except ConnectionResetError:
             # Rejected connections may surface as reset instead of EOF;
             # the counter assertions below still verify that no dial escaped.
@@ -216,7 +222,9 @@ async def test_oversized_and_slow_headers(tmp_path):
     async with fixture(tmp_path, handshakeSeconds=0.05) as (gateway, port):
         for wire_request in [b"CONNECT " + b"a" * 5000 + b"\r\n\r\n", b"CON"]:
             reader, writer = await connect(gateway, port, wire_request)
-            assert await asyncio.wait_for(reader.read(), 1) == b""
+            assert (
+                await asyncio.wait_for(reader.read(), 1) == CONNECT_FAILURES["denied"]
+            )
             writer.close()
         assert gateway.snapshot()["attempts"] == 0
         assert gateway.snapshot()["denials"]["header"] == 1
@@ -855,7 +863,7 @@ async def test_bookworm_curl_empty_agent_is_exactly_bounded(tmp_path, agent_valu
         reader, writer = await connect(gateway, port, wire)
         try:
             if agent_value:
-                assert await reader.read() == b""
+                assert await reader.read() == CONNECT_FAILURES["denied"]
                 assert gateway.snapshot()["attempts"] == 0
             else:
                 assert (

@@ -49,6 +49,13 @@ from moonmind.security.passive_repo_scan import (
 from moonmind.security.repository_scanners import ScannerSummary
 from moonmind.security.rgs_assessment import RgsAssessment
 from moonmind.security.rng_assessment import RngAssessment
+from moonmind.security.service_inventory import (
+    ServiceInventorySummary,
+    build_service_inventory_plan,
+    service_inventory_pinned_identities,
+    summarize_service_inventory,
+    validate_service_inventory_receipt,
+)
 from moonmind.security.tls_assessments import (
     TLSAssessment,
     TLSAssessmentSummary,
@@ -411,6 +418,106 @@ def _image_observation(
             "imageFeedSnapshot": (execution.database_digest if execution else None)
             or "unavailable",
             "imageScannerVersion": version,
+        },
+    )
+
+
+def _verify_service_inventory_report(summary, native_body, attestation_body):
+    """Recompute all coverage from retained bytes authorized by the artifact owner."""
+    from moonmind.security.egress_conformance_evidence import (
+        parse_and_verify_conformance_evidence,
+    )
+
+    plan = build_service_inventory_plan(
+        summary.native_network, summary.service_inventory
+    )
+    pins = ()
+    receipt_mismatch = False
+    native = json.loads(native_body) if native_body is not None else None
+    if attestation_body is not None:
+        try:
+            attestation = parse_and_verify_conformance_evidence(
+                attestation_body, location="service-inventory-attestation"
+            )
+        except RuntimeError as exc:
+            raise ValueError(
+                "Service inventory attestation failed verification"
+            ) from exc
+        if (
+            attestation.get("serviceInventoryPlanKey") != plan.plan_key
+            or attestation.get("containerJobState") != summary.job_state
+        ):
+            raise ValueError(
+                "Service inventory attestation differs from admitted plan or job"
+            )
+        try:
+            pins = service_inventory_pinned_identities(plan, attestation)
+        except (ValueError, TypeError, KeyError):
+            pins = ()
+        if pins and native:
+            try:
+                validate_service_inventory_receipt(plan, native, attestation)
+            except (ValueError, TypeError, KeyError):
+                receipt_mismatch = True
+    normalized = summarize_service_inventory(
+        plan,
+        native,
+        summary.evidence_ref,
+        pinned_identities=pins,
+        attestation_ref=summary.attestation_ref,
+        job_state=summary.job_state,
+        native_receipt_mismatch=receipt_mismatch,
+    )
+    if normalized != summary:
+        raise ValueError("Service inventory summary differs from retained evidence")
+    return normalized
+
+
+def _service_inventory_observation(request, summary, ref, created_at):
+    """Open TCP services are informational exposure observations, not vulnerabilities."""
+    assets = [f"tcp://{endpoint.authority}" for endpoint in summary.endpoints]
+    if set(assets) - set(request.scope.assets) or set(assets) & set(
+        request.scope.exclusions
+    ):
+        raise ValueError(
+            "Service inventory endpoints outside admitted assessment scope"
+        )
+    if summary.started_at is not None:
+        created_at = summary.started_at
+    rule = "informational-open-tcp-service"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=[
+            Finding(
+                source="service-inventory",
+                tool="tcp-connect",
+                rule_id=rule,
+                asset=f"tcp://{endpoint.authority}",
+                native_id=endpoint.authority,
+                evidence_refs=[summary.evidence_ref],
+            )
+            for endpoint in summary.endpoints
+            if endpoint.reachability == "open" and summary.evidence_ref != "unavailable"
+        ],
+        coverage=[
+            Coverage(
+                source="service-inventory",
+                tool="tcp-connect",
+                assets=assets,
+                rule_ids=[rule],
+                all_rules=False,
+                config_ref=summary.comparison_key or summary.plan_key,
+                status="complete" if summary.status == "complete" else "partial",
+                evidence_method="deterministic_check",
+            )
+        ],
+        provenance={
+            "serviceInventorySummary": ref,
+            "serviceInventoryNativeReport": summary.evidence_ref,
+            "serviceInventoryAttestation": summary.attestation_ref or "unavailable",
+            "serviceInventoryInterpretation": summary.interpretation,
         },
     )
 
@@ -1770,6 +1877,51 @@ class AssessmentExecution:
                                     "interpretation": image_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "service-inventory/v1":
+                            inventory_summary = ServiceInventorySummary.model_validate(payload)
+                            native_body = attestation_body = None
+                            native_refs = {}
+                            if inventory_summary.evidence_ref != "unavailable":
+                                _, native_body = await self.read(inventory_summary.evidence_ref)
+                                native_refs["execution"] = inventory_summary.evidence_ref
+                            if inventory_summary.attestation_ref:
+                                _, attestation_body = await self.read(inventory_summary.attestation_ref)
+                                native_refs["attestation"] = inventory_summary.attestation_ref
+                            inventory_summary = _verify_service_inventory_report(
+                                inventory_summary, native_body, attestation_body
+                            )
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _service_inventory_observation(
+                                request, inventory_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "service-inventory",
+                                    "summaryRef": ref,
+                                    "nativeRefs": native_refs,
+                                    "coverage": inventory_summary.status,
+                                    "execution": {
+                                        "jobState": inventory_summary.job_state,
+                                        "stopReason": inventory_summary.stop_reason,
+                                        "endpoints": [
+                                            endpoint.model_dump(mode="json", by_alias=True)
+                                            for endpoint in inventory_summary.endpoints
+                                        ],
+                                    },
+                                    "missingEndpoints": [
+                                        endpoint.authority
+                                        for endpoint in inventory_summary.endpoints
+                                        if endpoint.reachability == "untested"
+                                    ],
+                                    "reducedCoverage": inventory_summary.status != "complete",
+                                    "limitations": list(inventory_summary.limitations),
+                                    "verification": "observed" if native_body is not None else "unverified",
+                                    "attribution": "Per-endpoint outcomes are fixed-runner observations; the gateway independently attests aggregate bounds, not each endpoint outcome.",
+                                    "interpretation": inventory_summary.interpretation,
+                                }
+                            )
                         elif payload.get("schemaVersion") == "tls-assessment/v1":
                             tls_summary = TLSAssessmentSummary.model_validate(payload)
                             # Recompute normalized findings and identity from the retained
@@ -3041,6 +3193,15 @@ def _scanner_summary(summaries: list[dict]) -> str:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
+        if summary["scanner"] == "service-inventory":
+            lines.append(summary["attribution"])
+            lines.append(
+                "Reduced coverage: " + ("yes" if summary["reducedCoverage"] else "no") + "."
+            )
+            if summary["missingEndpoints"]:
+                lines.append(
+                    "Untested endpoints: " + ", ".join(summary["missingEndpoints"]) + "."
+                )
         if summary["scanner"] == "application-access":
 
             def safe(value):
