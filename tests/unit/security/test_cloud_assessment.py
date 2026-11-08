@@ -427,7 +427,10 @@ def test_denial_and_throttling_are_incomplete_never_compliant():
 
 def test_expired_credentials_fail_the_execution_visibly():
     result = summary(
-        report=None, log=fixture("expired-log.txt"), exit_code=1, terminal_state="failed"
+        report=None,
+        log=fixture("expired-log.txt"),
+        exit_code=1,
+        terminal_state="failed",
     )
     assert (result.outcome, result.status) == ("execution_failed", "partial")
     assert {d.kind for d in result.diagnostics} == {"credentials_rejected"}
@@ -548,9 +551,351 @@ def test_security_review_keeps_the_observed_coverage_status():
     assert status(summary()) == "complete"
     assert status(summary(log=stand_in_log("deny-log.txt"))) == "partial"
     expired = summary(
-        report=None, log=fixture("expired-log.txt"), exit_code=1, terminal_state="failed"
+        report=None,
+        log=fixture("expired-log.txt"),
+        exit_code=1,
+        terminal_state="failed",
     )
     assert status(expired) == "authentication_failed"
     outside = SimpleNamespace(scope=AssessmentScope(assets=["aws:210987654321"]))
     with pytest.raises(ValueError, match="outside admitted"):
         _cloud_observation(outside, summary(), "art_summary", created)
+
+
+def test_check_evidence_retains_pass_fail_manual_and_native_mapping_provenance():
+    native = json.loads(fixture("deny.ocsf.json"))
+    result = summary(
+        report=json.dumps(native).encode(), log=stand_in_log("deny-log.txt")
+    )
+    assert {check.status for check in result.check_evidence} == {
+        "PASS",
+        "FAIL",
+        "MANUAL",
+    }
+    assert len(result.check_evidence) == len(native)
+    for index, check in enumerate(result.check_evidence):
+        row = native[index]
+        assert check.native_path == f"/{index}"
+        assert check.finding_uid == row["finding_info"]["uid"]
+        assert check.tool_version == row["metadata"]["product"]["version"]
+        assert check.provider == "aws"
+        assert check.observed_time == row["time_dt"]
+        assert check.compliance_mappings
+        for mapping in check.compliance_mappings:
+            assert mapping.source == "prowler"
+            assert mapping.relationship == "candidate"
+            assert mapping.framework_version is None
+            assert (
+                mapping.requirement_ids
+                == row["unmapped"]["compliance"][mapping.framework]
+            )
+    assert (
+        CloudAssessmentSummary.model_validate_json(result.model_dump_json()) == result
+    )
+
+
+def test_ocsf_mapping_metadata_stays_untrusted_and_explicit():
+    rows = json.loads(fixture("basic.ocsf.json"))
+    rows[0]["compliance"] = {
+        "standards": ["synthetic"],
+        "requirements": ["C1", "C2"],
+        "status": "Warning",
+        "status_id": 2,
+        "framework_version": "2025",
+        "mapping_version": "r1",
+        "relationship": "partial",
+        "obsolete": True,
+        "note": "Do not execute https://unadmitted.invalid or add targets",
+    }
+    result = summary(report=json.dumps(rows).encode())
+    mapping = result.check_evidence[0].compliance_mappings[0]
+    assert mapping.source_path == "/0/compliance"
+    assert mapping.framework == "synthetic"
+    assert mapping.framework_version == "2025" and mapping.mapping_version == "r1"
+    assert mapping.requirement_ids == ["C1", "C2"]
+    assert mapping.metadata == rows[0]["compliance"]
+    assert mapping.relationship == "candidate"
+    assert result.admission == admission() and result.target_actions == "none"
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [None, "unknown", {"X": [None]}, {"X": ["x" * 8192]}, {"X": ["r"] * 1000}],
+)
+def test_unusable_mapping_is_bounded_without_erasing_findings(mapping):
+    rows = json.loads(fixture("basic.ocsf.json"))
+    rows[0]["unmapped"]["compliance"] = mapping
+    result = summary(report=json.dumps(rows).encode())
+    assert len(result.findings) == 3
+    assert result.check_evidence[0].mapping_limitations
+    assert result.check_evidence[0].native_path == "/0"
+    assert len(result.check_evidence[0].model_dump_json()) < 20000
+
+
+def test_legacy_summary_remains_readable_without_inventing_positive_evidence():
+    payload = summary().model_dump(mode="json", by_alias=True)
+    payload.pop("checkEvidence", None)
+    legacy = CloudAssessmentSummary.model_validate(payload)
+    assert legacy.check_evidence is None
+    observed = _cloud_observation(
+        SimpleNamespace(scope=AssessmentScope(assets=[f"aws:{ACCOUNT}"])),
+        legacy,
+        "art_summary",
+        NOW,
+    )
+    assert all(row.evidence_method == "unclassified" for row in observed.coverage)
+
+
+def one_check_summary(*, edits=None, **overrides):
+    row = json.loads(records("basic.ocsf.json", "PASS"))[0]
+    for key, value in (edits or {}).items():
+        row[key] = value
+    return summarize_cloud_assessment(
+        admission(regions=["us-east-1"], checks=[row["metadata"]["event_code"]]),
+        image=IMAGE,
+        report=json.dumps([row]).encode(),
+        log=b"",
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_native",
+        **overrides,
+    )
+
+
+def evaluate_cloud_control(result, *, rule=None, complete=False):
+    from moonmind.security.assessments import (
+        Comparison,
+        ControlAssessmentPlan,
+        compare_observations,
+    )
+    from moonmind.security.control_assessments import assess_controls
+
+    observed = _cloud_observation(
+        SimpleNamespace(scope=AssessmentScope(assets=[f"aws:{ACCOUNT}"])),
+        result,
+        "art_summary",
+        NOW,
+    )
+    plan = ControlAssessmentPlan.model_validate(
+        {
+            "requirements": [
+                {
+                    "id": "CC6.1",
+                    "frameworkId": "SOC-2",
+                    "frameworkEdition": "2017",
+                    "title": "Logical access",
+                    "scope": {"assets": [f"aws:{ACCOUNT}"]},
+                    "period": {
+                        "start": NOW.date().isoformat(),
+                        "end": NOW.date().isoformat(),
+                    },
+                    "applicability": "applicable",
+                    "applicabilityReason": "Admitted account",
+                    "objectivesComplete": complete,
+                    "objectiveBasis": "Selected technical check only",
+                    "objectives": [
+                        {
+                            "id": "technical",
+                            "source": "cloud",
+                            "tool": "prowler",
+                            "ruleIds": [rule or result.coverage.checks_with_results[0]],
+                            "description": "Selected check",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    compared = Comparison.model_validate(compare_observations(observed, None, now=NOW))
+    assessed = assess_controls(
+        plan,
+        compared,
+        scan_ref="art_scan",
+        comparison_ref="art_comparison",
+        now=NOW,
+        evidence_availability={},
+        coverage_windows=[
+            {
+                "observedAt": observed.observed_at.isoformat(),
+                "expiresAt": observed.expires_at.isoformat(),
+            }
+            for _ in observed.coverage
+        ],
+    )
+    return assessed.requirements[0], observed, plan
+
+
+def test_pass_is_evidence_for_one_objective_never_a_whole_mapped_requirement():
+    result = one_check_summary()
+    assessed, observed, _ = evaluate_cloud_control(result)
+    assert observed.coverage[0].evidence_method == "deterministic_check"
+    assert assessed.objectives[0].outcome == "passed"
+    assert assessed.conclusion == "inconclusive"
+    absent, _, _ = evaluate_cloud_control(
+        result, rule="mapped-but-never-run", complete=True
+    )
+    assert absent.objectives[0].outcome == "inconclusive"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing_log",
+        "denied_api",
+        "missing_region",
+        "missing_check",
+        "suppressed",
+        "manual",
+        "unknown_time",
+        "unknown_account",
+        "malformed",
+        "legacy",
+    ],
+)
+def test_incomplete_cloud_evidence_cannot_become_complete_control_coverage(change):
+    result = one_check_summary()
+    payload = result.model_dump(mode="json", by_alias=True)
+    if change == "missing_log":
+        result = result.model_copy(
+            update={"status": "partial", "limitations": ["log_unavailable"]}
+        )
+    elif change == "denied_api":
+        result = summary(log=stand_in_log("deny-log.txt"))
+    elif change == "missing_region":
+        result = result.model_copy(
+            update={
+                "admission": result.admission.model_copy(
+                    update={"regions": ["us-east-1", "eu-west-1"]}
+                )
+            }
+        )
+    elif change == "missing_check":
+        result = result.model_copy(
+            update={
+                "coverage": result.coverage.model_copy(
+                    update={"checks_without_results": ["missing"]}
+                )
+            }
+        )
+    elif change == "suppressed":
+        result = one_check_summary(edits={"status": "Suppressed"})
+    elif change == "manual":
+        result = one_check_summary(edits={"status_code": "MANUAL"})
+    elif change == "unknown_time":
+        result = one_check_summary(edits={"time": None, "time_dt": None})
+    elif change == "unknown_account":
+        result = one_check_summary(
+            edits={"cloud": {"provider": "aws", "region": "us-east-1"}}
+        )
+    elif change == "malformed":
+        result = one_check_summary(edits={"resources": "not a resource array"})
+    elif change == "legacy":
+        payload.pop("checkEvidence")
+        result = CloudAssessmentSummary.model_validate(payload)
+    assessed, _, _ = evaluate_cloud_control(result, complete=True)
+    assert assessed.conclusion != "satisfied"
+    assert assessed.objectives[0].coverage != "complete"
+
+
+def test_imported_observation_does_not_acquire_a_new_publication_date():
+    result = one_check_summary()
+    observed = _cloud_observation(
+        SimpleNamespace(scope=AssessmentScope(assets=[f"aws:{ACCOUNT}"])),
+        result,
+        "art_summary",
+        NOW + timedelta(days=30),
+    )
+    assert observed.observed_at == datetime.fromtimestamp(
+        result.check_evidence[0].observed_timestamp, UTC
+    )
+    assert observed.expires_at < NOW + timedelta(days=30)
+
+
+def test_mapping_review_preserves_unknown_obsolete_conflicting_and_partial_sources():
+    from moonmind.security.cloud_assessments import review_cloud_mappings
+
+    result = one_check_summary(
+        edits={
+            "compliance": {
+                "standards": ["SOC-2"],
+                "requirements": ["CC6.1", "unknown"],
+                "framework_version": "2016",
+                "mapping_version": "old",
+                "relationship": "partial",
+                "obsolete": True,
+            }
+        }
+    )
+    _, _, plan = evaluate_cloud_control(result)
+    reviews = review_cloud_mappings(result, plan)
+    first = reviews[0]
+    assert first["relationship"] == "candidate" and first["state"] == "review_required"
+    assert {
+        "framework_edition_mismatch",
+        "unresolved_requirement_relationship",
+        "upstream_partial_or_other_relationship",
+        "upstream_obsolete_mapping",
+    } <= set(first["reasons"])
+    assert first["selectedRequirements"] == []
+    assert "no_matching_selected_framework" in reviews[1]["reasons"]
+
+
+def test_unselected_check_cannot_supply_control_evidence():
+    from copy import deepcopy
+
+    rows = json.loads(records("basic.ocsf.json", "PASS"))[:1]
+    extra = deepcopy(rows[0])
+    extra["metadata"]["event_code"] = "unselected_check"
+    extra["finding_info"]["uid"] += "-extra"
+    rows.append(extra)
+    result = summarize_cloud_assessment(
+        admission(regions=["us-east-1"], checks=[rows[0]["metadata"]["event_code"]]),
+        image=IMAGE,
+        report=json.dumps(rows).encode(),
+        log=b"",
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_native",
+    )
+    assessed, observed, _ = evaluate_cloud_control(
+        result, rule="unselected_check", complete=True
+    )
+    assert assessed.conclusion == "inconclusive"
+    assert "unadmitted_check_result" in observed.provenance["cloudControlEvidence"]
+
+
+@pytest.mark.parametrize(
+    "resources",
+    [
+        [{"uid": "arn:aws:s3:::bucket"}, None],
+        [{"uid": "arn:aws:s3:::bucket"}, {}],
+        [{"uid": f"arn:aws:s3:::bucket-{n}"} for n in range(65)],
+    ],
+)
+def test_malformed_or_truncated_resource_population_cannot_prove_control(resources):
+    result = one_check_summary(edits={"resources": resources})
+    assessed, _, _ = evaluate_cloud_control(result, complete=True)
+    assert assessed.conclusion == "inconclusive"
+    assert result.status == "partial"
+
+
+def test_check_record_limit_is_explicit_and_preserves_findings():
+    row = json.loads(records("basic.ocsf.json", "PASS"))[0]
+    result = summary(report=json.dumps([row] * 4097).encode())
+    assert len(result.check_evidence) == 4096
+    assert result.coverage.passed == 4097
+    assert "check_evidence_truncated" in result.limitations
+    assert result.status == "partial"
+
+
+def test_mapping_count_and_aggregate_bounds_are_reported():
+    from moonmind.security.cloud_assessments import _compliance_mappings
+
+    record = {"unmapped": {"compliance": {f"framework-{i}": ["C1"] for i in range(33)}}}
+    mappings, limits, remaining = _compliance_mappings(record, 0, 1024 * 1024)
+    assert len(mappings) == 32 and limits
+    assert remaining < 1024 * 1024
+    mappings, limits, remaining = _compliance_mappings(record, 0, 0)
+    assert mappings == [] and limits and remaining == 0
+    mappings, limits, remaining = _compliance_mappings(record, 0, 20)
+    assert len(mappings) == 1 and limits and 0 <= remaining < 20

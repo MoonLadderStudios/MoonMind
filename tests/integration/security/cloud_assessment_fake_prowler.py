@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
@@ -92,14 +93,36 @@ def main(argv: list[str]) -> int:
         def write(rows: list[dict], *, cut: int = 0) -> None:
             for row in rows:
                 row["cloud"]["account"]["uid"] = account
+                # This controlled execution is a new observation, not an import
+                # of the original fixture's historical assessment time.
+                observed = datetime.now(UTC)
+                row["time"] = int(observed.timestamp())
+                row["time_dt"] = observed.isoformat()
             body = json.dumps(rows, indent=1).encode()
             report.write_bytes(body[:-cut] if cut else body)
 
         if scenario == "findings":
             write(records("basic.ocsf.json"))
             log.write(recorded_log("basic-log.txt"))
-        elif scenario == "compliant":
-            write(records("basic.ocsf.json", "PASS"))
+        elif scenario in {"compliant", "control-compliant"}:
+            # Every earlier finding was actually retested; merely dropping FAIL
+            # rows is not evidence that those checks now pass.
+            rows = records("basic.ocsf.json")
+            if scenario == "control-compliant":
+                rows = [
+                    row for row in rows if row["metadata"]["event_code"] in args.check
+                ]
+                for row in rows:
+                    row["compliance"] = {
+                        "standards": ["synthetic"],
+                        "requirements": ["C1"],
+                        "framework_version": "2026",
+                        "mapping_version": "r1",
+                    }
+            for row in rows:
+                row["status_code"] = "PASS"
+                row["status_detail"] = "Controlled repaired configuration passed."
+            write(rows)
             log.write(recorded_log("basic-log.txt"))
         elif scenario == "partial":
             write(records("deny.ocsf.json"))
@@ -116,9 +139,14 @@ def main(argv: list[str]) -> int:
             write(rows)
         elif scenario == "echo":
             rows = records("basic.ocsf.json", "PASS")
-            rows[0]["status_detail"] = Path(
-                os.environ["AWS_SHARED_CREDENTIALS_FILE"]
-            ).read_text()
+            secret_marker = Path(os.environ["AWS_SHARED_CREDENTIALS_FILE"]).read_text()
+            rows[0]["status_detail"] = secret_marker
+            rows[0]["compliance"] = {
+                "standards": ["fixture"],
+                "requirements": ["C1"],
+                "note": secret_marker,
+            }
+            rows[0]["unmapped"]["compliance"]["echo"] = [secret_marker]
             write(rows)
         else:
             raise SystemExit(f"unknown scenario {scenario}")

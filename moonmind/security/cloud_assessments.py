@@ -22,7 +22,7 @@ import re
 from collections import Counter
 from typing import Literal, Sequence
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from moonmind.schemas.repository_scanner_models import (
     CLOUD_ACTION_CLASS,
@@ -284,6 +284,37 @@ class CloudFinding(Contract):
     detail: Text | None = None
 
 
+class CloudComplianceMapping(Contract):
+    """Source-attributed crosswalk, never execution authority or control proof."""
+
+    source: Literal["prowler"] = "prowler"
+    source_path: Text
+    framework: Text | None = None
+    framework_version: Text | None = None
+    mapping_version: Text | None = None
+    requirement_ids: list[Text] = Field(default_factory=list, max_length=64)
+    relationship: Literal["candidate"] = "candidate"
+    # Bounded original OCSF metadata retains conflicts, partial/obsolete claims
+    # and unknown extensions without guessing their meaning or fetching links.
+    metadata: dict[str, JsonValue] = Field(default_factory=dict, max_length=32)
+
+
+class CloudCheckEvidence(CloudFinding):
+    status: Literal["PASS", "FAIL", "MANUAL"]
+    native_path: Text
+    provider: Text | None = None
+    tool_version: Text | None = None
+    schema_version: Text | None = None
+    observed_time: str | int | float | None = None
+    observed_timestamp: int | float | None = None
+    created_time: str | int | float | None = None
+    modified_time: str | int | float | None = None
+    compliance_mappings: list[CloudComplianceMapping] = Field(
+        default_factory=list, max_length=32
+    )
+    mapping_limitations: Items = Field(default_factory=list)
+
+
 class CloudDiagnostic(Contract):
     """One aggregated Prowler log error; provider message text is dropped."""
 
@@ -350,6 +381,10 @@ class CloudAssessmentSummary(Contract):
     outcome: Literal["findings", "clean", "incomplete", "execution_failed"]
     status: Literal["complete", "partial"]
     findings: list[CloudFinding] = Field(default_factory=list, max_length=4096)
+    # Absent in older v1 artifacts: never reconstruct PASS evidence from counts.
+    check_evidence: list[CloudCheckEvidence] | None = Field(
+        default=None, max_length=4096
+    )
     coverage: CloudCoverage
     diagnostics: list[CloudDiagnostic] = Field(default_factory=list, max_length=256)
     limitations: Items
@@ -451,6 +486,190 @@ def _get(record: dict, *path):
             return None
         record = record.get(key)
     return record
+
+
+def _bounded_mapping(value, depth=0):
+    """Reject oversized/unknown shapes without copying unbounded extensions."""
+    if depth > 4:
+        raise ValueError("mapping_depth_exceeded")
+    if isinstance(value, str):
+        if len(value) > 1024:
+            raise ValueError("mapping_text_exceeds_limit")
+    elif isinstance(value, dict):
+        if len(value) > 32 or any(
+            not isinstance(k, str) or len(k) > 128 for k in value
+        ):
+            raise ValueError("mapping_object_exceeds_limit")
+        for child in value.values():
+            _bounded_mapping(child, depth + 1)
+    elif isinstance(value, list):
+        if len(value) > 64:
+            raise ValueError("mapping_list_exceeds_limit")
+        for child in value:
+            _bounded_mapping(child, depth + 1)
+    elif value is not None and not isinstance(value, (bool, int, float)):
+        raise ValueError("mapping_value_unsupported")
+
+
+def _mapping_ids(value):
+    if (
+        not isinstance(value, list)
+        or any(
+            not isinstance(item, str) or not item.strip() or len(item) > 1024
+            for item in value
+        )
+        or len(value) > 64
+    ):
+        raise ValueError("mapping_requirements_unsupported")
+    return value
+
+
+def _compliance_mappings(record, index, remaining_bytes):
+    mappings, limitations = [], []
+
+    def retain(path, metadata, framework=None, requirements=None):
+        nonlocal remaining_bytes
+        try:
+            _bounded_mapping(metadata)
+            requirements = _mapping_ids(requirements)
+            size = len(json.dumps([metadata, requirements], allow_nan=False).encode())
+            if size > 8192 or size > remaining_bytes or len(mappings) >= 32:
+                raise ValueError("mapping_retention_limit")
+            mapping = CloudComplianceMapping(
+                sourcePath=path,
+                framework=framework,
+                frameworkVersion=_text(metadata.get("framework_version")),
+                mappingVersion=_text(metadata.get("mapping_version")),
+                requirementIds=_mapping_ids(requirements),
+                metadata=metadata,
+            )
+        except (ValueError, TypeError):
+            limitations.append("mapping_unsupported_or_exceeds_limit")
+            return
+        remaining_bytes -= size
+        mappings.append(mapping)
+
+    if "compliance" in record:
+        metadata = record["compliance"]
+        if isinstance(metadata, dict):
+            standards = metadata.get("standards", [])
+            framework = (
+                _text(standards[0])
+                if isinstance(standards, list) and len(standards) == 1
+                else None
+            )
+            retain(
+                f"/{index}/compliance",
+                metadata,
+                framework,
+                metadata.get("requirements", []),
+            )
+        else:
+            limitations.append("mapping_unsupported_or_exceeds_limit")
+    unmapped = record.get("unmapped")
+    if isinstance(unmapped, dict) and "compliance" in unmapped:
+        value = unmapped["compliance"]
+        if not isinstance(value, dict):
+            limitations.append("mapping_unsupported_or_exceeds_limit")
+        else:
+            if len(value) > 32:
+                limitations.append("mapping_unsupported_or_exceeds_limit")
+            for framework, requirements in list(value.items())[:32]:
+                if (
+                    not isinstance(framework, str)
+                    or not framework.strip()
+                    or len(framework) > 128
+                ):
+                    limitations.append("mapping_unsupported_or_exceeds_limit")
+                    continue
+                path = framework.replace("~", "~0").replace("/", "~1")
+                retain(
+                    f"/{index}/unmapped/compliance/{path}", {}, framework, requirements
+                )
+    return mappings, sorted(set(limitations)), max(0, remaining_bytes)
+
+
+def _record_time(record, *names):
+    if not isinstance(record, dict):
+        return None
+    for name in names:
+        value = record.get(name)
+        if isinstance(value, str):
+            return _text(value, 128)
+        if type(value) in (int, float):
+            return value
+    return None
+
+
+def review_cloud_mappings(summary: CloudAssessmentSummary, plan=None) -> list[dict]:
+    """Compare exact supplied identities only; a match still requires review.
+
+    Framework IDs which embed an edition are not split heuristically. Missing
+    editions, old crosswalks and conflicting source claims stay unresolved.
+    """
+    requirements = plan.requirements if plan else []
+    reviews = []
+    for check in summary.check_evidence or []:
+        for mapping in check.compliance_mappings:
+            selected = [r for r in requirements if r.framework_id == mapping.framework]
+            reasons = []
+            if not selected:
+                reasons.append("no_matching_selected_framework")
+            elif mapping.framework_version is None:
+                reasons.append("framework_edition_unknown")
+            elif mapping.framework_version not in {
+                r.framework_edition for r in selected
+            }:
+                reasons.append("framework_edition_mismatch")
+            matched = [
+                r
+                for r in selected
+                if r.framework_edition == mapping.framework_version
+                and r.id in mapping.requirement_ids
+            ]
+            if set(mapping.requirement_ids) - {r.id for r in matched}:
+                reasons.append("unresolved_requirement_relationship")
+            if any(
+                not any(
+                    o.source == "cloud"
+                    and o.tool == "prowler"
+                    and check.check_id in o.rule_ids
+                    for o in r.objectives
+                )
+                for r in matched
+            ):
+                reasons.append("selected_objectives_differ")
+            if mapping.metadata.get("relationship") not in (None, "equivalent"):
+                reasons.append("upstream_partial_or_other_relationship")
+            if (
+                mapping.metadata.get("obsolete")
+                or mapping.metadata.get("status") == "superseded"
+            ):
+                reasons.append("upstream_obsolete_mapping")
+            reviews.append(
+                {
+                    "findingUid": check.finding_uid,
+                    "checkId": check.check_id,
+                    "sourcePath": mapping.source_path,
+                    "relationship": "candidate",
+                    "state": "review_required",
+                    "selectedRequirements": [r.id for r in matched],
+                    "reasons": reasons or ["upstream_mapping_is_not_control_evidence"],
+                }
+            )
+            if len(reviews) == 4096:
+                if (
+                    sum(
+                        len(row.compliance_mappings)
+                        for row in summary.check_evidence or []
+                    )
+                    > 4096
+                ):
+                    reviews[-1]["reasons"].append(
+                        "additional_mapping_reviews_omitted_see_check_evidence"
+                    )
+                return reviews
+    return reviews
 
 
 def parse_log(body: bytes, selected_checks: Sequence[str]) -> list[CloudDiagnostic]:
@@ -572,12 +791,14 @@ def summarize_cloud_assessment(
     gaps.extend(sorted({d.kind for d in diagnostics}))
 
     findings: list[CloudFinding] = []
+    check_evidence: list[CloudCheckEvidence] = []
+    mapping_bytes_remaining = 1024 * 1024
     statuses: Counter = Counter()
     accounts, regions, checks, manual_checks = set(), set(), set(), set()
     compliant, noncompliant, unevaluated = set(), set(), set()
     muted = 0
     version = None
-    for record in records:
+    for index, record in enumerate(records):
         status = _get(record, "status_code")
         check = _text(_get(record, "metadata", "event_code"), 128)
         uid = _text(_get(record, "finding_info", "uid"))
@@ -587,10 +808,25 @@ def summarize_cloud_assessment(
         version = version or _text(_get(record, "metadata", "product", "version"), 64)
         account = _text(_get(record, "cloud", "account", "uid"), 128)
         region = _text(_get(record, "cloud", "region"), 64)
+        resource_data = _get(record, "resources")
+        if resource_data is not None and not isinstance(resource_data, list):
+            gaps.append("report_record_malformed")
         resources = [
-            r for r in (_get(record, "resources") or []) if isinstance(r, dict)
+            r
+            for r in (resource_data if isinstance(resource_data, list) else [])
+            if isinstance(r, dict)
         ]
         uids = [u for u in (_text(r.get("uid")) for r in resources) if u][:64]
+        if isinstance(resource_data, list) and (
+            len(resources) != len(resource_data)
+            or any(
+                not _text(r.get("uid")) or len(str(r.get("uid", ""))) > 1024
+                for r in resources
+            )
+        ):
+            gaps.append("resource_scope_malformed")
+        if len(resources) > 64:
+            gaps.append("resource_scope_truncated")
         is_muted = _get(record, "status") == "Suppressed" or bool(
             _get(record, "unmapped", "muted")
         )
@@ -606,28 +842,60 @@ def summarize_cloud_assessment(
         )
         if status == "MANUAL":
             manual_checks.add(check)
-        if status == "PASS":
-            continue
-        if len(findings) >= MAX_FINDINGS:
-            gaps.append("findings_truncated")
-            continue
-        findings.append(
-            CloudFinding(
-                findingUid=uid,
-                checkId=check,
-                status=status,
-                muted=is_muted,
-                severity=_text(_get(record, "severity"), 32) or "unknown",
-                title=_text(_get(record, "finding_info", "title")),
-                account=account,
-                region=region,
-                resourceUids=uids,
-                resourceType=(
-                    _text(resources[0].get("type"), 128) if resources else None
-                ),
-                detail=_text(_get(record, "status_detail")),
+        fields = {
+            "findingUid": uid,
+            "checkId": check,
+            "status": status,
+            "muted": is_muted,
+            "severity": _text(_get(record, "severity"), 32) or "unknown",
+            "title": _text(_get(record, "finding_info", "title")),
+            "account": account,
+            "region": region,
+            "resourceUids": uids,
+            "resourceType": _text(resources[0].get("type"), 128) if resources else None,
+            "detail": _text(_get(record, "status_detail")),
+        }
+        if len(check_evidence) < MAX_FINDINGS:
+            mappings, mapping_limits, mapping_bytes_remaining = _compliance_mappings(
+                record, index, mapping_bytes_remaining
             )
-        )
+            check_evidence.append(
+                CloudCheckEvidence(
+                    **fields,
+                    nativePath=f"/{index}",
+                    provider=_text(_get(record, "cloud", "provider"))
+                    or _text(_get(record, "unmapped", "provider")),
+                    toolVersion=_text(
+                        _get(record, "metadata", "product", "version"), 64
+                    ),
+                    schemaVersion=_text(_get(record, "metadata", "version"), 64),
+                    observedTime=_record_time(record, "time_dt", "time"),
+                    observedTimestamp=(
+                        record.get("time")
+                        if type(record.get("time")) in (int, float)
+                        else None
+                    ),
+                    createdTime=_record_time(
+                        record.get("finding_info") or {},
+                        "created_time_dt",
+                        "created_time",
+                    ),
+                    modifiedTime=_record_time(
+                        record.get("finding_info") or {},
+                        "modified_time_dt",
+                        "modified_time",
+                    ),
+                    complianceMappings=mappings,
+                    mappingLimitations=mapping_limits,
+                )
+            )
+        else:
+            gaps.append("check_evidence_truncated")
+        if status != "PASS":
+            if len(findings) >= MAX_FINDINGS:
+                gaps.append("findings_truncated")
+            else:
+                findings.append(CloudFinding(**fields))
     if statuses["MANUAL"]:
         # Prowler reports evaluations it could not complete, such as a denied
         # read, as MANUAL; they are neither compliant nor findings.
@@ -710,6 +978,7 @@ def summarize_cloud_assessment(
         outcome=outcome,
         status="complete" if complete else "partial",
         findings=findings,
+        checkEvidence=check_evidence,
         coverage=coverage,
         diagnostics=diagnostics,
         limitations=gaps,
