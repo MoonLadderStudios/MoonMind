@@ -9591,6 +9591,11 @@ export interface components {
              */
             feedMaxAgeHours: number;
             /**
+             * Requirefreshfeeds
+             * @default false
+             */
+            requireFreshFeeds: boolean;
+            /**
              * Outputdirectory
              * @default image-assessment
              */
@@ -12628,6 +12633,11 @@ export interface components {
              * @default 72
              */
             feedMaxAgeHours: number;
+            /**
+             * Requirefreshfeeds
+             * @default false
+             */
+            requireFreshFeeds: boolean;
             /**
              * Maxfiles
              * @default 4096

@@ -18,6 +18,7 @@ they use the session's unscoped capability.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
@@ -27,15 +28,17 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from typer.testing import CliRunner
 
-from api_service.api.routers import mcp_tools
+from api_service.api.routers import mcp_tools, presets
 from api_service.services.container_jobs import (
     ContainerJobService,
     owner_artifact_principal,
 )
+from api_service.services.presets.catalog import PresetCatalogService
 from api_service.services.registry_authorization import (
     PrivateImageAuthorizationPolicy,
     PrivateImageAuthorizationService,
 )
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.cli import app as cli_app
 from moonmind.config.container_backend_settings import (
     IMAGE_SOURCES_ENV_KEY,
@@ -317,8 +320,9 @@ def publisher(environment, published):
     return publish
 
 
+@pytest.mark.parametrize("entrypoint", ["cli", "preset-api"])
 async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
-    environment, tmp_path, monkeypatch
+    environment, tmp_path, monkeypatch, entrypoint
 ):
     from tests.integration.security.quality import QualityRun, observation
 
@@ -336,6 +340,56 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
         }
     )
     admission = {"scanner": "gitleaks", "outputDirectory": "artifacts/gitleaks-run"}
+    preset_provenance = None
+    if entrypoint == "preset-api":
+        await run_guarded_upgrade(environment.session, operator_authorized=True)
+        seed_dir = tmp_path / "assessment-presets"
+        seed_dir.mkdir()
+        seed = (
+            Path(__file__).resolve().parents[3]
+            / "api_service/data/presets/security-code-supply-chain.yaml"
+        )
+        (seed_dir / seed.name).write_text(seed.read_text())
+        await PresetCatalogService(environment.session).import_seed_templates(
+            seed_dir=seed_dir
+        )
+        monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
+        monkeypatch.setattr(mcp_tools.settings.feature_flags, "preset_catalog", True)
+        monkeypatch.setattr(
+            mcp_tools.settings.feature_flags, "disable_preset_catalog", False
+        )
+        session.app.include_router(presets.router)
+        async with AsyncClient(
+            transport=ASGITransport(app=session.app, client=("127.0.0.1", 12345)),
+            base_url="http://localhost",
+        ) as client:
+            response = await client.post(
+                "/api/presets/security-code-supply-chain:expand",
+                json={
+                    "inputs": {
+                        "goal": "Assess only the controlled repository fixture",
+                        "assessment": admission,
+                    }
+                },
+            )
+        assert response.status_code == 200, response.text
+        expanded = response.json()
+        assert len(expanded["steps"]) == 1
+        step = expanded["steps"][0]
+        assert step["skill"]["id"] == "security-review"
+        frozen = step["annotations"]["securityAssessment"]
+        assert frozen["kind"] == "repository-scan"
+        assert frozen["admission"] == step["skill"]["args"]["assessment"]
+        assert all(
+            frozen["admission"][key] == value for key, value in admission.items()
+        )
+        admission = frozen["admission"]
+        assert admission["requireFreshFeeds"] is True
+        assert "assessmentScope" not in expanded
+        preset_provenance = expanded["appliedTemplate"]
+        # The test fixture performs the portable Skill's CLI dispatch, not its
+        # model reasoning. Native admission, capture, runner, collector and
+        # security.assess below are the real production owners.
     started = await session.submit(
         tmp_path,
         "repository-scan",
@@ -346,6 +400,7 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     )
     spec = started.request.spec
     assert spec.repository_scan is not None and spec.workspace_read_only
+    assert spec.repository_scan == RepositoryScan.model_validate(admission)
 
     published = {}
 
@@ -436,8 +491,10 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
                 mode="json", by_alias=True
             ),
             "model": None,
+            "preset": preset_provenance,
+            "dispatch": "controlled fixture substitutes for portable Skill CLI dispatch",
             "jobId": started.job_id,
-            "topology": "CLI -> signed MCP -> admission -> Git capture -> scanner runner -> worker publication -> cleanup -> retained artifact -> security.assess -> report",
+            "topology": f"{entrypoint} -> CLI -> signed MCP -> admission -> Git capture -> scanner runner -> worker publication -> cleanup -> retained artifact -> security.assess -> report",
         },
     )
     await assert_assessment_retains(

@@ -334,6 +334,8 @@ def run_image_assessment(
                 )
                 if execution.feed.stale_components:
                     limitations.append("feed_snapshot_stale")
+                    if assessment.require_fresh_feeds:
+                        raise FeedSnapshotError("feed_snapshot_stale")
             version = root / "version"
             processes.run(["trivy", "--version"], cwd=root, env=env, capture=version)
             if version.exists():

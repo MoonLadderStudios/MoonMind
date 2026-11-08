@@ -857,3 +857,21 @@ def test_archive_identity_reads_oci_layout_config_without_extraction(tmp_path):
         "architecture": "arm64",
         "variant": "v8",
     }
+
+
+def test_required_fresh_image_feed_stops_before_scanner_process(tmp_path, monkeypatch):
+    inputs, assessment = archive_case(tmp_path, requireFreshFeeds=True)
+    original = runner.feed_evidence
+
+    def stale(*args, **kwargs):
+        return original(*args, **kwargs).model_copy(update={"stale_components": ["vulnerability"]})
+
+    monkeypatch.setattr(runner, "feed_evidence", stale)
+    calls = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(a))
+    output = tmp_path / "out"
+    assert runner.run_image_assessment(assessment, inputs=inputs, output=output, database=tmp_path / "db") == 2
+    assert calls == []
+    execution = json.loads((output / "execution.json").read_bytes())
+    assert {"feed_snapshot_stale", "scanner_prerequisite_failed"} <= set(execution["limitations"])
+    assert execution["feed"]["staleComponents"] == ["vulnerability"]

@@ -1,0 +1,222 @@
+slug: security-code-supply-chain
+title: Code and supply-chain assessment
+description: Select Gitleaks secrets, Opengrep code rules, or Trivy dependency and configuration checks
+  on the selected repository snapshot. One selected scanner per run; not exhaustive code review or runtime
+  testing.
+tags:
+- security
+- assessment
+- repository-scan
+releaseStatus: active
+requiredCapabilities:
+- git
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required:
+    - assessment
+    properties:
+      goal:
+        type: string
+        title: Goal
+        default: Select Gitleaks secrets, Opengrep code rules, or Trivy dependency and configuration checks
+          on the selected repository snapshot. One selected scanner per run; not exhaustive code review
+          or runtime testing.
+      assessment:
+        additionalProperties: false
+        properties:
+          scanner:
+            enum:
+            - gitleaks
+            - opengrep
+            - trivy
+            title: Scanner
+            type: string
+            default: gitleaks
+          inputPath:
+            default: .
+            title: Input path
+            type: string
+          outputDirectory:
+            title: Output directory
+            type: string
+            default: assessment-reports
+          rules:
+            items:
+              additionalProperties: false
+              properties:
+                id:
+                  maxLength: 1024
+                  minLength: 1
+                  title: Id
+                  type: string
+                path:
+                  pattern: ^/opt/moonmind-scanner-rules/[A-Za-z0-9_./-]+$
+                  title: Path
+                  type: string
+                sha256:
+                  pattern: ^[0-9a-f]{64}$
+                  title: Sha256
+                  type: string
+                license:
+                  maxLength: 1024
+                  minLength: 1
+                  title: License
+                  type: string
+                source:
+                  maxLength: 1024
+                  minLength: 1
+                  type: string
+                  title: Source
+                version:
+                  maxLength: 1024
+                  minLength: 1
+                  type: string
+                  title: Version
+                notice:
+                  maxLength: 1024
+                  minLength: 1
+                  type: string
+                  title: Notice
+                languages:
+                  items:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  maxItems: 4096
+                  title: Languages
+                  type: array
+                frameworks:
+                  items:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  maxItems: 4096
+                  title: Frameworks
+                  type: array
+              required:
+              - id
+              - path
+              - sha256
+              - license
+              title: ScannerRule
+              type: object
+            maxItems: 32
+            type: array
+            title: Rules
+          exclusions:
+            items:
+              maxLength: 1024
+              minLength: 1
+              type: string
+            maxItems: 4096
+            title: Exclusions
+            type: array
+          allowInlineSuppressions:
+            default: false
+            title: Allow inline suppressions
+            type: boolean
+          trivyScanners:
+            items:
+              enum:
+              - vuln
+              - misconfig
+              - secret
+              type: string
+            maxItems: 3
+            minItems: 1
+            title: Trivy scanners
+            type: array
+          gitleaksOwnsSecrets:
+            default: true
+            title: Gitleaks owns secrets
+            type: boolean
+          databaseCacheRef:
+            pattern: ^[a-z0-9][a-z0-9.-]*$
+            type: string
+            title: Database cache ref
+          databaseDigest:
+            pattern: ^[0-9a-f]{64}$
+            type: string
+            title: Database digest
+          feedMaxAgeHours:
+            default: 72
+            maximum: 8760
+            minimum: 1
+            title: Feed max age hours
+            type: integer
+          maxFiles:
+            default: 4096
+            maximum: 4096
+            minimum: 1
+            title: Max files
+            type: integer
+          maxInputBytes:
+            default: 134217728
+            maximum: 2147483648
+            minimum: 1
+            title: Max input bytes
+            type: integer
+          maxReportBytes:
+            default: 8388608
+            maximum: 8388608
+            minimum: 128
+            title: Max report bytes
+            type: integer
+          timeoutSeconds:
+            default: 300
+            maximum: 3600
+            minimum: 1
+            title: Timeout seconds
+            type: integer
+          requireFreshFeeds:
+            type: boolean
+            title: Require fresh feeds
+            default: true
+            description: Stop before scanning if the admitted feed snapshot is stale. Disable only for
+              an explicitly requested stale-evidence assessment.
+        required:
+        - scanner
+        - outputDirectory
+        title: Assessment
+        type: object
+        x-moonmind-input-contract: repository-scan
+      baseline_ref:
+        type: string
+        title: Baseline ref
+        description: Optional retained report for comparison. Omit for a first assessment.
+steps:
+- title: Collect evidence and assess
+  repositoryOperation: read
+  instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
+    Execute exactly the assessment inputs through moonmind container repository-scan --admission <file>.
+    Serialize assessment as JSON without changing target, rules, feeds, exclusions, credentials, network,
+    timeout or source. Use the existing container-job owner; retain the job ID and native report artifact
+    references. Reconcile uncertain submissions before retrying. Stop with actionable diagnostics if readiness
+    or admission fails; never install substitutes, broaden scope or refresh feeds as a side effect.
+
+
+    Interpret this step''s collected native evidence for the supplied goal. Reuse completed evidence;
+    never repeat collection. Save an evidence-referenced security-review/v1 interpretation and readable
+    report with findings, examined coverage, missing checks and honest exclusions. Compare baseline_ref
+    only when supplied and accessible. Preserve native reports if interpretation fails.
+
+
+    Preserve the selected workflow source, harness, Provider Profile, evidence-processing policy and publication
+    choice. This assessment does not authorize remediation, infrastructure changes or publication. Use
+    only the original remaining budget, including retries.'
+  skill:
+    id: security-review
+    args:
+      goal: '{{ inputs.goal }}'
+      assessment: '{{ inputs.assessment }}'
+      baseline_ref: '{{ inputs.baseline_ref }}'
+    requiredCapabilities:
+    - git
+  annotations:
+    securityAssessment:
+      kind: repository-scan
+      admission: '{{ inputs.assessment }}'
+      phase: collect

@@ -4032,7 +4032,7 @@ function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | nul
   return Object.keys(schemaProperties(detail?.inputSchema)).length > 0;
 }
 
-function resolveSchemaCapabilityValues(
+export function resolveSchemaCapabilityValues(
   detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
@@ -4086,6 +4086,16 @@ function resolveSchemaCapabilityValues(
     } else if (fallback !== undefined) {
       values[name] = fallback;
     }
+    if (fieldSchema.type === "array" && Array.isArray(values[name]) && recordValue(fieldSchema.items).type === "object") {
+      values[name] = (values[name] as unknown[]).map((item) =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? { ...recordValue(item), ...resolveSchemaCapabilityValues({ inputSchema: recordValue(fieldSchema.items) }, recordValue(item)) }
+          : item);
+    }
+    if (fieldSchema.type === "object" && values[name] && typeof values[name] === "object" && !Array.isArray(values[name]) && Object.keys(schemaProperties(fieldSchema)).length) {
+      const nested = recordValue(values[name]);
+      values[name] = { ...nested, ...resolveSchemaCapabilityValues({ inputSchema: fieldSchema, uiSchema }, nested) };
+    }
   }
   return values;
 }
@@ -4100,7 +4110,7 @@ function resolvedPresetInputValues(
     : explicitValues;
 }
 
-function validateSchemaCapabilityValues(
+export function validateSchemaCapabilityValues(
   detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   values: Record<string, unknown>,
 ): Record<string, string> {
@@ -4138,12 +4148,26 @@ function validateSchemaCapabilityValues(
     if (value === undefined || value === null || value === "") {
       continue;
     }
+    if (fieldSchema.type === "object" && typeof value === "object" && !Array.isArray(value)) {
+      const nestedErrors = validateSchemaCapabilityValues({ inputSchema: fieldSchema, uiSchema }, recordValue(value));
+      for (const [path, message] of Object.entries(nestedErrors)) errors[`${name}.${path}`] = message;
+    }
     if (fieldSchema.type === "array") {
       if (!Array.isArray(value)) {
         errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
         continue;
       }
       const itemSchema = recordValue(fieldSchema.items);
+      if (itemSchema.type === "object") {
+        value.forEach((item, index) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            errors[`${name}.${index}`] = `${capabilityFieldLabel(name, fieldSchema)} item ${index + 1} must be an object.`;
+          } else {
+            const nestedErrors = validateSchemaCapabilityValues({ inputSchema: itemSchema }, recordValue(item));
+            for (const [path, message] of Object.entries(nestedErrors)) errors[`${name}.${index}.${path}`] = message;
+          }
+        });
+      }
       if (Array.isArray(itemSchema.enum)) {
         const allowed = new Set(itemSchema.enum.map((item) => String(item)));
         const invalid = value.some((item) => !allowed.has(String(item)));
@@ -4398,6 +4422,33 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
 }
 
+function CapabilityStringList({ value, onChange, ...props }: {
+  value: unknown;
+  onChange: (value: string[]) => void;
+  id: string;
+  disabled: boolean;
+  "aria-label": string;
+  "aria-invalid": boolean;
+  "aria-describedby"?: string | undefined;
+}): ReactElement {
+  const serialized = capabilityInputStringArrayValue(value).join("\n");
+  const [draft, setDraft] = useState(serialized);
+  const lastEmitted = useRef(serialized);
+  useEffect(() => {
+    if (serialized !== lastEmitted.current) {
+      setDraft(serialized);
+      lastEmitted.current = serialized;
+    }
+  }, [serialized]);
+  return <textarea {...props} value={draft} onChange={(event) => {
+    const text = event.target.value;
+    const items = text.split(/\r?\n/).filter((item) => item !== "");
+    lastEmitted.current = items.join("\n");
+    setDraft(text);
+    onChange(items);
+  }} />;
+}
+
 export function SchemaCapabilityFields({
   fields,
   detail,
@@ -4410,7 +4461,7 @@ export function SchemaCapabilityFields({
   onGitHubIssueRepositoryChange,
 }: {
   fields: Array<[string, unknown]>;
-  detail: Pick<PresetDetail, "uiSchema" | "defaults">;
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">;
   values: Record<string, unknown>;
   errors: Record<string, string>;
   disabled: boolean;
@@ -4439,6 +4490,13 @@ export function SchemaCapabilityFields({
         const description = String(fieldSchema.description || "").trim();
         const describedBy = [description ? `${inputId}-hint` : '', error ? `${inputId}-error` : ''].filter(Boolean).join(' ') || undefined;
         const choices = schemaChoiceOptions(fieldSchema);
+        // Omission is distinct from an authored empty object/list. Only offer
+        // it when no semantic default would immediately recreate the value.
+        const omitControl = !schemaRequired(detail.inputSchema).has(name) && value !== undefined &&
+          safeCapabilityDefault(effectiveDefaults, name) === undefined &&
+          safeCapabilityDefault(fieldSchema, "default") === undefined
+          ? <Button type="button" variant="secondary" disabled={disabled} onClick={() => onChange(name, undefined)}>Omit {label}</Button>
+          : null;
         const hasTypeSafeRenderer =
           fieldSchema.type === "boolean" ||
           fieldSchema.type === "number" ||
@@ -4455,7 +4513,7 @@ export function SchemaCapabilityFields({
         }
         if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <input
                 id={inputId}
@@ -4472,7 +4530,7 @@ export function SchemaCapabilityFields({
                 Widget {widget} is unavailable; using a text field.
               </span>
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         if (widget === "jira.issue-picker" || widget === "github.issue-picker") {
@@ -4483,7 +4541,7 @@ export function SchemaCapabilityFields({
               (provider === "github" ? "Search GitHub issues" : "Search Jira issues"),
           );
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <input
                 id={inputId}
@@ -4527,12 +4585,12 @@ export function SchemaCapabilityFields({
               />
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         if (fieldSchema.type === "boolean") {
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <input
                 id={inputId}
@@ -4546,7 +4604,7 @@ export function SchemaCapabilityFields({
               />
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         const itemSchema = recordValue(fieldSchema.items);
@@ -4567,7 +4625,7 @@ export function SchemaCapabilityFields({
                 }));
           const selectedValues = capabilityInputStringArrayValue(value);
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <select
                 id={inputId}
@@ -4596,7 +4654,7 @@ export function SchemaCapabilityFields({
               </select>
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         if (Array.isArray(fieldSchema.enum) || choices.length > 0) {
@@ -4611,7 +4669,7 @@ export function SchemaCapabilityFields({
                   value: option,
                 }));
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <select
                 id={inputId}
@@ -4627,6 +4685,7 @@ export function SchemaCapabilityFields({
                   onChange(name, selected?.value ?? event.target.value);
                 }}
               >
+                {!options.some((option) => String(option.value) === "") ? <option value="">Choose an option</option> : null}
                 {options.map((option) => (
                   <option key={String(option.value)} value={String(option.value)}>
                     {option.label}
@@ -4635,7 +4694,7 @@ export function SchemaCapabilityFields({
               </select>
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         if (widget === "textarea" || widget === "markdown" || widget === "json") {
@@ -4643,7 +4702,7 @@ export function SchemaCapabilityFields({
             widget === "json" &&
             (fieldSchema.type === "array" || fieldSchema.type === "object");
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <textarea
                 id={inputId}
@@ -4663,12 +4722,68 @@ export function SchemaCapabilityFields({
               />
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
+        }
+        if (fieldSchema.type === "object" && Object.keys(schemaProperties(fieldSchema)).length > 0) {
+          const nestedValues = recordValue(value);
+          const nestedErrors = Object.fromEntries(Object.entries(errors)
+            .filter(([path]) => path.startsWith(`${name}.`))
+            .map(([path, message]) => [path.slice(name.length + 1), message]));
+          const nestedDefaults = Object.fromEntries(Object.entries(schemaProperties(fieldSchema))
+            .map(([key, schema]) => [key, safeCapabilityDefault(recordValue(schema), "default")])
+            .filter(([, fallback]) => fallback !== undefined));
+          return <fieldset key={name} className="col-span-full min-w-0" disabled={disabled} aria-describedby={describedBy}>
+            <legend>{label}</legend>
+            {description ? <p id={`${inputId}-hint`} className="small">{description}</p> : null}
+            {error ? <p id={`${inputId}-error`} className="notice small">{error}</p> : null}
+            <SchemaCapabilityFields fields={Object.entries(schemaProperties(fieldSchema))}
+              detail={{ inputSchema: fieldSchema, uiSchema, defaults: nestedDefaults }} values={nestedValues} errors={nestedErrors}
+              disabled={disabled} repositoryOptions={repositoryOptions} branchOptions={branchOptions}
+              {...(onGitHubIssueRepositoryChange ? { onGitHubIssueRepositoryChange } : {})}
+              onChange={(key, next) => {
+                const updated = { ...nestedValues, [key]: next };
+                if (next === undefined) delete updated[key];
+                onChange(name, updated);
+              }} />
+            {omitControl}
+          </fieldset>;
+        }
+        if (fieldSchema.type === "array" && itemSchema.type === "object" && Object.keys(schemaProperties(itemSchema)).length > 0) {
+          const items = Array.isArray(value) ? value : [];
+          const itemErrors = Object.fromEntries(Object.entries(errors)
+            .filter(([path]) => path.startsWith(`${name}.`))
+            .map(([path, message]) => [path.slice(name.length + 1), message]));
+          return <fieldset key={name} className="col-span-full min-w-0" disabled={disabled} aria-describedby={describedBy}>
+            <legend>{label}</legend>
+            {description ? <p id={`${inputId}-hint`} className="small">{description}</p> : null}
+            {error ? <p id={`${inputId}-error`} className="notice small">{error}</p> : null}
+            {items.map((item, index) => <div key={index}>
+              <SchemaCapabilityFields fields={[[String(index), { ...itemSchema, title: `${label} item ${index + 1}` }]]}
+                detail={{ inputSchema: { required: [String(index)] } }} values={{ [index]: item }} errors={itemErrors} disabled={disabled}
+                repositoryOptions={repositoryOptions} branchOptions={branchOptions}
+                onChange={(_key, updated) => onChange(name, items.map((previous, position) => position === index ? updated ?? {} : previous))} />
+              <Button type="button" variant="secondary" disabled={disabled}
+                onClick={() => onChange(name, items.filter((_item, position) => position !== index))}>Remove {label} item {index + 1}</Button>
+            </div>)}
+            <Button type="button" variant="secondary" disabled={disabled || (typeof fieldSchema.maxItems === "number" && items.length >= fieldSchema.maxItems)}
+              onClick={() => onChange(name, [...items, {}])}>Add {label} item</Button>
+            {omitControl}
+          </fieldset>;
+        }
+        if (fieldSchema.type === "array" && itemSchema.type === "string") {
+          return <div key={name}><label htmlFor={inputId}>{label}
+            <CapabilityStringList id={inputId} aria-label={label} value={value} disabled={disabled}
+              aria-invalid={Boolean(error)} aria-describedby={describedBy}
+              onChange={(items) => onChange(name, items)} />
+            <span className="small">Enter one item per line.</span>
+            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+            {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
+          </label>{omitControl}</div>;
         }
         if (fieldSchema.type === "array" || fieldSchema.type === "object") {
           return (
-            <label key={name} htmlFor={inputId}>
+            <div key={name}><label htmlFor={inputId}>
               {label}
               <textarea
                 id={inputId}
@@ -4683,12 +4798,12 @@ export function SchemaCapabilityFields({
               />
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
+            </label>{omitControl}</div>
           );
         }
         const inputType = textInputTypeForSchema(fieldSchema);
         return (
-          <label key={name} htmlFor={inputId}>
+          <div key={name}><label htmlFor={inputId}>
             {label}
             <input
               id={inputId}
@@ -4745,7 +4860,7 @@ export function SchemaCapabilityFields({
             ) : null}
             {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
             {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-          </label>
+          </label>{omitControl}</div>
         );
       })}
     </div>
@@ -6352,6 +6467,16 @@ function WorkflowStartPageContent({
   const submitExpansionRequestIdRef = useRef(0);
   const createIntentsRef = useRef<CreateSubmissionIntents | null>(null);
   const createDraftRevisionRef = useRef(0);
+  const retainedPresetSubmissionRef = useRef<{
+    revision: number;
+    href: string;
+    expansion: {
+      steps: StepState[];
+      appliedTemplates: AppliedTemplateState[];
+      warnings: string[];
+      workflowPublish: Record<string, unknown> | null;
+    };
+  } | null>(null);
   const createMountedRef = useRef(true);
   const [acceptedCreatePath, setAcceptedCreatePath] = useState<string | null>(null);
   const attachmentUploadsRef = useRef(new WeakMap<File, Map<string, StepAttachmentRef>>());
@@ -8852,8 +8977,8 @@ function WorkflowStartPageContent({
         if (step.localId !== localId) {
           return step;
         }
-        const { [definition.name]: _removed, ...remainingErrors } =
-          step.presetInputErrors;
+        const remainingErrors = Object.fromEntries(Object.entries(step.presetInputErrors)
+          .filter(([path]) => path !== definition.name && !path.startsWith(`${definition.name}.`)));
         return {
           ...step,
           presetInputValues: {
@@ -10266,10 +10391,15 @@ function WorkflowStartPageContent({
     );
     if (unresolvedPresetSteps.length > 0) {
       try {
-        const expanded = await expandUnresolvedPresetsForSubmit({
-          requestId,
-          submitIntent: pageMode.mode,
-        });
+        // An unchanged retry must reuse the exact expansion, including its
+        // provenance timestamp, so an uncertain admission keeps its identity.
+        // Every authored edit and route transition advances the draft revision.
+        const retained = retainedPresetSubmissionRef.current;
+        const expanded = retained?.revision === createRevision && retained.href === submissionHref
+          ? retained.expansion
+          : await expandUnresolvedPresetsForSubmit({ requestId, submitIntent: pageMode.mode });
+        if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+        retainedPresetSubmissionRef.current = { revision: createRevision, href: submissionHref, expansion: expanded };
         submissionSteps = expanded.steps;
         submissionAppliedTemplates = expanded.appliedTemplates;
         submitExpandedWorkflowPublish = expanded.workflowPublish;
