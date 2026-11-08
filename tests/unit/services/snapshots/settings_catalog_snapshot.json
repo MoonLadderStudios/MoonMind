@@ -3,6 +3,10 @@
     "section": "providers-secrets",
     "type": "secret_ref"
   },
+  "security.assessment_projects": {
+    "section": "user-workspace",
+    "type": "object"
+  },
   "skills.canary_percent": {
     "section": "user-workspace",
     "type": "integer"
