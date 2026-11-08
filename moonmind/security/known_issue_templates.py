@@ -31,7 +31,7 @@ TEMPLATE = {
             "headers": ["X-Nextjs-Data:1", "X-Middleware-Subrequest:" + SUBREQUEST],
         },
     ],
-    "matcher": "middleware-307-login-to-200/v1",
+    "matcher": "middleware-307-login-to-200/v2",
 }
 
 
@@ -82,13 +82,15 @@ def observe(origin: str, path: str, entries: list[dict]) -> tuple[str, str, list
     for phase, (_, row) in enumerate(rows):
         req, res = row.get("request") or {}, row.get("response") or {}
         hs = headers(req)
+        post = req.get("postData") or {}
         if (
             req.get("method") != "GET"
             or hs is None
             or any(h in hs for h in ("authorization", "cookie", "proxy-authorization"))
             or hs.get("x-nextjs-data") != "1"
             or hs.get("x-middleware-subrequest") != (SUBREQUEST if phase else None)
-            or req.get("postData", {}).get("text")
+            or not isinstance(post, dict)
+            or post.get("text")
         ):
             return "incomplete", "unexpected_request", [i for i, _ in rows]
         if not isinstance(res.get("status"), int) or headers(res) is None:
@@ -106,7 +108,10 @@ def observe(origin: str, path: str, entries: list[dict]) -> tuple[str, str, list
     )
     # The precondition is actual middleware enforcement, not an inferred
     # version. An already-public page cannot support either outcome.
-    redirect_url = urlsplit(urljoin(origin + path, redirect))
+    try:
+        redirect_url = urlsplit(urljoin(origin + path, redirect))
+    except ValueError:
+        return "incomplete", "malformed_middleware_precondition", [i for i, _ in rows]
     if redirect_url.scheme + "://" + redirect_url.netloc != origin:
         return "incomplete", "off_origin_middleware_precondition", [i for i, _ in rows]
     if baseline["status"] != 307 or not any(
@@ -118,9 +123,22 @@ def observe(origin: str, path: str, entries: list[dict]) -> tuple[str, str, list
             "middleware_precondition_not_observed",
             [i for i, _ in rows],
         )
-    body = (probe.get("content") or {}).get("text")
+    content = probe.get("content") or {}
+    if not isinstance(content, dict) or content.get("encoding"):
+        return "incomplete", "unsupported_response_content", [i for i, _ in rows]
+    body = content.get("text")
     if (
         probe["status"] == 200
+        and not any(
+            name in ph
+            for name in (
+                "location",
+                "x-nextjs-redirect",
+                "x-nextjs-rewrite",
+                "x-middleware-redirect",
+                "x-middleware-rewrite",
+            )
+        )
         and isinstance(body, str)
         and body.strip()
         and not any(

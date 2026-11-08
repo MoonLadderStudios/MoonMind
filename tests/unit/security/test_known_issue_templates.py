@@ -221,3 +221,106 @@ def test_template_updates_change_comparison_identity_without_engine_version_pinn
     updated = summary.model_copy(deep=True)
     updated.execution.version = "99.0.0"
     assert config(updated) == original
+
+
+@pytest.mark.parametrize(
+    "value", ["http://[broken/login", "https://outside.example/login"]
+)
+def test_malformed_or_external_middleware_location_is_incomplete(value):
+    rows = native_entries(307)
+    rows[0]["response"]["headers"][0]["value"] = value
+    assert summarize(rows).coverage.templates[0].outcome == "incomplete"
+
+
+def test_native_null_post_data_is_not_a_request_body():
+    rows = native_entries(307)
+    for row in rows:
+        row["request"]["postData"] = None
+    assert summarize(rows).coverage.templates[0].outcome == "negative"
+
+
+def test_encoded_content_does_not_establish_a_match():
+    rows = native_entries(200)
+    rows[1]["response"]["content"]["encoding"] = "base64"
+    assert summarize(rows).coverage.templates[0].outcome == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["x-middleware-rewrite", "x-nextjs-redirect", "x-nextjs-rewrite", "location"],
+)
+def test_probe_with_preserved_enforcement_header_is_not_a_match(name):
+    rows = native_entries(200)
+    rows[1]["response"]["headers"] = [{"name": name, "value": "/login"}]
+    rows[1]["response"]["content"][
+        "text"
+    ] = '<html><form action="/login">Sign in</form></html>'
+    result = summarize(rows)
+    assert result.coverage.templates[0].outcome == "incomplete"
+    assert not result.result.findings
+
+
+def test_sender_guard_enforces_recipe_headers_and_request_count():
+    import shutil
+    import subprocess
+
+    from moonmind.security.known_issue_templates import SUBREQUEST
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable; real script is qualified by upstream-image CI")
+    guard = build_web_assessment_plan(admission())["jobs"][0]["parameters"]["inline"]
+    program = (
+        """
+class FakeURI {
+  constructor(value) { this.value = value; this.url = new URL(value); }
+  toString() { return this.value; }
+  getHost() { return this.url.hostname; }
+  getEscapedPath() { return this.url.pathname; }
+}
+var Java = {type: () => FakeURI};
+"""
+        + guard
+        + """
+const rows = JSON.parse(process.argv[1]);
+const result = [];
+for (const row of rows) {
+  const headers = row.headers;
+  let uri = new URI(row.url);
+  const header = {
+    getURI: () => uri, setURI: (value) => {uri = value;},
+    getMethod: () => row.method,
+    getHeader: (name) => headers[name.toLowerCase()] ?? null,
+    setHeader: (name, value) => { if (value === null) delete headers[name.toLowerCase()]; else headers[name.toLowerCase()] = value; },
+  };
+  sendingRequest({getRequestHeader: () => header, getRequestBody: () => ({length: () => 0})}, 0, {});
+  result.push({url: uri.toString(), headers});
+}
+process.stdout.write(JSON.stringify(result));
+"""
+    )
+
+    def request(**headers):
+        return {
+            "url": ORIGIN + "/admin",
+            "method": "GET",
+            "headers": {"x-nextjs-data": "1", **headers},
+        }
+
+    rows = [
+        request(**{"x-middleware-subrequest": "unadmitted"}),
+        request(cookie="secret", authorization="secret"),
+        request(**{"x-middleware-subrequest": SUBREQUEST}),
+        request(),
+    ]
+    result = subprocess.run(
+        [node, "-e", program, json.dumps(rows)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    guarded = json.loads(result.stdout)
+    assert "request-denied.moonmind.invalid" in guarded[0]["url"]
+    assert guarded[1] == {"url": ORIGIN + "/admin", "headers": {"x-nextjs-data": "1"}}
+    assert guarded[2]["url"] == ORIGIN + "/admin"
+    assert "request-denied.moonmind.invalid" in guarded[3]["url"]

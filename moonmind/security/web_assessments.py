@@ -98,6 +98,7 @@ DENIED_HOST = "request-denied.moonmind.invalid"
 # host outside the admitted routes and methods is redirected to DENIED_HOST.
 _GUARD = """var SCOPE = %s;
 var URI = Java.type("org.apache.commons.httpclient.URI");
+var KNOWN_ISSUE_SENT = {};
 function within(path, prefix) {
   return prefix === "/" || path === prefix || path.indexOf(prefix + "/") === 0;
 }
@@ -124,10 +125,16 @@ function sendingRequest(msg, initiator, helper) {
     }
     header.setHeader("Cookie", null);
     header.setHeader("Authorization", null);
-    if (!exact || String(header.getMethod()) !== "GET" || msg.getRequestBody().length() !== 0) {
+    var sent = KNOWN_ISSUE_SENT[absolute] || 0;
+    var subrequest = header.getHeader("X-Middleware-Subrequest");
+    if (subrequest !== null) subrequest = String(subrequest);
+    var expected = sent === 0 ? null : SCOPE.knownIssueHeader;
+    if (!exact || String(header.getMethod()) !== "GET" || msg.getRequestBody().length() !== 0 ||
+        String(header.getHeader("X-Nextjs-Data")) !== "1" || subrequest !== expected || sent >= 2) {
       header.setURI(new URI("http://" + SCOPE.denied + "/", true));
       return;
     }
+    KNOWN_ISSUE_SENT[absolute] = sent + 1;
   }
   if (host === null || String(host).toLowerCase() !== SCOPE.host) return;
   var raw = uri.getEscapedPath();
@@ -148,7 +155,11 @@ def _guard_job(assessment: WebAssessment) -> dict:
         "denied": DENIED_HOST,
     }
     if assessment.mode == "known-issues":
-        scope.update(origin=assessment.origin, knownIssuePaths=assessment.start_paths)
+        scope.update(
+            origin=assessment.origin,
+            knownIssuePaths=assessment.start_paths,
+            knownIssueHeader=known_issue_templates.SUBREQUEST,
+        )
     return {
         "type": "script",
         "parameters": {
