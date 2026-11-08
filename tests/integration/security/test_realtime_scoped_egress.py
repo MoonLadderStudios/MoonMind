@@ -13,6 +13,7 @@ import tempfile
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from aiohttp import web
@@ -80,11 +81,14 @@ def compiled_proxy(port):
                 stderr=stderr,
                 **identity,
             )
+            failure = None
             try:
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     if process.poll() is not None:
-                        pytest.fail((directory / "stderr").read_text()[-4000:])
+                        pytest.fail(
+                            f"fixture Squid exited {process.returncode} before listening"
+                        )
                     try:
                         with socket.create_connection(("127.0.0.5", 3128), timeout=0.1):
                             break
@@ -93,6 +97,9 @@ def compiled_proxy(port):
                 else:
                     pytest.fail("compiled realtime proxy did not listen")
                 yield "http://127.0.0.5:3128"
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
                 process.terminate()
                 try:
@@ -100,6 +107,49 @@ def compiled_proxy(port):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
+                if failure is not None:
+                    # Report fixed fields only, never query tokens, headers,
+                    # response bodies, or arbitrary proxy exception strings.
+                    failure.add_note(f"Fixture Squid exit status: {process.returncode}")
+                    for name in ("stderr", "access.log"):
+                        try:
+                            with (directory / name).open("rb") as source:
+                                source.seek(0, os.SEEK_END)
+                                source.seek(max(0, source.tell() - 4000))
+                                tail = source.read(4000).decode(errors="replace")
+                        except OSError:
+                            continue
+                        if name == "stderr":
+                            categories = [
+                                label
+                                for label in ("FATAL", "ERROR", "WARNING")
+                                if label + ":" in tail
+                            ]
+                            failure.add_note(
+                                f"Fixture Squid stderr categories: {categories}"
+                            )
+                            continue
+                        for line in tail.splitlines()[-12:]:
+                            fields = line.split()
+                            if len(fields) < 7 or fields[5] not in {
+                                "GET",
+                                "POST",
+                                "CONNECT",
+                            }:
+                                continue
+                            code = fields[3].rsplit("/", 1)[-1]
+                            path = urlsplit(fields[6]).path
+                            if code.isdecimal() and path in {
+                                "/ws",
+                                "/negotiate",
+                                "/elsewhere",
+                            }:
+                                failure.add_note(
+                                    f"Fixture Squid HTTP {code} {fields[5]} {path}"
+                                )
+                    status = getattr(failure.__context__, "status", None)
+                    if isinstance(status, int):
+                        failure.add_note(f"Fixture handshake HTTP status: {status}")
 
 
 @asynccontextmanager

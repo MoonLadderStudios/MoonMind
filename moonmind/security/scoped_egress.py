@@ -36,6 +36,7 @@ _LOG = "/tmp/moonmind-access.log"
 _LABEL = "moonmind.egress.scope"
 _OWNER = "moonmind.ownership"
 _DEADLINE = "moonmind.expires_at"
+_WEBSOCKET_UPGRADE = "http_upgrade_request_protocols websocket allow all"
 # All input here is base64-encoded declarative data, not shell text. The installed
 # gateway image supplies Squid; source revisions do not select a different image.
 _COMMAND = (
@@ -116,6 +117,9 @@ def render_scoped_proxy(
         "cache_log /tmp/moonmind-cache.log",
         "cache_store_log none",
         "cache deny all",
+        # Squid strips Upgrade by default. Permit only the WebSocket token;
+        # the unchanged http_access rules still gate every host, port and client.
+        _WEBSOCKET_UPGRADE,
         "pinger_enable off",
         "shutdown_lifetime 0 seconds",
         "request_timeout 30 seconds",
@@ -528,6 +532,16 @@ class ScopedEgressLease:
                 listen_address=snapshot["proxyAddress"],
                 client_address=snapshot["clientAddress"],
             )
+            saved_config = base64.b64decode(
+                env["MOONMIND_EGRESS_CONFIG"], validate=True
+            )
+            # Retain the exact stricter pre-upgrade configuration until those
+            # bounded leases expire. Never rewrite a running proxy or broaden
+            # its authority; live-file attestation below hashes its saved bytes.
+            if saved_config == config.replace(
+                (_WEBSOCKET_UPGRADE + "\n").encode(), b"", 1
+            ):
+                config = saved_config
             valid_snapshot = (
                 snapshot["policyDigest"] == self.policy.digest
                 and snapshot["policyRef"] == self.policy.policy_ref
@@ -535,8 +549,7 @@ class ScopedEgressLease:
                 and float(snapshot["expiresAt"]) == float(cfg["Labels"][_DEADLINE])
                 and float(snapshot["expiresAt"]) > datetime.now(UTC).timestamp()
                 and int(env["MOONMIND_EGRESS_DEADLINE"]) == int(snapshot["expiresAt"])
-                and base64.b64decode(env["MOONMIND_EGRESS_CONFIG"], validate=True)
-                == config
+                and saved_config == config
                 and base64.b64decode(env["MOONMIND_EGRESS_HOSTS"], validate=True)
                 == hosts
             )
