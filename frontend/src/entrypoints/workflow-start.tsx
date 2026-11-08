@@ -13600,6 +13600,11 @@ function WorkflowStartPageContent({
           </div>
         </section>
 
+        {showAdvancedStepOptions && !showAssessmentSetup ? <div className="actions">
+          <Button type="button" variant="ghost" onClick={() => setAssessmentSetupRequested(true)}>
+            Add assessment setup
+          </Button>
+        </div> : null}
         {showAssessmentSetup ? <CreateOptionDisclosure
           id="assessment"
           label="Security assessment setup"
@@ -14176,11 +14181,6 @@ function WorkflowStartPageContent({
               </div>
             </InfoTooltip>
           </div>
-          {showAdvancedStepOptions && !showAssessmentSetup ? <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setAssessmentSetupRequested(true)}
-          >Add assessment setup</Button> : null}
         <div
           className="queue-floating-bar queue-step-actions queue-step-submit-actions"
           role="group"
