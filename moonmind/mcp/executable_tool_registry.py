@@ -9,7 +9,20 @@ class ExecutableToolDiscoveryRegistry:
     """Read-only catalog for task-submission executable tools."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, ToolMetadata] = {}
+        from moonmind.workflows.skills.tool_definitions import (
+            default_registry_tool_payload,
+        )
+
+        # Discovery supplies the same server-owned contract used by workflow
+        # compilation. Direct MCP calls still require ordinary task submission.
+        assessment = default_registry_tool_payload(name="security.assess")
+        self._tools = {
+            "security.assess": ToolMetadata(
+                name=assessment["name"],
+                description=assessment["description"],
+                inputSchema=assessment["inputs"]["schema"],
+            )
+        }
 
     def list_tools(self) -> list[ToolMetadata]:
         """Return discoverable Temporal executable tools."""

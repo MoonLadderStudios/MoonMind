@@ -836,3 +836,25 @@ async def test_call_tool_rejects_invalid_jira_arguments(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_tool_arguments"
+
+
+async def test_assessment_context_defaults_are_discoverable_without_direct_execution(
+    router_app,
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/mcp/tools")
+        tools = {tool["name"]: tool for tool in response.json()["tools"]}
+        assert "security.assess" in tools
+        schema = tools["security.assess"]["inputSchema"]
+        assert schema["x-assessment-project-defaults"] is True
+        assert schema["properties"]["assessmentProject"]["readOnly"] is True
+        assert schema["$defs"]["AssessmentScope"]["properties"]["assets"]
+        called = await client.post(
+            "/api/mcp/tools/call", json={"tool": "security.assess", "arguments": {}}
+        )
+        assert called.status_code == 409
+        assert (
+            called.json()["detail"]["code"] == "execution_tool_requires_task_submission"
+        )

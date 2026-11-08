@@ -18,6 +18,7 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
+from moonmind.security.assessment_projects import AssessmentProjectSnapshot
 from moonmind.security.frameworks import (
     AssessmentText,
     EvidencePeriod,
@@ -751,6 +752,13 @@ class GitHubChangeControl(Contract):
 
 
 class AssessmentRequest(Contract):
+    model_config = {
+        **Contract.model_config,
+        "json_schema_extra": {"x-assessment-project-defaults": True},
+    }
+    assessment_project: AssessmentProjectSnapshot | None = Field(
+        default=None, json_schema_extra={"readOnly": True}
+    )
     scope: AssessmentScope
     tools: Annotated[
         list[

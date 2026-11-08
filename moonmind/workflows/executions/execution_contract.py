@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from typing import Any, Literal, Mapping, Sequence
@@ -3159,6 +3160,10 @@ def original_task_snapshot_parameters(snapshot: Mapping[str, Any]) -> dict[str, 
             "targetRuntime": str(draft.get("targetRuntime") or "omnigent"),
             "requiredCapabilities": list(draft.get("requiredCapabilities") or []),
             "workflow": dict(workflow) if isinstance(workflow, Mapping) else {},
+            **(
+                {"assessmentProject": _snapshot_safe(draft["assessmentProject"])}
+                if "assessmentProject" in draft else {}
+            ),
         }
     target = snapshot.get("target")
     if isinstance(target, Mapping):
@@ -3556,3 +3561,45 @@ def merge_workflow_input(
             merged_steps.append(step)
         merged["steps"] = merged_steps
     return merged
+
+
+def snapshot_workflow_from_artifact_payload(
+    artifact_payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    draft = artifact_payload.get("draft")
+    source = draft if isinstance(draft, Mapping) else artifact_payload
+    workflow_value = source.get("workflow") if isinstance(source, Mapping) else None
+    if (not isinstance(workflow_value, Mapping) or not workflow_value) and isinstance(
+        source, Mapping
+    ):
+        workflow_value = source.get("task")
+    task = dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
+    instructions = str(source.get("instructions") or "").strip()
+    if instructions and not str(task.get("instructions") or "").strip():
+        task["instructions"] = instructions
+    capabilities_value = source.get("requiredCapabilities")
+    target_runtime = source.get("targetRuntime") or artifact_payload.get(
+        "targetRuntime"
+    )
+    if not target_runtime and isinstance(source.get("runtime"), str):
+        target_runtime = source.get("runtime")
+    payload = {
+        "repository": source.get("repository") or artifact_payload.get("repository"),
+        "targetRuntime": target_runtime,
+        "requiredCapabilities": (
+            list(capabilities_value) if isinstance(capabilities_value, list) else []
+        ),
+    }
+    if "assessmentProject" in source:
+        payload["assessmentProject"] = copy.deepcopy(source["assessmentProject"])
+    return payload, task
+
+
+def workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    workflow_payload = parameters.get("workflow")
+    if isinstance(workflow_payload, Mapping) and workflow_payload:
+        return dict(workflow_payload)
+    legacy_task_payload = parameters.get("task")
+    if isinstance(legacy_task_payload, Mapping):
+        return dict(legacy_task_payload)
+    return {}

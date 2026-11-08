@@ -29,6 +29,11 @@ from api_service.db.models import (
     RecurringWorkflowScopeType,
     TemporalExecutionRecord,
 )
+from api_service.services.assessment_projects import (
+    apply_assessment_project_parameter_defaults,
+    validate_assessment_project_input_artifact,
+    validate_assessment_project_parameter,
+)
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
@@ -1661,7 +1666,10 @@ class RecurringWorkflowsService:
         *,
         access: ArtifactAccessContext,
         saved_target: Mapping[str, Any] | None = None,
-    ) -> None:
+        assessment_project: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        input_artifacts: dict[str, Any] = {}
+
         async def read_input_artifact(ref: str) -> Any:
             from moonmind.workflows.temporal.artifacts import (
                 ArtifactTransactionOwnership,
@@ -1680,7 +1688,9 @@ class RecurringWorkflowsService:
                 )
                 import json
 
-                return json.loads(body.decode("utf-8"))
+                decoded = json.loads(body.decode("utf-8"))
+                input_artifacts[ref] = decoded
+                return decoded
             except Exception as exc:
                 raise RecurringWorkflowValidationError(
                     f"Cannot validate model selection in input artifact {ref}: {exc}"
@@ -1692,9 +1702,71 @@ class RecurringWorkflowsService:
                 saved_payload=saved_target,
                 read_input_artifact=read_input_artifact,
                 field_name="target",
+                validate_input_artifact=lambda artifact: (
+                    validate_assessment_project_input_artifact(artifact, assessment_project)
+                ),
             )
         except RuntimeIntentValidationError as exc:
             raise RecurringWorkflowValidationError(str(exc)) from exc
+        return input_artifacts
+
+    async def _admit_target_inputs(
+        self,
+        target: Mapping[str, Any],
+        *,
+        actor: OperatorAdmission | None,
+        saved_target: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Freeze authored assessment defaults before storage or compilation.
+
+        Target replacement is admission; schedule-only edits and dispatch use
+        the already frozen target and never resolve current Settings defaults.
+        """
+        from api_service.auth_providers import instance_operator_principal
+        from moonmind.workflows.executions.execution_contract import (
+            merge_workflow_input,
+            snapshot_workflow_from_artifact_payload,
+            workflow_payload_from_parameters,
+        )
+
+        normalized = _normalize_target(_json_object(target, field_name="target"))
+        parameters = normalized["initialParameters"]
+        access = (
+            ArtifactAccessContext.for_operator(actor)
+            if actor is not None
+            else ArtifactAccessContext.for_service("system")
+        )
+        snapshot = await validate_assessment_project_parameter(
+            parameters,
+            session=self._session,
+            access=access,
+            principal=instance_operator_principal() if actor is not None else "system",
+        )
+        input_artifacts = await self._validate_model_selection_submission(
+            target,
+            access=access,
+            saved_target=saved_target,
+            assessment_project=snapshot,
+        )
+        if "assessmentProject" in parameters:
+            parameters["assessmentProject"] = snapshot
+            artifact = input_artifacts.get(normalized.get("inputArtifactRef"))
+            if isinstance(artifact, Mapping):
+                _source, artifact_workflow = snapshot_workflow_from_artifact_payload(
+                    artifact
+                )
+                if artifact_workflow:
+                    key = (
+                        "workflow"
+                        if "workflow" in parameters or "task" not in parameters
+                        else "task"
+                    )
+                    # Freeze effective inputs without changing the retained source.
+                    parameters[key] = merge_workflow_input(
+                        artifact_workflow, workflow_payload_from_parameters(parameters)
+                    )
+            apply_assessment_project_parameter_defaults(parameters, snapshot)
+        return normalized
 
     async def _admit_omnigent_schedule_target(
         self,
@@ -1961,15 +2033,7 @@ class RecurringWorkflowsService:
         parse_cron_expression(cron_normalized)
         timezone_name = validate_timezone_name(timezone)
         name_text = _clean_text(name, field_name="name", required=True) or ""
-        await self._validate_model_selection_submission(
-            target,
-            access=(
-                ArtifactAccessContext.for_operator(actor)
-                if actor is not None
-                else ArtifactAccessContext.for_service("system")
-            ),
-        )
-        target_payload = _normalize_target(_json_object(target, field_name="target"))
+        target_payload = await self._admit_target_inputs(target, actor=actor)
         # The stored target's initialParameters are what a later schedule action
         # launches, so the runtime/Provider Profile pair is validated here,
         # before anything is persisted.
@@ -2106,17 +2170,8 @@ class RecurringWorkflowsService:
         # target untouched.
         normalized_target: dict[str, Any] | None = None
         if target is not None:
-            await self._validate_model_selection_submission(
-                target,
-                access=(
-                    ArtifactAccessContext.for_operator(actor)
-                    if actor is not None
-                    else ArtifactAccessContext.for_service("system")
-                ),
-                saved_target=definition.target,
-            )
-            normalized_target = _normalize_target(
-                _json_object(target, field_name="target")
+            normalized_target = await self._admit_target_inputs(
+                target, actor=actor, saved_target=definition.target
             )
             await require_launch_target_provider_profile_runtime(
                 session=self._session,

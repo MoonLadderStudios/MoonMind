@@ -105,6 +105,18 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
+from api_service.services.assessment_projects import (
+    apply_assessment_project_defaults as _apply_assessment_project_defaults,
+)
+from api_service.services.assessment_projects import (
+    apply_assessment_project_parameter_defaults as _apply_assessment_project_parameter_defaults,
+)
+from api_service.services.assessment_projects import (
+    validate_assessment_project_input_artifact as _validate_assessment_project_input_artifact,
+)
+from api_service.services.assessment_projects import (
+    validate_assessment_project_parameter,
+)
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
@@ -269,6 +281,12 @@ from moonmind.workflows.executions.execution_contract import (
     validate_publish_mode_repository_authority,
     validate_workflow_runtime_targets,
     workflow_requires_agent,
+)
+from moonmind.workflows.executions.execution_contract import (
+    snapshot_workflow_from_artifact_payload as _snapshot_workflow_from_artifact_payload,
+)
+from moonmind.workflows.executions.execution_contract import (
+    workflow_payload_from_parameters as _workflow_payload_from_parameters,
 )
 from moonmind.workflows.executions.model_resolver import (
     ModelTierFamilyUnavailableError,
@@ -8128,6 +8146,18 @@ def _admitted_assessment_scope_parameter(
     return scope.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+async def _validate_assessment_project_parameter(
+    parameters: Mapping[str, Any],
+    *,
+    session: AsyncSession | None,
+    user: OperatorAdmission,
+    access: ArtifactAccessContext,
+) -> dict[str, Any] | None:
+    return await validate_assessment_project_parameter(
+        parameters, session=session, principal=_execution_principal(user), access=access
+    )
+
+
 def _validate_runtime_tier_intent_for_submit(
     runtime_payload: Mapping[str, Any] | None,
     *,
@@ -10589,6 +10619,8 @@ def _build_original_workflow_input_snapshot_payload(
         ),
     }
     workspace_value = payload.get("workspace")
+    if "assessmentProject" in payload:
+        draft["assessmentProject"] = copy.deepcopy(payload["assessmentProject"])
     if isinstance(workspace_value, Mapping):
         draft["workspace"] = copy.deepcopy(dict(workspace_value))
     for key in ("inputArtifactRef", "planArtifactRef"):
@@ -10649,6 +10681,8 @@ def _snapshot_source_payload_from_parameters(
         ),
     }
     workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
+    if "assessmentProject" in parameters:
+        payload["assessmentProject"] = copy.deepcopy(parameters["assessmentProject"])
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
     for key in ("inputArtifactRef", "planArtifactRef"):
@@ -10674,15 +10708,21 @@ async def _validate_model_selection_submission(
     user: OperatorAdmission,
     saved_payload: Mapping[str, Any] | None = None,
     access: ArtifactAccessContext,
-) -> None:
+    validate_input_artifact: Callable[[Any], None] | None = None,
+) -> dict[str, Any]:
+    """Return parsed artifacts so other admission checks can reuse the reads."""
     from moonmind.runtime_intent import validate_model_selection_submission
+
+    input_artifacts: dict[str, Any] = {}
 
     async def read_input_artifact(ref: str) -> Any:
         try:
             _artifact, body = await get_temporal_artifact_service(
                 session, transaction_ownership=ArtifactTransactionOwnership.CALLER
             ).read(artifact_id=_artifact_id_from_ref(ref), access=access)
-            return json.loads(body.decode("utf-8"))
+            decoded = json.loads(body.decode("utf-8"))
+            input_artifacts[ref] = decoded
+            return decoded
         except Exception as exc:
             raise _invalid_workflow_request(
                 f"Cannot validate model selection in input artifact {ref}: {exc}"
@@ -10693,37 +10733,11 @@ async def _validate_model_selection_submission(
             payload,
             saved_payload=saved_payload,
             read_input_artifact=read_input_artifact,
+            validate_input_artifact=validate_input_artifact,
         )
     except RuntimeIntentValidationError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
-
-
-def _snapshot_workflow_from_artifact_payload(
-    artifact_payload: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    draft = artifact_payload.get("draft")
-    source = draft if isinstance(draft, Mapping) else artifact_payload
-    workflow_value = source.get("workflow") if isinstance(source, Mapping) else None
-    if not isinstance(workflow_value, Mapping) and isinstance(source, Mapping):
-        workflow_value = source.get("task")
-    task = dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
-    instructions = str(source.get("instructions") or "").strip()
-    if instructions and not str(task.get("instructions") or "").strip():
-        task["instructions"] = instructions
-    capabilities_value = source.get("requiredCapabilities")
-    target_runtime = source.get("targetRuntime") or artifact_payload.get(
-        "targetRuntime"
-    )
-    if not target_runtime and isinstance(source.get("runtime"), str):
-        target_runtime = source.get("runtime")
-    payload = {
-        "repository": source.get("repository") or artifact_payload.get("repository"),
-        "targetRuntime": target_runtime,
-        "requiredCapabilities": (
-            list(capabilities_value) if isinstance(capabilities_value, list) else []
-        ),
-    }
-    return payload, task
+    return input_artifacts
 
 
 async def _exact_rerun_parameters_from_snapshot(
@@ -10804,7 +10818,7 @@ async def _exact_rerun_parameters_from_snapshot(
 
     parameters = dict(getattr(record, "parameters", None) or {})
     for key, value in snapshot_payload.items():
-        if value not in (None, [], ""):
+        if key == "assessmentProject" or value not in (None, [], ""):
             parameters[key] = value
     workflow_payload = dict(snapshot_task)
     workflow_payload["recovery"] = {
@@ -10883,15 +10897,18 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         **{
             key: value
             for key, value in parameter_payload.items()
-            if value not in (None, [], "")
+            if key == "assessmentProject" or value not in (None, [], "")
         },
     }
     if artifact_task and parameter_task:
-        return payload, merge_workflow_input(
-            artifact_task,
-            parameter_task,
-        )
-    return payload, parameter_task or artifact_task
+        task = merge_workflow_input(artifact_task, parameter_task)
+    else:
+        task = parameter_task or artifact_task
+    if "assessmentProject" in payload and payload["assessmentProject"] is None:
+        # An explicit clear also wins over metadata in the older input artifact.
+        task = copy.deepcopy(task)
+        _apply_assessment_project_defaults(task, None)
+    return payload, task
 
 
 async def _apply_snapshot_memo_patch_via_mutator(
@@ -11350,16 +11367,6 @@ async def _attach_input_attachment_artifacts_to_execution(
     if changed_refs:
         record.artifact_refs = existing_refs
     await session.flush()
-
-
-def _workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
-    workflow_payload = parameters.get("workflow")
-    if isinstance(workflow_payload, Mapping):
-        return dict(workflow_payload)
-    legacy_task_payload = parameters.get("task")
-    if isinstance(legacy_task_payload, Mapping):
-        return dict(legacy_task_payload)
-    return {}
 
 
 def _normalize_submitted_repository(
@@ -11932,6 +11939,16 @@ async def _create_execution_from_workflow_request(
         if existing_execution is not None:
             existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution)
+    assessment_project = await _validate_assessment_project_parameter(
+        payload, session=session, user=user, access=access
+    )
+    if assessment_project is not None:
+        payload["assessmentProject"] = assessment_project
+    input_artifacts = await _validate_model_selection_submission(
+        payload, session=session, user=user, access=access
+    )
+    for artifact_payload in input_artifacts.values():
+        _validate_assessment_project_input_artifact(artifact_payload, assessment_project)
     try:
         inherited = await resolve_child_runtime_inheritance(
             request_payload=payload,
@@ -11998,6 +12015,12 @@ async def _create_execution_from_workflow_request(
     # so validate the same invariant first: an unsatisfiable publish mode would
     # otherwise repeat its guaranteed late failure on every tick.
     _validate_publish_authority_for_payload(payload)
+    if (
+        schedule is not None
+        and schedule.mode == "recurring"
+        and "assessmentProject" in payload
+    ):
+        _apply_assessment_project_defaults(task_payload, assessment_project)
     route = await _resolve_schedule_routing(
         schedule,
         request_payload=payload,
@@ -12061,6 +12084,14 @@ async def _create_execution_from_workflow_request(
             workflow_settings=creation_defaults,
         )
         _reject_submit_version_identity(task_payload)
+
+    if "assessmentProject" in payload:
+        _apply_assessment_project_defaults(task_payload, assessment_project)
+    else:
+        # Expanded presets cannot introduce unadmitted report context either.
+        await _validate_assessment_project_parameter(
+            payload, session=session, user=user, access=access
+        )
 
     if default_profile_ref is None:
         creation_defaults = await _workflow_creation_defaults(
@@ -12543,6 +12574,8 @@ async def _create_execution_from_workflow_request(
         initial_parameters["batchTargets"] = list(payload["batchTargets"])
     if assessment_scope is not None:
         initial_parameters["assessmentScope"] = assessment_scope
+    if assessment_project is not None:
+        initial_parameters["assessmentProject"] = assessment_project
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
     # `followUpRetrieval` requirements fail before scheduling with an
     # actionable validation result. Absent/empty/disabled values are stripped
@@ -15391,7 +15424,7 @@ def _fresh_serialized_workflow_request(
     if set(parameters) - {
         "workflow", "task", "targetRuntime", "profileId", "providerProfileRef",
         "repository", "integration", "requiredCapabilities",
-        "workspaceSpec", "publishMode", "assessmentScope", "dependsOn",
+        "workspaceSpec", "publishMode", "assessmentScope", "assessmentProject", "dependsOn",
         "mergeAutomation",
     }:
         return None
@@ -15512,10 +15545,6 @@ async def create_execution(
             "verified_principal": authority.principal,
         }
 
-    await _validate_model_selection_submission(
-        payload.get("payload", payload), session=session, user=user, access=access
-    )
-
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
@@ -15536,16 +15565,6 @@ async def create_execution(
             principal=(principal_context or {}).get("verified_principal"),
         )
 
-        # --- Schedule routing ---
-        route = await _resolve_schedule_routing(
-            request.schedule,
-            request_payload=payload,
-            user=user,
-            session=session,
-        )
-        if route.recurring_response is not None:
-            return route.recurring_response
-
         # Match the service's create identity for scoped fan-out as well as
         # ordinary instance-owned requests. An admitted retry keeps its saved
         # selection even if today's default account changed or disappeared.
@@ -15562,10 +15581,49 @@ async def create_execution(
             if request.idempotency_key
             else None
         )
+        if existing is not None:
+            existing = await service.ensure_create_started(existing)
+            return _serialize_execution(existing, user=user)
+        assessment_project = await _validate_assessment_project_parameter(
+            request.initial_parameters, session=session, user=user, access=access
+        )
+        input_artifacts = await _validate_model_selection_submission(
+            payload, session=session, user=user, access=access
+        )
+        for artifact_payload in input_artifacts.values():
+            _validate_assessment_project_input_artifact(artifact_payload, assessment_project)
+        # Freeze and validate context before saving a recurring target too.
+        if (
+            request.schedule is not None
+            and request.schedule.mode == "recurring"
+            and "assessmentProject" in request.initial_parameters
+        ):
+            schedule_parameters = dict(request.initial_parameters)
+            schedule_parameters["assessmentProject"] = assessment_project
+            _apply_assessment_project_parameter_defaults(
+                schedule_parameters, assessment_project
+            )
+            payload["initialParameters"] = schedule_parameters
+        route = await _resolve_schedule_routing(
+            request.schedule,
+            request_payload=payload,
+            user=user,
+            session=session,
+        )
+        if route.recurring_response is not None:
+            return route.recurring_response
         workflow_request = (
             _fresh_serialized_workflow_request(request) if existing is None else None
         )
         initial_parameters = dict(request.initial_parameters)
+        if assessment_project is not None:
+            initial_parameters["assessmentProject"] = assessment_project
+        elif "assessmentProject" in initial_parameters:
+            initial_parameters.pop("assessmentProject")
+        if "assessmentProject" in request.initial_parameters:
+            _apply_assessment_project_parameter_defaults(
+                initial_parameters, assessment_project
+            )
         if existing is None and "omnigentStepExecutionPlans" in initial_parameters:
             raise _invalid_workflow_request(
                 "Step execution plans must be compiled by workflow admission."
@@ -20355,13 +20413,6 @@ async def update_execution(
     ) or getattr(record, "input_ref", None)
     if saved_source_ref:
         saved_selection["inputArtifactRef"] = saved_source_ref
-    await _validate_model_selection_submission(
-        submitted_selection,
-        session=session,
-        user=user,
-        saved_payload=saved_selection,
-        access=access,
-    )
 
     effective_parameters_patch = payload.parameters_patch
     if (
@@ -20383,6 +20434,51 @@ async def update_execution(
         )
         if exact_snapshot_parameters is not None:
             effective_parameters_patch = exact_snapshot_parameters
+
+    if is_task_editing_update:
+        effective_parameters = {
+            **dict(record.parameters or {}),
+            **dict(effective_parameters_patch or {}),
+        }
+        assessment_project = await _validate_assessment_project_parameter(
+            effective_parameters, session=session, user=user, access=access
+        )
+        if effective_parameters.get("assessmentScope") is not None:
+            _admitted_assessment_scope_parameter(
+                effective_parameters["assessmentScope"], principal=None
+            )
+        if "assessmentProject" in effective_parameters and not exact_plan_rerun:
+            effective_parameters_patch = copy.deepcopy(
+                dict(effective_parameters_patch or {})
+            )
+            effective_parameters_patch["assessmentProject"] = assessment_project
+            project_parameters = copy.deepcopy(effective_parameters)
+            _apply_assessment_project_parameter_defaults(
+                project_parameters, assessment_project
+            )
+            for task_key in ("workflow", "task"):
+                if isinstance(project_parameters.get(task_key), Mapping):
+                    effective_parameters_patch[task_key] = project_parameters[task_key]
+
+    # Explicitly submitted retained refs are still bound to the reviewed
+    # context. Reads of superseded source artifacts for model provenance are
+    # not submitted inputs and remain outside this validation callback.
+    await _validate_model_selection_submission(
+        submitted_selection,
+        session=session,
+        user=user,
+        saved_payload=saved_selection,
+        access=access,
+        validate_input_artifact=(
+            (
+                lambda artifact: _validate_assessment_project_input_artifact(
+                    artifact, assessment_project
+                )
+            )
+            if is_task_editing_update
+            else None
+        ),
+    )
 
     try:
         update_result = await service.update_execution(
@@ -20840,6 +20936,13 @@ async def rerun_execution(
     # Use canonical parameters with rerun-specific sanitization to avoid carrying
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    await _validate_assessment_project_parameter(
+        initial_params, session=session, user=user, access=access
+    )
+    if initial_params.get("assessmentScope") is not None:
+        _admitted_assessment_scope_parameter(
+            initial_params["assessmentScope"], principal=None
+        )
     reserved_workflow_id = f"mm:{_uuid4()}"
     if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
         try:

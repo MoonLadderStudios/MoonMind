@@ -1,3 +1,5 @@
+import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
+import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, resolveSchemaProperty, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
 import { RepositoryScannerReadiness } from '../components/RepositoryScannerReadiness';
 import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
@@ -3666,7 +3668,7 @@ function isVisiblePresetInputName(
 }
 
 function schemaProperties(schema: Record<string, unknown> | undefined): Record<string, unknown> {
-  return recordValue(schema?.properties);
+  return Object.fromEntries(Object.entries(recordValue(schema?.properties)).map(([name, property]) => [name, resolveSchemaProperty(property, schema || {})]));
 }
 
 function schemaRequired(schema: Record<string, unknown> | undefined): Set<string> {
@@ -4313,13 +4315,16 @@ function schemaToolInputs(
   if (!detail || !schemaContractHasFields(detail)) {
     return { values: {}, errors: {} };
   }
-  const rawValues = resolveSchemaCapabilityValues(detail, explicitValues);
+  const aliases = assessmentInputAliases(detail.inputSchema, explicitValues);
+  const rawValues = resolveSchemaCapabilityValues(detail, aliases.values);
   const required = schemaRequired(detail.inputSchema);
   const values: Record<string, unknown> = {};
   for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
     const value = rawValues[name];
-    if (value === undefined || value === null) {
+    // Assessment nulls are authored values too. Keep them for admission to
+    // reject rather than silently treating them as a missing saved default.
+    if (value === undefined || (value === null && !supportsAssessmentDefaults(detail.inputSchema))) {
       continue;
     }
     if (typeof value === "string" && !required.has(name) && !value.trim()) {
@@ -4347,7 +4352,7 @@ function schemaToolInputs(
   delete sanitized.approved_scope;
   return {
     values: sanitized,
-    errors: validateSchemaCapabilityValues(detail, sanitized),
+    errors: { ...validateSchemaCapabilityValues(detail, sanitized), ...aliases.errors },
   };
 }
 
@@ -4383,7 +4388,8 @@ function initializeToolInputValues(
   const merged = parsed.ok
     ? { ...parsed.value, ...currentValues }
     : { ...currentValues };
-  return resolveSchemaCapabilityValues(detail, merged);
+  const aliases = assessmentInputAliases(detail.inputSchema, merged);
+  return Object.keys(aliases.errors).length ? merged : resolveSchemaCapabilityValues(detail, aliases.values);
 }
 
 function serializeToolInputValues(values: Record<string, unknown>): string {
@@ -4439,6 +4445,12 @@ export function SchemaCapabilityFields({
           fieldSchema.type === "object" ||
           Array.isArray(fieldSchema.enum) ||
           choices.length > 0;
+        if (fieldSchema.readOnly === true) {
+          return <label key={name} htmlFor={inputId}>{label}<textarea id={inputId} aria-label={label}
+            value={complexCapabilityTextValue(value)} readOnly disabled={disabled} aria-describedby={describedBy} />
+            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+          </label>;
+        }
         if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
           return (
             <label key={name} htmlFor={inputId}>
@@ -6185,6 +6197,8 @@ function WorkflowStartPageContent({
   const [omnigentLaunchPolicyAuthored, setOmnigentLaunchPolicyAuthored] =
     useState(false);
   const [modelSelection, setModelSelection] = useState<ModelSelection>({});
+  const [assessmentProject, setAssessmentProject] = useState<AssessmentProjectSnapshot | null>(null);
+  const [assessmentProjectProblem, setAssessmentProjectProblem] = useState<string | null>(null);
   const [repository, setRepository] = useState(initialRepository);
   const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
@@ -7001,6 +7015,8 @@ function WorkflowStartPageContent({
     }
     const draft = temporalDraftQuery.data.draft;
     temporalDraftAppliedRef.current = applyKey;
+    setAssessmentProject(draft.assessmentProject);
+    setAssessmentProjectProblem(null);
 
     if (draft.runtime) {
       prevRuntimeRef.current = draft.runtime;
@@ -8577,10 +8593,29 @@ function WorkflowStartPageContent({
     });
   }
 
+  function changeAssessmentProject(snapshot: AssessmentProjectSnapshot | null) {
+    markDraftEdited();
+    setAssessmentProject(snapshot);
+    setSteps(current => current.map(step => {
+      const tool = (trustedToolsQuery.data || []).find(candidate => toolDefinitionId(candidate) === step.toolId.trim());
+      if (!supportsAssessmentDefaults(tool?.inputSchema)) return step;
+      // An unfinished advanced JSON edit is still the operator's draft.
+      // Do not replace it with the last valid structured input on selection.
+      if (!parseToolInputsText(step.toolInputs).ok) return step;
+      const values = assessmentInputAliases(tool?.inputSchema, step.toolInputValues).values;
+      delete values.assessment_project;
+      if (snapshot) values.assessmentProject = snapshot;
+      else delete values.assessmentProject;
+      return { ...step, toolInputValues: values, toolInputs: serializeToolInputValues(values) };
+    }));
+  }
+
   function updateToolInputValue(localId: string, name: string, value: unknown) {
     markDraftEdited();
     const step = stepsRef.current.find((item) => item.localId === localId);
-    const nextValues = { ...(step?.toolInputValues || {}), [name]: value };
+    const tool = (trustedToolsQuery.data || []).find(candidate => toolDefinitionId(candidate) === step?.toolId.trim());
+    const authored = assessmentInputAliases(tool?.inputSchema, step?.toolInputValues || {});
+    const nextValues = { ...authored.values, [name]: value };
     updateStep(localId, { toolInputValues: nextValues });
   }
 
@@ -10012,6 +10047,10 @@ function WorkflowStartPageContent({
       }
       clearSubmitBusy();
     };
+    if (assessmentProjectProblem) {
+      rejectSubmit(assessmentProjectProblem);
+      return;
+    }
     const normalizedRepository = repository.trim();
     // Read the live branch draft inside submission. The render-time
     // `effectiveBranch` is stale when Start is pressed within the settle
@@ -11366,6 +11405,7 @@ function WorkflowStartPageContent({
       priority,
       maxAttempts,
       payload: {
+        ...(assessmentProject || pageMode.mode !== "create" ? { assessmentProject } : {}),
         ...(normalizedRepository ? { repository: submittedRepository } : {}),
         // Edit and rerun always state the source so the backend re-admits it
         // (or clears a removed one) instead of inheriting it unchecked.
@@ -11600,6 +11640,7 @@ function WorkflowStartPageContent({
       );
       const rerunFormChanged = isExactRerunRequest
         ? !rerunDraft ||
+          JSON.stringify(assessmentProject) !== JSON.stringify(rerunDraft.assessmentProject) ||
           selectedAttachmentFiles.length > 0 ||
           normalizedRepository !== String(rerunDraft.repository || "").trim() ||
           submissionBranch !== String(rerunDraft.branch || "").trim() ||
@@ -11643,6 +11684,7 @@ function WorkflowStartPageContent({
       );
       const taskInputArtifactBody = JSON.stringify({
         repository: artifactPayload.repository ?? normalizedRepository,
+        ...(Object.hasOwn(artifactPayload, "assessmentProject") ? { assessmentProject: artifactPayload.assessmentProject } : {}),
         workflow: artifactWorkflowPayload,
       });
       const taskInputArtifactBytes = utf8ByteLength(taskInputArtifactBody);
@@ -12267,6 +12309,12 @@ function WorkflowStartPageContent({
             ) : null}
           </section>
         ) : null}
+        <AssessmentProjectPicker
+          key={navigationKey}
+          value={assessmentProject}
+          onChange={changeAssessmentProject}
+          onStatusChange={setAssessmentProjectProblem}
+        />
         <section
           className="card queue-steps-section stack"
           data-canonical-create-section="Steps"
@@ -12373,6 +12421,10 @@ function WorkflowStartPageContent({
                   (tool) => toolDefinitionId(tool) === step.toolId.trim(),
                 ) || null;
               const selectedToolDetail = detailFromTrustedTool(selectedTrustedTool);
+              const selectedToolAuthoredInputs = assessmentInputAliases(selectedToolDetail?.inputSchema, step.toolInputValues);
+              const assessmentDefaultsProblem = !parseToolInputsText(step.toolInputs).ok
+                ? "Fix the unfinished Tool input JSON before applying defaults."
+                : Object.values(selectedToolAuthoredInputs.errors)[0];
               const selectedToolRequired = schemaRequired(
                 selectedToolDetail?.inputSchema,
               );
@@ -12732,10 +12784,19 @@ function WorkflowStartPageContent({
                       </p>
                       {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (
                         <div className="stack">
+                          {assessmentProject && supportsAssessmentDefaults(selectedToolDetail.inputSchema) ? <div>
+                            <Button type="button" variant="secondary"
+                              disabled={Boolean(assessmentDefaultsProblem)}
+                              disabledReason={assessmentDefaultsProblem}
+                              onClick={() => updateStep(step.localId, {
+                              toolInputValues: applyAssessmentInputDefaults(selectedToolDetail.inputSchema, step.toolInputValues, assessmentProject),
+                            })}>Apply assessment defaults</Button>
+                            <p className="small">Fill missing scope, budget, and retained evidence from the frozen context. Existing values, including empty lists, stay unchanged. Review the inputs before starting.</p>
+                          </div> : null}
                           <SchemaCapabilityFields
                             fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}
-                            values={step.toolInputValues}
+                            values={selectedToolAuthoredInputs.values}
                             errors={step.toolInputErrors}
                             disabled={false}
                             repositoryOptions={repositoryOptions}
@@ -12753,7 +12814,7 @@ function WorkflowStartPageContent({
                               <SchemaCapabilityFields
                                 fields={optionalToolSchemaFields}
                                 detail={selectedToolDetail}
-                                values={step.toolInputValues}
+                                values={selectedToolAuthoredInputs.values}
                                 errors={step.toolInputErrors}
                                 disabled={false}
                                 repositoryOptions={repositoryOptions}
@@ -12793,7 +12854,7 @@ function WorkflowStartPageContent({
                                       toolInputs: text,
                                       ...(parsed.ok
                                         ? {
-                                            toolInputValues: parsed.value,
+                                            toolInputValues: assessmentInputAliases(selectedToolDetail.inputSchema, parsed.value).values,
                                             toolInputErrors: {},
                                           }
                                         : {}),

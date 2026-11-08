@@ -1387,6 +1387,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/assessment-projects/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Assessment Project Selection */
+        post: operations["resolve_assessment_project_selection_api_v1_settings_assessment_projects_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/repository-scanners/readiness": {
         parameters: {
             query?: never;
@@ -5323,6 +5340,19 @@ export interface components {
             /** Required Headers */
             required_headers?: {
                 [key: string]: string;
+            };
+        };
+        /** AssessmentProjectResolveRequest */
+        AssessmentProjectResolveRequest: {
+            /** Projectid */
+            projectId: string;
+            /** Environmentid */
+            environmentId: string;
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Overrides */
+            overrides?: {
+                [key: string]: unknown;
             };
         };
         /** AssignmentRemoveRequest */
@@ -17032,6 +17062,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    resolve_assessment_project_selection_api_v1_settings_assessment_projects_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssessmentProjectResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

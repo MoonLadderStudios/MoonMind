@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -258,3 +257,226 @@ async def test_mm661_settings_override_contract_rejects_not_ready_provider_profi
     assert response.json()["details"]["code"] == "provider_profile_not_ready"
     assert "not-ready-secret-plaintext" not in response.text
     assert "enabled-not-ready-profile" in response.text
+
+
+async def test_assessment_projects_save_resolve_copy_and_stale_selection(
+    settings_contract_db,
+):
+    import copy
+
+    from api_service.auth_providers import get_artifact_access
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    key = "security.assessment_projects"
+    document = {
+        "projects": [
+            {
+                "id": "shop",
+                "name": "Shop",
+                "purpose": "Checkout",
+                "boundaries": "No payment provider",
+                "environments": [
+                    {
+                        "id": "staging",
+                        "name": "Staging",
+                        "assets": ["app"],
+                        "originCandidates": ["https://staging.example.com"],
+                    }
+                ],
+            }
+        ]
+    }
+    app.dependency_overrides[get_artifact_access] = (
+        lambda: ArtifactAccessContext.for_operator(OperatorAdmission(via="loopback"))
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            saved = await client.patch(
+                "/api/v1/settings",
+                json={"changes": {key: document}, "expected_versions": {key: 1}},
+            )
+            assert saved.status_code == 200, saved.text
+            version = saved.json()["values"][key]["value_version"]
+            stale_first_editor = await client.patch(
+                "/api/v1/settings",
+                json={
+                    "changes": {key: {"projects": []}},
+                    "expected_versions": {key: 1},
+                },
+            )
+            assert stale_first_editor.status_code == 409
+            unversioned = await client.patch(
+                "/api/v1/settings", json={"changes": {key: {"projects": []}}}
+            )
+            assert unversioned.status_code == 400
+            selected = {
+                "projectId": "shop",
+                "environmentId": "staging",
+                "expectedVersion": version,
+            }
+            first = await client.post(
+                "/api/v1/settings/assessment-projects/resolve", json=selected
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["gaps"] == []
+            original = first.json()["snapshot"]
+            overridden = await client.post(
+                "/api/v1/settings/assessment-projects/resolve",
+                json={
+                    **selected,
+                    "overrides": {"assets": ["explicit"], "originCandidates": []},
+                },
+            )
+            assert overridden.json()["snapshot"]["configuration"]["assets"] == [
+                "explicit"
+            ]
+            assert (
+                overridden.json()["snapshot"]["configuration"]["originCandidates"] == []
+            )
+            copied = copy.deepcopy(document["projects"][0]["environments"][0])
+            copied.update(id="production", name="Production", assets=["production"])
+            document["projects"][0]["environments"].append(copied)
+            document["projects"][0]["environments"][0]["assets"] = ["changed"]
+            edited = await client.patch(
+                "/api/v1/settings",
+                json={"changes": {key: document}, "expected_versions": {key: version}},
+            )
+            assert edited.status_code == 200
+            stale_resolve = await client.post(
+                "/api/v1/settings/assessment-projects/resolve", json=selected
+            )
+            assert stale_resolve.status_code == 409
+            assert (
+                stale_resolve.json()["detail"]["code"] == "assessment_project_changed"
+            )
+            stale_save = await client.patch(
+                "/api/v1/settings",
+                json={
+                    "changes": {key: {"projects": []}},
+                    "expected_versions": {key: version},
+                },
+            )
+            assert stale_save.status_code == 409
+            second = await client.post(
+                "/api/v1/settings/assessment-projects/resolve",
+                json={
+                    **selected,
+                    "environmentId": "production",
+                    "expectedVersion": edited.json()["values"][key]["value_version"],
+                },
+            )
+            assert second.json()["snapshot"]["configuration"]["assets"] == [
+                "production"
+            ]
+            assert original["configuration"]["assets"] == ["app"]
+            assert "assessmentScope" not in original
+    finally:
+        app.dependency_overrides.pop(get_artifact_access, None)
+
+
+async def test_assessment_projects_resolve_reports_missing_and_revoked_refs(
+    settings_contract_db,
+):
+    from api_service.auth_providers import get_artifact_access
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    key = "security.assessment_projects"
+    async with settings_contract_db() as session:
+        session.add(
+            ManagedSecret(
+                slug="revoked-project-secret",
+                ciphertext="never-read-or-return",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        await session.commit()
+    document = {
+        "projects": [
+            {
+                "id": "shop",
+                "name": "Shop",
+                "purpose": "Checkout",
+                "boundaries": "Local",
+                "environments": [
+                    {
+                        "id": "test",
+                        "name": "Test",
+                        "credentialRefs": [
+                            "db://missing",
+                            "db://revoked-project-secret",
+                        ],
+                        "connectionRefs": ["missing-connection"],
+                        "artifactRefs": ["art_missing"],
+                    }
+                ],
+            }
+        ]
+    }
+    app.dependency_overrides[get_artifact_access] = (
+        lambda: ArtifactAccessContext.for_operator(OperatorAdmission(via="loopback"))
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            saved = await client.patch(
+                "/api/v1/settings",
+                json={"changes": {key: document}, "expected_versions": {key: 1}},
+            )
+            assert saved.status_code == 200, saved.text
+            result = await client.post(
+                "/api/v1/settings/assessment-projects/resolve",
+                json={
+                    "projectId": "shop",
+                    "environmentId": "test",
+                    "expectedVersion": saved.json()["values"][key]["value_version"],
+                },
+            )
+            assert result.status_code == 200, result.text
+            assert {gap["code"] for gap in result.json()["gaps"]} == {
+                "artifact_unavailable",
+                "credential_unavailable",
+                "connection_unavailable",
+            }
+            assert len(result.json()["gaps"]) == 4
+            assert "never-read-or-return" not in result.text
+    finally:
+        app.dependency_overrides.pop(get_artifact_access, None)
+
+
+async def test_assessment_project_reset_never_reuses_an_editor_version(
+    settings_contract_db,
+):
+    key = "security.assessment_projects"
+    empty = {"projects": []}
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: 1}},
+        )
+        assert first.status_code == 200, first.text
+        original_version = first.json()["values"][key]["value_version"]
+        reset = await client.delete(f"/api/v1/settings/{key}")
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["value"] == empty
+        reset_version = reset.json()["value_version"]
+        replacement = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: reset_version}},
+        )
+        assert replacement.status_code == 200, replacement.text
+        stale = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: original_version}},
+        )
+        assert stale.status_code == 409, stale.text
+        assert reset_version > original_version
+        assert replacement.json()["values"][key]["value_version"] > reset_version
+        repeated_reset = await client.delete(f"/api/v1/settings/{key}")
+        assert repeated_reset.status_code == 200
+        assert repeated_reset.json()["value_version"] > reset_version

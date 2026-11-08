@@ -4849,16 +4849,17 @@ class TemporalArtifactService:
         except Exception as exc:
             _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation=operation, read=True)
 
-    async def _verify_dependency_bytes(
+    async def validate_dependency_availability(
         self,
         artifact: db_models.TemporalArtifact,
         *,
         access: ArtifactAccessContext,
-        expected_sha256: str | None,
     ) -> None:
-        # Integrity verification returns no raw bytes and creates no raw grant.
-        # Preserve metadata-authorized restricted-input admission separately
-        # from the ordinary consumer raw-serving policy.
+        """Check current retained-input metadata without bytes or a new grant.
+
+        Previews do not reserve content. Integrity/admission still rechecks
+        this owner before recording a required dependency or consuming bytes.
+        """
         await self._assert_artifact_read_access(artifact, access=access)
         self._assert_not_quarantined(artifact)
         if (
@@ -4888,6 +4889,18 @@ class TemporalArtifactService:
             )
         ):
             raise TemporalArtifactStateError("Dependency artifact is expired")
+
+    async def _verify_dependency_bytes(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        access: ArtifactAccessContext,
+        expected_sha256: str | None,
+    ) -> None:
+        # Integrity verification returns no raw bytes and creates no raw grant.
+        # Preserve metadata-authorized restricted-input admission separately
+        # from the ordinary consumer raw-serving policy.
+        await self.validate_dependency_availability(artifact, access=access)
         if (
             not artifact.sha256
             or artifact.size_bytes is None
