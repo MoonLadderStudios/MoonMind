@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, model_serializer, model_validator
 
 from moonmind.security.assessments import Contract, Evidence, Text
 
@@ -23,7 +23,23 @@ class TargetIdentity(Contract):
     account_ref: IdentityRef
     session_ref: IdentityRef
     integration_ref: IdentityRef
-    credential_ref: Text = Field(pattern=r"^[A-Za-z][A-Za-z0-9+.-]*://\S+$")
+    credential_ref: Text | None = Field(
+        default=None, pattern=r"^[A-Za-z][A-Za-z0-9+.-]*://\S+$"
+    )
+    anonymous: bool = False
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        value = handler(self)
+        if not self.anonymous:
+            value.pop("anonymous", None)
+        return value
+
+    @model_validator(mode="after")
+    def _credential(self):
+        if self.anonymous != (self.credential_ref is None):
+            raise ValueError("only anonymous target identities omit credentials")
+        return self
 
 
 class AccessCase(Contract):
@@ -33,7 +49,16 @@ class AccessCase(Contract):
     session_ref: IdentityRef
     integration_ref: IdentityRef
     action: IdentityRef
+    resource_ref: IdentityRef | None = None
     expected: Literal["allow", "deny"]
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        value = handler(self)
+        if self.resource_ref is None:
+            value.pop("resource_ref", None)
+            value.pop("resourceRef", None)
+        return value
 
 
 class AuthorizationMatrix(Contract):
@@ -47,7 +72,9 @@ class AuthorizationMatrix(Contract):
             self.cases
         ):
             raise ValueError("target identities and access cases must be unique")
-        credentials = [i.credential_ref for i in self.identities]
+        credentials = [
+            i.credential_ref for i in self.identities if i.credential_ref is not None
+        ]
         if len(set(credentials)) != len(credentials):
             raise ValueError("a credential cannot identify multiple target sessions")
         expectations = set()
@@ -60,6 +87,7 @@ class AuthorizationMatrix(Contract):
                 case.session_ref,
                 case.integration_ref,
                 case.action,
+                case.resource_ref,
             )
             if key in expectations:
                 raise ValueError("duplicate or contradictory target access case")
