@@ -98,6 +98,8 @@
 #   FIRST_RUN_3938_LOG_DIR              default var/artifacts/first-run-3938
 #   MOONMIND_TEST_CLEANUP_TIMEOUT       seconds each teardown or diagnostics
 #                                       Compose command may take (default 120)
+#   FIRST_RUN_3938_WORKER_TOPOLOGY      optional separate/combined comparison;
+#                                       fresh journeys only, asyncio debug on
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -206,7 +208,20 @@ JOURNEY_FAILED=1
 ENV_STASH_DIR=""
 UPGRADE_REGISTRY=""
 UPGRADE_CONTROLLER_IMAGE=""
+WORKER_MEASUREMENT_PID=""
+WORKER_MEASUREMENT_PHASE=""
+stop_worker_measurement() {
+  if [[ -n "$WORKER_MEASUREMENT_PID" ]]; then
+    python3 "$SCRIPT_DIR/worker_runtime_measurements.py" mark \
+      --phase-file "$WORKER_MEASUREMENT_PHASE" --phase stop \
+      || echo "Note: measurement stop marker unavailable; continuing teardown." >&2
+    kill -TERM "$WORKER_MEASUREMENT_PID" 2>/dev/null || true
+    wait "$WORKER_MEASUREMENT_PID" || true
+    WORKER_MEASUREMENT_PID=""
+  fi
+}
 cleanup() {
+  stop_worker_measurement
   if [[ "$JOURNEY_FAILED" != "0" ]]; then
     mkdir -p "$LOG_DIR" 2>/dev/null || true
     compose "$CLEANUP_TIMEOUT" logs --no-color --tail 300 2>/dev/null | redact \
@@ -273,6 +288,39 @@ Path(sys.argv[1]).write_text(json.dumps({"services": {
     name: {"environment": environment} for name in services
 }}))
 EOF
+}
+
+prepare_worker_measurement() {
+  local topology="${FIRST_RUN_3938_WORKER_TOPOLOGY:-}" override
+  [[ -n "$topology" ]] || return 0
+  if [[ "$MODE" != fresh || ( "$topology" != separate && "$topology" != combined ) ]]; then
+    echo "Error: worker comparison requires a fresh separate or combined journey." >&2
+    exit 2
+  fi
+  override="$DEPLOY_DIR/var/first-run-journey/workers.json"
+  compose config --format json | python3 "$SCRIPT_DIR/worker_runtime_measurements.py" \
+    override --topology "$topology" --debug > "$override"
+  COMPOSE_OVERRIDES+=(-f "$override")
+  WORKER_MEASUREMENT_PHASE="$STATE_DIR/measurement-phase"
+  python3 "$SCRIPT_DIR/worker_runtime_measurements.py" mark \
+    --phase-file "$WORKER_MEASUREMENT_PHASE" --phase startup
+  python3 "$SCRIPT_DIR/worker_runtime_measurements.py" record \
+    --project "$PROJECT_NAME" --topology "$topology" \
+    --revision "$CANDIDATE_REVISION" \
+    --phase-file "$WORKER_MEASUREMENT_PHASE" \
+    --interval "${FIRST_RUN_3938_MEASUREMENT_INTERVAL:-5}" \
+    --output "$LOG_DIR/worker-runtime-measurements.json" \
+    > "$LOG_DIR/worker-runtime-measurements.log" 2>&1 &
+  WORKER_MEASUREMENT_PID=$!
+}
+
+worker_measurement_phase() {
+  [[ -n "$WORKER_MEASUREMENT_PID" ]] || return 0
+  python3 "$SCRIPT_DIR/worker_runtime_measurements.py" mark \
+    --phase-file "$WORKER_MEASUREMENT_PHASE" --phase "$1"
+  if [[ "$1" == *idle ]]; then
+    sleep "${FIRST_RUN_3938_MEASUREMENT_IDLE_SECONDS:-20}"
+  fi
 }
 
 record_provenance() {
@@ -731,9 +779,24 @@ if [[ "$MODE" == "fresh" ]]; then
   prepare_disposable_source
   prepare_isolation_override
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
+  prepare_worker_measurement
   bring_up
+  worker_measurement_phase cold_idle
   require_controller_conversion fresh fresh_init
+  worker_measurement_phase workload
   fresh_journey fresh
+  if [[ -n "$WORKER_MEASUREMENT_PID" ]]; then
+    compose exec -T api python - --project "$PROJECT_NAME" \
+      < "$SCRIPT_DIR/worker_runtime_activity_probe.py" \
+      > "$LOG_DIR/worker-runtime-activity-probe.json" 2> >(redact >&2)
+    python3 - "$LOG_DIR/worker-runtime-activity-probe.json" <<'EOF'
+import json, sys
+if json.load(open(sys.argv[1])).get("status") != "completed":
+    sys.exit("Error: worker activity probe did not complete.")
+EOF
+  fi
+  worker_measurement_phase warm_idle
+  stop_worker_measurement
 elif [[ "$MODE" == "controller" ]]; then
   prepare_disposable_source
   prepare_isolation_override
