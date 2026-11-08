@@ -15504,7 +15504,10 @@ async def create_optional_quality_review(
 
     receipt_ref = await persist_review_delivery_receipt(
         execution=admitted,
-        receipt=workflow_payload["workflow"]["reportOutput"]["subject"]["evidenceDelivery"],
+        # The report subject is only a bounded, model-agnostic projection.
+        receipt=workflow_payload["workflow"]["steps"][0]["inputs"]["optionalReview"][
+            "evidenceDelivery"
+        ],
         session=session, artifacts=artifacts, access=access,
         principal=_execution_principal(user),
     )

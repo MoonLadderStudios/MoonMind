@@ -379,8 +379,94 @@ async def test_optional_review_excludes_personal_fields_and_records_transformati
     assert "assessment-person" not in workflow["instructions"]
     assert "555-0100" not in workflow["instructions"]
     assert "synthetic-private-value" not in workflow["instructions"]
-    delivery = workflow["reportOutput"]["subject"]["evidenceDelivery"]
+    delivery = workflow["steps"][0]["inputs"]["optionalReview"]["evidenceDelivery"]
     assert delivery["recipient"]["providerProfileRef"] == "review-profile"
     assert delivery["artifacts"][0]["sha256"] == hashlib.sha256(body).hexdigest()
     assert delivery["transformation"]["piiLimitations"]
     assert delivery["publicationMode"] == "none"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection_count", [1, 16])
+async def test_review_delivery_receipt_obeys_real_report_metadata_bounds(
+    review_api, selection_count, monkeypatch
+):
+    from api_service.services import assessment_model_delivery
+    from moonmind.core.artifacts import assert_model_agnostic_metadata
+    from moonmind.workflows.temporal.report_artifacts import (
+        validate_report_artifact_contract,
+    )
+
+    persist = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        assessment_model_delivery, "persist_review_delivery_receipt", persist
+    )
+    body = b"reproduce src/check.py:42 password=synthetic-receipt-value"
+    expected = b"reproduce src/check.py:42 password=[REDACTED]"
+    artifacts = review_api[4]
+    artifact = artifacts.get_metadata.return_value[0]
+    artifact.size_bytes, artifact.sha256 = len(body), hashlib.sha256(body).hexdigest()
+    artifacts.read_chunks.side_effect = lambda **_kw: (artifact, iter([body]))
+    request = {
+        **review_api[5],
+        "candidateRefs": [
+            f"artifact://art_candidate{index}"
+            for index in range(min(selection_count, 8))
+        ],
+        "evidenceRefs": [
+            f"artifact://art_evidence{index}"
+            for index in range(max(0, selection_count - 8))
+        ],
+    }
+    response = await _submit(review_api, request)
+    assert response.status_code == 201, response.text
+    workflow = review_api[3].await_args.kwargs["payload"]["payload"]["workflow"]
+    subject = workflow["reportOutput"]["subject"]
+    validate_report_artifact_contract(
+        link_type="report.primary", metadata={"subject": subject}
+    )
+    assert_model_agnostic_metadata({"subject": subject})
+    receipt = subject["evidenceDelivery"]
+    assert len(receipt["artifacts"]) == selection_count
+    for row in receipt["artifacts"]:
+        assert row["sha256"] == row["readSha256"] == hashlib.sha256(body).hexdigest()
+        assert row["transformationVersion"] == receipt["transformation"]["version"]
+        assert row["transformedSha256"] == hashlib.sha256(expected).hexdigest()
+        assert row["transformedSha256"] != row["sha256"]
+        assert "transformation" not in row and "untrustedContent" not in row
+    full_receipt = workflow["steps"][0]["inputs"]["optionalReview"]["evidenceDelivery"]
+    assert persist.await_args.kwargs["receipt"] == full_receipt
+    assert receipt["artifacts"] == full_receipt["artifacts"]
+    assert receipt["transformation"] == full_receipt["transformation"]
+    assert full_receipt["recipient"]["providerProfileRef"] == "review-profile"
+    assert "recipient" not in receipt and "sourceProcessing" not in receipt
+    assert receipt["transformation"]["piiLimitations"]
+    assert "synthetic-receipt-value" not in workflow["instructions"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["credentialSource", "credential_source"])
+async def test_review_receipt_hash_matches_exact_delivered_json(review_api, field):
+    import json
+
+    artifacts = review_api[4]
+    body = json.dumps({field: "configured by operator"}).encode()
+    artifact = artifacts.get_metadata.return_value[0]
+    artifact.size_bytes, artifact.sha256 = len(body), hashlib.sha256(body).hexdigest()
+    artifacts.read_chunks.side_effect = lambda **_kw: (artifact, iter([body]))
+    response = await _submit(review_api)
+    assert response.status_code == 201, response.text
+    workflow = review_api[3].await_args.kwargs["payload"]["payload"]["workflow"]
+    delivered = json.loads(workflow["instructions"].split("\n", 1)[1])
+    observed = delivered["artifacts"][0]
+    actual_digest = hashlib.sha256(observed["untrustedContent"].encode()).hexdigest()
+    assert observed["transformation"]["sha256"] == actual_digest
+    for receipt in (
+        delivered["evidenceDelivery"],
+        workflow["steps"][0]["inputs"]["optionalReview"]["evidenceDelivery"],
+        workflow["reportOutput"]["subject"]["evidenceDelivery"],
+    ):
+        row = receipt["artifacts"][0]
+        assert row["transformedSha256"] == actual_digest
+        assert row["sha256"] == row["readSha256"] == hashlib.sha256(body).hexdigest()
+        assert row["transformationVersion"] == observed["transformation"]["version"]

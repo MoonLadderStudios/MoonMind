@@ -207,6 +207,54 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
             )
             assert plan.payload.modelConfig.qualifiedId == journey.server.model
             assert set(plan.payload.credentialBindings) == {"primary-model"}
+            # The model-agnostic report summary must not replace the retained
+            # recipient audit or its exact final-evidence transformation hashes.
+            receipts = [
+                item
+                for item in await artifacts.list_for_execution(
+                    namespace=record.namespace,
+                    workflow_id=record.workflow_id,
+                    run_id=record.run_id,
+                    access=access,
+                    link_type="report.evidence",
+                )
+                if item.metadata_json.get("artifact_type")
+                == "assessment_evidence_delivery"
+            ]
+            assert len(receipts) == 1
+            assert receipts[0].redaction_level.value == "restricted"
+            _, receipt_body = await artifacts.read(
+                artifact_id=receipts[0].artifact_id, access=access
+            )
+            receipt = json.loads(receipt_body)
+            declared = parameters["workflow"]["steps"][0]["inputs"]["optionalReview"][
+                "evidenceDelivery"
+            ]
+            # Admission appends the standard report contract after the JSON.
+            delivered, _ = json.JSONDecoder().raw_decode(
+                parameters["workflow"]["instructions"].split("\n", 1)[1]
+            )
+            observed = delivered["artifacts"][0]
+            transformed_digest = hashlib.sha256(
+                observed["untrustedContent"].encode()
+            ).hexdigest()
+            assert receipt["artifacts"] == declared["artifacts"]
+            assert receipt["transformation"] == declared["transformation"]
+            assert receipt["artifacts"][0]["sha256"] == digest
+            assert receipt["artifacts"][0]["readSha256"] == digest
+            assert receipt["artifacts"][0]["transformedSha256"] == transformed_digest
+            assert observed["transformation"]["sha256"] == transformed_digest
+            assert receipt["status"] == "admitted"
+            assert receipt["recipient"]["model"] == plan.payload.modelConfig.qualifiedId
+            assert receipt["recipient"]["provider"] == plan.payload.modelConfig.routeRef
+            assert receipt["recipient"]["providerProfileRefs"] == [
+                native_fixture.PROFILE
+            ]
+            assert receipt["executionPlanRef"] == plan.planRef
+            assert (
+                "recipient"
+                not in parameters["reportOutput"]["subject"]["evidenceDelivery"]
+            )
             # A duplicate request reuses the admitted execution and never starts
             # another workflow, even before optional report publication finishes.
             again = await client.post(

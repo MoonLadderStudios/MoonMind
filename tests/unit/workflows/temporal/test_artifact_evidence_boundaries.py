@@ -863,3 +863,38 @@ async def test_empty_run_pair_cannot_grant_operator_output(evidence_service):
         await service.read(
             artifact_id=artifact.artifact_id, access=access_for_test("operator")
         )
+
+
+async def test_structured_authorization_values_never_reach_metadata_only_preview(
+    evidence_service,
+):
+    service, _ = evidence_service
+    native = json.dumps(
+        {
+            "Authorization": "Basic c3ludGhldGljOnNlY3JldA==",
+            "proxy-authorization": "Token synthetic-credential-canary",
+            "path": "src/reproduce.py",
+            "line": 42,
+        }
+    ).encode()
+    source = await put(service, native, "application/json")
+    reader = access_for_test("workflow:metadata-only")._with_verified_inputs(
+        [source.artifact_id]
+    )
+    _, _, _, policy = await service.get_metadata(
+        artifact_id=source.artifact_id, access=reader
+    )
+    assert not policy.raw_access_allowed
+    _, preview = await service.read(
+        artifact_id=policy.default_read_ref.artifact_id, access=reader
+    )
+    assert b"c3ludGhldGljOnNlY3JldA==" not in preview
+    assert b"synthetic-credential-canary" not in preview
+    assert b"src/reproduce.py" in preview and b"42" in preview
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(artifact_id=source.artifact_id, access=reader)
+    assert (
+        await service.read(
+            artifact_id=source.artifact_id, access=access_for_test("owner")
+        )
+    )[1] == native
