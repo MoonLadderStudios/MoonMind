@@ -1820,6 +1820,7 @@ def _check_results(plan, observations, selection, as_of, coverage_deadlines):
                 row is not None
                 and row.response is not None
                 and row.response.dns_outcome == "incomplete_cname"
+                and row.response.freshness == "fresh"
                 and row.response.remaining_ttl is not None
                 and row.response.remaining_ttl
                 > (as_of - row.finished_at).total_seconds()

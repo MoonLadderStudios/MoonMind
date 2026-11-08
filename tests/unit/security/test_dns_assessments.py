@@ -1636,3 +1636,35 @@ def test_dkim_empty_interior_tag_is_malformed(text):
     row = observation(q, parsed(q, [(q.name, 120, "IN", "TXT", json.dumps(text))]))
     check = summarize_dns_assessment(p, execution(p, row), "art_test").checks[0]
     assert check.status == "malformed"
+
+
+@pytest.mark.parametrize("ede_code", [3, 19])
+def test_caa_alias_requires_fresh_supporting_response(ede_code):
+    q, target = question("a.example", "CAA"), question("b.example", "CAA")
+    p = plan(
+        assessment(
+            questions=[q],
+            allowed_followups=(target,),
+            checks=(DNSCheckSelection(check="caa", subject=q.name),),
+        )
+    )
+    first = observation(
+        q,
+        parsed(
+            q,
+            [(q.name, 120, "IN", "CNAME", target.name)],
+            ede=[(ede_code, "Stale Answer")],
+        ),
+    )
+    second = observation(
+        target,
+        parsed(target, [(target.name, 120, "IN", "CAA", '0 issue "ca.example"')]),
+        attempt=2,
+        depth=1,
+        parent_attempt=1,
+    )
+    check = summarize_dns_assessment(p, execution(p, first, second), "art_test").checks[
+        0
+    ]
+    assert check.status == "incomplete"
+    assert check.code == "caa_alias_or_ancestor_uncovered"
