@@ -34,6 +34,7 @@ from moonmind.security.cloud_assessments import (
 )
 from moonmind.security.web_assessments import (
     build_web_assessment_job,
+    path_admitted,
     render_web_assessment_plan,
     sanitize_messages,
     sanitize_report,
@@ -193,10 +194,19 @@ def test_zap_image_assesses_vulnerable_and_hardened_routes(tmp_path, route, expe
         # A real 307 redirects the general spider to a local, admitted login
         # page. The curated requestor must still send only its exact pair.
         expected_routes.append("GET /middleware/login")
-    assert (summary.execution.plan, summary.coverage.tested_routes) == (
-        "completed",
-        expected_routes,
-    ), summary.model_dump(mode="json")
+    assert summary.execution.plan == "completed", summary.model_dump(mode="json")
+    if expected == "general-active":
+        # The existing general scanner can probe additional admitted children,
+        # including randomized not-found checks. That is not template expansion.
+        assert set(expected_routes) <= set(summary.coverage.tested_routes)
+        assert all(
+            method == "GET" and path_admitted(web, path, method)
+            for method, path in (
+                route.split(" ", 1) for route in summary.coverage.tested_routes
+            )
+        )
+    else:
+        assert summary.coverage.tested_routes == expected_routes
     if expected in {"match", "negative", "incomplete"}:
         assert summary.coverage.templates[0].outcome == expected
         assert summary.status == ("partial" if expected == "incomplete" else "complete")
