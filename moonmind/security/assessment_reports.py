@@ -7,6 +7,7 @@ is attributed separately and cannot promote a finding or coverage conclusion.
 from __future__ import annotations
 
 import html
+import json
 import re
 
 from moonmind.utils.logging import redact_evidence_text
@@ -24,7 +25,7 @@ def _text(value):
 
 
 def render_assessment_details(
-    comparison, *, request, comparison_ref, review_status, work
+    comparison, *, request, comparison_ref, review_status, work, native_reports=()
 ):
     observation = comparison["observation"]
     context = request.report_context
@@ -157,4 +158,49 @@ def render_assessment_details(
         ],
         "",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines) + render_native_admission(native_reports)
+
+
+def render_native_admission(native_reports):
+    """Render bounded source context using the export owner's typed projection."""
+    from moonmind.security.evidence_exports import (
+        WithheldEvidence,
+        prepare_evidence_member,
+    )
+
+    fields = {
+        "service-inventory/v1": ("planKey", "nativeNetwork", "serviceInventory"),
+        "tls-assessment/v1": ("settings",),
+        "web-assessment/v1": ("admission",),
+        "cloud-posture/v1": ("admission",),
+        "image-assessment/v1": ("admission",),
+        "game-math-assessment/v1": ("specDigest", "provenance", "limitations"),
+    }
+    if not native_reports:
+        return ""
+    lines = [
+        "",
+        "## Recorded source configuration",
+        "",
+        "These retained source declarations are context, not independent proof of execution or authorization. The admitted assessment above reads retained evidence; source configuration grants no new permission.",
+    ]
+    for ref, body in native_reports:
+        lines.append(f"- Source summary: {_text(ref)}.")
+        try:
+            prepared, _, schema = prepare_evidence_member(
+                body, content_type="application/json", hint=""
+            )
+        except WithheldEvidence:
+            lines.append(
+                "  Source configuration unavailable in the supported sanitized projection. Consult authorized native evidence; execution and authorization are not inferred."
+            )
+            continue
+        document = json.loads(prepared)
+        for field in fields.get(schema, ()):
+            if field in document:
+                lines.append(f"  {field}: {_text(document[field])}.")
+        if schema == "game-math-assessment/v1":
+            lines.append(
+                "  Imported game mathematics is unclassified control evidence: a specification digest alone does not prove retained source inputs, actual execution, or deployed-game behavior."
+            )
+    return "\n".join(lines) + "\n"

@@ -786,7 +786,6 @@ def _game_math_observation(
             tool="game-math",
             assets=[summary.game_ref],
             rule_ids=sorted(rules),
-            evidence_method="deterministic_check",
             config_ref=content_key(["game-math", summary.spec_digest]),
             status="complete" if summary.covered else "partial",
         )
@@ -2694,6 +2693,11 @@ class AssessmentExecution:
                 comparison_ref=comparison_ref,
                 review_status=review_status,
                 work=work,
+                native_reports=[
+                    (row["summaryRef"], inputs[row["summaryRef"]][1])
+                    for row in work.get("scannerSummaries", [])
+                    if row["summaryRef"] in inputs
+                ],
             )
             if request.report_context:
                 context_body = _json(

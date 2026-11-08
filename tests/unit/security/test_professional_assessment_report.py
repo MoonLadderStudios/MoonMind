@@ -80,7 +80,7 @@ async def test_readable_report_traces_observed_scope_and_limits(environment, sce
     )
 
 
-def test_game_math_native_projection_and_control_method():
+def test_game_math_projection_never_promotes_imported_control_method():
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
@@ -106,7 +106,7 @@ def test_game_math_native_projection_and_control_method():
         "art_math",
         datetime.now(UTC),
     )
-    assert observation.coverage[0].evidence_method == "deterministic_check"
+    assert observation.coverage[0].evidence_method == "unclassified"
 
 
 @pytest.mark.asyncio
@@ -241,3 +241,60 @@ def test_offline_archive_integrity_rejects_changed_missing_or_extra_members():
                 output.writestr(path, data)
         with pytest.raises(WithheldEvidence):
             verify_evidence_archive(archive.getvalue())
+
+
+def test_native_admission_is_context_not_execution_authority():
+    from moonmind.security.assessment_reports import render_native_admission
+    from tests.unit.security.test_service_inventory_integration import summarized
+
+    summary = summarized()
+    report = render_native_admission(
+        [("art_inventory", summary.model_dump_json(by_alias=True).encode())]
+    )
+    assert "art_inventory" in report
+    assert "nativeNetwork" in report
+    assert "serviceInventory" in report
+    assert summary.plan_key in report
+    assert "not independent proof of execution or authorization" in report
+
+
+@pytest.mark.asyncio
+async def test_accepted_risk_and_unknown_annotation_cannot_rewrite_native(environment):
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    first = await recurring.invoke(service, request)
+    comparison = await recurring.read(service, first["comparisonRef"])
+    finding_id = comparison["findings"][0]["findingId"]
+    decision = recurring.decision(finding_id, [first["scanRef"]])
+    decision.update(
+        disposition="accepted_risk", reason="Recorded test-environment acceptance"
+    )
+    decision.pop("retestOutcome")
+    request["decisionsRef"] = await recurring.put(service, [decision])
+    accepted = await recurring.invoke(service, request)
+    _, body = await service.read(
+        artifact_id=recurring.report_ref(accepted),
+        access=access_for_test("workflow:assessment"),
+    )
+    assert b"accepted_risk" in body and b"Recorded test-environment acceptance" in body
+    assert (await recurring.read(service, accepted["comparisonRef"]))["findings"][0][
+        "state"
+    ] != "remediated_verified"
+    request["reportContext"] = {
+        "author": "assessor",
+        "annotations": [
+            {
+                "findingId": "unknown",
+                "author": "assessor",
+                "annotation": "No fabricated finding",
+            }
+        ],
+    }
+    invalid = await recurring.invoke(service, request)
+    assert invalid["publicationOutcome"] == "failed"
+    assert invalid["scanRef"] == accepted["scanRef"] == first["scanRef"]
+    assert invalid["comparisonRef"] == accepted["comparisonRef"]
+    request["reportContext"]["annotations"][0]["findingId"] = finding_id
+    corrected = await recurring.invoke(service, request)
+    assert corrected["publicationOutcome"] == "published"
+    assert corrected["scanRef"] == first["scanRef"]
