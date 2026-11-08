@@ -146,6 +146,8 @@ async def application_fixture(protocol, *, vulnerable=False, mode="normal"):
         "version": 1,
         "mutation": None,
         "identity_calls": 0,
+        "identity_times": [],
+        "message_times": [],
         "closed": asyncio.Event(),
         "connected": asyncio.Event(),
     }
@@ -157,6 +159,7 @@ async def application_fixture(protocol, *, vulnerable=False, mode="normal"):
         )
         if request.path == "/identity":
             state["identity_calls"] += 1
+            state["identity_times"].append(asyncio.get_running_loop().time())
             return web.json_response(
                 {"identity": identity},
                 status=401 if mode == "expired" and state["messages"] else 200,
@@ -175,6 +178,8 @@ async def application_fixture(protocol, *, vulnerable=False, mode="normal"):
                     ],
                 }
             )
+        if mode == "delayed-upgrade":
+            await asyncio.sleep(0.6)
         socket = web.WebSocketResponse(autoping=False)
         await socket.prepare(request)
         state["connected"].set()
@@ -186,6 +191,7 @@ async def application_fixture(protocol, *, vulnerable=False, mode="normal"):
                     continue
                 payload = value["arguments"][0] if protocol == "signalr-json" else value
                 state["messages"].append(payload)
+                state["message_times"].append(asyncio.get_running_loop().time())
                 allowed = identity in {"owner", "admin"} or vulnerable
                 if payload["type"] == "update" and allowed:
                     state["effects"] += 1
@@ -417,5 +423,85 @@ def test_cumulative_connection_reservation_stops_next_case_before_upgrade(
             tampered["transport_budget"]["connections"] = 2
             with pytest.raises(ValueError, match="transport budget"):
                 ApplicationAccessCapture.model_validate(tampered)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("protocol,cost", [("websocket", 2), ("signalr-json", 4)])
+def test_checkpoint_reserves_every_protocol_rate_slot_before_transport(
+    tmp_path, protocol, cost
+):
+    async def run():
+        s = selected_realtime(protocol)
+        path = tmp_path / "capture"
+        async with application_fixture(protocol) as state:
+            target_client(s, state, tmp_path)  # Materialize only fixture credentials.
+            scope = admitted_scope(s)
+            scope.web.max_requests_per_second = 1
+            client = ScopedTargetClient(
+                scope, proxy=state["proxy"], credential_root=tmp_path, max_seconds=10
+            )
+            snapshots = []
+            original = client.exchange
+
+            async def checked(request):
+                if request.realtime_case_ref:
+                    saved = ApplicationAccessCapture.model_validate_json(
+                        path.read_bytes()
+                    )
+                    # The preceding snapshot is the attempted checkpoint, before
+                    # reserving any negotiation/upgrade/handshake/message turns.
+                    assert saved.next_request_at >= snapshots[-2] + cost - 0.00001
+                    raise asyncio.CancelledError
+                return await original(request)
+
+            client.exchange = checked
+            capture = await observe_application_access(
+                s,
+                client,
+                checkpoint_path=path,
+                on_progress=lambda value: snapshots.append(value.next_request_at),
+            )
+            assert capture.stop_reason == "cancelled" and not state["messages"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("protocol", ["websocket", "signalr-json"])
+def test_restart_waits_full_rate_interval_after_delayed_uncertain_send(
+    tmp_path, protocol
+):
+    async def run():
+        s = selected_realtime(protocol)
+        path = tmp_path / "capture"
+        async with application_fixture(protocol, mode="delayed-upgrade") as state:
+            target_client(s, state, tmp_path)
+            scope = admitted_scope(s)
+            scope.web.max_requests_per_second = 10
+
+            def fresh():
+                return ScopedTargetClient(
+                    scope,
+                    proxy=state["proxy"],
+                    credential_root=tmp_path,
+                    max_seconds=10,
+                )
+
+            client = fresh()
+            original = client.exchange
+
+            async def interrupted(request):
+                result = await original(request)
+                if request.realtime_case_ref:
+                    raise RuntimeError("simulated host loss before response checkpoint")
+                return result
+
+            client.exchange = interrupted
+            with pytest.raises(RuntimeError, match="simulated host loss"):
+                await observe_application_access(s, client, checkpoint_path=path)
+            resumed = await observe_application_access(s, fresh(), checkpoint_path=path)
+            assert len(state["messages"]) == 1
+            assert state["identity_times"][1] - state["message_times"][0] >= 0.095
+            assert resumed.progress[0].phase == "complete"
 
     asyncio.run(run())

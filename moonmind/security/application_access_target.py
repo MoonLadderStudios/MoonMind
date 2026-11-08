@@ -223,8 +223,12 @@ async def _observe(spec, client, path, on_progress):
         if capture.transport_budget is not None:
             client.restore_transport(capture.transport_budget)
         client.started = time.monotonic() - max(0, time.time() - capture.started_at)
+        # A delayed exchange may have sent after its upfront reservation. The
+        # prior attempt is stopped; wait one full interval from this successor
+        # before any probe, without renewing the original wall-clock deadline.
         client.next_request = time.monotonic() + max(
-            0, capture.next_request_at - time.time()
+            1 / client.scope.web.max_requests_per_second,
+            capture.next_request_at - time.time(),
         )
     else:
         capture = ApplicationAccessCapture(
@@ -262,7 +266,7 @@ async def _observe(spec, client, path, on_progress):
         # Reserve the rate slot as well: a successor cannot burst after a crash.
         capture.next_request_at = (
             max(time.time(), capture.next_request_at)
-            + 1 / client.scope.web.max_requests_per_second
+            + cost / client.scope.web.max_requests_per_second
         )
         save()
         try:
