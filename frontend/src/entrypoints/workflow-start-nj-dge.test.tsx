@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { useState } from 'react';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { SchemaCapabilityFields } from './workflow-start';
 
@@ -24,13 +24,16 @@ it('keeps NJ entity, annual rule, requirement scope and evidence choices in shar
     </>;
   }
   const view = render(<Fields />);
-  expect(JSON.parse((view.getByLabelText('Saved entity and system inputs') as HTMLTextAreaElement).value)).toEqual(saved);
+  const system = within(view.getByRole('group', { name: 'Saved entity and system inputs' }));
+  expect(system.getByLabelText('entityType')).toHaveProperty('value', 'rgs_content_provider');
+  expect(JSON.parse((system.getByLabelText('Saved entity and system inputs JSON') as HTMLTextAreaElement).value)).toEqual(saved);
+  fireEvent.change(system.getByLabelText('entityType'), { target: { value: 'casino_licensee' } });
   const choices = { 'nj.rgs.incidents': { systems: ['rgs'], period: { start: '2026-03-01', end: '2026-06-30' } } };
   fireEvent.change(view.getByLabelText('Requirement scope and period choices'), { target: { value: JSON.stringify(choices) } });
-  fireEvent.change(view.getByLabelText('Evidence record artifacts'), { target: { value: '["art_incident_records"]' } });
+  fireEvent.change(view.getByLabelText('Evidence record artifacts'), { target: { value: 'art_incident_records' } });
   fireEvent.change(view.getByLabelText('Annual assessment records artifact'), { target: { value: 'art_annual_report' } });
   const result = JSON.parse(view.getByTestId('saved-values').textContent || '{}');
-  expect(result.system_inputs).toEqual(saved);
+  expect(result.system_inputs).toEqual({ ...saved, entityType: 'casino_licensee' });
   expect(result.requirement_choices).toEqual(choices);
   expect(result.evidence_refs).toEqual(['art_incident_records']);
   expect(result.audit_ref).toEqual('art_annual_report');

@@ -249,6 +249,7 @@ class SettingDescriptor(BaseModel):
     section: SettingSection
     type: str
     ui: str
+    input_schema: dict[str, Any] | None = Field(None, exclude_if=lambda value: value is None)
     default_value: Any = None
     effective_value: Any = None
     override_value: Any = None
@@ -1027,7 +1028,15 @@ class SettingsCatalogService:
             override_present,
             diagnostics,
         )
+        input_schema = None
+        if entry.key == "security.assessment_authorizations":
+            from moonmind.security.assessment_authorizations import (
+                authorization_scope_input_schema,
+            )
+
+            input_schema = authorization_scope_input_schema()
         return SettingDescriptor(
+            input_schema=input_schema,
             key=entry.key,
             title=entry.title,
             description=entry.description,

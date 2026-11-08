@@ -225,4 +225,28 @@ it('cancels an interrupted preset submission on navigation without leaking it in
   }
 });
 
+it('links missing authorization setup to Settings without silently abandoning a Create draft', async () => {
+  const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  try {
+    const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+    cleanupRender = unmount;
+    const instructions = await screen.findByLabelText('Instructions', {}, { timeout: 10_000 });
+    await userEvent.fill(instructions, 'Keep this assessment draft while configuring authorization.');
+    const setup = screen.getByRole('link', { name: 'Manage authorizations in Settings' });
+    expect(setup.getAttribute('href')).toBe('/settings/instance#assessment-authorizations');
+    await userEvent.click(setup);
+    expect(confirmation).toHaveBeenCalledWith('Leave Create? Unsaved workflow draft changes may be lost.');
+    expect(window.location.pathname).toBe('/workflows/new');
+    expect(instructions).toHaveProperty('value', 'Keep this assessment draft while configuring authorization.');
+    confirmation.mockClear().mockReturnValue(true);
+    const pushState = vi.spyOn(window.history, 'pushState');
+    await userEvent.click(setup);
+    await expect.poll(() => window.location.pathname).toBe('/settings/instance');
+    expect(window.location.hash).toBe('#assessment-authorizations');
+    expect(confirmation).toHaveBeenCalledTimes(1);
+    expect(pushState).toHaveBeenCalledTimes(1);
+    pushState.mockRestore();
+  } finally { confirmation.mockRestore(); }
+});
+
 }

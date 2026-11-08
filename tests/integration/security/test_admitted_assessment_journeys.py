@@ -18,6 +18,7 @@ they use the session's unscoped capability.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -161,7 +162,8 @@ class Session:
 
     async def submit(self, tmp_path, command, admission, *, temporal, **service):
         """Run the CLI command, then send its exact request to the API route."""
-        await seed_legacy_assessment_admission(self.environment, self.scope)
+        if self.scope is None or self.scope.engagement is None:
+            await seed_legacy_assessment_admission(self.environment, self.scope)
         self.service = {"temporal": temporal, **service}
         sent = []
 
@@ -598,6 +600,166 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
     )
 
 
+async def scoped_preset_plan(
+    environment, tmp_path, monkeypatch, slug, assessment, scope
+):
+    """Fixture substitutes for Skill dispatch, never for operator/job authority."""
+    from api_service.db.models import SettingsOverride, TemporalExecutionCanonicalRecord
+    from api_service.services.assessment_engagements import (
+        admit_assessment_parameters,
+        compile_assessment_proposal,
+    )
+    from moonmind.security.assessment_authorizations import (
+        SETTINGS_KEY,
+        prepare_authorizations_update,
+    )
+    from moonmind.security.operator_admission import OperatorAdmission
+    from moonmind.security.workload_profiles import AdmittedAssessmentScope
+
+    await run_guarded_upgrade(environment.session, operator_authorized=True)
+    seed_dir = tmp_path / "scoped-presets"
+    seed_dir.mkdir()
+    seed = (
+        Path(__file__).resolve().parents[3]
+        / "api_service/data/presets"
+        / f"{slug}.yaml"
+    )
+    (seed_dir / seed.name).write_text(seed.read_text())
+    await PresetCatalogService(environment.session).import_seed_templates(
+        seed_dir=seed_dir
+    )
+    monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(mcp_tools.settings.feature_flags, "preset_catalog", True)
+    monkeypatch.setattr(
+        mcp_tools.settings.feature_flags, "disable_preset_catalog", False
+    )
+    app = FastAPI()
+    app.include_router(presets.router)
+
+    async def session_dependency():
+        yield environment.session
+
+    app.dependency_overrides[mcp_tools.get_async_session] = session_dependency
+    native = assessment.model_dump(mode="json", by_alias=True, exclude_none=True)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.1", 12345)),
+        base_url="http://localhost",
+    ) as client:
+        response = await client.post(
+            f"/api/presets/{slug}:expand",
+            json={
+                "inputs": {
+                    "goal": "Assess only the controlled scoped fixture",
+                    "assessment": native,
+                }
+            },
+        )
+    assert response.status_code == 200, response.text
+    expanded = response.json()
+    step = expanded["steps"][0]
+    frozen = step["annotations"]["securityAssessment"]["admission"]
+    assert frozen == step["skill"]["args"]["assessment"]
+    assert type(assessment).model_validate(frozen) == assessment
+    assert "assessmentScope" not in expanded
+
+    # New saved authority has explicit limits, using the existing native job's
+    # resource ceiling; target/actions/exclusions/grants remain exactly selected.
+    saved_scope = scope.model_dump(mode="json", by_alias=True)
+    saved_scope.update(maxCpuMillis=2000, maxMemoryMiB=4096)
+    if "web-assessment" in scope.profile_refs:
+        saved_scope["maxRequestsPerSecond"] = assessment.max_requests_per_second
+    now = datetime.now(UTC)
+    document = prepare_authorizations_update(
+        {
+            "authorizations": [
+                {
+                    "ref": "controlled-engagement",
+                    "name": "Controlled fixture engagement",
+                    "authorityKind": "self_hosted",
+                    "authoritySource": "Local controlled test fixture",
+                    "validFrom": (now - timedelta(minutes=1)).isoformat(),
+                    "validUntil": (now + timedelta(hours=1)).isoformat(),
+                    "maxTotalJobSeconds": scope.max_jobs * scope.max_job_seconds,
+                    "scope": saved_scope,
+                }
+            ]
+        },
+        {"authorizations": []},
+    )
+    environment.session.add(SettingsOverride(key=SETTINGS_KEY, value_json=document))
+    await environment.session.commit()
+    parameters = {
+        "workflow": {
+            "title": "Controlled preset assessment",
+            "steps": expanded["steps"],
+        },
+        "assessmentAuthorizationRef": "controlled-engagement",
+    }
+    operator = OperatorAdmission(via="loopback")
+    access = ArtifactAccessContext.for_execution("assessment")
+    proposal = await compile_assessment_proposal(
+        parameters,
+        "controlled-engagement",
+        session=environment.session,
+        user=operator,
+        access=access,
+    )
+    assert {section["label"] for section in proposal["sections"]} >= {
+        "Targets",
+        "Actions",
+        "Identities",
+        "Workflow plan",
+    }
+    parameters["assessmentReview"] = proposal
+    admitted = await admit_assessment_parameters(
+        parameters, session=environment.session, user=operator, access=access
+    )
+    assert (
+        admitted["engagement"]["authorizationGeneration"]
+        == document["authorizations"][0]["generation"]
+    )
+    environment.session.add(
+        TemporalExecutionCanonicalRecord(
+            workflow_id="assessment",
+            run_id="run",
+            workflow_type="MoonMind.UserWorkflow",
+            entry="run",
+            parameters=parameters,
+        )
+    )
+    await environment.session.commit()
+    return type(assessment).model_validate(
+        frozen
+    ), AdmittedAssessmentScope.model_validate(admitted)
+
+
+async def assert_review_captured(environment, accepted):
+    from api_service.db.models import ContainerJobRecord
+
+    record = await environment.session.get(ContainerJobRecord, accepted.job_id)
+    review = record.assessment_review_json
+    # Credential-shaped fixture refs are deliberately sanitized by the current
+    # immutable review owner; raw grants remain in canonical execution authority.
+    assert review["state"] == "redacted"
+    assert review["limitations"] == [
+        "Credential-shaped text was redacted from the accepted review."
+    ]
+    assert review["review"]["authorizationRef"] == "controlled-engagement"
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    canonical = await environment.session.get(
+        TemporalExecutionCanonicalRecord, "assessment"
+    )
+    original = canonical.parameters["assessmentReview"]
+    assert (
+        review["review"]["authorizationGeneration"]
+        == original["authorizationGeneration"]
+    )
+    assert review["review"]["proposalDigest"] == original["proposalDigest"]
+    assert len(review["review"]["sections"]) == len(original["sections"])
+    assert canonical.parameters["assessmentScope"]["grants"]
+
+
 class CliCloud(cloud.Harness):
     def __init__(self, session, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -615,15 +777,30 @@ class CliCloud(cloud.Harness):
         return started.request, SimpleNamespace(job_id=started.job_id)
 
 
+@pytest.mark.parametrize("entrypoint", ["cli", "preset-api"])
 async def test_cloud_assessment_cli_job_keeps_native_report_after_cleanup(
-    environment, tmp_path, monkeypatch, provider
+    environment, tmp_path, monkeypatch, provider, entrypoint
 ):
-    session = Session(environment, monkeypatch, scope=cloud.scope())
+    selected, admitted = cloud.assessment(), cloud.scope()
+    if entrypoint == "preset-api":
+        selected, admitted = await scoped_preset_plan(
+            environment,
+            tmp_path,
+            monkeypatch,
+            "security-aws-posture",
+            selected,
+            admitted,
+        )
+    session = Session(environment, monkeypatch, scope=admitted)
     seen = spy_publication(monkeypatch)
-    harness = CliCloud(session, environment, tmp_path, monkeypatch, provider)
-    summary, _, _, accepted = await harness.run(
-        cloud.assessment(), "findings", scenario="findings"
+    harness = CliCloud(
+        session, environment, tmp_path, monkeypatch, provider, admitted=admitted
     )
+    summary, _, _, accepted = await harness.run(
+        selected, "findings", scenario="findings"
+    )
+    if entrypoint == "preset-api":
+        await assert_review_captured(environment, accepted)
     assert (summary["outcome"], summary["status"]) == ("findings", "complete")
     harness.assert_no_seed()
     native = cloud.artifact_names(harness, accepted)["report"]["artifactRef"]
@@ -657,15 +834,26 @@ class CliWeb(web.Harness):
         return started.request, SimpleNamespace(job_id=started.job_id)
 
 
+@pytest.mark.parametrize("entrypoint", ["cli", "preset-api"])
 async def test_web_assessment_cli_job_keeps_native_report_after_cleanup(
-    environment, tmp_path, monkeypatch, target
+    environment, tmp_path, monkeypatch, target, entrypoint
 ):
     app, gateway = target
-    session = Session(environment, monkeypatch, scope=web.scope(app))
-    harness = CliWeb(session, environment, tmp_path, monkeypatch, app, gateway)
-    summary, _, _, accepted, resolved = await harness.run(
-        web.assessment(app, identity=web.identity("alice")), "alice"
+    selected, admitted = (
+        web.assessment(app, identity=web.identity("alice")),
+        web.scope(app),
     )
+    if entrypoint == "preset-api":
+        selected, admitted = await scoped_preset_plan(
+            environment, tmp_path, monkeypatch, "security-web-api", selected, admitted
+        )
+    session = Session(environment, monkeypatch, scope=admitted)
+    harness = CliWeb(
+        session, environment, tmp_path, monkeypatch, app, gateway, admitted=admitted
+    )
+    summary, _, _, accepted, resolved = await harness.run(selected, "alice")
+    if entrypoint == "preset-api":
+        await assert_review_captured(environment, accepted)
     assert resolved == ["secret://web/alice"]
     assert summary["coverage"]["authentication"]["status"] == "verified"
     assert summary["findings"]

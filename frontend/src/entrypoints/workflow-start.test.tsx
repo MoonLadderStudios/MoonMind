@@ -633,6 +633,30 @@ describe("WorkflowStartPage workflow list display modes", () => {
     confirmSpy.mockRestore();
   });
 
+  it("confirms an accepted click only once when the router listener runs after Create", async () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft before leaving." } });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const link = document.createElement("a");
+    link.href = "/settings/instance#assessment-authorizations";
+    document.body.appendChild(link);
+    const router = (event: MouseEvent) => {
+      if (event.target !== link) return;
+      expect(requestWorkflowStartRouteChange(link.href, event)).toBe(true);
+      event.preventDefault();
+    };
+    document.addEventListener("click", router);
+    try {
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("click", router);
+      link.remove();
+      confirmSpy.mockRestore();
+    }
+  });
+
   it("does not guard hash-only links or navigation canceled by a local handler", () => {
     renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft." } });

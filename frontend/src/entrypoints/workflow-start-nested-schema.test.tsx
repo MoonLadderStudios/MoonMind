@@ -159,3 +159,44 @@ it.each([
   fireEvent.click(view.getByRole('button', { name: 'Omit Option' }));
   expect(JSON.parse(view.getByTestId('optional-value').textContent!)).toEqual({});
 });
+
+it('honors explicit text presentation for timezone-bearing date-time values', () => {
+  const view = render(<SchemaCapabilityFields fields={[["expiresAt", { type: 'string', format: 'date-time', 'x-moonmind-widget': 'text', title: 'Expiry' }]]}
+    detail={{}} values={{ expiresAt: '2026-11-30T12:00:00+02:00' }} errors={{}} disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={() => {}} />);
+  expect(view.getByLabelText('Expiry')).toHaveProperty('type', 'text');
+  expect(view.getByLabelText('Expiry')).toHaveProperty('value', '2026-11-30T12:00:00+02:00');
+});
+
+it('keeps advanced JSON authoring for open-ended typed objects without losing known-field edits', () => {
+  function Draft() {
+    const [values, setValues] = useState<Record<string, unknown>>({ system: { kind: 'saved', extra: { retained: true } } });
+    return <><SchemaCapabilityFields fields={[["system", { type: 'object', title: 'System', properties: { kind: { type: 'string', title: 'Kind' } } }]]}
+      detail={{}} values={values} errors={{}} disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={(key, value) => setValues({ [key]: value })} />
+      <output data-testid="open-object">{JSON.stringify(values)}</output></>;
+  }
+  const view = render(<Draft />);
+  fireEvent.change(view.getByLabelText('System JSON'), { target: { value: '{"kind":"saved","extra":{"retained":true},"entityName":"New entity"}' } });
+  fireEvent.change(view.getByLabelText('Kind'), { target: { value: 'edited' } });
+  expect(JSON.parse(view.getByTestId('open-object').textContent!)).toEqual({ system: { kind: 'edited', extra: { retained: true }, entityName: 'New entity' } });
+  expect(JSON.parse((view.getByLabelText('System JSON') as HTMLTextAreaElement).value).kind).toBe('edited');
+});
+
+it.each([false, true])('retains invalid advanced JSON until corrected, including object-list rows (%s)', (list) => {
+  const item = { type: 'object', title: 'System', properties: { kind: { type: 'string', title: 'Kind' } } };
+  function Draft() {
+    const [values, setValues] = useState<Record<string, unknown>>({ system: list ? [{ kind: 'saved', extra: true }] : { kind: 'saved', extra: true } });
+    return <><SchemaCapabilityFields fields={[["system", list ? { type: 'array', title: 'Systems', items: item } : item]]}
+      detail={{}} values={values} errors={{}} disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={(key, value) => setValues({ [key]: value })} />
+      <output data-testid="invalid-object">{JSON.stringify(values)}</output></>;
+  }
+  const view = render(<Draft />);
+  const raw = view.getByLabelText(list ? 'Systems item 1 JSON' : 'System JSON');
+  fireEvent.change(raw, { target: { value: '{"kind":' } });
+  expect(raw).toHaveProperty('value', '{"kind":');
+  expect(view.getByLabelText('Kind')).toHaveProperty('disabled', true);
+  fireEvent.change(view.getByLabelText('Kind'), { target: { value: 'must not replace invalid JSON' } });
+  expect(JSON.parse(view.getByTestId('invalid-object').textContent!)).toEqual({ system: list ? ['{"kind":'] : '{"kind":' });
+  fireEvent.change(raw, { target: { value: '{"kind":"corrected","extra":true}' } });
+  expect(view.getByLabelText('Kind')).toHaveProperty('disabled', false);
+  expect(view.getByLabelText('Kind')).toHaveProperty('value', 'corrected');
+});

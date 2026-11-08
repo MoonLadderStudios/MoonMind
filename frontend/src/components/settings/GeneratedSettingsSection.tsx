@@ -33,6 +33,7 @@ export interface SettingAuditPolicy {
 }
 
 export interface SettingDescriptor {
+  input_schema?: Record<string, unknown> | null;
   key: string;
   title: string;
   description?: string | null;

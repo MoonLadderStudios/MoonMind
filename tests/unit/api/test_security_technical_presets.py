@@ -122,6 +122,7 @@ CASES = [
         "webAssessment",
         {
             "mode": "baseline",
+            "assessmentRef": "test",
             "origin": "https://example.test",
             "routes": [{"path": "/", "methods": ["GET"]}],
             "exclusions": ["/logout"],
@@ -316,3 +317,26 @@ def test_nested_defaults_preserve_explicit_feed_policy(explicit):
         True if explicit is None else explicit
     )
     assert result["assessment"]["outputDirectory"] == "assessment-reports"
+
+
+def test_web_preset_requires_matching_authorization_reference_before_expansion():
+    from api_service.services.presets.catalog import _schema_contract_input_definitions
+
+    seed = yaml.safe_load(
+        (ROOT / "api_service/data/presets/security-web-api.yaml").read_text()
+    )
+    schema = _schema_contract_input_definitions(
+        input_schema=seed["annotations"]["inputSchema"], ui_schema={}, defaults={}
+    )
+    value = dict(CASES[3][2])
+    value.pop("assessmentRef", None)
+    with pytest.raises(PresetValidationError) as error:
+        PresetCatalogService(None)._resolve_inputs(
+            schema=schema, submitted={"assessment": value}
+        )
+    assert "assessmentRef" in str(error.value.errors)
+    value["assessmentRef"] = "web-review"
+    result = PresetCatalogService(None)._resolve_inputs(
+        schema=schema, submitted={"assessment": value}
+    )
+    assert result["assessment"]["assessmentRef"] == "web-review"

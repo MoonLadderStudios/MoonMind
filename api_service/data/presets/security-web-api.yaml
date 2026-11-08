@@ -47,6 +47,7 @@ annotations:
             pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
             type: string
             title: Assessment ref
+            description: Must match the assessment reference in the saved authorization selected for launch.
           origin:
             title: Origin
             type: string
@@ -247,6 +248,7 @@ annotations:
             type: integer
         required:
         - mode
+        - assessmentRef
         - origin
         - routes
         - egressPolicyRef
