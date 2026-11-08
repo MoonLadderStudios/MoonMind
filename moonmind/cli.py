@@ -449,6 +449,37 @@ def container_web_assessment(
     _print_container_job_result(result)
 
 
+@container_app.command(
+    "tls-assessment", help="Inspect TLS at one admitted HTTPS origin."
+)
+def container_tls_assessment(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    image_source: str = typer.Option("repository-security", "--image-source"),
+) -> None:
+    from moonmind.security.tls_assessments import (
+        TLSAssessment,
+        build_tls_assessment_job,
+    )
+
+    try:
+        if admission.stat().st_size > 32 * 1024:
+            raise ValueError("TLS admission exceeds the input bound")
+        assessment = TLSAssessment.model_validate_json(admission.read_bytes())
+        result = run_container_job(
+            build_tls_assessment_job(assessment, image_source_ref=image_source)
+        )
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        typer.secho(
+            "Invalid TLS admission or container job unavailable.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
 @worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion

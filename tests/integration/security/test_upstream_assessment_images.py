@@ -244,3 +244,53 @@ def test_prowler_image_assesses_open_and_repaired_account(tmp_path, scenario, ou
         assert {f.check_id for f in summary.findings} == set(CHECKS)
     else:
         assert summary.findings == [] and summary.coverage.passed >= len(CHECKS)
+
+
+def test_tls_scanner_image_inspects_local_connect_fixtures(tmp_path):
+    import json
+
+    image = os.environ.get("MOONMIND_TLS_ASSESSMENT_IMAGE")
+    assert image, "dedicated qualification must supply the candidate TLS scanner image"
+    outputs = tmp_path / "tls-outputs"
+    outputs.mkdir()
+    outputs.chmod(0o777)
+    import tempfile
+    from datetime import UTC, datetime
+
+    from tests.integration.security.tls_assessment_fixture import certificates
+
+    # Private fixture keys must never live under pytest's retained basetemp.
+    with tempfile.TemporaryDirectory(prefix="moonmind-private-tls-") as private:
+        root = Path(private)
+        root.chmod(0o755)
+        _chain, key, ca = certificates(root, valid_at=datetime.now(UTC))
+        key.chmod(0o444)  # The image's non-root user reads a read-only fixture mount.
+        code = run_image(
+            image,
+            ["exec python /qualification/tls_fixture.py /outputs"],
+            mounts={
+                outputs: "/outputs",
+                HERE / "tls_assessment_fixture.py": "/qualification/tls_fixture.py:ro",
+                root: "/qualification/private-fixture:ro",
+                ca: "/inputs/tls-trust/ca.pem:ro",
+            },
+            timeout=180,
+        )
+    assert code == 0
+    results = json.loads((outputs / "qualification.json").read_text())
+    assert set(results) == {
+        "valid",
+        "expired",
+        "wrong-host",
+        "untrusted",
+        "private-ca",
+        "legacy",
+    }
+    for scenario, result in results.items():
+        print(f"TLS {scenario}: {result['summary']['execution']['tool']}")
+        assert result["summary"]["execution"]["tool"]["version"] not in {
+            None,
+            "unavailable",
+        }
+        assert result["gatewayEvents"]
+        assert result["summary"]["execution"]["probes"]

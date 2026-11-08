@@ -384,11 +384,12 @@ class ContainerJobService:
         scope = self._capability.assessment_scope if self._capability else None
         if scope is None and (
             request.spec.web_assessment is not None
+            or request.spec.tls_assessment is not None
             or request.spec.cloud_assessment is not None
         ):
             # Reaching a target does not authorize acting on it.
             raise ContainerJobScopeDeniedError(
-                "web and cloud assessments run only inside an admitted "
+                "web, TLS and cloud assessments run only inside an admitted "
                 "assessment scope"
             )
         if scope is not None:

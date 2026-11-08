@@ -596,6 +596,7 @@ def _withholds_console(spec) -> bool:
     return (
         spec.repository_scan is not None
         or spec.image_assessment is not None
+        or spec.tls_assessment is not None
         or spec.web_assessment is not None
         or spec.cloud_assessment is not None
     )
@@ -4028,6 +4029,8 @@ class DockerContainerJobBackend:
             return await self._collect_scanner_outputs(request)
         if request.request.spec.image_assessment is not None:
             return await self._collect_image_assessment_outputs(request)
+        if request.request.spec.tls_assessment is not None:
+            return await self._collect_tls_assessment_outputs(request)
         if request.request.spec.web_assessment is not None:
             return await self._collect_web_assessment_outputs(request)
         if request.request.spec.cloud_assessment is not None:
@@ -4591,6 +4594,109 @@ class DockerContainerJobBackend:
             )
         except ValueError:
             rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
+    async def _collect_tls_assessment_outputs(self, request: ContainerJobActivityRequest):
+        """Retain checked per-probe evidence before the existing cleanup owner runs."""
+        from moonmind.security.tls_assessments import (
+            summarize_tls_assessment,
+            validate_tls_execution,
+        )
+
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        assessment = spec.tls_assessment
+        # The summary is worker-generated, never accepted from the workload.
+        entries = await asyncio.to_thread(
+            self._build_output_entries,
+            self._output_root(request),
+            [o for o in spec.outputs if o.name == "execution"],
+        )
+        entry = entries[0]
+        manifest = []
+        remaining = self._settings.max_output_total_bytes
+        files = self._settings.max_output_files
+
+        async def publish(name, payload):
+            nonlocal remaining, files
+            relative = f"{assessment.output_directory}/{name}.json"
+            if len(payload) > min(remaining, 8 * 1024 * 1024) or files < 1:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="rejected",
+                        detail="TLS output exceeds collection bounds.",
+                    )
+                )
+                return None
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", payload
+            )
+            remaining -= len(payload)
+            files -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType="application/json",
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        execution, evidence_ref, limitations = {}, None, []
+        if entry["payload"] is not None:
+            try:
+                execution = validate_tls_execution(assessment, json.loads(entry["payload"]))
+            except (ValueError, TypeError, KeyError, RecursionError, UnicodeDecodeError):
+                limitations.append("invalid_execution_evidence")
+                manifest.append(
+                    ContainerJobArtifact(
+                        name="execution",
+                        relativePath=entry["relative_path"],
+                        collectionStatus="rejected",
+                        detail="TLS evidence failed validation.",
+                    )
+                )
+            else:
+                evidence_ref = await publish(
+                    "execution", json.dumps(execution, sort_keys=True).encode()
+                )
+        else:
+            manifest.append(
+                ContainerJobArtifact(
+                    name="execution",
+                    relativePath=entry["relative_path"],
+                    collectionStatus=entry["status"],
+                    detail=entry["detail"],
+                )
+            )
+            limitations.append("missing_execution_evidence")
+        try:
+            resolution = await self._runtime_egress_evidence(request) or {}
+        except (RuntimeError, ValueError, OSError):
+            resolution = {}
+            limitations.append("egress_attestation_unavailable")
+        if resolution.get("resolution") != "validated_pinned_job_snapshot":
+            limitations.append("pinned_resolution_unverified")
+        if resolution.get("coverage") != "complete":
+            limitations.append("egress_coverage_incomplete")
+        if str(request.terminal_state) != "succeeded":
+            limitations.append(f"container_job_{request.terminal_state or 'failed'}")
+        if not evidence_ref:
+            limitations.append("execution_artifact_unavailable")
+        summary = summarize_tls_assessment(
+            assessment, execution, evidence_ref or "unavailable", resolution=resolution
+        )
+        if limitations:
+            summary.status = "partial"
+            summary.limitations = sorted(set(summary.limitations + limitations))
+        await publish("summary", summary.model_dump_json(by_alias=True).encode())
         return manifest
 
     async def _collect_web_assessment_outputs(

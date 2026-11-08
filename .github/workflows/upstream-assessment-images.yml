@@ -13,6 +13,11 @@ on:
     paths:
       - "moonmind/security/web_assessments.py"
       - "moonmind/security/cloud_assessments.py"
+      - "moonmind/security/tls_assessment*.py"
+      - "moonmind/security/egress_policy.py"
+      - "services/repository-security/Dockerfile"
+      - "tools/ci/repository_security_image.py"
+      - "tests/integration/security/*tls*"
       - "moonmind/schemas/repository_scanner_models.py"
       - "tests/integration/security/test_upstream_assessment_images.py"
       - "tests/integration/security/upstream_prowler_driver.py"
@@ -22,6 +27,11 @@ on:
     paths:
       - "moonmind/security/web_assessments.py"
       - "moonmind/security/cloud_assessments.py"
+      - "moonmind/security/tls_assessment*.py"
+      - "moonmind/security/egress_policy.py"
+      - "services/repository-security/Dockerfile"
+      - "tools/ci/repository_security_image.py"
+      - "tests/integration/security/*tls*"
       - "moonmind/schemas/repository_scanner_models.py"
       - "tests/integration/security/test_upstream_assessment_images.py"
       - "tests/integration/security/upstream_prowler_driver.py"
@@ -34,6 +44,10 @@ on:
         type: string
       cloud_posture_image:
         description: "Prowler image override; omitted qualifies prowlercloud/prowler:stable"
+        type: string
+
+      repository_security_image:
+        description: "Published scanner tool/rule base for candidate TLS qualification; omitted uses repository-security:latest"
         type: string
 
 permissions:
@@ -72,4 +86,79 @@ jobs:
         run: >-
           python -m pytest -q -s
           tests/integration/security/test_upstream_assessment_images.py
-          -m "integration_ci or integration"
+          -k "not tls" -m "integration_ci or integration"
+
+
+  qualify-tls:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      MOONMIND_RUN_UPSTREAM_ASSESSMENT_IMAGES: "1"
+      MOONMIND_TLS_ASSESSMENT_IMAGE: moonmind-tls-qualification:current
+      PUBLISHED_SCANNER_IMAGE: ${{ inputs.repository_security_image || 'ghcr.io/moonladderstudios/repository-security:latest' }}
+      TEST_ARCHITECTURE: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Preserve published tools and build the candidate production Dockerfile
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/tls-qualification services/repository-security/resolved/{bin,notices,rules}
+          docker pull --platform "linux/$TEST_ARCHITECTURE" "$PUBLISHED_SCANNER_IMAGE"
+          docker image inspect "$PUBLISHED_SCANNER_IMAGE" > artifacts/tls-qualification/published-image.json
+          source=$(docker create "$PUBLISHED_SCANNER_IMAGE")
+          trap 'docker rm "$source" >/dev/null' EXIT
+          for tool in opengrep gitleaks trivy; do
+            docker cp "$source:/usr/local/bin/$tool" "services/repository-security/resolved/bin/$tool"
+          done
+          docker cp "$source:/usr/local/share/repository-security/notices/." services/repository-security/resolved/notices/
+          docker cp "$source:/usr/local/share/repository-security/inventory.json" services/repository-security/resolved/inventory.json
+          docker cp "$source:/opt/moonmind-scanner-rules/default/." services/repository-security/resolved/rules/
+          python - <<'PY_STAGE'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          from tools.ci.repository_security_image import stage_runner
+          root = Path("services/repository-security/resolved")
+          stage_runner(root / "python")
+          base = json.loads(Path("artifacts/tls-qualification/published-image.json").read_text())[0]
+          assert base["Architecture"] == os.environ["TEST_ARCHITECTURE"]
+          provenance = {
+              "candidateRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "architecture": base["Architecture"], "publishedImageId": base["Id"], "publishedRepoDigests": base["RepoDigests"],
+              "scope": "Candidate Dockerfile, dependencies and Python payload with unchanged published scanner tools/rules; not fresh upstream release signature verification.",
+              "files": {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob("*")) if p.is_file()},
+          }
+          Path("artifacts/tls-qualification/input-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+          PY_STAGE
+          docker pull --platform "linux/$TEST_ARCHITECTURE" python:3.12-slim-bookworm
+          base_identity=$(docker image inspect --format '{{index .RepoDigests 0}}' python:3.12-slim-bookworm)
+          docker build --platform "linux/$TEST_ARCHITECTURE" --build-arg "SECURITY_BASE_IDENTITY=$base_identity" \
+            --file services/repository-security/Dockerfile --tag "$MOONMIND_TLS_ASSESSMENT_IMAGE" .
+          docker image inspect "$MOONMIND_TLS_ASSESSMENT_IMAGE" > artifacts/tls-qualification/candidate-image.json
+      - name: Qualify actual TLS transport and retained evidence against local fixtures
+        run: |
+          python -m pytest -q -s tests/integration/security/test_upstream_assessment_images.py \
+            -k tls -m "integration_ci or integration" --basetemp artifacts/tls-qualification/fixtures
+      - name: Retain qualification provenance and fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tls-assessment-${{ matrix.architecture }}
+          path: artifacts/tls-qualification/
+          retention-days: 30

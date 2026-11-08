@@ -234,6 +234,13 @@ class ContainerBackendSettings:
                         raise ValueError(
                             "image assessment egress may reach only its registry"
                         )
+                if request.spec.tls_assessment is not None:
+                    from moonmind.security.tls_assessments import tls_policy_admits
+
+                    if not tls_policy_admits(policy, request.spec.tls_assessment):
+                        raise ValueError(
+                            "TLS egress may reach only its admitted HTTPS target"
+                        )
                 if request.spec.web_assessment is not None:
                     from moonmind.security.web_assessments import web_policy_admits
 
