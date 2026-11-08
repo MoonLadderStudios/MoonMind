@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from temporalio import activity
 
 from moonmind.security.assessments import (
+    MAX_RETAINED_REPORT_BYTES,
     AdvisoryFeed,
     AssessmentRequest,
     Comparison,
@@ -29,7 +30,10 @@ from moonmind.security.assessments import (
     compare_observations,
     content_key,
 )
-from moonmind.security.cloud_assessments import CloudAssessmentSummary
+from moonmind.security.cloud_assessments import (
+    CloudAssessmentSummary,
+    review_cloud_mappings,
+)
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
@@ -57,7 +61,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
 
 TOOL_NAME = "security.assess"
-_MAX_INPUT_BYTES = 8 * 1024 * 1024
+_MAX_INPUT_BYTES = MAX_RETAINED_REPORT_BYTES
 # Retaining a comparison keeps its baseline's exact bytes, not the baseline's
 # own lineage: evidence a comparison still cites is sealed directly, so every
 # recurring occurrence does not retain all earlier history.
@@ -457,6 +461,58 @@ def _web_observation(
     )
 
 
+def _cloud_control_evidence(summary: CloudAssessmentSummary):
+    """Positive observations prove only executed checks in the admitted population.
+
+    Prowler's retained epoch is in Unix seconds (also retained unchanged). Aware
+    ISO timestamps are supported when no epoch is supplied; unknown timestamps
+    cannot acquire the artifact's publication time as a new observation date.
+    """
+    checks = summary.check_evidence or []
+    reasons, observed = set(), []
+    admission = summary.admission
+    if not checks or not summary.native_ref:
+        reasons.add("check_records_unavailable")
+    if summary.status != "complete" or summary.coverage.checks_without_results:
+        reasons.add("collection_incomplete")
+    by_rule = {}
+    for check in checks:
+        if admission.checks and check.check_id not in admission.checks:
+            reasons.add("unadmitted_check_result")
+        by_rule.setdefault(check.check_id, set()).add(check.region)
+        if (
+            check.provider != admission.provider
+            or check.account != admission.account
+            or check.region not in admission.regions
+            or not check.resource_uids
+        ):
+            reasons.add("record_scope_unknown_or_unadmitted")
+        if check.muted or check.status == "MANUAL":
+            reasons.add("suppressed_or_manual_result")
+        try:
+            if check.observed_timestamp is not None:
+                stamp = datetime.fromtimestamp(check.observed_timestamp, UTC)
+            elif isinstance(check.observed_time, str):
+                stamp = datetime.fromisoformat(check.observed_time)
+                if stamp.tzinfo is None:
+                    raise ValueError("unknown timezone")
+            else:
+                raise ValueError("no observation time")
+            observed.append(stamp.astimezone(UTC))
+        except (ValueError, OverflowError, OSError):
+            reasons.add("observation_time_unknown")
+    if any(set(admission.regions) - regions for regions in by_rule.values()):
+        reasons.add("region_population_incomplete")
+    if len({stamp.date() for stamp in observed}) > 1:
+        reasons.add("multiple_observation_dates")
+    known_times = observed and len(observed) == len(checks)
+    return (
+        sorted(reasons),
+        min(observed) if known_times else None,
+        max(observed) if known_times else None,
+    )
+
+
 def _cloud_observation(
     request, summary: CloudAssessmentSummary, ref: str, created_at: datetime
 ) -> Observation:
@@ -479,10 +535,14 @@ def _cloud_observation(
         status = "failed"
     else:
         status = "partial"
+    control_limits, earliest, latest = _cloud_control_evidence(summary)
+    # Every contributing record must already exist, while the oldest record
+    # still decides expiry. Neither future nor stale rows borrow another's age.
+    observed_at = latest or created_at
     return Observation(
         scope=request.scope,
-        observed_at=created_at,
-        expires_at=created_at + timedelta(days=1),
+        observed_at=observed_at,
+        expires_at=(earliest or created_at) + timedelta(days=1),
         findings=result.findings,
         coverage=[
             Coverage(
@@ -490,7 +550,11 @@ def _cloud_observation(
                 tool="prowler",
                 assets=assets,
                 rule_ids=summary.coverage.checks_with_results,
-                all_rules=status == "complete",
+                # Only named results can prove a check, never an omitted rule.
+                all_rules=False,
+                evidence_method=(
+                    "unclassified" if control_limits else "deterministic_check"
+                ),
                 # Absence is comparable only for the same regions, checks or
                 # services and Prowler version.
                 config_ref=content_key(
@@ -512,6 +576,9 @@ def _cloud_observation(
             "cloudNativeReport": summary.native_ref or "unavailable",
             "cloudAccount": f"{admission.provider}:{admission.account}",
             "cloudOutcome": summary.outcome,
+            "cloudControlEvidence": (
+                ", ".join(control_limits) if control_limits else "executed_checks_only"
+            ),
         },
     )
 
@@ -1620,6 +1687,18 @@ class AssessmentExecution:
                                     "limitations": sorted(cloud_summary.limitations),
                                     "verification": cloud_summary.verification,
                                     "interpretation": cloud_summary.interpretation,
+                                    "checkEvidenceRef": ref,
+                                    "checkEvidenceCount": len(
+                                        cloud_summary.check_evidence or []
+                                    ),
+                                    "controlEvidenceLimitations": _cloud_control_evidence(
+                                        cloud_summary
+                                    )[
+                                        0
+                                    ],
+                                    "effectiveConfiguration": cloud_summary.admission.model_dump(
+                                        mode="json", by_alias=True
+                                    ),
                                 }
                             )
                         elif payload.get("schemaVersion") == "game-math-assessment/v1":
@@ -2034,6 +2113,19 @@ class AssessmentExecution:
             "reviewStatus": review_status,
             "scannerSummaries": work.get("scannerSummaries", []),
         }
+        # Mapping relationships depend on today's control plan, unlike the
+        # immutable native scan. Never reuse a previous plan's review results.
+        outputs["scannerSummaries"] = [dict(row) for row in outputs["scannerSummaries"]]
+        for scanner in outputs["scannerSummaries"]:
+            if scanner.get("scanner") != "prowler":
+                continue
+            source = inputs.get(scanner["summaryRef"])
+            if source is None:
+                continue
+            current_cloud = CloudAssessmentSummary.model_validate_json(source[1])
+            scanner["mappingReviews"] = review_cloud_mappings(
+                current_cloud, request.control_assessment
+            )
         if comparison["productComparison"] is not None:
             outputs.update(
                 productBaselineRef=request.product_baseline_ref,

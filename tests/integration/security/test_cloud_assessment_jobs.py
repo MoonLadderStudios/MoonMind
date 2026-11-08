@@ -28,7 +28,6 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
 import pytest
-
 from pydantic import ValidationError
 
 from api_service.services.container_jobs import (
@@ -501,6 +500,17 @@ async def test_findings_and_compliant_resources_use_only_the_issued_session(
     assert {f["findingUid"] for f in summary["findings"]} <= {
         r["finding_info"]["uid"] for r in native
     }
+    assert len(summary["checkEvidence"]) == len(native)
+    assert {row["status"] for row in summary["checkEvidence"]} == {"PASS", "FAIL"}
+    for check in summary["checkEvidence"]:
+        record = native[int(check["nativePath"].removeprefix("/"))]
+        assert check["findingUid"] == record["finding_info"]["uid"]
+        assert check["observedTime"] == record["time_dt"]
+        for mapping in check["complianceMappings"]:
+            assert (
+                mapping["requirementIds"]
+                == record["unmapped"]["compliance"][mapping["framework"]]
+            )
     harness.assert_no_seed()
 
     # Security Skills review the retained summary through the existing
@@ -528,6 +538,15 @@ async def test_findings_and_compliant_resources_use_only_the_issued_session(
         "findings",
     )
     assert outputs["counts"]["new"] == 3
+    assert reviewed["checkEvidenceRef"] == names["summary"]["artifactRef"]
+    assert reviewed["checkEvidenceCount"] == len(summary["checkEvidence"])
+    assert "checkEvidence" not in reviewed
+    assert reviewed["mappingReviews"]
+    assert all(row["state"] == "review_required" for row in reviewed["mappingReviews"])
+    assert {"collection_incomplete", "region_population_incomplete"} <= set(
+        reviewed["controlEvidenceLimitations"]
+    )
+    assert reviewed["effectiveConfiguration"] == summary["admission"]
 
     clean, _, _, _ = await harness.run(assessment(), "compliant", scenario="compliant")
     assert (clean["outcome"], clean["status"]) == ("clean", "complete")
@@ -564,6 +583,18 @@ async def test_denied_and_throttled_collection_is_partial_coverage(
         key="cloud-partial-review",
     )
     assert outputs["scannerSummaries"][0]["coverage"] == "partial"
+    assert {row["status"] for row in summary["checkEvidence"]} == {
+        "PASS",
+        "FAIL",
+        "MANUAL",
+    }
+    assert outputs["scannerSummaries"][0]["checkEvidenceCount"] == len(
+        summary["checkEvidence"]
+    )
+    assert (
+        "collection_incomplete"
+        in outputs["scannerSummaries"][0]["controlEvidenceLimitations"]
+    )
 
 
 async def test_expired_session_is_an_execution_failure_with_its_cause(
@@ -740,3 +771,72 @@ async def test_repaired_account_is_verified_only_with_comparable_retest(
     )
     assert outputs["coverageStatus"] == "complete"
     assert outputs["counts"]["new"] == 0
+
+
+async def test_retained_positive_checks_feed_only_selected_control_objective(
+    environment, tmp_path, monkeypatch, provider
+):
+    harness = Harness(environment, tmp_path, monkeypatch, provider)
+    check = "s3_bucket_level_public_access_block"
+    summary, _, _, accepted = await harness.run(
+        assessment(regions=["us-east-1"], checks=[check]),
+        "control-check",
+        scenario="control-compliant",
+    )
+    calls = list(ProviderApi.calls)
+    today = datetime.now(UTC).date().isoformat()
+    original = await invoke(
+        environment.service,
+        posture_review(artifact_names(harness, accepted)["summary"]["artifactRef"]),
+        key="cloud-before-control-selection",
+    )
+    assert all(
+        not row["selectedRequirements"]
+        for row in original["scannerSummaries"][0]["mappingReviews"]
+    )
+    outputs = await invoke(
+        environment.service,
+        posture_review(
+            artifact_names(harness, accepted)["summary"]["artifactRef"],
+            controlAssessment={
+                "requirements": [
+                    {
+                        "id": "C1",
+                        "frameworkId": "synthetic",
+                        "frameworkEdition": "2026",
+                        "title": "Logical access",
+                        "scope": {"assets": [f"aws:{ACCOUNT}"]},
+                        "period": {"start": today, "end": today},
+                        "applicability": "applicable",
+                        "applicabilityReason": "Admitted account",
+                        "objectivesComplete": False,
+                        "objectiveBasis": "Selected technical check only",
+                        "objectives": [
+                            {
+                                "id": "technical",
+                                "source": "cloud",
+                                "tool": "prowler",
+                                "ruleIds": [check],
+                                "description": "Check bucket access",
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
+        key="cloud-positive-control",
+    )
+    assert outputs["diagnostics"] == []
+    control = await recurring.read(environment.service, outputs["controlAssessmentRef"])
+    assert control["requirements"][0]["objectives"][0]["outcome"] == "passed"
+    assert control["requirements"][0]["conclusion"] == "inconclusive"
+    assert outputs["scanRef"] == original["scanRef"]
+    retained = outputs["scannerSummaries"][0]
+    source = await recurring.read(environment.service, retained["checkEvidenceRef"])
+    assert source["checkEvidence"] == summary["checkEvidence"]
+    assert retained["checkEvidenceCount"] == len(summary["checkEvidence"])
+    assert "checkEvidence" not in retained
+    assert retained["mappingReviews"][0]["selectedRequirements"] == ["C1"]
+    assert retained["mappingReviews"][0]["state"] == "review_required"
+    assert ProviderApi.calls == calls
+    harness.assert_no_seed()
