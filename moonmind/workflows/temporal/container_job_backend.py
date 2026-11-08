@@ -4165,6 +4165,44 @@ class DockerContainerJobBackend:
             )
         return refs
 
+    def _application_access_spec_body(self, request, invocation) -> bytes:
+        """Read the exact immutable file used by the profile, including archive inputs."""
+        from moonmind.security.assessments import MAX_RETAINED_REPORT_BYTES
+
+        paths = [
+            arg.split("=", 1)[1] for arg in invocation if arg.startswith("--spec=")
+        ]
+        paths += [
+            invocation[i + 1]
+            for i, arg in enumerate(invocation[:-1])
+            if arg == "--spec"
+        ]
+        storage = self._attachment_storage(request)
+        if len(paths) != 1 or storage is None or not paths[0].startswith("/inputs/"):
+            raise ValueError(
+                "application access specification must be a captured input"
+            )
+        relative = paths[0][len("/inputs/") :]
+        parts = relative.split("/")
+        names = {
+            attachment.name
+            for attachment in request.request.spec.input_attachments or ()
+        }
+        if parts[0] not in names or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("application access input path is outside captured inputs")
+        path = storage.inputs
+        for part in parts:
+            path = path / part
+            if path.is_symlink():
+                raise ValueError("application access input cannot be a symlink")
+        if not path.is_file():
+            raise ValueError("application access specification is unavailable")
+        with path.open("rb") as source:
+            body = source.read(MAX_RETAINED_REPORT_BYTES + 1)
+        if len(body) > MAX_RETAINED_REPORT_BYTES:
+            raise ValueError("application access specification exceeds its bound")
+        return body
+
     async def _collect_declared_outputs(
         self, request: ContainerJobActivityRequest, delivered: Sequence[str] = ()
     ) -> list[ContainerJobArtifact]:
@@ -4189,15 +4227,110 @@ class DockerContainerJobBackend:
             *request.request.spec.command,
         )
         rgs_target = "moonmind.security.rgs_target" in invocation
-        if rgs_target:
+        access_target = "moonmind.security.application_access_target" in invocation
+        if rgs_target or access_target:
             # A live observation's recoverable capture must be retained before
             # publishing the report that depends on it.
             raw.sort(key=lambda entry: entry["name"] != "capture")
         capture_ref = None
         rgs_input_refs = None
+        access_capture_body = None
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and access_target:
+                from moonmind.security.application_access import (
+                    ApplicationAccessReport,
+                    ApplicationAccessSpec,
+                )
+                from moonmind.security.application_access import (
+                    bind_job_result as bind_access_job,
+                )
+                from moonmind.security.application_access import verify_report_evidence
+                from moonmind.security.application_access_target import (
+                    ApplicationAccessCapture,
+                    validate_capture_spec,
+                )
+                from moonmind.security.target_assessments import TargetScope
+                from moonmind.security.workload_profiles import TARGET_SCOPE_ENV
+
+                try:
+                    if entry["name"] == "capture":
+                        capture = ApplicationAccessCapture.model_validate_json(payload)
+                        configured = next(
+                            (
+                                item.value
+                                for item in request.request.spec.environment
+                                if item.name == TARGET_SCOPE_ENV
+                            ),
+                            None,
+                        )
+                        if (
+                            configured is None
+                            or capture.scope
+                            != TargetScope.model_validate_json(configured)
+                        ):
+                            raise ValueError(
+                                "capture target differs from admitted scope"
+                            )
+                    else:
+                        if (
+                            entry["name"] != "assessment"
+                            or capture_ref is None
+                            or access_capture_body is None
+                        ):
+                            raise ValueError(
+                                "application access capture was not retained"
+                            )
+                        summary = ApplicationAccessReport.model_validate_json(payload)
+                        if summary.job is not None:
+                            raise ValueError(
+                                "workload cannot author ContainerJob outcome"
+                            )
+                        spec_body = await asyncio.to_thread(
+                            self._application_access_spec_body, request, invocation
+                        )
+                        if (
+                            delivered
+                            and _without_delivered(
+                                spec_body, "application/json", delivered
+                            )
+                            != spec_body
+                        ):
+                            raise ValueError(
+                                "application access input contains credentials"
+                            )
+                        access_spec = ApplicationAccessSpec.model_validate_json(
+                            spec_body
+                        )
+                        capture = ApplicationAccessCapture.model_validate_json(
+                            access_capture_body
+                        )
+                        validate_capture_spec(access_spec, capture)
+                        verify_report_evidence(
+                            summary,
+                            access_spec,
+                            capture.bundle,
+                            spec_body,
+                            access_capture_body,
+                        )
+                        spec_ref = await self._publish_artifact(
+                            request,
+                            f"{request.job_id}-input-access-spec.json",
+                            spec_body,
+                        )
+                        payload = bind_access_job(
+                            payload,
+                            str(request.terminal_state or "failed"),
+                            request.exit_code,
+                            {"spec": spec_ref, "capture": capture_ref},
+                        )
+                except (ValueError, OSError, PermissionError):
+                    payload = None
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="invalid application access assessment output",
+                    )
             if payload is not None and (
                 rgs_target or "moonmind.security.rgs_assessment" in invocation
             ):
@@ -4240,7 +4373,9 @@ class DockerContainerJobBackend:
 
                 try:
                     payload = bind_job_result(
-                        payload, str(request.terminal_state or "failed"), request.exit_code
+                        payload,
+                        str(request.terminal_state or "failed"),
+                        request.exit_code,
                     )
                 except ValueError:
                     payload = None
@@ -4272,8 +4407,10 @@ class DockerContainerJobBackend:
             if entry["media_type"] == "application/gzip":
                 name = name.removesuffix(suffixes) + ".tar.gz"
             ref = await self._publish_artifact(request, name, payload)
-            if rgs_target and entry["name"] == "capture":
+            if (rgs_target or access_target) and entry["name"] == "capture":
                 capture_ref = ref
+                if access_target:
+                    access_capture_body = payload
             manifest.append(
                 ContainerJobArtifact(
                     name=entry["name"],
