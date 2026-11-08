@@ -31,8 +31,11 @@ from moonmind.security.container_job_capabilities import (
 )
 from moonmind.security.workload_profiles import AdmittedAssessmentScope
 from tests.unit.security.test_workload_profiles import SCOPE, scoped, settings
-from tests.unit.services.test_container_jobs import session_factory as session_factory  # noqa: PLC0414
-from tests.unit.services.test_container_jobs import temporal as temporal  # noqa: PLC0414
+from tests.unit.services import test_container_jobs as container_job_fixtures
+
+# Pytest discovers these shared fixture objects through module-level aliases.
+session_factory = container_job_fixtures.session_factory
+temporal = container_job_fixtures.temporal
 
 
 def authorization(**overrides):
@@ -627,3 +630,94 @@ async def test_readable_review_retention_projects_known_fields_and_redacts_crede
     assert retained["review"]["scopeDigest"] == review["scopeDigest"]
     assert "[REDACTED]" in json.dumps(retained)
     assert "rawCredentials" not in retained["review"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", ["jobs", "seconds"])
+@pytest.mark.parametrize("history", ["retargeted", "missing", "unchanged"])
+async def test_legacy_reservations_count_without_reauthorizing_or_rebinding_history(
+    session_factory, temporal, budget, history
+):
+    from api_service.services.assessment_authorizations import (
+        AssessmentAuthorizationDenied,
+        assessment_reserved_budget,
+        validate_job_assessment_authority,
+    )
+
+    original = AdmittedAssessmentScope.model_validate(SCOPE)
+    target = "app" if history == "unchanged" else "replacement"
+    auth = authorization(
+        maxTotalJobSeconds=500 if budget == "seconds" else 900,
+        scope={
+            **SCOPE,
+            "targets": [{"workspacePath": target}],
+            "maxJobs": 2 if budget == "jobs" else 10,
+            "maxCpuMillis": 2000,
+            "maxMemoryMiB": 2048,
+        },
+    )
+    current = authorization_scope(auth)
+    async with session_factory() as session:
+        await save_scope(session, original)
+        accepted = await submit(session, temporal, original)
+        historical = await session.get(ContainerJobRecord, accepted.job_id)
+        old_request = ContainerJobSubmitRequest.model_validate(historical.request_json)
+        historical.state = "succeeded"
+        historical.logs_ref = "art_completed_history"
+        historical.assessment_scope_json = None
+        historical.assessment_deadline_at = None
+        source = await session.get(TemporalExecutionCanonicalRecord, "workflow-1")
+        workflow_id = "workflow-1"
+        if history == "missing":
+            await session.delete(source)
+            await session.commit()
+            workflow_id = "reviewed-workflow"
+            await save_scope(session, current, workflow=workflow_id)
+        else:
+            source.parameters = {
+                "assessmentScope": current.model_dump(mode="json", by_alias=True)
+            }
+        row = await session.scalar(
+            select(SettingsOverride).where(SettingsOverride.key == SETTINGS_KEY)
+        )
+        row.value_json = {
+            "authorizations": [auth.model_dump(mode="json", by_alias=True)]
+        }
+        await session.commit()
+
+        cap = capability(current, owner="new-step", workflow=workflow_id)
+        jobs = ContainerJobService(
+            session, temporal=temporal, backend_settings=settings(), capability=cap
+        )
+
+        def fresh(key, seconds):
+            return ContainerJobSubmitRequest(
+                idempotencyKey=key,
+                source={"source": "workflow", "workflowId": workflow_id},
+                spec=scoped(
+                    [{"name": "source", "workspacePath": f"{target}/routes"}]
+                ).model_copy(update={"timeout_seconds": seconds}),
+            )
+
+        await jobs.submit(owner=cap.owner, request=fresh("new-target", 200))
+        assert await assessment_reserved_budget(session, current) == (2, 500)
+        # Accounting cannot claim today's reviewed targets/generation as an
+        # old job's original authority, or manufacture a fresh deadline.
+        assert historical.assessment_scope_json is None
+        assert historical.assessment_deadline_at is None
+        assert historical.logs_ref == "art_completed_history"
+        with pytest.raises(ContainerJobScopeDeniedError, match="budget"):
+            await jobs.submit(owner=cap.owner, request=fresh("over-budget", 100))
+        assert await assessment_reserved_budget(session, current) == (2, 500)
+        if history != "unchanged":
+            with pytest.raises(AssessmentAuthorizationDenied, match="canonical"):
+                await validate_job_assessment_authority(
+                    session,
+                    historical,
+                    old_request,
+                    profiles=settings().workload_profiles,
+                )
+        # Observation of retained completed work still needs no live authority.
+        await validate_job_assessment_authority(
+            session, historical, old_request, live=False
+        )

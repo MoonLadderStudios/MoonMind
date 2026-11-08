@@ -169,6 +169,8 @@ async def _authorization_row(session, *, for_update=False, ensure_legacy_lock=Fa
                 )
                 await session.flush()
         except IntegrityError:
+            # Another admission may insert this singleton row first. The
+            # savepoint rolls back our insert; select and lock the winner below.
             pass
         row = await session.scalar(statement)
     return row
@@ -325,6 +327,7 @@ async def persisted_assessment_scope(session, record, request, *, bind=True):
 
 
 async def assessment_reserved_budget(session, scope):
+    """Count admitted reservations without reauthorizing historical actions."""
     spec = ContainerJobRecord.request_json["spec"]
     refs = [
         spec[field]["assessmentRef"].as_string()
@@ -353,10 +356,12 @@ async def assessment_reserved_budget(session, scope):
         request = ContainerJobSubmitRequest.model_validate(
             {**record.request_json, "source": record.source_json}
         )
-        admitted = await persisted_assessment_scope(session, record, request)
-        if admitted is not None and admitted.assessment_ref == scope.assessment_ref:
-            count += 1
-            seconds += request.spec.timeout_seconds
+        # These are API-owned reservation records, not a request to act. The
+        # recorded reference selects accounting only; it cannot grant launch
+        # authority. Today's canonical targets may differ or no longer exist,
+        # and counting must neither rebind old jobs nor refund their budgets.
+        count += 1
+        seconds += request.spec.timeout_seconds
     return count, seconds
 
 
