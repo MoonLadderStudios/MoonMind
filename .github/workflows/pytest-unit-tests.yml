@@ -1372,7 +1372,7 @@ jobs:
         # cleanup. Provider catalog/turn are controlled; failed or missing evidence fails.
         # MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'fresh-journey'
-        timeout-minutes: ${{ inputs.worker_comparison && 30 || 20 }}
+        timeout-minutes: 20
         env:
           MOONMIND_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
           WORKER_COMPARISON: ${{ inputs.worker_comparison && '1' || '0' }}

@@ -11,6 +11,7 @@ import os
 import shutil
 from contextlib import AsyncExitStack
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -3184,8 +3185,13 @@ async def main_async(*, fleet: str | None = None) -> None:
         )
     ):
         log_fields["service"] = service_name
-    if len(topologies) > 1:
-        log_fields["component"] = "temporal-worker"
+    if not any(
+        os.environ.get(name)
+        for name in ("MOONMIND_COMPONENT", "MOONMIND_COMPONENT_NAME")
+    ):
+        log_fields["component"] = (
+            topologies[0].fleet if len(topologies) == 1 else "temporal-worker"
+        )
     _configure_worker_logging(
         enable_opentelemetry=os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0")
         == "1",
@@ -3239,7 +3245,12 @@ async def main_async(*, fleet: str | None = None) -> None:
                     )
 
                     initialize_telemetry(
-                        TelemetrySettings.from_env(service_name=service_name)
+                        replace(
+                            TelemetrySettings.from_env(service_name=service_name),
+                            worker_fleet=",".join(
+                                topology.fleet for topology in topologies
+                            ),
+                        )
                     )
                     interceptors.append(TracingInterceptor())
 

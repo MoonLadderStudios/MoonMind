@@ -1,6 +1,7 @@
 """Process ownership and isolated queue contracts for co-located fleets."""
 
 import asyncio
+import os
 from contextlib import AsyncExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -250,6 +251,33 @@ def test_runtime_logging_uses_actual_selection_not_legacy_marker(monkeypatch):
     log_filter.filter(record)
     assert record.worker_fleet == "workflow,llm"
     assert record.service == "temporal-worker-multi"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count, expected", [(1, "llm"), (2, "llm,sandbox")])
+async def test_telemetry_uses_actual_hosted_fleets_not_legacy_marker(
+    process, monkeypatch, count, expected
+):
+    from moonmind.observability import telemetry
+
+    process.topologies[:] = process.topologies[:count]
+    monkeypatch.setenv("MOONMIND_ENABLE_OPENTELEMETRY", "1")
+    monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "artifacts")
+    initialized = MagicMock()
+    monkeypatch.setattr(telemetry, "initialize_telemetry", initialized)
+    monkeypatch.setattr(runtime, "Runtime", MagicMock())
+    logging = MagicMock()
+    monkeypatch.setattr(runtime, "_configure_worker_logging", logging)
+    await runtime.main_async()
+    assert initialized.call_count == 1
+    assert initialized.call_args.args[0].worker_fleet == expected
+    assert initialized.call_args.args[0].service_name == (
+        "temporal-worker-llm" if count == 1 else "temporal-worker-multi"
+    )
+    assert os.environ["TEMPORAL_WORKER_FLEET"] == "artifacts"
+    assert logging.call_args.kwargs["default_fields"]["component"] == (
+        "llm" if count == 1 else "temporal-worker"
+    )
 
 
 @pytest.mark.asyncio
