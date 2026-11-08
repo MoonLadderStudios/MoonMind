@@ -379,9 +379,8 @@ class ScopedTargetClient:
                     elif request.realtime_case_ref is not None:
                         status, body = await self._realtime(session, request, headers)
                     else:
-                        url = ("wss" if url.startswith("https:") else "ws") + url[
-                            url.index(":") :
-                        ]
+                        # ws_connect accepts HTTP(S). Preserve that scheme so
+                        # the proxy receives an HTTP upgrade request target.
                         async with session.ws_connect(
                             url,
                             headers=headers,
@@ -585,7 +584,8 @@ class ScopedTargetClient:
             url += "?" + urlencode({"id": token})
         self.admit(request)
         self._transport_budget.connections += 1
-        url = ("wss" if url.startswith("https:") else "ws") + url[url.index(":") :]
+        # Retain the admitted HTTP(S) scheme: aiohttp supplies Upgrade and
+        # retains HTTPS TLS/CONNECT handling without a ws:// proxy target.
         socket = await self._await(
             session.ws_connect(
                 url,

@@ -109,10 +109,15 @@ async def fixture_server(mode="normal", signalr=False):
         "connected": asyncio.Event(),
         "negotiations": 0,
         "paths": [],
+        "request_targets": [],
     }
 
     async def handler(request):
         state["paths"].append(request.path)
+        # Observe the actual proxy request target, omitting query tokens.
+        state["request_targets"].append(request.raw_path.split("?", 1)[0])
+        if mode == "http-proxy" and not request.raw_path.startswith("http://"):
+            return web.Response(status=501)
         if request.path == "/identity":
             identity = (
                 request.headers.get("Authorization", "").removeprefix("Bearer token-")
@@ -628,5 +633,35 @@ def test_named_transport_refusal_is_inconclusive_with_verified_identity(
             "Private gateway refusal"
             not in capture.model_dump_json() + report.model_dump_json()
         )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("protocol", ["websocket", "signalr-json", "legacy-websocket"])
+def test_proxy_upgrade_uses_admitted_http_request_target(protocol):
+    async def run():
+        async with fixture_server("http-proxy", signalr=protocol == "signalr-json") as (
+            proxy,
+            state,
+        ):
+            scope = realtime_scope(
+                "websocket" if protocol == "legacy-websocket" else protocol
+            )
+            request = request_for(scope)
+            if protocol == "legacy-websocket":
+                scope.realtime = None
+                scope.messages = {"/ws": ["read"]}
+                request.realtime_case_ref = None
+                request.effect = None
+            client = ScopedTargetClient(scope, proxy=proxy)
+            observation = await client.exchange(request)
+            assert observation.status == 101
+            assert observation.payload == {"access": "allow"}
+            assert state["request_targets"][-1] == "http://fixture.test/ws"
+            assert all(
+                target.startswith("http://fixture.test/")
+                for target in state["request_targets"]
+            )
+            assert len(state["sends"]) == (2 if protocol == "signalr-json" else 1)
 
     asyncio.run(run())
