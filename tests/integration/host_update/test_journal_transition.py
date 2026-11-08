@@ -23,6 +23,7 @@ ACTOR = Path(__file__).with_name("journal_transition_actor.py")
 WRITER = "temporal-worker-agent-runtime"
 SWEEPER = "temporal-worker-artifacts"
 CONTROL = "temporal-worker-deployment-control"
+CORE = "temporal-worker-core"
 pytestmark = [pytest.mark.integration]
 
 CONTROLLER_PHASE = """
@@ -71,7 +72,12 @@ def await_record(path, *, process_check=None):
     return pytest.fail(f"Journal actor did not produce {path.name}")
 
 
-def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_path):
+@pytest.mark.parametrize(
+    "rename_sweeper", [False, True], ids=["legacy-services", "core-round-trip"]
+)
+def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(
+    tmp_path, rename_sweeper
+):
     if os.environ.get("MOONMIND_TEST_JOURNAL_TRANSITION") != "1":
         pytest.skip("Real Compose journey is explicitly enabled in controller-journey CI")
     image = os.environ["MOONMIND_TEST_JOURNAL_APP_IMAGE"]
@@ -121,14 +127,27 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
     def compose(*args, check=True):
         return run([*base, *args], env=env, cwd=tmp_path, check=check)
 
-    def actors_healthy(services=(WRITER, SWEEPER)):
+    def actor_rows():
         result = compose("ps", "--all", "--format", "json")
         output = result.stdout.strip()
         rows = json.loads(output) if output.startswith("[") else [json.loads(line) for line in output.splitlines()]
+        return rows
+
+    def actors_healthy(services=(WRITER, SWEEPER)):
+        rows = actor_rows()
         broken = [row for row in rows if row.get("Service") in services
                   and row.get("State") not in ("running", "created")]
         if broken:
             pytest.fail(compose("logs", "--tail", "80", check=False).stdout + str(broken))
+
+    def assert_installed_consumers(sweeper, *, absent=None):
+        rows = actor_rows()
+        for service in (WRITER, sweeper):
+            matching = [row for row in rows if row.get("Service") == service]
+            assert len(matching) == 1, rows
+            assert matching[0]["State"] == "running", rows
+        if absent:
+            assert all(row.get("Service") != absent for row in rows), rows
 
     # The old target has the actual app dependencies and retained reader
     # contract, but intentionally cannot run the new preparation helper.
@@ -170,6 +189,13 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         before = await_record(state / "seeded.json", process_check=actors_healthy)
         await_record(state / "swept.json", process_check=actors_healthy)
         config["services"][WRITER]["entrypoint"][-1] = "writer-resume"
+        candidate_sweeper = CORE if rename_sweeper else SWEEPER
+        if rename_sweeper:
+            # Exercise deployment topology independently of the future combined
+            # worker implementation. Older discovery still sees its fleet marker.
+            config["services"][CORE] = config["services"].pop(SWEEPER)
+            config["services"][CORE]["labels"] = {"moonmind.journal-consumer": "true"}
+            target = {**target, "services": ["postgres", WRITER, CORE]}
         compose_file.write_text(json.dumps(config))
         operation = store.begin(stack="moonmind", desired_image=image,
                                 source_revision="candidate", target=target)
@@ -177,18 +203,48 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         assert crashed.returncode == 71, crashed.stdout + crashed.stderr
         assert store.load(operation["operationId"])["installed"] is None
         await_record(state / "resumed.json", process_check=lambda: actors_healthy((WRITER,)))
-        original_sources = store.load(operation["operationId"])["journalTransition"]["sourceImages"]
+        prepared = store.load(operation["operationId"])["journalTransition"]
+        assert set(prepared["installedConsumerServices"]) == {WRITER, SWEEPER}
+        assert set(prepared["targetConsumerServices"]) == {WRITER, candidate_sweeper}
+        original_sources = prepared["sourceImages"]
+        assert original_sources
+        for source in original_sources:
+            run(["docker", "image", "inspect", source], env=env, cwd=tmp_path)
         resumed = phase(store.load(operation["operationId"]))
         assert '"compacted": 1' in resumed.stdout
         completed = store.load(operation["operationId"])
         assert completed["status"] == "succeeded"
         assert completed["journalTransition"]["sourceImages"] == original_sources
+        assert set(completed["journalTransition"]["targetConsumerServices"]) == {
+            WRITER,
+            candidate_sweeper,
+        }
+        assert_installed_consumers(
+            candidate_sweeper, absent=SWEEPER if rename_sweeper else None
+        )
+        if rename_sweeper:
+            config["services"][SWEEPER] = config["services"].pop(CORE)
+            config["services"][SWEEPER].pop("labels")
+            target = {**target, "services": ["postgres", WRITER, SWEEPER]}
         config["services"][WRITER]["entrypoint"][-1] = "legacy-reader"
         config["services"][SWEEPER]["entrypoint"][-1] = "legacy-sweeper"
         compose_file.write_text(json.dumps(config))
         rollback = store.begin(stack="moonmind", desired_image=old_image,
                                source_revision="legacy-contract", target=target)
         phase(rollback)
+        rolled_back = store.load(rollback["operationId"])
+        assert rolled_back["status"] == "succeeded"
+        assert set(rolled_back["journalTransition"]["installedConsumerServices"]) == {
+            WRITER,
+            candidate_sweeper,
+        }
+        assert set(rolled_back["journalTransition"]["targetConsumerServices"]) == {
+            WRITER,
+            SWEEPER,
+        }
+        assert_installed_consumers(SWEEPER, absent=CORE if rename_sweeper else None)
+        for source in original_sources:
+            run(["docker", "image", "inspect", source], env=env, cwd=tmp_path)
         await_record(state / "legacy-read.json", process_check=actors_healthy)
         await_record(state / "legacy-swept.json", process_check=actors_healthy)
         # Re-read after the old sweeper has actually run, not only before it.
