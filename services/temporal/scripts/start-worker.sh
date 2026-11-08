@@ -1,18 +1,16 @@
 #!/usr/bin/env sh
 set -eu
 
-FLEET="${TEMPORAL_WORKER_FLEET:-}"
-if [ -z "$FLEET" ]; then
-  echo "TEMPORAL_WORKER_FLEET is required" >&2
+if [ -z "${TEMPORAL_WORKER_FLEET:-}" ] && [ -z "${TEMPORAL_WORKER_FLEETS:-}" ]; then
+  echo "TEMPORAL_WORKER_FLEET or TEMPORAL_WORKER_FLEETS is required" >&2
   exit 64
 fi
 
-python - "$FLEET" <<'PY'
+python - <<'PYTHON'
 from moonmind.workflows.temporal.workers import main
-import sys
 
-raise SystemExit(main(["--fleet", sys.argv[1], "--describe-json"]))
-PY
+raise SystemExit(main(["--describe-json"]))
+PYTHON
 
 if [ -n "${TEMPORAL_WORKER_COMMAND:-}" ] && [ "$TEMPORAL_WORKER_COMMAND" != "sleep infinity" ]; then
   exec sh -lc "$TEMPORAL_WORKER_COMMAND"

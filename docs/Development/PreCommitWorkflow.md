@@ -91,6 +91,33 @@ CI does **not** currently run a dedicated `pre-commit` step, so local `pre-commi
 
 The test suite and migration gate run when PRs targeting any branch are opened, updated, or reopened, including stacked remediation PRs targeting another job branch. Changing the base branch alone does not trigger them; reopen the PR or push a new commit to verify that candidate. The test suite also supports merge groups, schedules, and manual dispatch; the release workflow owns checks for pushes to `main`. Pushing a feature branch without an existing PR does not trigger CI. When publication is authorized, open or update the PR, or use an authorized manual dispatch, and confirm the expected run started for the intended revision. Do not assume a successful push is test evidence.
 
+### Matched worker resource measurements
+
+The test-suite workflow's optional `worker_comparison` dispatch input runs the
+same fresh-install journey twice on one runner and application image: once with
+separate workers and once with the optional combined process. Both disposable
+projects enable asyncio debug. The comparison preserves ordinary production
+defaults and does not touch an installed deployment.
+
+The integration artifact retains sampled startup, cold-idle, workload and
+warmed-idle memory, container counts, host capacity, worker image identities and
+resource limits. Log summaries separately count asyncio slow callbacks, event-loop
+lag warnings and Temporal workflow-activation deadlocks without retaining task
+contents. The journey separates the restart-through-readiness window from
+post-restart workload; readiness does not establish that lazy initialization is
+finished. Each phase retains at most 100 numeric callback emission timestamps
+and durations, with an omitted-event count. A boundary-crossing flag estimates
+whether emission time minus duration precedes the phase start; log emission is
+not an exact callback-end timestamp. Missing or truncated diagnostics remain
+visible. A comparison requires matched conditions and observed cold-idle,
+post-restart workload and warmed-idle resources. Post-restart work includes the
+generated workflow and production activity probes. Pre-restart work and restart
+are diagnostic windows that may finish between samples; the comparison explicitly
+lists every phase without observed resources and preserves unavailable counts.
+Samples crossing phase boundaries or missing container inventory remain excluded.
+These short controlled journeys do not establish one-to-two-day normal-use safety;
+record that gap separately from measured memory savings or passing functional checks.
+
 ## Setup
 
 Install `pre-commit` into the Python environment you use for MoonMind development:

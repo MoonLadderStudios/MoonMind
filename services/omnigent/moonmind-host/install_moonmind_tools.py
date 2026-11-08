@@ -21,13 +21,18 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_TIMEOUT_SECONDS = 60
+DOWNLOAD_BUDGET_SECONDS = 180
 PROBE_TIMEOUT_SECONDS = 30
 
 _PLATFORM_MACHINES = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
@@ -52,20 +57,78 @@ def _read_json(path: Path) -> dict:
 
 
 def _download(url: str, destination: Path, expected_sha256: str) -> None:
-    digest = hashlib.sha256()
-    total = 0
-    with (
-        urllib.request.urlopen(url, timeout=60) as response,
-        destination.open("wb") as output,
-    ):
-        while chunk := response.read(1024 * 1024):
-            total += len(chunk)
-            if total > MAX_ARTIFACT_BYTES:
-                raise RuntimeError(f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes")
-            digest.update(chunk)
-            output.write(chunk)
-    if digest.hexdigest() != expected_sha256:
-        raise RuntimeError(f"SHA-256 mismatch for {url}")
+    """Retry transient downloads, never invalid artifacts or permanent errors."""
+
+    # GitHub's release asset API otherwise returns metadata instead of the archive.
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/octet-stream"}
+    )
+    deadline = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        digest = hashlib.sha256()
+        total = 0
+        started = False
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("tool download exceeded its elapsed budget")
+            with (
+                urllib.request.urlopen(
+                    request, timeout=min(DOWNLOAD_TIMEOUT_SECONDS, remaining)
+                ) as response,
+                destination.open("wb") as output,
+            ):
+                started = True
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("tool download exceeded its elapsed budget")
+                    # read1 performs at most one underlying read, so a slow stream
+                    # cannot hide repeated socket reads between deadline checks.
+                    # An in-flight read retains the request's bounded timeout.
+                    chunk = response.read1(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_ARTIFACT_BYTES:
+                        raise RuntimeError(
+                            f"artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
+                        )
+                    digest.update(chunk)
+                    output.write(chunk)
+            if time.monotonic() >= deadline:
+                raise TimeoutError("tool download exceeded its elapsed budget")
+            if digest.hexdigest() != expected_sha256:
+                raise RuntimeError(f"SHA-256 mismatch for {url}")
+            return
+        except Exception as exc:
+            if started:
+                try:
+                    destination.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"Cannot remove partial download: {cleanup_error}")
+                    raise exc from cleanup_error
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+                retryable = exc.code in {408, 429, 500, 502, 503, 504}
+            else:
+                cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                retryable = isinstance(cause, (TimeoutError, ConnectionError))
+            delay = 2 ** (attempt - 1)
+            if (
+                not retryable
+                or attempt == DOWNLOAD_ATTEMPTS
+                or time.monotonic() + delay >= deadline
+            ):
+                raise
+            print(
+                f"Tool download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed: {exc}; "
+                f"retrying in {delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+            if time.monotonic() >= deadline:
+                raise
 
 
 def _extract_executable(archive: Path, archive_path: str, destination: Path) -> None:

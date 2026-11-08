@@ -32,6 +32,37 @@ This document standardizes:
 
 This document covers the **Temporal-managed worker model** only.
 
+### Process fleet selection
+
+Compose keeps its separate worker services by default. An optional
+`TEMPORAL_WORKER_FLEETS` JSON array (or comma-separated list) selects multiple
+fleets in one worker process. Names are normalized and deduplicated in order;
+blank lists and unknown names fail startup. When set, this list is authoritative
+over `TEMPORAL_WORKER_FLEET`. The singular variable remains the fallback and may
+retain `artifacts` as the legacy deployment-journal discovery marker in a combined
+process; it does not restrict the plural selection. An explicit `--fleet` on the
+worker runtime or topology CLI selects only that fleet.
+
+Each selected fleet retains its own executable specification, task queues,
+registrations and concurrency limits. The topology CLI emits its existing object
+for one selected fleet and a `fleets` array of topology objects for multiple fleets.
+The launcher validates the configured selection without converting the singular
+marker into a CLI override.
+
+The process shares one Temporal client, metrics listener, health listener, and
+Omnigent transport lifecycle. Each fleet keeps its own handlers and queue slot
+budgets. Readiness waits for every selected poller; any poller failure stops the
+group. Shutdown withdraws readiness and drains all workers before closing fleet
+resources and shared transports. `/readyz` exposes the selected `fleets` and
+per-fleet `fleetSpecs`. Top-level queues and registrations are unions, with shared
+release identity retained for existing probes; singleton processes retain their
+existing top-level spec.
+Both health endpoints expose `eventLoopLagSeconds` and the process-lifetime
+`eventLoopLagMaxSeconds`, sampled once per second. These are diagnostics, not
+readiness thresholds. Samples of at least 250 ms also emit a numeric warning,
+separate from asyncio debug slow-callback warnings. The health listener owns and
+stops the sampler.
+
 ### Executable worker specification and readiness
 
 Every fleet is constructed from one immutable `WorkerSpec`. For the workflow

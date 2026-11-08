@@ -183,3 +183,12 @@ def test_explicit_shell_override_keeps_its_shell_semantics(worker_probe, tmp_pat
     assert result.returncode == 0, result.stderr.decode()
     assert _events(events)[0]["args"] == ["--exit", "quoted argument"]
     assert after.read_text() == "done"
+
+
+def test_plural_only_worker_receives_sigterm_and_drains(worker_probe):
+    worker_probe[2].pop("TEMPORAL_WORKER_FLEET", None)
+    worker_probe[2]["TEMPORAL_WORKER_FLEETS"] = "workflow,artifacts"
+    assert _launch_and_stop(worker_probe) == [
+        "-m",
+        "moonmind.workflows.temporal.worker_runtime",
+    ]

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -1127,6 +1129,114 @@ def test_temporal_readiness_runs_in_the_private_test_network():
     assert not {"--publish", "-p", "--mount", "--privileged"}.intersection(command)
     assert command[-1] == driver.TEMPORAL_READINESS_SCRIPT
     assert driver.TEMPORAL_ADDRESS in driver.TEMPORAL_READINESS_SCRIPT
+
+
+@pytest.fixture
+def temporal_readiness_probe(monkeypatch, tmp_path):
+    """Run the embedded probe with real cancellation and a fast test clock."""
+    import runpy
+
+    script = tmp_path / "temporal_readiness.py"
+    script.write_text(driver.TEMPORAL_READINESS_SCRIPT)
+    with monkeypatch.context() as patch:
+        patch.setattr(asyncio, "run", lambda coroutine: coroutine.close())
+        ready = runpy.run_path(str(script))["ready"]
+    namespace = ready.__globals__
+    observed = SimpleNamespace(now=0.0, timeouts=[], sleeps=[])
+
+    @asynccontextmanager
+    async def timeout(seconds):
+        observed.timeouts.append((observed.now, seconds))
+        try:
+            async with asyncio.timeout(0.001):
+                yield
+        except TimeoutError:
+            observed.now += seconds
+            raise
+
+    async def sleep(seconds):
+        observed.sleeps.append(seconds)
+        observed.now += seconds
+        await asyncio.sleep(0)
+
+    namespace["time"] = SimpleNamespace(monotonic=lambda: observed.now)
+    namespace["asyncio"] = SimpleNamespace(timeout=timeout, sleep=sleep)
+    return namespace, observed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["connect", "describe_namespace"])
+@pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize("failure", ["hang", "error"])
+async def test_temporal_readiness_bounds_sdk_calls_and_retains_namespace_proof(
+    temporal_readiness_probe, capsys, stage, recover, failure
+):
+    namespace, observed = temporal_readiness_probe
+    attempts = []
+    cancelled = []
+    rpc_timeouts = []
+    described = []
+
+    async def fail_if_requested(current_stage):
+        if current_stage != stage or (recover and len(attempts) > 1):
+            return
+        if failure == "error":
+            raise RuntimeError("namespace unavailable")
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(current_stage)
+            raise
+
+    async def describe_namespace(request, *, timeout=None):
+        assert request.namespace == "default"
+        rpc_timeouts.append((observed.now, timeout))
+        await fail_if_requested("describe_namespace")
+        described.append(request.namespace)
+
+    async def connect(address):
+        assert address == driver.TEMPORAL_ADDRESS
+        attempts.append(address)
+        await fail_if_requested("connect")
+        return SimpleNamespace(
+            workflow_service=SimpleNamespace(describe_namespace=describe_namespace)
+        )
+
+    namespace["Client"] = SimpleNamespace(connect=connect)
+    # This watchdog fails the old unbounded probe instead of hanging the suite.
+    async with asyncio.timeout(2):
+        if recover:
+            await namespace["ready"]()
+            assert len(attempts) == 2
+            assert described == ["default"]
+            assert observed.sleeps == [2]
+        else:
+            with pytest.raises(
+                SystemExit, match="did not serve the default namespace"
+            ) as raised:
+                await namespace["ready"]()
+            assert stage in str(raised.value)
+            assert not described
+            assert observed.now == 200
+            assert len(attempts) > 1
+
+    assert len(observed.timeouts) == len(attempts)
+    assert all(
+        0 < seconds <= min(10, 200 - start) for start, seconds in observed.timeouts
+    )
+    assert all(
+        timeout is not None and 0 < timeout.total_seconds() <= min(10, 200 - start)
+        for start, timeout in rpc_timeouts
+    )
+    diagnostics = capsys.readouterr().err
+    assert stage in diagnostics
+    if failure == "hang":
+        assert cancelled == [stage] * (len(attempts) - int(recover))
+        assert "TimeoutError" in diagnostics
+        if not recover:
+            assert observed.timeouts[-1][1] < 10
+    else:
+        assert "RuntimeError: namespace unavailable" in diagnostics
 
 
 @pytest.mark.asyncio
