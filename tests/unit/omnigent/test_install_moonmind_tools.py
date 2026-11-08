@@ -17,8 +17,10 @@ import stat
 import tarfile
 import time
 import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest.mock import Mock, call
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -37,6 +39,19 @@ def _helper():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _assert_download_requests(request, url, timeouts):
+    assert len(request.call_args_list) == len(timeouts)
+    for request_call, timeout in zip(request.call_args_list, timeouts, strict=True):
+        assert len(request_call.args) == 1
+        download_request = request_call.args[0]
+        assert isinstance(download_request, urllib.request.Request)
+        assert download_request.full_url == url
+        assert download_request.get_method() == "GET"
+        assert download_request.get_header("Accept") == "application/octet-stream"
+        assert download_request.get_header("Authorization") is None
+        assert request_call.kwargs == {"timeout": timeout}
 
 
 def _fixture_tree(tmp_path: Path, *, version: str = "9.9.9"):
@@ -111,7 +126,7 @@ def test_download_recovers_from_transient_http_errors(tmp_path, monkeypatch, sta
     helper._download(url, destination, hashlib.sha256(payload).hexdigest())
 
     assert destination.read_bytes() == payload
-    assert request.call_args_list == [call(url, timeout=60)] * 2
+    _assert_download_requests(request, url, [60, 60])
     sleep.assert_called_once_with(1)
 
 
@@ -171,7 +186,7 @@ def test_download_stops_after_three_transient_failures(tmp_path, monkeypatch, ca
         helper._download(url, destination, "0" * 64)
 
     assert raised.value is errors[-1]
-    assert request.call_args_list == [call(url, timeout=60)] * 3
+    _assert_download_requests(request, url, [60, 60, 60])
     assert sleep.call_args_list == [call(1), call(2)]
     assert not destination.exists()
     assert "504" in capsys.readouterr().err
@@ -230,7 +245,7 @@ def test_download_caps_retry_timeout_to_remaining_budget(tmp_path, monkeypatch):
 
     helper._download(url, destination, hashlib.sha256(payload).hexdigest())
 
-    assert request.call_args_list == [call(url, timeout=60), call(url, timeout=19)]
+    _assert_download_requests(request, url, [60, 19])
     assert destination.read_bytes() == payload
 
 
@@ -411,6 +426,15 @@ def test_real_manifest_and_cli_sources_are_installable_inputs() -> None:
     manifest = json.loads(REAL_MANIFEST.read_text(encoding="utf-8"))
     gh = next(item for item in manifest["tools"] if item["name"] == "gh")
     assert set(gh["platforms"]) == {"linux/amd64", "linux/arm64"}
+    asset_urls = {pin["url"] for pin in gh["platforms"].values()}
+    assert len(asset_urls) == 2
+    for asset_url in asset_urls:
+        parsed = urlsplit(asset_url)
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "api.github.com"
+        assert parsed.path.startswith("/repos/cli/cli/releases/assets/")
+        assert parsed.path.removeprefix("/repos/cli/cli/releases/assets/").isdigit()
+        assert not parsed.query and not parsed.fragment
     docker_tool = next(item for item in manifest["tools"] if item["name"] == "docker")
     assert docker_tool["path"] == "bin/moonmind"
     assert REAL_CLI.is_file()

@@ -59,6 +59,10 @@ def _read_json(path: Path) -> dict:
 def _download(url: str, destination: Path, expected_sha256: str) -> None:
     """Retry transient downloads, never invalid artifacts or permanent errors."""
 
+    # GitHub's release asset API otherwise returns metadata instead of the archive.
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/octet-stream"}
+    )
     deadline = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         digest = hashlib.sha256()
@@ -70,7 +74,7 @@ def _download(url: str, destination: Path, expected_sha256: str) -> None:
                 raise TimeoutError("tool download exceeded its elapsed budget")
             with (
                 urllib.request.urlopen(
-                    url, timeout=min(DOWNLOAD_TIMEOUT_SECONDS, remaining)
+                    request, timeout=min(DOWNLOAD_TIMEOUT_SECONDS, remaining)
                 ) as response,
                 destination.open("wb") as output,
             ):
