@@ -1394,6 +1394,8 @@ def test_journal_transition_actor_selects_its_exact_invocation_owner():
         "moonmind/mcp/container_job_tool_registry.py",
         "moonmind/workflows/skills/security_assessment.py",
         "moonmind/security/web_assessments.py",
+        "tests/fixtures/security_review/quality-cases.json",
+        "tests/fixtures/prowler/basic.ocsf.json",
     ],
 )
 def test_assessment_admission_paths_select_integration_ci(changed_path: str) -> None:

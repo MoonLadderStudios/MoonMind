@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -33,6 +34,13 @@ if command[:1] == ["port"]:
     print(config.get("public_binding", "0.0.0.0:43127"))
     raise SystemExit(0)
 if command[:1] == ["run"]:
+    if command[-1] == "tests.integration.security.quality":
+        quality = directory / "artifacts/integration-ci/security-quality"
+        assert (quality / "sample/native.txt").is_file()
+        status = config.get("quality_status", 0)
+        (quality / "summary.json").write_text(json.dumps({"passed": status == 0}))
+        print("quality evidence checked", flush=True)
+        raise SystemExit(status)
     junit = re.search(r"--junitxml=(\S+)", command[-1])
     phase = "seed" if "storage-restart-seed.xml" in command[-1] else "verify" if "storage-restart-verify.xml" in command[-1] else "main"
 
@@ -41,6 +49,10 @@ if command[:1] == ["run"]:
             path = directory / junit.group(1)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"<testsuite failures='{int(status != 0)}'/>")
+        if config.get("write_quality", True):
+            quality = directory / "artifacts/integration-ci/security-quality/sample"
+            quality.mkdir(parents=True, exist_ok=True)
+            (quality / "native.txt").write_text("actual retained fixture observation")
         raise SystemExit(status)
 
     signal.signal(signal.SIGINT, lambda *_: report(2))
@@ -196,10 +208,54 @@ def test_interactive_and_scheduled_runs_keep_collecting_without_maxfail(
     assert not (wrapper.repo / REPORT / "compose-logs.txt").exists()
     assert wrapper.downs() == 1
     commands = wrapper.compose_commands()
-    assert [command[0] for command in commands] == ["up", "port", "run", "images", "run", "restart", "up", "run", "down"]
+    assert [command[0] for command in commands] == [
+        "up", "port", "run", "images", "run", "restart", "up", "run", "run", "down"
+    ]
     assert "storage-restart-seed.xml" in commands[4][-1]
     assert "storage-restart-verify.xml" in commands[7][-1]
     assert "--volumes" in commands[-1]
+
+
+@pytest.mark.parametrize("quality_status", [0, 6])
+@pytest.mark.parametrize("temporary_checkout", [False, True])
+def test_quality_validation_uses_the_producing_project_and_keeps_its_result(
+    tmp_path, quality_status, temporary_checkout
+):
+    repo_name = "work:checkout" if temporary_checkout else "checkout"
+    wrapper = _make_wrapper(tmp_path, tmp_path / repo_name)
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+
+    status, output, _ = wrapper.run(write_quality=True, quality_status=quality_status)
+
+    assert status == quality_status
+    commands = wrapper.compose_commands()
+    quality_runs = [
+        command
+        for command in commands
+        if command[:1] == ["run"]
+        and command[-1] == "tests.integration.security.quality"
+    ]
+    assert len(quality_runs) == 1
+    assert quality_runs[0][-4:] == [
+        "pytest", "python", "-m", "tests.integration.security.quality"
+    ]
+    assert len(
+        {
+            call[call.index("--project-directory") + 1]
+            for call in wrapper.calls()
+            if "--project-directory" in call
+        }
+    ) == 1
+    quality = wrapper.repo / REPORT / "security-quality"
+    assert (
+        quality / "sample/native.txt"
+    ).read_text() == "actual retained fixture observation"
+    assert json.loads((quality / "summary.json").read_text()) == {
+        "passed": quality_status == 0
+    }
+    assert "quality evidence checked" in output
+    assert (wrapper.repo / REPORT / "compose-logs.txt").exists() == bool(quality_status)
+    assert wrapper.downs() == 1
 
 
 @pytest.mark.parametrize(
@@ -280,6 +336,32 @@ def test_temporary_checkout_exports_report_before_removal(tmp_path: Path) -> Non
     report = wrapper.repo / REPORT
     assert "failures='1'" in (report / "pytest-integration-ci.xml").read_text()
     assert "test_case FAILED" in (report / "pytest-integration-ci.log").read_text()
+
+
+def test_temporary_checkout_retains_native_quality_evidence_on_failure(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+    status, _, _ = wrapper.run(run_status=1, write_quality=True)
+    assert status == 1
+    assert (
+        wrapper.repo / REPORT / "security-quality/sample/native.txt"
+    ).read_text() == "actual retained fixture observation"
+
+
+def test_failed_quality_export_keeps_the_only_recoverable_copy(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+    copier = tmp_path / "bin/cp"
+    copier.write_text(
+        '#!/bin/sh\nif [ "$1" = "-R" ]; then exit 1; fi\n'
+        f'exec "{shutil.which("cp")}" "$@"\n'
+    )
+    copier.chmod(0o755)
+    status, output, _ = wrapper.run(run_status=1, write_quality=True)
+    assert status == 1
+    directory = Path(next(call[call.index("--project-directory") + 1] for call in wrapper.calls() if "--project-directory" in call))
+    assert (directory / REPORT / "security-quality/sample/native.txt").is_file()
+    assert str(directory) in output
 
 
 def test_stuck_teardown_is_bounded_and_keeps_primary_status(wrapper: Wrapper) -> None:

@@ -1,0 +1,272 @@
+{
+  "schemaVersion": "security-quality-cases/v1",
+  "license": "Apache-2.0",
+  "licenseRef": "LICENSE",
+  "origin": "First-party MoonMind controlled source, local application, and provider fixtures. No external target is assessed.",
+  "heldOutPolicy": "Held-out rows are separate control inputs, excluded from the regression fixture set. They are executed by the same fixed oracle; this small corpus is not a statistically independent benchmark.",
+  "cases": [
+    {
+      "id": "source-vulnerable",
+      "capability": "source",
+      "split": "regression",
+      "target": "inline immutable snapshot: DATABASE_PASSWORD assignment",
+      "source": "DATABASE_PASSWORD=\"synthetic-quality-value\"\n",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "credential@sample.py"
+        ],
+        "covered": [
+          "sample.py"
+        ],
+        "satisfied": false
+      }
+    },
+    {
+      "id": "source-clean",
+      "capability": "source",
+      "split": "regression",
+      "target": "inline clean snapshot: ordinary configuration",
+      "source": "DATABASE_NAME=\"example\"\n",
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "sample.py"
+        ],
+        "satisfied": true
+      }
+    },
+    {
+      "id": "source-held-out",
+      "capability": "source",
+      "split": "held-out",
+      "target": "independent prefixed credential key",
+      "source": "SERVICE_API_KEY=\"synthetic-held-out-value\"\n",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "credential@sample.py"
+        ],
+        "covered": [
+          "sample.py"
+        ],
+        "satisfied": false
+      }
+    },
+    {
+      "id": "cloud-vulnerable",
+      "capability": "cloud",
+      "split": "regression",
+      "target": "tests/fixtures/prowler/basic.ocsf.json",
+      "scenario": "findings",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "iam_password_policy_minimum_length_14@arn:aws:iam:us-east-1:123456789012:password-policy",
+          "s3_bucket_level_public_access_block@arn:aws:s3:::open-bucket",
+          "s3_bucket_object_versioning@arn:aws:s3:::open-bucket"
+        ],
+        "covered": [
+          "us-east-1"
+        ],
+        "satisfied": false,
+        "scope": [
+          "eu-west-1",
+          "us-east-1"
+        ],
+        "coverageGaps": 1
+      }
+    },
+    {
+      "id": "cloud-clean",
+      "capability": "cloud",
+      "split": "held-out",
+      "target": "tests/fixtures/prowler/basic.ocsf.json",
+      "scenario": "compliant",
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "us-east-1"
+        ],
+        "satisfied": true,
+        "scope": [
+          "eu-west-1",
+          "us-east-1"
+        ],
+        "coverageGaps": 1
+      }
+    },
+    {
+      "id": "cloud-partial",
+      "capability": "cloud",
+      "split": "regression",
+      "target": "tests/fixtures/prowler/deny.ocsf.json",
+      "scenario": "partial",
+      "expected": {
+        "outcome": "partial",
+        "findings": [
+          "s3_bucket_level_public_access_block@arn:aws:s3:::open-bucket"
+        ],
+        "covered": [],
+        "satisfied": false,
+        "scope": [
+          "eu-west-1",
+          "us-east-1"
+        ],
+        "coverageGaps": 2
+      }
+    },
+    {
+      "id": "cloud-malformed-output",
+      "capability": "cloud",
+      "split": "regression",
+      "target": "tests/fixtures/prowler/basic.ocsf.json",
+      "scenario": "malformed",
+      "expected": {
+        "outcome": "malformed-output",
+        "findings": [],
+        "covered": [],
+        "satisfied": false,
+        "scope": [
+          "eu-west-1",
+          "us-east-1"
+        ],
+        "coverageGaps": 2
+      }
+    },
+    {
+      "id": "cloud-canceled",
+      "capability": "cloud",
+      "split": "regression",
+      "target": "tests/fixtures/prowler/basic.ocsf.json",
+      "scenario": "canceled",
+      "expected": {
+        "outcome": "canceled",
+        "findings": [
+          "iam_password_policy_minimum_length_14@arn:aws:iam:us-east-1:123456789012:password-policy",
+          "s3_bucket_level_public_access_block@arn:aws:s3:::open-bucket",
+          "s3_bucket_object_versioning@arn:aws:s3:::open-bucket"
+        ],
+        "covered": [
+          "us-east-1"
+        ],
+        "satisfied": false,
+        "scope": [
+          "eu-west-1",
+          "us-east-1"
+        ],
+        "coverageGaps": 1
+      }
+    },
+    {
+      "id": "web-vulnerable",
+      "capability": "web",
+      "split": "regression",
+      "target": "local fixture GET /search",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "10021@/search"
+        ],
+        "covered": [
+          "GET /search"
+        ],
+        "satisfied": false
+      }
+    },
+    {
+      "id": "web-clean",
+      "capability": "web",
+      "split": "held-out",
+      "target": "local hardened fixture GET /fixed/search",
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "GET /fixed/search"
+        ],
+        "satisfied": true
+      }
+    },
+    {
+      "id": "web-auth-failed",
+      "capability": "web",
+      "split": "regression",
+      "target": "local authenticated fixture with deliberately wrong password",
+      "expected": {
+        "outcome": "auth-failed",
+        "findings": [
+          "10021@/account",
+          "10021@/login"
+        ],
+        "covered": [
+          "GET /account",
+          "GET /login"
+        ],
+        "satisfied": false,
+        "scope": [
+          "GET /account",
+          "GET /login",
+          "authenticated GET /account"
+        ],
+        "coverageGaps": 1
+      }
+    },
+    {
+      "id": "authorization-vulnerable",
+      "capability": "authorization",
+      "split": "regression",
+      "target": "tests/fixtures/security_review/vulnerable.py",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "invoice-owner@app/routes.py"
+        ],
+        "covered": [
+          "app/routes.py"
+        ],
+        "satisfied": false
+      },
+      "requiredMutations": [
+        "false-clean",
+        "false-fixed"
+      ]
+    },
+    {
+      "id": "authorization-repaired",
+      "capability": "authorization",
+      "split": "held-out",
+      "target": "tests/fixtures/security_review/fixed.py",
+      "expected": {
+        "outcome": "repaired",
+        "findings": [],
+        "covered": [
+          "app/routes.py"
+        ],
+        "satisfied": true
+      }
+    },
+    {
+      "id": "admitted-source-vulnerable",
+      "capability": "source",
+      "split": "regression",
+      "target": "Git history/worktree scanner fixture through CLI and MCP",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "credential@removed.txt",
+          "credential@tracked.txt",
+          "credential@untracked.txt",
+          "credential@[redacted]"
+        ],
+        "covered": [
+          "history",
+          "worktree"
+        ],
+        "satisfied": false
+      }
+    }
+  ]
+}
