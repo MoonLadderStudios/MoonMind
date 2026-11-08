@@ -247,3 +247,17 @@ def test_evidence_alias_policy_keeps_stronger_projection_and_generic_owner_rules
     assert logging.redact_sensitive_payload({"authorizationBlob": False}) == {
         "authorizationBlob": False
     }
+
+
+@pytest.mark.parametrize(
+    "value", ["own-auth", False, 42, {"strategy": "own-auth"}, ["own-auth"]]
+)
+def test_evidence_retains_typed_auth_field_policy(value):
+    assert logging.redact_evidence_payload({"auth": value, "path": "src/check.py"}) == {
+        "auth": "[REDACTED]",
+        "path": "src/check.py",
+    }
+    assert logging.redact_sensitive_payload({"auth": "own-auth"}) == {
+        "auth": "[REDACTED]"
+    }
+    assert logging.redact_sensitive_payload({"auth": False}) == {"auth": False}

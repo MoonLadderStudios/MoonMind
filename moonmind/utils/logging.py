@@ -550,6 +550,23 @@ def _redact_structured_payload(
             candidate = json.dumps(key) + ": "
             if _SECRET_ASSIGNMENT_HEAD_PATTERN.fullmatch(candidate):
                 assignment_field = candidate
+        # Command output uses the plaintext assignment grammar, not the API
+        # field classifier: public metadata such as capabilities.auth must
+        # remain exact. Ambiguous assignment aliases and credential-bearing
+        # keys still withhold their associated values.
+        ambiguous_field = (
+            not include_personal_data
+            and key is not None
+            and (
+                redact_sensitive_text(key) != key
+                or (
+                    key != key.strip()
+                    and _SECRET_ASSIGNMENT_HEAD_PATTERN.fullmatch(
+                        json.dumps(key.strip()) + ": "
+                    ) is not None
+                )
+            )
+        )
         if isinstance(value, Mapping):
             result = {}
             for raw_key, item in value.items():
@@ -574,31 +591,38 @@ def _redact_structured_payload(
                 masked_assignment = False
             if masked_assignment:
                 result = "[REDACTED]"
-            elif assignment_field is not None and not include_personal_data:
-                result = value
-            else:
-                # A credential exception cannot loosen the existing evidence
-                # projection's reference and personal-data transformations.
-                protected = redact_sensitive_payload(value, key=key)
+            elif not include_personal_data:
                 result = (
-                    redact_evidence_text(protected, max_chars=max_text_chars)
-                    if include_personal_data else redact_sensitive_text(protected)
+                    value
+                    if assignment_field is not None
+                    else redact_sensitive_text(value)
                 )
+            else:
+                # A command credential exception cannot loosen the evidence
+                # projection's typed-field and personal-data transformations.
+                protected = redact_sensitive_payload(value, key=key)
+                result = redact_evidence_text(protected, max_chars=max_text_chars)
         elif value is None or isinstance(value, (bool, int, float)):
             if isinstance(value, float) and not math.isfinite(value):
                 raise ValueError("Evidence value is not a finite number")
             result = value
         else:
             raise ValueError("Evidence value has an unsupported type")
-        # The credential owner knows value fields versus references. Apply
-        # the same decision to non-string values after traversing their bounds.
-        if (
-            value is not None
-            and not isinstance(value, str)
-            and key is not None
-            and (
-                assignment_field is not None
-                or redact_sensitive_payload("evidence-value", key=key) == "[REDACTED]"
+        # Apply each mode's field policy to non-string values only after
+        # traversing their bounds. Evidence retains its stronger API policy.
+        if value is not None and (
+            ambiguous_field
+            or (
+                not isinstance(value, str)
+                and key is not None
+                and (
+                    assignment_field is not None
+                    or (
+                        include_personal_data
+                        and redact_sensitive_payload("evidence-value", key=key)
+                        == "[REDACTED]"
+                    )
+                )
             )
         ):
             return "[REDACTED]"

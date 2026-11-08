@@ -1426,7 +1426,15 @@ async def test_exact_recovery_class_uses_installed_native_registry_without_picke
         probe.write_text(args[-1])
         with contextlib.redirect_stdout(output):
             runpy.run_path(str(probe), run_name="__main__")
-        return 0, output.getvalue(), ""
+        # Keep the installed registry producer and its actual command-output
+        # projection in this test: a backend mock alone hides identity drift.
+        from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+
+        return await DockerCommandBackend().run(
+            [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+            input_bytes=output.getvalue().encode(),
+            timeout_seconds=10,
+        )
 
     # The real upstream picker deliberately omits native wrapper rows; the
     # installed registry must be sufficient without an HTTP catalog client.

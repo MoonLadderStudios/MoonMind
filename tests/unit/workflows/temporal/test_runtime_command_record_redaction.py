@@ -459,3 +459,78 @@ async def test_command_field_parity_preserves_nonsecret_diagnostics_and_typed_ow
     assert output == source
     # Command assignment parity does not alter unrelated typed API policies.
     assert redact_sensitive_payload({"secretValues": False}) == {"secretValues": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_command_uses_assignment_policy_for_public_auth_metadata(streaming):
+    record = {
+        "auth": "own-auth",
+        "key": "public-resource-identity",
+        "AuthEnabled": True,
+        "AuthOptions": ["own-auth", False, 2],
+        "capabilities": {"auth": "own-auth", "interrupt": True},
+    }
+    source = (json.dumps(record) + "\n").encode()
+
+    output, lines = await _emit(source, streaming=streaming)
+
+    assert output == source
+    if streaming:
+        assert b"".join(lines) == source
+    assert redact_sensitive_text(source.decode()).encode() == source
+    # Structured API values retain their own, stronger field classification.
+    assert redact_sensitive_payload({"auth": "own-auth"}) == {"auth": "[REDACTED]"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_public_auth_container_keeps_nested_credential_scans(streaming):
+    record = {
+        "auth": {
+            "strategy": "own-auth",
+            "password": "canyon",
+            "provider": "ghp_" + "x" * 24,
+            "header": "Bearer meadow",
+            "apiKey": ["lantern", 482901],
+        },
+        "key": "ghp_" + "y" * 24,
+    }
+
+    output, lines = await _emit(
+        (json.dumps(record) + "\n").encode(), streaming=streaming
+    )
+
+    assert json.loads(output) == {
+        "auth": {
+            "strategy": "own-auth",
+            "password": "[REDACTED]",
+            "provider": "[REDACTED]",
+            "header": "[REDACTED_AUTHORIZATION]",
+            "apiKey": "[REDACTED]",
+        },
+        "key": "[REDACTED]",
+    }
+    assert all(
+        value not in output
+        for value in (b"canyon", b"ghp_", b"meadow", b"lantern", b"482901")
+    )
+    if streaming:
+        assert b"".join(lines) == output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [" resetAuthorization ", "password=canyon"],
+    ids=["whitespace-alias", "credential-bearing-key"],
+)
+@pytest.mark.parametrize("value", [False, 482901, {"opaque": "meadow"}, ["meadow"]])
+async def test_ambiguous_assignment_keys_withhold_nonstring_values(key, value):
+    output, _ = await _emit(json.dumps({key: value, "count": 2}).encode())
+
+    assert json.loads(output) == {
+        redact_sensitive_text(key): "[REDACTED]",
+        "count": 2,
+    }
+    assert b"meadow" not in output and b"482901" not in output
