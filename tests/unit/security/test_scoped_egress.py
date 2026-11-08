@@ -813,3 +813,98 @@ async def test_assessment_deadline_caps_gateway_lifetime_and_retry(lease_setup):
         timeout_seconds=600, deadline=deadline + timedelta(minutes=10)
     )
     assert second["expiresAt"] == first["expiresAt"]
+
+
+def test_compiled_proxy_allows_only_websocket_upgrade_without_expanding_scope():
+    from moonmind.security.egress_policy import ScopedEgressPolicy
+    from moonmind.security.scoped_egress import render_scoped_proxy
+
+    policy = ScopedEgressPolicy.model_validate(declaration())
+    config, _hosts = render_scoped_proxy(
+        policy,
+        {d.host: ("127.0.0.1",) for d in policy.destinations},
+        client_address="127.0.0.2",
+    )
+    lines = config.decode().splitlines()
+    assert [
+        line for line in lines if line.startswith("http_upgrade_request_protocols")
+    ] == ["http_upgrade_request_protocols websocket allow all"]
+    assert "http_access deny !scope_client" in lines
+    assert [line for line in lines if line.startswith("http_access allow")] == [
+        "http_access allow scope_0_host scope_0_port scope_0_addresses tunnel",
+        "http_access allow scope_1_host scope_1_port scope_1_addresses tunnel",
+        "http_access allow scope_2_host scope_2_port scope_2_addresses !tunnel web",
+    ]
+    assert lines[-1] == "http_access deny all"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", ["current", "historical"])
+async def test_retained_proxy_config_keeps_original_authority_and_deadline(
+    lease_setup, variant
+):
+    import base64
+    import copy
+
+    module, docker, request, backend, _ = lease_setup
+    lease = backend._scoped_lease(request)
+    original = await lease.prepare(timeout_seconds=100)
+    gateway = docker.container(lease.gateway_ref)
+    if variant == "historical":
+        pinned = docker.files[module._CONFIG].replace(
+            b"http_upgrade_request_protocols websocket allow all\n", b""
+        )
+        docker.files[module._CONFIG] = pinned
+        gateway["Config"]["Env"] = [
+            "MOONMIND_EGRESS_CONFIG=" + base64.b64encode(pinned).decode()
+            if value.startswith("MOONMIND_EGRESS_CONFIG=")
+            else value
+            for value in gateway["Config"]["Env"]
+        ]
+    before = copy.deepcopy(gateway)
+    files = dict(docker.files)
+    call_count = len(docker.calls)
+    recovered = await lease.prepare(timeout_seconds=9999, previously_admitted=True)
+    assert recovered == original
+    assert gateway == before and docker.files == files
+    assert module._public_answers.await_count == 2
+    assert not any(
+        call[0] in {"create", "start", "rm"} for call in docker.calls[call_count:]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    ["arbitrary-upgrade", "extra-allow", "missing-deny", "malformed", "live-only"],
+)
+async def test_historical_proxy_config_does_not_accept_other_changes(
+    lease_setup, mutation
+):
+    import base64
+
+    module, docker, request, backend, _ = lease_setup
+    lease = backend._scoped_lease(request)
+    await lease.prepare(timeout_seconds=100)
+    gateway = docker.container(lease.gateway_ref)
+    pinned = docker.files[module._CONFIG].replace(
+        b"http_upgrade_request_protocols websocket allow all\n", b""
+    )
+    if mutation == "arbitrary-upgrade":
+        pinned += b"http_upgrade_request_protocols OTHER allow all\n"
+    elif mutation == "extra-allow":
+        pinned = pinned.replace(b"http_access deny all", b"http_access allow all")
+    elif mutation == "missing-deny":
+        pinned = pinned.replace(b"http_access deny !scope_client\n", b"")
+    docker.files[module._CONFIG] = pinned
+    saved = b"invalid-base64!" if mutation == "malformed" else base64.b64encode(pinned)
+    gateway["Config"]["Env"] = [
+        "MOONMIND_EGRESS_CONFIG=" + saved.decode()
+        if value.startswith("MOONMIND_EGRESS_CONFIG=")
+        else value
+        for value in gateway["Config"]["Env"]
+    ]
+    if mutation == "live-only":
+        docker.files[module._CONFIG] += b"http_access allow all\n"
+    with pytest.raises(RuntimeError, match="unattested|tampered"):
+        await lease.prepare(timeout_seconds=9999, previously_admitted=True)

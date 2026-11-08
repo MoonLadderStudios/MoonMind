@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, model_serializer, model_validator
 
 from moonmind.security.assessments import Contract, Evidence, Text, content_key
 from moonmind.security.authorization_matrix import (
@@ -19,6 +19,7 @@ from moonmind.security.authorization_matrix import (
     AuthorizationMatrix,
     IdentityRef,
 )
+from moonmind.security.realtime_scope import TransportEvent
 from moonmind.security.target_assessments import TargetRequest
 
 JsonPath = Annotated[
@@ -78,15 +79,22 @@ class ApplicationAccessCase(Contract):
 
     @model_validator(mode="after")
     def _consistent(self):
-        for request in (self.request, self.identity_check, self.state_check):
-            if request is not None and request.protocol != "http":
-                raise ValueError("application access cases require HTTP")
+        if self.request.protocol != "http" and (
+            self.request.realtime_case_ref is None or self.request.effect is None
+        ):
+            raise ValueError("real-time cases require a named operation and effect")
         for request in (self.identity_check, self.state_check):
-            if request is not None and request.method != "GET":
+            if request is not None and (
+                request.protocol != "http" or request.method != "GET"
+            ):
                 raise ValueError(
                     "identity and state verification require read-only GET"
                 )
-        mutation = self.request.method not in {"GET", "HEAD", "OPTIONS"}
+        mutation = (
+            self.request.effect == "mutation"
+            if self.request.protocol != "http"
+            else self.request.method not in {"GET", "HEAD", "OPTIONS"}
+        )
         if mutation != (self.mutation_ref is not None):
             raise ValueError("mutations require a stable mutation reference")
         if bool(self.state_assertions) != (self.state_check is not None):
@@ -201,6 +209,15 @@ class ApplicationAccessObservation(Contract):
     attempt_ref: IdentityRef | None = None
     receipt_ref: IdentityRef | None = None
     receipt: AssertionResult | None = None
+    transcript: list[TransportEvent] | None = Field(None, max_length=259)
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        result = handler(self)
+        if self.transcript is None:
+            result.pop("transcript", None)
+        return result
+
     stop_reason: (
         Literal[
             "timeout",
@@ -305,9 +322,19 @@ _MISSING = object()
 
 def _value(payload, path):
     for key in path.split("."):
-        if not isinstance(payload, dict) or key not in payload:
+        if isinstance(payload, dict) and key in payload:
+            payload = payload[key]
+        elif (
+            isinstance(payload, list)
+            and key.isascii()
+            and key.isdecimal()
+            and (key == "0" or not key.startswith("0"))
+            and len(key) <= 9
+            and int(key) < len(payload)
+        ):
+            payload = payload[int(key)]
+        else:
             return _MISSING
-        payload = payload[key]
     return payload
 
 

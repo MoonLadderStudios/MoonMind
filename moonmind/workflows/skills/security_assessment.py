@@ -1966,6 +1966,16 @@ class AssessmentExecution:
                                             "request": {
                                                 "method": case.request.method,
                                                 "path": case.request.path,
+                                                **(
+                                                    {
+                                                        "protocol": case.request.protocol,
+                                                        "messageType": case.request.message_type,
+                                                        "effect": case.request.effect,
+                                                        "realtimeCaseRef": case.request.realtime_case_ref,
+                                                    }
+                                                    if case.request.realtime_case_ref is not None
+                                                    else {}
+                                                ),
                                             },
                                         }
                                         for row, case in zip(
@@ -2989,9 +2999,15 @@ def _scanner_summary(summaries: list[dict]) -> str:
                 return re.sub(r"([\\`*_[\]{}()#!|>])", r"\\\1", value)
 
             for row in summary["cases"]:
+                request = row["request"]
+                transport = (
+                    f"{safe(request['protocol'])} {safe(request['messageType'])} "
+                    f"({safe(request['effect'])}; operation {safe(request['realtimeCaseRef'])}), "
+                    if request.get("realtimeCaseRef") is not None else ""
+                )
                 lines.append(
                     f"- Case {safe(row['caseRef'])}: {safe(row['identityRef'])} on {safe(row['resourceRef'])}, "
-                    f"{safe(row['request']['method'])} {safe(row['request']['path'])}. "
+                    f"{transport}{safe(request['method'])} {safe(request['path'])}. "
                     f"Expected {row['expected']}; observed {row['observed']}. "
                     f"Authentication {row['authenticationState']}; outcome {row['outcome']}; coverage {row['coverage']}. "
                     f"Reasons: {', '.join(row['reasons']) or 'none'}."

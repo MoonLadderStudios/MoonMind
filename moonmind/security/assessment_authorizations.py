@@ -113,7 +113,8 @@ def prepare_authorizations_update(value: Any, previous: Any) -> dict[str, Any]:
             retained.generation
             if retained
             and retained.generation
-            and _authority(retained) == _authority(item)
+            and json.dumps(_authority(retained), sort_keys=True, allow_nan=False)
+            == json.dumps(_authority(item), sort_keys=True, allow_nan=False)
             else str(uuid4())
         )
         records.append(item.model_copy(update={"generation": generation}))
