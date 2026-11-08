@@ -6328,13 +6328,16 @@ class TemporalAgentRuntimeActivities:
             return
         from api_service.services.assessment_model_delivery import (
             assessment_processing_for_execution,
+            processing_source_error,
             require_model_delivery,
         )
         from moonmind.workflows.temporal.artifacts import (
             TemporalArtifactAuthorizationError,
             TemporalArtifactStateError,
+            TemporalArtifactUnavailableError,
         )
 
+        identity = None
         try:
             identity = temporal_activity.info()
             async with self._session_factory() as session:
@@ -6350,13 +6353,15 @@ class TemporalAgentRuntimeActivities:
                         raise
                     processing = await assessment_processing_for_execution(session, *parent)
             require_model_delivery(processing, profile_ref=profile_ref)
+        except TemporalArtifactUnavailableError as exc:
+            raise exc from None
         except (TemporalArtifactAuthorizationError, TemporalArtifactStateError) as exc:
             # The existing Activity wrapper marks these deterministic denials
             # non-retryable. Do not serialize a payload-bearing cause chain.
             raise type(exc)(str(exc)) from None
-        except Exception:  # noqa: BLE001 - Missing trusted authority must not launch a model.
-            raise TemporalArtifactStateError(
-                "Assessment processing context is unavailable; retained evidence is preserved."
+        except Exception as exc:  # noqa: BLE001 - Missing trusted authority must not launch a model.
+            raise processing_source_error(
+                exc, workflow_id=getattr(identity, "workflow_id", ""),
             ) from None
 
     async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
@@ -17103,6 +17108,9 @@ class TemporalReviewActivities:
                 assessment_processing_for_execution,
             )
             from moonmind.workflows.temporal.activities.step_review import _unavailable
+            from moonmind.workflows.temporal.artifacts import (
+                TemporalArtifactUnavailableError,
+            )
 
             try:
                 identity = temporal_activity.info()
@@ -17110,6 +17118,8 @@ class TemporalReviewActivities:
                     processing = await assessment_processing_for_execution(
                         session, identity.workflow_id, identity.workflow_run_id,
                     )
+            except TemporalArtifactUnavailableError as exc:
+                raise exc from None
             except Exception:  # noqa: BLE001 - A missing trusted source must not send evidence.
                 return _unavailable(
                     "evidence_delivery_context_unavailable",

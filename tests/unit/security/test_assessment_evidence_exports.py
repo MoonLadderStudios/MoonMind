@@ -394,6 +394,154 @@ async def test_export_publication_retry_reuses_sealed_native_and_package_work(
 
 
 @pytest.mark.parametrize(
+    "fault", ["operator-grant", "failed-upload"], ids=["pending-grant", "failed-upload"]
+)
+@pytest.mark.asyncio
+async def test_primary_report_retry_skips_incomplete_publication_and_preserves_native(
+    environment, monkeypatch, fault
+):
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    grant = service.grant_operator_output_read
+    write = service.write_payload_complete
+    interrupted = []
+
+    async def is_first_report(artifact_id):
+        links = await service._repository.list_links(artifact_id)
+        if not interrupted and any(
+            link.link_type == "report.primary" for link in links
+        ):
+            interrupted.append(artifact_id)
+            return True
+        return False
+
+    async def interrupt_grant(**kwargs):
+        if await is_first_report(kwargs["artifact_id"]):
+            raise ConnectionError("synthetic operator grant interruption")
+        return await grant(**kwargs)
+
+    async def fail_upload(**kwargs):
+        if await is_first_report(kwargs["artifact_id"]):
+            return await write(**{**kwargs, "payload": b"synthetic wrong upload"})
+        return await write(**kwargs)
+
+    if fault == "operator-grant":
+        monkeypatch.setattr(service, "grant_operator_output_read", interrupt_grant)
+    else:
+        monkeypatch.setattr(service, "write_payload_complete", fail_upload)
+    first = await recurring.invoke(service, request)
+    assert first["scanOutcome"] == "completed"
+    assert first["publicationOutcome"] == "failed"
+    assert "reportBundle" not in first
+    assert len(interrupted) == 1
+    unfinished = await service._repository.get_artifact(interrupted[0])
+    state = "pending_upload" if fault == "operator-grant" else "failed"
+    assert unfinished.status.value == state
+    subject = unfinished.metadata_json["subject"]
+    assert await recurring.read(service, first["scanRef"])
+    assert await recurring.read(service, first["comparisonRef"])
+
+    def repeat_forbidden(*_args, **_kwargs):
+        raise AssertionError("completed native observation repeated")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        repeat_forbidden,
+    )
+    await environment.session.close()
+    async with environment.sessions() as session:
+        restarted = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        second = await recurring.invoke(restarted, request)
+        assert second["scanRef"] == first["scanRef"]
+        assert second["comparisonRef"] == first["comparisonRef"]
+        assert second["publicationOutcome"] == "published", second["diagnostics"]
+        report_ref = recurring.report_ref(second)
+        _, report = await restarted.read(
+            artifact_id=report_ref, access=access_for_test("workflow:assessment")
+        )
+        assert b"Security assessment" in report
+        assert await restarted.dependency_proof(
+            root_artifact_id=report_ref, access=access_for_test("workflow:assessment")
+        )
+        third = await recurring.invoke(restarted, request)
+        assert third["publicationOutcome"] == "published"
+        assert recurring.report_ref(third) == report_ref
+        rows = await restarted.list_for_execution(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="run",
+            link_type="report.primary",
+            access=access_for_test("workflow:assessment"),
+        )
+        assert len(rows) == 2
+        assert {row.metadata_json["subject"] for row in rows} == {subject}
+        assert {row.status.value for row in rows} == {state, "complete"}
+
+
+@pytest.mark.parametrize("fault", ["corrupt", "revoked"], ids=["integrity", "access"])
+@pytest.mark.asyncio
+async def test_primary_report_retry_never_replaces_untrusted_completed_work(
+    environment, monkeypatch, fault
+):
+    from sqlalchemy import delete
+
+    from api_service.db.models import TemporalArtifactLink
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    first = await recurring.invoke(service, request)
+    assert first["publicationOutcome"] == "published"
+    ref = recurring.report_ref(first)
+    artifact = await service._repository.get_artifact(ref)
+    if fault == "corrupt":
+        service._store.write_bytes(
+            artifact.storage_key,
+            b"synthetic corrupted retained report",
+            content_type=artifact.content_type,
+        )
+    else:
+        await environment.session.execute(
+            delete(TemporalArtifactLink).where(
+                TemporalArtifactLink.artifact_id == ref,
+                TemporalArtifactLink.workflow_id == "assessment",
+                TemporalArtifactLink.link_type == "input.artifact.raw",
+            )
+        )
+        await environment.session.commit()
+
+    def repeat_forbidden(*_args, **_kwargs):
+        raise AssertionError("completed native observation repeated")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        repeat_forbidden,
+    )
+    second = await recurring.invoke(service, request)
+    assert second["scanRef"] == first["scanRef"]
+    assert second["comparisonRef"] == first["comparisonRef"]
+    assert second["publicationOutcome"] == "failed"
+    assert "reportBundle" not in second
+    rows = await service.list_for_execution(
+        namespace="default",
+        workflow_id="assessment",
+        run_id="run",
+        link_type="report.primary",
+        access=access_for_test("workflow:assessment"),
+    )
+    assert [row.artifact_id for row in rows] == [ref]
+    assert rows[0].status.value == "complete"
+
+
+@pytest.mark.parametrize(
     "kind",
     ["security.evidence-export-manifest", "security.evidence-export"],
     ids=["manifest", "package"],

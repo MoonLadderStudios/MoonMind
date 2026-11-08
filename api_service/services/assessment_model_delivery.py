@@ -12,7 +12,9 @@ from typing import Any
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactStateError,
+    TemporalArtifactUnavailableError,
 )
 
 
@@ -37,34 +39,127 @@ def processing_from_parameters(parameters: Mapping) -> tuple[dict | None, dict |
     )
 
 
-async def assessment_processing_for_execution(session, workflow_id: str, run_id: str):
+def _temporary_processing_source_failure(error: BaseException) -> bool:
+    """Recognize transport failures without exposing their messages or payloads."""
+    from sqlalchemy.exc import OperationalError
+    from temporalio.service import RPCError, RPCStatusCode
+
+    seen: set[int] = set()
+    for _ in range(8):
+        if id(error) in seen:
+            break
+        seen.add(id(error))
+        if isinstance(error, (TimeoutError, ConnectionError, OperationalError)):
+            return True
+        if isinstance(error, RPCError) and error.status in {
+            RPCStatusCode.UNAVAILABLE,
+            RPCStatusCode.DEADLINE_EXCEEDED,
+            RPCStatusCode.RESOURCE_EXHAUSTED,
+            RPCStatusCode.ABORTED,
+        }:
+            return True
+        if error.__cause__ is None:
+            break
+        error = error.__cause__
+    return False
+
+
+def processing_source_error(
+    error: BaseException, *, workflow_id: str
+) -> TemporalArtifactError:
+    """Preserve bounded recovery without serializing source or transport payloads."""
+    if _temporary_processing_source_failure(error):
+        return TemporalArtifactUnavailableError(
+            workflow_id, dependency="assessment_history", operation="model_delivery"
+        )
+    return TemporalArtifactStateError(
+        "Admitted assessment processing context is unavailable; evidence is preserved."
+    )
+
+
+async def assessment_context_for_execution(
+    session,
+    workflow_id: str,
+    run_id: str | None,
+    *,
+    service=None,
+):
+    """Read admitted processing and snapshot through the shared source owner."""
     from api_service.db.models import (
         TemporalExecutionCanonicalRecord,
         TemporalExecutionRecord,
     )
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
-    source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
-    if source is None:
-        # Scheduled starts have no API source row. The existing recovery owner
-        # verifies their exact Temporal start input rather than trusting the
-        # compact Visibility parameters.
-        projection = await session.get(TemporalExecutionRecord, workflow_id)
+    try:
+        source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        if source is not None:
+            if source.workflow_id != workflow_id or not source.run_id:
+                raise ValueError("Canonical source identity is unavailable")
+            if run_id is not None and source.run_id != run_id:
+                await TemporalClientAdapter().verify_workflow_continuation(
+                    workflow_id,
+                    run_id=run_id,
+                    source_run_id=source.run_id,
+                )
+            # Never replace the admitted snapshot with mutable settings or
+            # continuation arguments, even when the API row predates this run.
+            return processing_from_source(source)
+        projection = None
+        if run_id is None:
+            projection = (
+                await service.describe_execution(workflow_id)
+                if service is not None
+                else await session.get(TemporalExecutionRecord, workflow_id)
+            )
+            run_id = getattr(projection, "run_id", None)
+            if not run_id:
+                raise ValueError("Admitted source run is unavailable")
+        if scheduled_definition_id(workflow_id) is not None:
+            # Schedules have no API source row. The existing start-input owner
+            # follows server first-run authority and rejects authored schedule
+            # identities; continuation arguments cannot relax the original policy.
+            admitted = (
+                await TemporalClientAdapter().read_scheduled_workflow_start_input(
+                    workflow_id,
+                    run_id=run_id,
+                )
+            )
+            parameters = admitted.get("initial_parameters")
+            if not isinstance(parameters, Mapping):
+                raise ValueError("Scheduled source parameters are unavailable")
+            return processing_from_parameters(parameters)
+        if projection is None:
+            projection = (
+                await service.describe_execution(workflow_id)
+                if service is not None
+                else await session.get(TemporalExecutionRecord, workflow_id)
+            )
         if projection is not None and projection.run_id == run_id:
             from moonmind.workflows.temporal.service import TemporalExecutionService
 
-            try:
-                source = await TemporalExecutionService(
-                    session
-                ).read_scheduled_execution_source(projection)
-            except Exception:  # noqa: BLE001 - Fail closed without payload-bearing failure causes.
-                raise TemporalArtifactStateError(
-                    "Admitted assessment processing context is unavailable; evidence is preserved."
-                ) from None
-    if source is None or source.run_id != run_id:
-        raise TemporalArtifactStateError(
-            "Admitted assessment processing context is unavailable; evidence is preserved."
-        )
-    return processing_from_source(source)[0]
+            source = await (
+                service or TemporalExecutionService(session)
+            ).read_scheduled_execution_source(projection)
+        if (
+            source is None
+            or source.workflow_id != workflow_id
+            or source.run_id != run_id
+        ):
+            raise ValueError("Admitted source identity is unavailable")
+        return processing_from_source(source)
+    except TemporalArtifactError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Classify transport failure without serializing source data.
+        raise processing_source_error(exc, workflow_id=workflow_id) from None
+
+
+async def assessment_processing_for_execution(session, workflow_id: str, run_id: str):
+    policy, _snapshot = await assessment_context_for_execution(
+        session, workflow_id, run_id
+    )
+    return policy
 
 
 def require_model_delivery(policy: Mapping | None, *, profile_ref: str | None) -> None:

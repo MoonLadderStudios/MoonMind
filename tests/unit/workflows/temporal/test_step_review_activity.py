@@ -123,7 +123,7 @@ async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(prov
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     environment = ActivityEnvironment()
-    canonical = SimpleNamespace(run_id=environment.info.workflow_run_id, parameters={})
+    canonical = SimpleNamespace(workflow_id=environment.info.workflow_id, run_id=environment.info.workflow_run_id, parameters={})
     session = SimpleNamespace(get=AsyncMock(return_value=canonical))
     @asynccontextmanager
     async def sessions():

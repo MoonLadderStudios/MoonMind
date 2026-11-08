@@ -2584,6 +2584,7 @@ class AssessmentExecution:
                     item.artifact_id
                     for item in saved_summary
                     if (item.metadata_json or {}).get("subject") == summary_key
+                    and getattr(item.status, "value", item.status) == "complete"
                 ),
                 None,
             )
@@ -2594,6 +2595,10 @@ class AssessmentExecution:
                     key=summary_key,
                     content_type="text/markdown",
                 )
+            else:
+                # As with native saved work, incomplete upload intents are not
+                # reusable; completed reports still require current read access.
+                await self.read(summary_ref)
 
             async def summary_dependencies():
                 # Interpretation is optional: it never holds native retention.

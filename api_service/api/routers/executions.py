@@ -10733,27 +10733,24 @@ async def _inherit_assessment_processing_for_child(
     """Workflow delegation carries constraints independently of runtime defaults."""
     if not principal.is_workflow_principal:
         return
-    from api_service.services.assessment_model_delivery import processing_from_source
+    from api_service.services.assessment_model_delivery import (
+        assessment_context_for_execution,
+    )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
 
     try:
         if session is None:
             raise ValueError("source storage unavailable")
-        source = await session.get(
-            TemporalExecutionCanonicalRecord, principal.workflow_id
+        policy, snapshot = await assessment_context_for_execution(
+            session, principal.workflow_id, principal.run_id, service=service,
         )
-        if source is None:
-            projection = await service.describe_execution(principal.workflow_id)
-            source = await service.read_scheduled_execution_source(projection)
-        if (
-            source.workflow_id != principal.workflow_id
-            or not source.run_id
-            or (principal.run_id is not None and source.run_id != principal.run_id)
-        ):
-            raise ValueError("source identity changed")
-        policy, snapshot = processing_from_source(source)
-    except Exception:  # noqa: BLE001 - A missing authority cannot become unrestricted delivery.
+    except Exception as exc:  # noqa: BLE001 - A missing authority cannot become unrestricted delivery.
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+                if isinstance(exc, TemporalArtifactUnavailableError)
+                else status.HTTP_409_CONFLICT
+            ),
             detail={
                 "code": "assessment_processing_source_unavailable",
                 "message": "The caller's admitted assessment processing context is unavailable. Retry after its source can be verified; retained evidence is unchanged.",

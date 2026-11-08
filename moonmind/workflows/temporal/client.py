@@ -788,6 +788,68 @@ class TemporalClientAdapter:
             break
         raise ValueError("The source run has no readable workflow start input")
 
+    async def verify_workflow_continuation(
+        self, workflow_id: str, *, run_id: str, source_run_id: str
+    ) -> None:
+        """Prove an exact run descends from admitted Continue-As-New authority.
+
+        Like the existing cleanup-chain reader, require server predecessor
+        links and CONTINUED_AS_NEW status. The close event must also name the
+        precise successor: resets, retries and unrelated runs cannot borrow
+        a canonical row merely by sharing a workflow ID or first-run hint.
+        """
+        from temporalio.client import (
+            WorkflowExecutionStatus,
+            WorkflowHistoryEventFilterType,
+        )
+
+        if not workflow_id or not run_id or not source_run_id:
+            raise ValueError("Continuation identity is unavailable")
+        current = run_id
+        seen: set[str] = set()
+        first_run: str | None = None
+        async with asyncio.timeout(20):
+            for _ in range(64):
+                if current in seen:
+                    raise ValueError("Continuation authority contains a cycle")
+                seen.add(current)
+                attributes = await self._read_workflow_start_attributes(
+                    workflow_id, run_id=current
+                )
+                if (
+                    attributes.workflow_type.name != "MoonMind.UserWorkflow"
+                    or (attributes.workflow_id and attributes.workflow_id != workflow_id)
+                ):
+                    raise ValueError("Continuation start identity does not match")
+                if attributes.first_execution_run_id:
+                    if first_run is not None and first_run != attributes.first_execution_run_id:
+                        raise ValueError("Continuation first-run authority does not match")
+                    first_run = attributes.first_execution_run_id
+                if current == source_run_id:
+                    return
+                previous = attributes.continued_execution_run_id
+                if not previous or previous in seen:
+                    raise ValueError("Continuation does not reach the admitted source run")
+                handle = await self.get_workflow_handle(workflow_id, run_id=previous)
+                described = await handle.describe()
+                if (
+                    described.id != workflow_id
+                    or described.run_id != previous
+                    or described.status != WorkflowExecutionStatus.CONTINUED_AS_NEW
+                ):
+                    raise ValueError("Continuation predecessor is not a completed Continue-As-New")
+                successor = None
+                async for event in handle.fetch_history_events(
+                    page_size=1, event_filter_type=WorkflowHistoryEventFilterType.CLOSE_EVENT,
+                ):
+                    if event.HasField("workflow_execution_continued_as_new_event_attributes"):
+                        successor = event.workflow_execution_continued_as_new_event_attributes.new_execution_run_id
+                    break
+                if successor != current:
+                    raise ValueError("Continuation close event does not own the successor")
+                current = previous
+        raise ValueError("Continuation proof exceeds the bounded history read")
+
     async def _decode_workflow_start_input(self, attributes) -> Mapping[str, Any]:
         client = await self.get_client()
         values = await client.data_converter.decode(attributes.input.payloads)
