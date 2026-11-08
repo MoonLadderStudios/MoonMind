@@ -2761,7 +2761,7 @@ class AssessmentExecution:
                 [
                     report_key,
                     "summary",
-                    "professional-report/v1",
+                    "professional-report/v2",
                     request.report_context.model_dump(mode="json", by_alias=True)
                     if request.report_context
                     else None,

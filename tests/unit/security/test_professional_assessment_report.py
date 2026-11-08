@@ -298,3 +298,49 @@ async def test_accepted_risk_and_unknown_annotation_cannot_rewrite_native(enviro
     corrected = await recurring.invoke(service, request)
     assert corrected["publicationOutcome"] == "published"
     assert corrected["scanRef"] == first["scanRef"]
+
+
+@pytest.mark.asyncio
+async def test_structured_personal_risk_inputs_are_redacted_before_rendering(
+    environment,
+):
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    first = await recurring.invoke(service, request)
+    finding_id = (await recurring.read(service, first["comparisonRef"]))["findings"][0][
+        "findingId"
+    ]
+    request["reportContext"] = {
+        "author": "assessor",
+        "annotations": [
+            {
+                "findingId": finding_id,
+                "author": "assessor",
+                "annotation": "Context",
+                "environmentInputs": {
+                    "phone": "555-0100",
+                    "passportNumber": "fixture-private-id",
+                    "exposure": "isolated",
+                },
+            }
+        ],
+    }
+    result = await recurring.invoke(service, request)
+    _, primary = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    assert b"555-0100" not in primary
+    assert b"fixture-private-id" not in primary
+    assert b"isolated" in primary
+    native = await recurring.read(service, result["reportContextRef"])
+    assert native["annotations"][0]["environmentInputs"]["phone"] == "555-0100"
+    request["evidenceExport"] = {
+        "artifactRefs": [recurring.report_ref(result), result["reportContextRef"]]
+    }
+    exported = await recurring.invoke(service, request)
+    archive, manifest = await unpack(service, exported)
+    for entry in manifest["entries"]:
+        body = archive.read(entry["memberName"])
+        assert b"555-0100" not in body
+        assert b"fixture-private-id" not in body

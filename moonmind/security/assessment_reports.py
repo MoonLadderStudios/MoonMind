@@ -10,10 +10,12 @@ import html
 import json
 import re
 
-from moonmind.utils.logging import redact_evidence_text
+from moonmind.utils.logging import redact_evidence_payload, redact_evidence_text
 
 
 def _text(value):
+    if isinstance(value, (dict, list, tuple)):
+        value = redact_evidence_payload(value)
     if re.fullmatch(r"art_[A-Za-z0-9_-]+", str(value)):
         return str(value)
     value = (
