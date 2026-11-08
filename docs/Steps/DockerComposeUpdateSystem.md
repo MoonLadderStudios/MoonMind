@@ -179,23 +179,30 @@ escalates privilege.
 
 Dependency and `init-db`/schema gates precede dependent services. Failed migration preserves errors and data. Legacy conversion scans distinct principals and skips artifact hashing once unreadable evidence requires refusal, preserving access guards without Python row processing over retained history. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
 
-**Active journals and recovery.** After storage qualification, the journal
-helper stops actual `agent_runtime` writers and `artifacts` sweepers, verifies
-quiescence and compacts committed chunks into complete JSONL journals for old
-readers. References/event locators commit atomically; original chunks remain
-recoverable until that commit. Recorded source helper images support rollback.
-Unavailable storage, artifacts or consumer observations prevent recreation.
-Default workers execute Python directly so Docker's stop signal reaches the
-SDK's graceful drain. An explicit `TEMPORAL_WORKER_COMMAND` is a shell override:
-it must `exec` the long-lived worker or forward stop signals and await its drain.
-Interrupted Activities use their existing recovery owners, logical steps and
-budgets; completed workflow effects are not repeated.
+**Active journals and recovery.** Controller and helper discover
+`moonmind.journal-consumer: "true"`; other explicit values exclude the service.
+Unlabeled releases retain the service-name and `agent_runtime`/`artifacts` fleet
+fallback until upgrades and rollbacks to them are retired. Installed helper
+images and target recovery services are recorded separately.
 
-After a partial apply, every journal consumer is stopped again. Retry recompacts
-before recreation because a partial writer may have committed more chunks.
-After the final automatic attempt, consumer services are recreated on the
-selected release; stopped one-offs remain stopped. Recovery/reporting failures
-are recorded beside the original apply error.
+After storage qualification, the helper fences every consumer, including
+one-offs, and compacts chunks for retained JSONL readers. References and locators
+commit atomically; original chunks survive until commit. Unavailable storage or
+consumer observations prevent recreation. Workers receive stop signals directly;
+a `TEMPORAL_WORKER_COMMAND` override must forward signals and await drain.
+Interrupted Activities retain recovery owners and budgets; completed effects are
+not repeated.
+
+Renames require all target consumers and surviving installed consumers selected
+together. Label-aware helpers prepare them; the capable controller retains
+ownership through installation before handing off, including on rollback. Legacy
+controllers cannot perform renames. Keep the artifacts fleet marker on a combined
+worker while rollback to them is supported. Helpers refuse label-only consumers
+when their controller lacks topology support.
+
+Partial apply fences consumers again; retry recompacts new chunks. Exhausted
+retries recreate target services, not obsolete names or stopped one-offs.
+Recovery failures accompany the original error.
 
 Once detached apply confirms installation, readiness has a fifteen-minute
 budget measured from that checkpoint, including controller restarts. An early
@@ -253,7 +260,7 @@ Host endpoint and project follow installed controller identity; `--compose-proje
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
-**Handoff.** A selected storage-volume transition finishes before handoff so an older rollback controller sees verified data. Before applying application services, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
+**Handoff.** Storage transfer precedes handoff; journal topology changes retain the capable controller until installation. The managed controller's `controller-handoff` one-off replaces it, releases its lock, and the replacement resumes after the one-off exits. Only that operation may be open; each attempt group hands off once. Older controllers enter through `--omnigent-select`. Missing `active-journal-transition` or `unversioned-routing-cutover` capabilities refuse mutation and direct the operator to `./tools/update-moonmind.sh`.
 
 Handoff shares one monotonic deadline within the caller's 300-second allowance, reserving recovery time. Subprocesses consume the remaining budget. Linux process groups are terminated, killed if necessary, and reaped before recovery reconciles known running or stopped candidates, including created replacements, and attempts saved-configuration restoration. New replacements require zero restarts; recovery permits history only with stable identity, restart count, start time and healthy state. Receipts retain the original failure and distinguish verified restoration from failed or unverified recovery. An available controller can continue applying, including targets predating handoff.
 

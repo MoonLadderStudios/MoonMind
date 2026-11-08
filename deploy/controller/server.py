@@ -65,18 +65,24 @@ CONTROLLER_CAPABILITIES = (
     "unversioned-routing-cutover",
     "controller-handoff",
     "storage-transfer-budget",
+    "journal-consumer-topology",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
 # complete stdout, never its bounded diagnostic tail.
+JOURNAL_CONSUMER_LABEL = "moonmind.journal-consumer"
+# Remove this fallback once releases creating unlabeled consumers are unsupported.
 JOURNAL_CONSUMER_SERVICES = ("temporal-worker-agent-runtime", "temporal-worker-artifacts")
 JOURNAL_CONSUMER_INSPECT_FORMAT = (
+    '{{$journal := "null"}}{{range $key, $value := .Config.Labels}}'
+    '{{if eq $key "moonmind.journal-consumer"}}{{$journal = json $value}}{{end}}{{end}}'
     '{{$fleet := ""}}{{range .Config.Env}}'
     '{{if or (eq . "TEMPORAL_WORKER_FLEET=agent_runtime") '
     '(eq . "TEMPORAL_WORKER_FLEET=artifacts")}}{{$fleet = .}}{{end}}{{end}}'
     '{"Image":{{json .Image}},"Config":{"Labels":{'
     '"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},'
-    '"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}}},'
+    '"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+    '"moonmind.journal-consumer":{{$journal}}},'
     '"Env":[{{json $fleet}}]}}'
 )
 # Temporal workers by the fleet variable every worker service sets, with the
@@ -1479,6 +1485,7 @@ def run_omnigent_step(
     phase: str,
     selected_revision: int | None = None,
     helper_image: str | None = None,
+    required_capability: str | None = None,
 ) -> dict:
     """Delegate one release step to the selected image, never a full updater.
 
@@ -1569,7 +1576,12 @@ def run_omnigent_step(
                 "    r=__import__('moonmind.workflows.skills.deployment_release', "
                 f"fromlist=['{function}']) if importlib.util.find_spec('moonmind') else None\n"
                 f"    f=getattr(r,'{function}',None)\n"
-                "    code=asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
+                + (
+                    "    if not getattr(r, 'JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED', False): f=None\n"
+                    if required_capability == "journal-consumer-topology"
+                    else ""
+                )
+                + "    code=asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
                 "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0)\n"
                 "except BaseException:\n"
                 "    traceback.print_exc()\n"
@@ -1675,55 +1687,154 @@ def prepare_controller_storage(store, operation, *, runner, overlay, observe=Fal
     raise ValueError("No available release helper can verify storage cutover")
 
 
+def _journal_consumer(service, config):
+    """Use the declared ownership label, with an unlabeled-release fallback."""
+    label = (config.get("labels") or {}).get(JOURNAL_CONSUMER_LABEL)
+    if label is not None:
+        return label == "true"
+    return service in JOURNAL_CONSUMER_SERVICES or (
+        (config.get("environment") or {}).get("TEMPORAL_WORKER_FLEET")
+        in ("agent_runtime", "artifacts")
+    )
+
+
+def observe_journal_transition(store, operation, *, runner, overlay):
+    """Persist installed provenance separately from the target recovery set.
+
+    The target inventory is the complete rendered Compose model, not just the
+    requested subset. A rename may remove installed service names, but it may
+    not omit a target consumer or an installed consumer still in that model.
+    """
+    operation_id = operation["operationId"]
+    target = operation.get("target") or {}
+    state = store.load(operation_id).get("journalTransition") or {}
+    if "targetConsumerServices" in state:
+        return state
+    base = engine.compose_base(
+        project=target.get("project", operation.get("stack")),
+        project_dir=target.get("projectDir", ""),
+        compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
+        env_files=_env_files_for_apply(target, overlay),
+    )
+    rendered = engine.run_command(
+        runner,
+        (*base, "config", "--format", "json"),
+        timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
+    )
+    # The full model includes secrets; neither bytes nor parse errors belong
+    # in operation diagnostics.
+    try:
+        definitions = json.loads(engine.command_stdout(rendered))["services"]
+        if int(rendered.get("exit", 0)) or not isinstance(definitions, dict):
+            raise ValueError()
+        target_consumers = {
+            name
+            for name, definition in definitions.items()
+            if _journal_consumer(name, definition)
+        }
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError(
+            "Target journal consumer configuration is unavailable"
+        ) from None
+    listed = engine.run_command(
+        runner,
+        (
+            "docker",
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={target.get('project', operation.get('stack'))}",
+        ),
+        timeout_seconds=30,
+    )
+    if int(listed.get("exit", 0)) != 0:
+        raise engine.ApplyError(
+            "journal-consumer-observation", 1, "Docker consumers unavailable"
+        )
+    identifiers = engine.command_stdout(listed).split()
+    rows = []
+    if identifiers:
+        inspected = engine.run_command(
+            runner,
+            (
+                "docker",
+                "inspect",
+                "--format",
+                JOURNAL_CONSUMER_INSPECT_FORMAT,
+                *identifiers,
+            ),
+            timeout_seconds=30,
+        )
+        if int(inspected.get("exit", 0)) != 0:
+            raise engine.ApplyError(
+                "journal-consumer-observation", 1, "Docker consumer images unavailable"
+            )
+        rows = [
+            json.loads(line) for line in engine.command_stdout(inspected).splitlines()
+        ]
+        if len(rows) != len(identifiers) or any(
+            not isinstance(row, dict) for row in rows
+        ):
+            raise ValueError("Journal consumer inventory is incomplete")
+    images, installed = list(state.get("sourceImages") or ()), set()
+    labeled = any(
+        JOURNAL_CONSUMER_LABEL in (item.get("labels") or {})
+        for item in definitions.values()
+    )
+    for row in rows:
+        config = row.get("Config") or {}
+        labels = config.get("Labels") or {}
+        environment = dict(
+            item.split("=", 1) for item in config.get("Env", ()) if "=" in item
+        )
+        service = labels.get("com.docker.compose.service")
+        labeled = labeled or labels.get(JOURNAL_CONSUMER_LABEL) is not None
+        if not _journal_consumer(
+            service, {"labels": labels, "environment": environment}
+        ):
+            continue
+        if labels.get("com.docker.compose.project") != target.get(
+            "project", operation.get("stack")
+        ):
+            raise ValueError("Journal consumer inventory escaped the selected project")
+        if not row.get("Image") or not service:
+            raise ValueError("Installed journal consumer image is unavailable")
+        images.append(row["Image"])
+        installed.add(service)
+    selected = set(target.get("services") or ())
+    if not selected.intersection(target_consumers | installed) and not (
+        installed - definitions.keys()
+    ):
+        return {}
+    if target_consumers - selected or (installed & definitions.keys()) - selected:
+        raise ValueError(
+            "Journal writers and sweepers must be selected together for recreation"
+        )
+    if installed and not target_consumers:
+        raise ValueError(
+            "Selected release has no target journal consumers for recovery"
+        )
+    state = {
+        **state,
+        "sourceImages": list(dict.fromkeys(images)),
+        "installedConsumerServices": sorted(installed),
+        "targetConsumerServices": sorted(target_consumers),
+        # Older controllers understand this field during post-install handoff.
+        "consumerServices": sorted(target_consumers),
+        "requiresTopologySupport": labeled or installed != target_consumers,
+    }
+    store.record_journal_transition(operation_id, state)
+    return state
+
+
 def prepare_controller_journals(store, operation, *, runner, overlay, compact=True):
     """Prepare active data using installed-image provenance, under stack ownership."""
     operation_id = operation["operationId"]
     target = operation.get("target") or {}
-    state = store.load(operation_id).get("journalTransition") or {}
-    if "sourceImages" not in state:
-        listed = engine.run_command(runner, (
-            "docker", "ps", "--all", "--quiet", "--filter",
-            f"label=com.docker.compose.project={target.get('project', operation.get('stack'))}",
-        ), timeout_seconds=30)
-        if int(listed.get("exit", 0)) != 0:
-            raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumers unavailable")
-        identifiers = engine.command_stdout(listed).split()
-        rows = []
-        if identifiers:
-            inspected = engine.run_command(runner, (
-                "docker", "inspect", "--format", JOURNAL_CONSUMER_INSPECT_FORMAT,
-                *identifiers,
-            ), timeout_seconds=30)
-            if int(inspected.get("exit", 0)) != 0:
-                raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumer images unavailable")
-            rows = [json.loads(line) for line in engine.command_stdout(inspected).splitlines()]
-            if len(rows) != len(identifiers) or any(not isinstance(row, dict) for row in rows):
-                raise ValueError("Journal consumer inventory is incomplete")
-        selected = set(target.get("services") or ())
-        standard = set(JOURNAL_CONSUMER_SERVICES)
-        images, services = [], set()
-        for row in rows:
-            config = row.get("Config") or {}
-            labels = config.get("Labels") or {}
-            environment = dict(item.split("=", 1) for item in config.get("Env", ()) if "=" in item)
-            service = labels.get("com.docker.compose.service")
-            if service not in standard and environment.get("TEMPORAL_WORKER_FLEET") not in ("agent_runtime", "artifacts"):
-                continue
-            if labels.get("com.docker.compose.project") != target.get("project", operation.get("stack")):
-                raise ValueError("Journal consumer inventory escaped the selected project")
-            if not row.get("Image") or not service:
-                raise ValueError("Installed journal consumer image is unavailable")
-            images.append(row["Image"])
-            services.add(service)
-        if not selected.intersection(standard | services):
-            return {"status": "skipped"}
-        if services - selected:
-            raise ValueError("Journal writers and sweepers must be selected together for recreation")
-        state = {
-            "sourceImages": list(dict.fromkeys(images)),
-            "consumerServices": sorted((standard & selected) | services),
-        }
-        store.record_journal_transition(operation_id, state)
+    state = observe_journal_transition(store, operation, runner=runner, overlay=overlay)
+    if not state:
+        return {"status": "skipped"}
     if compact:
         base = engine.compose_base(
             project=target.get("project", operation.get("stack")),
@@ -1745,8 +1856,17 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
     ])))
     for helper_image in candidates:
         receipt = run_omnigent_step(
-            store, operation, runner=runner, overlay=overlay,
-            phase="journal-prepare" if compact else "journal-quiesce", helper_image=helper_image,
+            store,
+            operation,
+            runner=runner,
+            overlay=overlay,
+            phase="journal-prepare" if compact else "journal-quiesce",
+            helper_image=helper_image,
+            required_capability=(
+                "journal-consumer-topology"
+                if state.get("requiresTopologySupport")
+                else None
+            ),
         )
         if receipt.get("status") == "unsupported":
             continue
@@ -1769,7 +1889,13 @@ def resume_journal_consumers(store, operation, *, runner, overlay) -> None:
     state = store.load(operation["operationId"]).get("journalTransition") or {}
     selected = set(target.get("services") or ())
     services = sorted(
-        set(state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES) & selected
+        set(
+            state.get(
+                "targetConsumerServices",
+                state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES,
+            )
+        )
+        & selected
     )
     if not services:
         return
@@ -1959,6 +2085,14 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
     ``unavailable`` with the reason kept on the operation.
     """
     operation_id = operation["operationId"]
+    current = store.load(operation_id)
+    if (current.get("journalTransition") or {}).get(
+        "requiresTopologySupport"
+    ) and not current.get("installed"):
+        # A rollback can request a controller that cannot map source names to
+        # target names. Keep this capable owner through fencing, retries and
+        # target recovery, then let the requested controller verify installation.
+        return
     try:
         receipt = run_omnigent_step(
             store, operation, runner=runner, overlay=overlay, phase="controller-handoff"
@@ -2052,7 +2186,14 @@ def production_apply(
         target = operation["target"]
         project = target.get("project", operation.get("stack"))
     storage_selected = "minio" in target.get("services", ())
-    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and not storage_selected:
+    if (
+        os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1"
+        and operation.get("installed") is None
+    ):
+        observe_journal_transition(store, operation, runner=runner, overlay=overlay)
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and (
+        not storage_selected or operation.get("installed") is not None
+    ):
         hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
     channels = omnigent_channels_for_target(target)
     selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
@@ -2173,6 +2314,12 @@ def production_apply(
         operation["operationId"], image=selected_image(operation),
         verification_pending=True,
     )
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+        current = store.load(operation["operationId"])
+        if (current.get("journalTransition") or {}).get("requiresTopologySupport"):
+            hand_off_to_requested_controller(
+                store, current, runner=runner, overlay=overlay
+            )
     return _finish_installed_verification(
         store, operation, runner=runner, project=project,
         env_files=env_files, overlay=overlay, outcome=outcome,
