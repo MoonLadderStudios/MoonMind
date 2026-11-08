@@ -16,7 +16,9 @@ import os
 import signal
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
+from temporalio.testing import ActivityEnvironment
 from unittest.mock import AsyncMock
 
 import pytest
@@ -40,7 +42,10 @@ from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
 from tests.integration.security import test_recurring_assessments as recurring
-from tests.integration.security.test_admitted_assessment_journeys import publisher
+from moonmind.workflows.temporal.worker_runtime import (
+    _container_job_evidence_publisher,
+    _container_job_projection_writer,
+)
 from tests.integration.security.test_recurring_assessments import invoke
 from tests.integration.security.test_web_assessment_jobs import (
     create_container_in_activity,
@@ -213,10 +218,25 @@ class Job:
                 return 1, b"", b"no such container"
             return 0, b"", b""
 
+        self.jobs = jobs
+
+        async def publish(request, name, payload):
+            ref = await _container_job_evidence_publisher(self.environment.service)(
+                request, name, payload
+            )
+            self.published[ref] = payload
+            # The assessment fixture explicitly admits all outputs from this job.
+            await self.environment.service.delegate_read_access(
+                artifact_ids=[ref],
+                workflow_id="assessment",
+                access=ArtifactAccessContext.for_activity(),
+            )
+            return ref
+
         self.backend = DockerContainerJobBackend(
             workspace_root=self.tmp_path,
             command_runner=daemon,
-            evidence_publisher=publisher(self.environment, self.published),
+            evidence_publisher=publish,
             artifact_reader=_container_job_artifact_reader(self.environment.service),
             settings=self.settings,
         )
@@ -257,20 +277,27 @@ class Job:
         self.request.container_ref = "fixture-container"
         self.request.terminal_state = terminal_state
         self.request.exit_code = exit_code
-        await self.backend.publish_evidence(self.request)
+        from moonmind.schemas.container_job_models import container_job_workflow_id
+
+        activity = ActivityEnvironment()
+        activity.info = replace(
+            activity.info, workflow_id=container_job_workflow_id(self.request.job_id)
+        )
+        result = await activity.run(self.backend.publish_evidence, self.request)
+        self.request.artifacts_ref = result.artifacts_ref
+        await _container_job_projection_writer("docker", "fixture")(self.request)
         return next(
-            ref
-            for ref, body in self.published.items()
-            if self.result_schema in body
+            ref for ref, body in self.published.items() if self.result_schema in body
         )
 
-    async def assess(self, ref: str, key: str) -> dict:
+    async def assess(self, ref: str, key: str, **options) -> dict:
         return await invoke(
             self.environment.service,
             {
                 "scope": {"assets": [GAME]},
                 "tools": ["retained-report"],
                 "reportRefs": [ref],
+                **options,
                 "credentialRefs": [],
                 "networkRefs": [],
                 "budget": {
@@ -336,6 +363,10 @@ async def test_profile_job_result_is_read_as_game_math_coverage(
     assert (reviewed["scanner"], reviewed["target"]) == ("game-math", GAME)
     assert (reviewed["coverage"], reviewed["outcome"]) == ("complete", "violations")
     assert reviewed["verification"] == "not_performed"
+    assert reviewed["inputVerification"] == "reproduced"
+    assert {"assessment", "spec", "settlements", "jobManifest"} <= reviewed[
+        "nativeRefs"
+    ].keys()
     assert outputs["coverageStatus"] == "complete"
     assert outputs["counts"]["new"] == 1
 
@@ -378,3 +409,300 @@ async def test_cancelled_profile_job_keeps_partial_evidence(
     assert "simulation_cancelled" in reviewed["limitations"]
     assert outputs["coverageStatus"] == "stale_or_partial"
     assert outputs["counts"]["new"] == 0
+
+
+async def retained_job(
+    environment,
+    tmp_path,
+    monkeypatch,
+    *,
+    key="retained",
+    settlements=SETTLEMENTS,
+    spec=SPEC,
+):
+    job = Job(environment, tmp_path, monkeypatch)
+    _, argv = await job.launch(
+        key,
+        {"spec": "spec/spec.json", "settlements": "settlements/settlements.json"},
+        {
+            "spec": json.dumps(spec).encode(),
+            "settlements": "\n".join(map(json.dumps, settlements)).encode(),
+        },
+    )
+    process = job.process(argv)
+    _, error = process.communicate(timeout=60)
+    assert process.returncode == 0, error.decode()
+    ref = await job.publish(terminal_state="succeeded", exit_code=0)
+    return job, ref
+
+
+def controls():
+    from datetime import UTC, datetime
+    from tests.unit.security.test_control_assessments import requirement
+
+    day = datetime.now(UTC).date().isoformat()
+    return {
+        "requirements": [
+            requirement(
+                scope={"assets": [GAME]},
+                period={"start": day, "end": day},
+                title="Reference settlement conforms to supplied specification",
+                objectives=[
+                    {
+                        "id": "settlement",
+                        "description": "Check retained settlement cases",
+                        "source": "game-math",
+                        "tool": "game-math",
+                        "ruleIds": ["settlement"],
+                    }
+                ],
+            )
+        ]
+    }
+
+
+async def test_job_to_control_report_export_and_explicit_retest(
+    environment, tmp_path, monkeypatch
+):
+    from tests.unit.security.test_assessment_evidence_exports import unpack
+    from tests.artifact_access import access_for_test
+
+    service = environment.service
+    job, ref = await retained_job(environment, tmp_path, monkeypatch)
+    plan = controls()
+    result = await job.assess(ref, "controls", controlAssessment=plan)
+    control = await recurring.read(service, result["controlAssessmentRef"])
+    assert control["requirements"][0]["conclusion"] == "not_satisfied"
+    scan = await recurring.read(service, result["scanRef"])
+    assert all(
+        row["evidenceMethod"] == "deterministic_check"
+        for row in scan["observation"]["coverage"]
+    )
+    summary = json.loads(job.published[ref])
+    assert set(summary["job"]["inputRefs"].values()) <= await recurring.required(
+        service, ref
+    )
+    assert {
+        ref,
+        *summary["job"]["inputRefs"].values(),
+        job.request.artifacts_ref,
+    } <= await recurring.required(service, result["scanRef"])
+    _, report = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    assert b"deterministic_check" in report and b"not_satisfied" in report
+    assert b"does not certify a deployed game" in report
+    exported = await job.assess(
+        ref,
+        "controls-export",
+        controlAssessment=plan,
+        evidenceExport={
+            "artifactRefs": [
+                ref,
+                result["controlAssessmentRef"],
+                recurring.report_ref(result),
+            ]
+        },
+    )
+    archive, manifest = await unpack(service, exported)
+    row = next(row for row in manifest["entries"] if row["sourceArtifactId"] == ref)
+    projected = json.loads(archive.read(row["memberName"]))
+    assert projected["certification"] == "not_performed"
+    assert projected["job"]["inputRefs"] == summary["job"]["inputRefs"]
+    assert projected["theoretical"][0]["rtp"] == "99/100"
+
+    fixed, fixed_ref = await retained_job(
+        environment,
+        tmp_path,
+        monkeypatch,
+        key="fixed",
+        settlements=[
+            SETTLEMENTS[0],
+            {**SETTLEMENTS[1], "payouts": ["0"], "total": "0"},
+        ],
+    )
+    unreviewed = await fixed.assess(
+        fixed_ref,
+        "unreviewed",
+        baselineRef=result["comparisonRef"],
+        controlAssessment=plan,
+    )
+    assert unreviewed["counts"]["absent_comparable"] == 1
+    compared = await recurring.read(service, result["comparisonRef"])
+    finding_id = compared["findings"][0]["findingId"]
+    decision = recurring.decision(finding_id, [fixed_ref])
+    decision["scope"] = {"assets": [GAME]}
+    decisions = await recurring.put(service, [decision])
+    reviewed = await fixed.assess(
+        fixed_ref,
+        "reviewed",
+        baselineRef=result["comparisonRef"],
+        decisionsRef=decisions,
+        controlAssessment=plan,
+    )
+    assert reviewed["counts"]["remediated_verified"] == 1
+    assert (await recurring.read(service, reviewed["controlAssessmentRef"]))[
+        "requirements"
+    ][0]["conclusion"] == "satisfied"
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "copy",
+        "changed_input",
+        "missing_input",
+        "revoked_input",
+        "replaced_output",
+        "wrong_terminal",
+        "missing_manifest",
+    ],
+)
+async def test_untrusted_job_evidence_cannot_be_control_execution(
+    environment, tmp_path, monkeypatch, attack
+):
+    from api_service.db.models import ContainerJobRecord
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactNotFoundError,
+    )
+
+    job, ref = await retained_job(environment, tmp_path, monkeypatch)
+    summary = json.loads(job.published[ref])
+    original_read = environment.service.read
+    input_ref = summary["job"]["inputRefs"]["spec"]
+    if attack == "copy":
+        ref = await recurring.put(environment.service, summary)
+    elif attack == "wrong_terminal":
+        record = await environment.session.get(ContainerJobRecord, job.request.job_id)
+        record.state = "failed"
+        await environment.session.commit()
+    elif attack == "missing_manifest":
+        record = await environment.session.get(ContainerJobRecord, job.request.job_id)
+        record.artifacts_ref = None
+        await environment.session.commit()
+    else:
+
+        async def damaged(*, artifact_id, access):
+            if artifact_id == input_ref:
+                if attack == "missing_input":
+                    raise TemporalArtifactNotFoundError(input_ref)
+                if attack == "revoked_input":
+                    raise TemporalArtifactAuthorizationError("fixture revoked")
+                if attack == "changed_input":
+                    metadata, body = await original_read(
+                        artifact_id=artifact_id, access=access
+                    )
+                    return metadata, body + b" "
+            metadata, body = await original_read(artifact_id=artifact_id, access=access)
+            if attack == "replaced_output" and artifact_id == ref:
+                body = body + b" "
+            return metadata, body
+
+        monkeypatch.setattr(environment.service, "read", damaged)
+    if attack in {"missing_input", "revoked_input", "replaced_output"}:
+        from temporalio.exceptions import ApplicationError
+
+        with pytest.raises(
+            ApplicationError, match="(not found|revoked|digest mismatch)"
+        ):
+            await job.assess(ref, "attack", controlAssessment=controls())
+        return
+    result = await job.assess(ref, "attack", controlAssessment=controls())
+    assert result.get("controlAssessmentCounts", {}).get("satisfied", 0) == 0
+    assert result["scanOutcome"] != "completed", result
+
+
+async def test_imported_summary_is_preserved_but_never_executed_control(
+    environment, tmp_path, monkeypatch
+):
+    job, ref = await retained_job(
+        environment, tmp_path, monkeypatch, settlements=[SETTLEMENTS[0]]
+    )
+    summary = json.loads(job.published[ref])
+    summary.pop("job")
+    imported = await recurring.put(environment.service, summary)
+    result = await job.assess(imported, "import", controlAssessment=controls())
+    assert result["scanOutcome"] == "completed"
+    assert result["scannerSummaries"][0]["inputVerification"] == "unverified"
+    control = await recurring.read(environment.service, result["controlAssessmentRef"])
+    assert control["requirements"][0]["conclusion"] == "inconclusive"
+
+
+async def test_removing_a_targeted_case_cannot_clear_its_violation(
+    environment, tmp_path, monkeypatch
+):
+    job, ref = await retained_job(environment, tmp_path, monkeypatch)
+    original = await job.assess(ref, "case-original")
+    reduced, reduced_ref = await retained_job(
+        environment, tmp_path, monkeypatch, key="reduced", settlements=[SETTLEMENTS[0]]
+    )
+    result = await reduced.assess(
+        reduced_ref, "case-reduced", baselineRef=original["comparisonRef"]
+    )
+    assert result["counts"]["not_reassessed"] == 1
+    assert result["counts"]["absent_comparable"] == 0
+
+
+async def test_import_cannot_clear_verified_declared_value_finding(
+    environment, tmp_path, monkeypatch
+):
+    import copy
+
+    spec = copy.deepcopy(SPEC)
+    spec["declared"][0]["rtp"] = "0.8"
+    job, ref = await retained_job(
+        environment, tmp_path, monkeypatch, spec=spec, settlements=[]
+    )
+    baseline = await job.assess(ref, "trusted-theory")
+    report = json.loads(job.published[ref])
+    report.pop("job")
+    report["violations"] = []
+    report["outcome"] = "consistent"
+    for row in report["theoretical"]:
+        row["consistent"] = True
+    forged = await recurring.put(environment.service, report)
+    result = await job.assess(
+        forged, "imported-theory", baselineRef=baseline["comparisonRef"]
+    )
+    assert result["counts"]["not_reassessed"] == 1
+    assert result["counts"]["absent_comparable"] == 0
+    compared = await recurring.read(environment.service, baseline["comparisonRef"])
+    decision = recurring.decision(compared["findings"][0]["findingId"], [forged])
+    decision["scope"] = {"assets": [GAME]}
+    decisions = await recurring.put(environment.service, [decision])
+    result = await job.assess(
+        forged,
+        "imported-theory-retest",
+        baselineRef=baseline["comparisonRef"],
+        decisionsRef=decisions,
+    )
+    assert result["counts"]["remediated_verified"] == 0
+
+
+@pytest.mark.parametrize("mutation", ["quarantine", "revoke"])
+async def test_revoked_retained_input_blocks_cached_positive_scan(
+    environment, tmp_path, monkeypatch, mutation
+):
+    from api_service.db.models import TemporalArtifact, TemporalArtifactLink
+    from sqlalchemy import delete
+    from temporalio.exceptions import ApplicationError
+
+    job, ref = await retained_job(
+        environment, tmp_path, monkeypatch, settlements=[SETTLEMENTS[0]]
+    )
+    result = await job.assess(ref, "cache", controlAssessment=controls())
+    assert result["controlAssessmentCounts"]["satisfied"] == 1
+    blocked = json.loads(job.published[ref])["job"]["inputRefs"]["spec"]
+    if mutation == "quarantine":
+        artifact = await environment.session.get(TemporalArtifact, blocked)
+        artifact.metadata_json = {**artifact.metadata_json, "quarantine": True}
+    else:
+        await environment.session.execute(delete(TemporalArtifactLink).where(
+            TemporalArtifactLink.artifact_id == blocked,
+            TemporalArtifactLink.workflow_id == "assessment",
+        ))
+    await environment.session.commit()
+    with pytest.raises(ApplicationError, match="(quarantined|QUARANTINED|read|access)"):
+        await job.assess(ref, "cache", controlAssessment=controls())

@@ -4215,17 +4215,19 @@ class DockerContainerJobBackend:
             )
         return refs
 
-    def _application_access_spec_body(self, request, invocation) -> bytes:
+    def _application_access_spec_body(
+        self, request, invocation, argument="--spec"
+    ) -> bytes:
         """Read the exact immutable file used by the profile, including archive inputs."""
         from moonmind.security.assessments import MAX_RETAINED_REPORT_BYTES
 
         paths = [
-            arg.split("=", 1)[1] for arg in invocation if arg.startswith("--spec=")
+            arg.split("=", 1)[1] for arg in invocation if arg.startswith(argument + "=")
         ]
         paths += [
             invocation[i + 1]
             for i, arg in enumerate(invocation[:-1])
-            if arg == "--spec"
+            if arg == argument
         ]
         storage = self._attachment_storage(request)
         if len(paths) != 1 or storage is None or not paths[0].startswith("/inputs/"):
@@ -4291,6 +4293,68 @@ class DockerContainerJobBackend:
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and "moonmind.security.game_math" in invocation:
+                from moonmind.security.game_math import GameMathAssessment, GameMathJob
+                from moonmind.security.game_math_evidence import bind_job, verify_inputs
+
+                try:
+                    summary = GameMathAssessment.model_validate_json(payload)
+                    if summary.job is not None or entry["name"] != "assessment":
+                        raise ValueError(
+                            "workload cannot author game math job evidence"
+                        )
+                    bodies = {}
+                    for name in ("spec", "settlements", "records"):
+                        flag = "--" + name
+                        if name == "spec" or any(
+                            arg == flag or arg.startswith(flag + "=")
+                            for arg in invocation
+                        ):
+                            body = await asyncio.to_thread(
+                                self._application_access_spec_body,
+                                request,
+                                invocation,
+                                flag,
+                            )
+                            if (
+                                delivered
+                                and _without_delivered(
+                                    body, "application/json", delivered
+                                )
+                                != body
+                            ):
+                                raise ValueError("game math input contains credentials")
+                            bodies[name] = body
+                    # Oversized simulations remain retained but unclassified.
+                    await asyncio.to_thread(verify_inputs, summary, bodies)
+                    refs = {
+                        name: await self._publish_artifact(
+                            request,
+                            f"{request.job_id}-input-game-math-{name}.json",
+                            body,
+                        )
+                        for name, body in bodies.items()
+                    }
+                    summary = bind_job(
+                        summary,
+                        GameMathJob(
+                            job_id=request.job_id,
+                            terminal_state=str(request.terminal_state or "failed"),
+                            exit_code=request.exit_code,
+                            input_refs=refs,
+                            input_digests={
+                                name: hashlib.sha256(body).hexdigest()
+                                for name, body in bodies.items()
+                            },
+                        ),
+                    )
+                    payload = summary.model_dump_json(by_alias=True).encode()
+                except (ValueError, OSError, PermissionError):
+                    payload = None
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="invalid game math assessment output",
+                    )
             if payload is not None and access_target:
                 from moonmind.security.application_access import (
                     ApplicationAccessReport,

@@ -2493,21 +2493,26 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                         "run_id": source.run_id,
                         "link_type": "output.container-job",
                     }
+        game_math = "moonmind.security.game_math" in (
+            *request.request.spec.entrypoint[1:],
+            *request.request.spec.command,
+        )
         content_type = _container_job_evidence_content_type(name)
         artifact, _ = await artifact_service.create_for_activity(
             principal=principal,
             content_type=content_type,
             metadata_json={
                 "artifact_type": "container_job.evidence",
+                **({"evidence_producer": "game-math"} if game_math else {}),
                 "name": name,
                 "container_job_id": request.job_id,
                 "ownership_digest": hashlib.sha256(
                     request.ownership_token.encode()
                 ).hexdigest(),
             },
-            **({"redaction_level": "restricted"} if scoped else {}),
+            **({"redaction_level": "restricted"} if scoped or game_math else {}),
         )
-        if scoped:
+        if scoped or game_math:
             await artifact_service.grant_operator_output_read(
                 artifact_id=artifact.artifact_id
             )
@@ -2517,6 +2522,26 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             payload=payload,
             content_type=content_type,
         )
+        if (artifact.metadata_json or {}).get("evidence_producer") == "game-math" and (
+            name == f"{request.job_id}-output-assessment"
+            or name.startswith(f"{request.job_id}-output-assessment.")
+        ):
+            from moonmind.security.game_math import GameMathAssessment
+            from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+            summary = GameMathAssessment.model_validate_json(payload)
+            if summary.job is None or summary.job.job_id != request.job_id:
+                raise ValueError("game math output lacks producer-owned inputs")
+            await artifact_service.record_verified_dependencies(
+                root_artifact_id=artifact.artifact_id,
+                dependencies=[
+                    ArtifactDependency(
+                        ref, summary.job.input_digests[key], True, "game-math.input"
+                    )
+                    for key, ref in summary.job.input_refs.items()
+                ],
+                access=ArtifactAccessContext.for_activity(),
+            )
         if scoped and source_workflow:
             await artifact_service.delegate_read_access(
                 artifact_ids=[artifact.artifact_id],

@@ -762,7 +762,13 @@ def _cloud_observation(
 
 
 def _game_math_observation(
-    request, summary: GameMathAssessment, ref: str, created_at: datetime
+    request,
+    summary: GameMathAssessment,
+    ref: str,
+    created_at: datetime,
+    *,
+    verified=False,
+    case_basis=None,
 ) -> Observation:
     """Specification violations as game-math coverage of one game.
 
@@ -780,19 +786,35 @@ def _game_math_observation(
     simulation = summary.simulation
     if summary.settlement_cases or (simulation and simulation.source == "records"):
         rules |= {"settlement", "outcome-support"}
+    verified_basis = ["retained-input-replay"] if verified else []
     coverage = [
         Coverage(
+            evidence_method="deterministic_check" if verified else "unclassified",
             source="game-math",
             tool="game-math",
             assets=[summary.game_ref],
             rule_ids=sorted(rules),
-            config_ref=content_key(["game-math", summary.spec_digest]),
+            config_ref=content_key(["game-math", summary.spec_digest, *verified_basis]),
             status="complete" if summary.covered else "partial",
         )
     ]
+    if verified and rules & {"settlement", "outcome-support"}:
+        coverage[0].rule_ids = sorted(rules - {"settlement", "outcome-support"})
+        coverage.append(
+            Coverage(
+                source="game-math",
+                tool="game-math",
+                assets=[summary.game_ref],
+                rule_ids=["settlement", "outcome-support"],
+                evidence_method="deterministic_check",
+                config_ref=content_key(["game-math", summary.spec_digest, case_basis]),
+                status="complete" if summary.covered else "partial",
+            )
+        )
     if simulation is not None:
         coverage.append(
             Coverage(
+                evidence_method="deterministic_check" if verified else "unclassified",
                 source="game-math",
                 tool="game-math",
                 assets=[summary.game_ref],
@@ -804,6 +826,7 @@ def _game_math_observation(
                         "game-math",
                         summary.spec_digest,
                         simulation.source,
+                        *verified_basis,
                     ]
                 ),
                 status="complete" if summary.covered else "partial",
@@ -820,7 +843,9 @@ def _game_math_observation(
                 rule_id=row.rule,
                 asset=summary.game_ref,
                 native_id=row.identity,
-                evidence_refs=[ref],
+                evidence_refs=[ref, *summary.job.input_refs.values()]
+                if verified
+                else [ref],
             )
             for row in summary.violations
         ],
@@ -831,6 +856,7 @@ def _game_math_observation(
             "gameMathSource": summary.provenance.source_ref,
             "gameMathApproval": summary.provenance.approval_ref or "unavailable",
             "gameMathOutcome": summary.outcome,
+            "gameMathInputVerification": "reproduced" if verified else "unverified",
         },
     )
 
@@ -1080,6 +1106,40 @@ class AssessmentExecution:
             *_history_evidence(_scan_citations(work), history),
         ]
 
+    async def game_math_inputs(self, ref, summary):
+        """Recheck current job/input authority without repeating completed math."""
+        from moonmind.security.game_math_evidence import MAX_INPUT_BYTES
+
+        refs = {"assessment": ref}
+        refs["jobManifest"] = await self.service.verify_game_math_job_output(
+            artifact_id=ref, job=summary.job, access=self.access
+        )
+        bodies = {}
+        for name, input_ref in summary.job.input_refs.items():
+            _, bodies[name] = await self.read(input_ref)
+            refs[name] = input_ref
+        if (
+            sum(map(len, bodies.values())) > MAX_INPUT_BYTES
+            or {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}
+            != summary.job.input_digests
+        ):
+            raise ValueError("game math retained inputs differ or exceed their bound")
+        return refs, bodies
+
+    async def revalidate_game_math_inputs(self, inputs):
+        for ref, (_, raw) in inputs.items():
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                continue
+            if (
+                isinstance(payload, dict)
+                and payload.get("schemaVersion") == "game-math-assessment/v1"
+                and payload.get("job") is not None
+            ):
+                await self.game_math_inputs(
+                    ref, GameMathAssessment.model_validate(payload)
+                )
     async def product_evidence(self, components, records=()) -> list[str]:
         """Check retained evidence through the existing artifact authority.
 
@@ -1756,6 +1816,7 @@ class AssessmentExecution:
         scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
+            await self.revalidate_game_math_inputs(inputs)
             scan_ref, work = saved
             observation = Observation.model_validate(work["observation"])
             await self.seal(
@@ -1772,6 +1833,7 @@ class AssessmentExecution:
                 and baseline["observation"]["provenance"].get("assessmentWork")
                 == scan_key
             ):
+                await self.revalidate_game_math_inputs(inputs)
                 # Duplicate feed delivery may reference the previous occurrence's
                 # authorized baseline, so no scanner computation is repeated.
                 observations.append(Observation.model_validate(baseline["observation"]))
@@ -2048,11 +2110,32 @@ class AssessmentExecution:
                             )
                         elif payload.get("schemaVersion") == "game-math-assessment/v1":
                             game_summary = GameMathAssessment.model_validate(payload)
+                            game_verified = False
+                            game_refs = {"assessment": ref}
+                            if game_summary.job is not None:
+                                from moonmind.security.game_math_evidence import (
+                                    comparison_basis,
+                                    verify_inputs,
+                                )
+
+                                game_refs, game_bodies = await self.game_math_inputs(
+                                    ref, game_summary
+                                )
+                                game_verified = await asyncio.to_thread(
+                                    verify_inputs, game_summary, game_bodies
+                                )
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
                             observation = _game_math_observation(
-                                request, game_summary, ref, observed_at
+                                request,
+                                game_summary,
+                                ref,
+                                observed_at,
+                                verified=game_verified,
+                                case_basis=comparison_basis(game_bodies)
+                                if game_verified
+                                else None,
                             )
                             simulation = game_summary.simulation
                             scanner_summaries.append(
@@ -2060,7 +2143,10 @@ class AssessmentExecution:
                                     "scanner": "game-math",
                                     "target": game_summary.game_ref,
                                     "summaryRef": ref,
-                                    "nativeRefs": {"assessment": ref},
+                                    "nativeRefs": game_refs,
+                                    "inputVerification": "reproduced"
+                                    if game_verified
+                                    else "unverified",
                                     "coverage": observation.coverage[0].status,
                                     "outcome": game_summary.outcome,
                                     "execution": {
@@ -2070,7 +2156,11 @@ class AssessmentExecution:
                                             else "not_requested"
                                         )
                                     },
-                                    "limitations": sorted(game_summary.limitations),
+                                    "limitations": sorted(
+                                        {*game_summary.limitations,
+                                         *(["input_replay_limit_exceeded"]
+                                           if game_summary.job and not game_verified else [])}
+                                    ),
                                     "verification": game_summary.certification,
                                 }
                             )
