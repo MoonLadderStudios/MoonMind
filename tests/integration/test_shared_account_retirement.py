@@ -545,7 +545,10 @@ async def test_converted_running_job_preserves_temporal_handoff_and_cancel(
             for e in history.events
             if e.HasField("workflow_execution_signaled_event_attributes")
         ]
-        assert len(started) == 1 and len(signals) == 1
+        assert len(started) == 1
+        # Stop intent is durable before dispatch. A retry redelivers the
+        # idempotent signal rather than assuming a prior signal was received.
+        assert len(signals) == 2
         original = (
             await temporal.client.data_converter.decode(
                 started[0].workflow_execution_started_event_attributes.input.payloads
@@ -553,7 +556,11 @@ async def test_converted_running_job_preserves_temporal_handoff_and_cancel(
         )[0]
         assert original["jobId"] == accepted.job_id
         assert original["owner"] == owner.model_dump(by_alias=True)
-        assert (
-            signals[0].workflow_execution_signaled_event_attributes.signal_name
-            == "cancel"
+        assert all(
+            event.workflow_execution_signaled_event_attributes.signal_name == "cancel"
+            for event in signals
+        )
+        assert all(
+            not event.workflow_execution_signaled_event_attributes.input.payloads
+            for event in signals
         )
