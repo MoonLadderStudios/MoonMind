@@ -85,6 +85,7 @@ logger = logging.getLogger(__name__)
 
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
+_PREVIEW_INPUT_MAX_BYTES = 4 * 1024 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _DELEGATED_INPUT_LINK_TYPE = "input.artifact.admitted"
 _DELEGATED_RAW_LINK_TYPE = "input.artifact.raw"
@@ -4118,12 +4119,129 @@ class TemporalArtifactService:
                 "size_bytes mismatch during upload completion"
             )
 
+    def _preview_transaction_service(self) -> TemporalArtifactService:
+        """Borrow this transaction so preview publication keeps its source fence."""
+        return TemporalArtifactService(
+            self._repository,
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            store=self._store,
+            default_namespace=self._default_namespace,
+            presign_ttl_seconds=self._presign_ttl_seconds,
+            direct_upload_max_bytes=self._direct_upload_max_bytes,
+            lifecycle_hard_delete_after_seconds=int(
+                self._lifecycle.hard_delete_after.total_seconds()
+            ),
+            lifecycle_purge_after_seconds=int(
+                self._lifecycle.purge_after.total_seconds()
+            ),
+        )
+
+    async def _current_preview(
+        self, artifact: db_models.TemporalArtifact
+    ) -> db_models.TemporalArtifact | None:
+        preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
+        if not preview_id:
+            return None
+        try:
+            preview = await self._repository.get_artifact(str(preview_id))
+            source = await self._preview_source(preview)
+            if source.artifact_id != artifact.artifact_id:
+                raise TemporalArtifactStateError(
+                    "Artifact preview relationship is invalid"
+                )
+            await self._validate_retained_availability(artifact)
+            await self._validate_retained_availability(preview)
+            return preview
+        except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
+            return None
+
+    async def _read_preview_input(
+        self, artifact: db_models.TemporalArtifact
+    ) -> bytes | None:
+        """Bound upgrade reads and verify native identity before transforming."""
+        if artifact.size_bytes is None or not artifact.sha256:
+            raise TemporalArtifactStateError("Preview source integrity is unavailable")
+        if artifact.size_bytes > _PREVIEW_INPUT_MAX_BYTES:
+            # Only a generic withheld diagnostic is derived for large sources.
+            return None
+
+        def read_bounded() -> bytes:
+            payload = bytearray()
+            with _closing_artifact_stream(
+                self._store.read_chunks(artifact.storage_key)
+            ) as chunks:
+                for chunk in chunks:
+                    if len(payload) + len(chunk) > _PREVIEW_INPUT_MAX_BYTES:
+                        raise TemporalArtifactStateError("Preview source size mismatch")
+                    payload.extend(chunk)
+            return bytes(payload)
+
+        try:
+            payload = await _settled_storage_call(read_bounded)
+        except TemporalArtifactStateError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - preserve storage failure categories
+            _raise_storage_error(
+                exc,
+                artifact_id=artifact.artifact_id,
+                operation="compute_preview",
+                read=True,
+            )
+        if (
+            len(payload) != artifact.size_bytes
+            or hashlib.sha256(payload).hexdigest() != artifact.sha256
+        ):
+            raise TemporalArtifactStateError("Preview source integrity mismatch")
+        return payload
+
+    async def _regenerate_preview_for_reader(
+        self, *, artifact: db_models.TemporalArtifact, access: ArtifactAccessContext
+    ) -> db_models.TemporalArtifact:
+        """Repair safe diagnostics, never grant the reader access to raw bytes."""
+        # Reuse lifecycle's storage fence and fresh row lock. Concurrent HTTP
+        # requests converge on one current preview, including after a restart.
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend, storage_key=artifact.storage_key
+        )
+        artifact = await self._repository.get_artifact_for_update(artifact.artifact_id)
+        await self._assert_artifact_read_access(artifact, access=access)
+        await self._validate_retained_availability(artifact)
+        if (
+            artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            or (artifact.metadata_json or {}).get("preview_of")
+        ):
+            raise TemporalArtifactStateError(
+                "Preview source is not restricted evidence"
+            )
+        preview = await self._current_preview(artifact)
+        if preview is None:
+            writer = self._preview_transaction_service()
+            async with writer._bounded_consumer_use(
+                artifact_id=artifact.artifact_id,
+                principal=access.principal,
+                admitted_principal=access.execution_principal,
+                ttl_seconds=300,
+            ):
+                payload = await self._read_preview_input(artifact)
+            await writer._create_preview_if_required(
+                artifact=artifact,
+                principal=access.principal,
+                payload=payload,
+                policy="read-repair",
+            )
+            preview = await self._current_preview(artifact)
+            if preview is None:
+                raise TemporalArtifactStateError("Safe artifact preview is unavailable")
+        await self._finish_mutation()
+        return preview
+
     async def _create_preview_if_required(
         self,
         *,
         artifact: db_models.TemporalArtifact,
         principal: str,
-        payload: bytes,
+        payload: bytes | None,
         policy: str,
     ) -> None:
         if (
@@ -4131,27 +4249,21 @@ class TemporalArtifactService:
             is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
         ):
             return
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend, storage_key=artifact.storage_key
+        )
+        artifact = await self._repository.get_artifact_for_update(artifact.artifact_id)
+        if await self._current_preview(artifact) is not None:
+            await self._finish_mutation()
+            return
+        # Leave old bytes immutable. Publish only the complete new preview and
+        # its pointer in one transaction, without releasing the source fence.
         metadata = dict(artifact.metadata_json or {})
-        if metadata.get("preview_artifact_id"):
-            try:
-                preview = await self._repository.get_artifact(
-                    str(metadata["preview_artifact_id"])
-                )
-                source = await self._preview_source(preview)
-                if source.artifact_id != artifact.artifact_id:
-                    raise TemporalArtifactStateError("Artifact preview relationship is invalid")
-                await self._validate_retained_availability(preview)
-                return
-            except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
-                # A legacy/expired representation is not a safe read fallback.
-                # Leave its bytes immutable and replace only the current pointer.
-                pass
-
         # A preview failure never removes completed native evidence or falls
         # back to its raw bytes. Parse structured content before transforming
         # quoted keys/values, and withhold opaque or malformed representations.
         try:
-            if len(payload) > 4 * 1024 * 1024:
+            if payload is None or len(payload) > _PREVIEW_INPUT_MAX_BYTES:
                 raise ValueError("Preview input exceeds the transformation bound")
             source = payload.decode("utf-8")
             media_type = (artifact.content_type or "").split(";", 1)[0].strip().lower()
@@ -4173,7 +4285,8 @@ class TemporalArtifactService:
                 b"Preview withheld: this evidence could not be safely transformed."
             )
 
-        preview_artifact, _upload = await self.create(
+        writer = self._preview_transaction_service()
+        preview_artifact, _upload = await writer.create(
             principal=principal,
             content_type="text/plain",
             retention_class=db_models.TemporalArtifactRetentionClass.EPHEMERAL,
@@ -4190,7 +4303,7 @@ class TemporalArtifactService:
             **preview_artifact.metadata_json,
             "preview_of": artifact.artifact_id,
         }
-        await self.write_complete(
+        await writer.write_complete(
             artifact_id=preview_artifact.artifact_id,
             principal=principal,
             payload=preview_payload,
@@ -5524,36 +5637,28 @@ class TemporalArtifactService:
         access: ArtifactAccessContext,
     ) -> ArtifactReadPolicy:
         access = ArtifactAccessContext.require(access)
-        metadata = dict(artifact.metadata_json or {})
-        preview_ref: ArtifactRef | None = None
-        preview_artifact_id = metadata.get("preview_artifact_id")
-        if preview_artifact_id:
-            try:
-                preview_artifact = await self._repository.get_artifact(
-                    str(preview_artifact_id)
-                )
-            except TemporalArtifactNotFoundError:
-                preview_artifact = None
-            if preview_artifact is not None:
-                try:
-                    source = await self._preview_source(preview_artifact)
-                    if source.artifact_id != artifact.artifact_id:
-                        raise TemporalArtifactStateError("Artifact preview relationship is invalid")
-                    await self._validate_retained_availability(artifact)
-                    await self._validate_retained_availability(preview_artifact)
-                except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
-                    pass
-                else:
-                    preview_ref = build_artifact_ref(preview_artifact)
-
-        raw_access_allowed = await self._artifact_raw_access_allowed(
-            artifact,
-            access=access,
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
+        preview = await self._current_preview(artifact)
+        retained = True
         try:
             await self._validate_retained_availability(artifact)
         except TemporalArtifactStateError:
-            raw_access_allowed = False
+            retained = False
+        if (
+            preview is None
+            and retained
+            and artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            and not (artifact.metadata_json or {}).get("preview_of")
+        ):
+            preview = await self._regenerate_preview_for_reader(
+                artifact=artifact, access=access
+            )
+        preview_ref = build_artifact_ref(preview) if preview is not None else None
+        raw_access_allowed = retained and await self._artifact_raw_access_allowed(
+            artifact,
+            access=access,
+        )
         default_read_ref = (
             preview_ref
             if preview_ref is not None and not raw_access_allowed

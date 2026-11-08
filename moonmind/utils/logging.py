@@ -273,7 +273,6 @@ def _redact_secret_assignments(text: str) -> str:
         quote, previous, escaped = _advance_quoted_context(
             text, quote_scan, context.start(), (quote, previous, escaped)
         )
-        quote_scan = context.start()
         end = context.end()
         adjacent = text[context.start() - 1] if context.start() else ""
         enclosing = quote or (adjacent if adjacent in {"\"", "'", "`"} else "")

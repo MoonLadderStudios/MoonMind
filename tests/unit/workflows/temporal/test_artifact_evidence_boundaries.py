@@ -302,15 +302,14 @@ async def test_stale_preview_is_regenerated_without_raw_fallback(evidence_servic
     _, _, _, policy = await service.get_metadata(
         artifact_id=source.artifact_id, access=access_for_test("operator")
     )
-    assert not policy.raw_access_allowed and policy.preview_artifact_ref is None
+    assert not policy.raw_access_allowed
+    assert policy.preview_artifact_ref is not None
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service.read(
-            artifact_id=policy.default_read_ref.artifact_id,
+            artifact_id=source.artifact_id,
             access=access_for_test("operator"),
         )
-    ref = await service.compute_preview(
-        artifact_id=source.artifact_id, access=access_for_test("owner")
-    )
+    ref = policy.preview_artifact_ref
     assert ref.artifact_id != old_ref
     _, safe = await service.read(
         artifact_id=ref.artifact_id, access=access_for_test("owner")
@@ -1015,3 +1014,61 @@ async def test_plaintext_preview_masks_complete_punctuation_credentials(
             artifact_id=source.artifact_id, access=access_for_test("owner")
         )
     )[1] == native
+
+
+async def test_direct_read_policy_does_not_repair_without_source_authority(
+    evidence_service, monkeypatch
+):
+    service, session = evidence_service
+    source = await put(service)
+    preview = await service._repository.get_artifact(
+        source.metadata_json["preview_artifact_id"]
+    )
+    preview.metadata_json = {**preview.metadata_json, "transformation": "legacy"}
+    await session.commit()
+
+    async def unexpected_repair(**kwargs):
+        raise AssertionError("Unauthorized reader started preview repair")
+
+    monkeypatch.setattr(service, "_regenerate_preview_for_reader", unexpected_repair)
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.get_read_policy(
+            artifact=source, access=access_for_test("foreign")
+        )
+
+
+@pytest.mark.parametrize("change", ["revoked", "expired"])
+async def test_preview_repair_rechecks_source_after_lock(
+    evidence_service, monkeypatch, change
+):
+    service, session = evidence_service
+    source = await put(service)
+    old_ref = source.metadata_json["preview_artifact_id"]
+    preview = await service._repository.get_artifact(old_ref)
+    preview.metadata_json = {**preview.metadata_json, "transformation": "legacy"}
+    await session.commit()
+    lock = service._repository.get_artifact_for_update
+
+    async def changed_source(artifact_id, **kwargs):
+        artifact = await lock(artifact_id, **kwargs)
+        if change == "revoked":
+            artifact.created_by_principal = "new-owner"
+        else:
+            artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.flush()
+        return artifact
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("Changed source bytes were read")
+
+    monkeypatch.setattr(service._repository, "get_artifact_for_update", changed_source)
+    monkeypatch.setattr(service._store, "read_chunks", unexpected_read)
+    with pytest.raises(
+        TemporalArtifactAuthorizationError
+        if change == "revoked"
+        else TemporalArtifactStateError
+    ):
+        await service.get_metadata(
+            artifact_id=source.artifact_id, access=access_for_test("owner")
+        )
+    assert source.metadata_json["preview_artifact_id"] == old_ref
