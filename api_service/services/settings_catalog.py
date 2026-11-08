@@ -1647,10 +1647,18 @@ class SettingsCatalogService:
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
-        row = await self._get_override(key=key)
+        rows = await self._get_overrides(keys=[key], for_update=True)
+        row = rows.get(key)
         if row is not None:
             old_value = row.value_json
-            await self._session.delete(row)
+            if key == "security.assessment_projects":
+                # Keep the shared collection's generation after clearing it:
+                # deleting/recreating this row would let an old editor reuse a
+                # version and silently overwrite a newer accepted collection.
+                row.value_json = {"projects": []}
+                row.value_version += 1
+            else:
+                await self._session.delete(row)
             self._session.add(
                 self._audit_event(
                     entry,

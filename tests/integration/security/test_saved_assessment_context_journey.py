@@ -129,3 +129,25 @@ async def test_current_artifact_owner_blocks_foreign_and_quarantined_context(
         principal=operator.principal,
     )
     assert blocked[0]["code"] == "artifact_unavailable"
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db.models import TemporalArtifactRetentionClass
+
+    artifact.metadata_json = {}
+    artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+    await environment.session.flush()
+    expired = await assessment_project_gaps(
+        snapshot,
+        session=environment.session,
+        access=operator,
+        principal=operator.principal,
+    )
+    assert expired[0]["code"] == "artifact_unavailable"
+    artifact.retention_class = TemporalArtifactRetentionClass.PINNED
+    await environment.session.flush()
+    assert not await assessment_project_gaps(
+        snapshot,
+        session=environment.session,
+        access=operator,
+        principal=operator.principal,
+    )

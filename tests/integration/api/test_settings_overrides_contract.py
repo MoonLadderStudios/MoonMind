@@ -445,3 +445,38 @@ async def test_assessment_projects_resolve_reports_missing_and_revoked_refs(
             assert "never-read-or-return" not in result.text
     finally:
         app.dependency_overrides.pop(get_artifact_access, None)
+
+
+async def test_assessment_project_reset_never_reuses_an_editor_version(
+    settings_contract_db,
+):
+    key = "security.assessment_projects"
+    empty = {"projects": []}
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: 1}},
+        )
+        assert first.status_code == 200, first.text
+        original_version = first.json()["values"][key]["value_version"]
+        reset = await client.delete(f"/api/v1/settings/{key}")
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["value"] == empty
+        reset_version = reset.json()["value_version"]
+        replacement = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: reset_version}},
+        )
+        assert replacement.status_code == 200, replacement.text
+        stale = await client.patch(
+            "/api/v1/settings",
+            json={"changes": {key: empty}, "expected_versions": {key: original_version}},
+        )
+        assert stale.status_code == 409, stale.text
+        assert reset_version > original_version
+        assert replacement.json()["values"][key]["value_version"] > reset_version
+        repeated_reset = await client.delete(f"/api/v1/settings/{key}")
+        assert repeated_reset.status_code == 200
+        assert repeated_reset.json()["value_version"] > reset_version

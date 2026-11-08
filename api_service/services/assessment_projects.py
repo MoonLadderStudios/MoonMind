@@ -137,12 +137,11 @@ async def assessment_project_gaps(
                     artifact, _, _, policy = await artifacts.get_metadata(
                         artifact_id=ref, access=access
                     )
-                    status = getattr(artifact.status, "value", artifact.status)
-                    valid = status == "complete" and policy.raw_access_allowed
-                    # Quarantine and retained expiry remain the artifact owner's
-                    # responsibility, not a parallel lifecycle calculation.
+                    valid = policy.raw_access_allowed
                     if valid:
-                        artifacts._assert_not_quarantined(artifact)
+                        await artifacts.validate_dependency_availability(
+                            artifact, access=access
+                        )
                 except TemporalArtifactError:
                     valid = False
             elif kind == "credential":
