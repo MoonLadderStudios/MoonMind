@@ -186,6 +186,12 @@ def build_assessment_proposal(
                         + json.dumps(caps, sort_keys=True)
                     )
                 )
+        elif target.native_network is not None:
+            targets.append(_review_text(
+                "Native TCP CONNECT authority (IPv4 only): "
+                + json.dumps(target.native_network.model_dump(mode="json", by_alias=True), sort_keys=True)
+                + "; connections, bytes, connection rate and concurrency are conservatively reserved across all jobs without refunds; duration is per job."
+            ))
         elif target.cloud_account:
             targets.append(
                 f'{target.cloud_provider} account {target.cloud_account}; regions {", ".join(target.cloud_regions)}'

@@ -220,6 +220,16 @@ class ContainerBackendSettings:
                     or request.source.workflow_id not in policy.allowed_workflow_ids
                 ):
                     raise ValueError("egress policy is not authorized for this workflow and image")
+                from moonmind.security.native_network import require_native_subset
+
+                profile = request.spec.workload_profile
+                native = profile.native_network if profile is not None else None
+                if policy.native_network is not None:
+                    if native is None or profile.assessment_ref is None:
+                        raise ValueError("native egress requires an assessment-stamped native profile")
+                    require_native_subset(native, policy.native_network)
+                elif native is not None:
+                    raise ValueError("native selection requires a native egress policy")
                 if request.spec.feed_refresh is not None:
                     from moonmind.security.scanner_feeds import feed_policy_admits
 

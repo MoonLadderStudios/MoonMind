@@ -154,11 +154,12 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
         resolvedImageRef="sha256:" + "a" * 64,
     )
     monkeypatch.setattr(activity, "in_activity", lambda: True)
-    monkeypatch.setattr(
-        activity,
-        "info",
-        lambda: SimpleNamespace(workflow_id=container_job_workflow_id(accepted.job_id)),
+    activity_info = SimpleNamespace(
+        workflow_namespace="default",
+        workflow_id=container_job_workflow_id(accepted.job_id),
+        workflow_run_id="00000000-0000-4000-8000-000000000001",
     )
+    monkeypatch.setattr(activity, "info", lambda: activity_info)
     await backend.create_container(request)
     storage = storage_for(tmp_path, accepted.job_id)
     assert (storage.inputs / "evidence" / "content").read_bytes() == (
@@ -187,6 +188,17 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
     )
     assert payload == b'{"findings":1}'
     assert report.sha256 == hashlib.sha256(payload).hexdigest()
+    links = await service._repository.list_links(report.artifact_ref)
+    assert any(
+        (link.namespace, link.workflow_id, link.run_id, link.link_type)
+        == (
+            activity_info.workflow_namespace,
+            activity_info.workflow_id,
+            activity_info.workflow_run_id,
+            "output.artifact",
+        )
+        for link in links
+    )
 
     with pytest.raises(ContainerJobNotFoundError):
         await jobs.artifacts(owner=SIBLING, job_id=accepted.job_id)
@@ -258,6 +270,8 @@ async def test_delegated_raw_job_input_still_requires_live_exact_rights(
         activity,
         "info",
         lambda: SimpleNamespace(
+            workflow_namespace="default",
+            workflow_run_id="00000000-0000-4000-8000-000000000002",
             workflow_id=(
                 "other"
                 if fault == "foreign_job"
