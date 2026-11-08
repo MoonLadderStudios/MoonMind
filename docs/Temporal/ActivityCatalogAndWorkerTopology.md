@@ -629,7 +629,12 @@ If using OpenTelemetry:
 
 2. **Worker fleet integration tests**
  - verify activity-to-fleet routing
- - verify helper activities remain narrow and intentional
+ - `tests/integration/temporal/test_core_worker_upgrade.py` runs an admitted
+   production workflow across separate fleets, core replacement and core process
+   loss. It checks the original run completes with its accepted step and plan
+   artifacts preserved, and exercises the real artifact/integration pollers.
+   Its local Temporal/SQLite/filesystem substrate does not qualify Docker journal
+   transitions; those remain in `tests/integration/host_update/test_journal_transition.py`.
 
 3. **Load tests**
  - sandbox concurrency and isolation
