@@ -35,6 +35,7 @@ RUNNER_FILES = (
     "security/assessments.py",
     "security/assessment_projects.py",
     "security/evidence_exports.py",
+    "security/dns_assessments.py",
     "security/tls_assessments.py",
     "security/tls_assessment_runner.py",
     "security/egress_policy.py",

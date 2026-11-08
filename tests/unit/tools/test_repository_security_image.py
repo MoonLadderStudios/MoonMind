@@ -359,6 +359,7 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
         "moonmind.security.scanner_feeds",
         "moonmind.security.image_assessment_runner",
         "moonmind.security.tls_assessment_runner",
+        "moonmind.security.dns_assessments",
     ],
 )
 def test_packaged_runner_imports_with_only_its_declared_python_dependency(

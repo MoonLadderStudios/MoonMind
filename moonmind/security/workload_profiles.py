@@ -46,6 +46,10 @@ from moonmind.schemas.repository_scanner_models import (
     web_origin,
     web_route,
 )
+from moonmind.security.dns_assessments import (
+    DNSAssessment, DNSResolverConfig, build_dns_command, build_dns_query_plan,
+    require_dns_subset,
+)
 from moonmind.security.native_network import NativeNetworkSelection, require_native_subset
 from moonmind.security.realtime_scope import RealtimeScope
 
@@ -235,6 +239,7 @@ class ProfileCredential(_Model):
 
 
 class WorkloadProfile(_Model):
+    dns_resolver: DNSResolverConfig | None = Field(None, alias="dnsResolver")
     native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
 
     @model_serializer(mode="wrap")
@@ -243,6 +248,9 @@ class WorkloadProfile(_Model):
         if self.native_network is None:
             value.pop("nativeNetwork", None)
             value.pop("native_network", None)
+        if self.dns_resolver is None:
+            value.pop("dnsResolver", None)
+            value.pop("dns_resolver", None)
         return value
 
     profile_ref: str = Field(alias="profileRef", pattern=_REF)
@@ -264,6 +272,8 @@ class WorkloadProfile(_Model):
 
     @model_validator(mode="after")
     def _unambiguous(self) -> "WorkloadProfile":
+        if self.dns_resolver is not None and (self.network_mode != "bridge" or self.native_network is not None):
+            raise ValueError("DNS resolver profiles require only scoped HTTPS egress")
         if self.native_network is not None and self.network_mode != "bridge":
             raise ValueError("native profiles require scoped bridge egress")
         if len({mode.name for mode in self.modes}) != len(self.modes):
@@ -343,6 +353,41 @@ _PROFILE_OWNED = (
 )
 
 
+def dns_profile_plan(spec, profiles):
+    """Derive the DNS invocation solely from current deployment configuration."""
+    selection = spec.workload_profile
+    if selection is None or selection.dns_assessment is None:
+        return None
+    profile = _profile(profiles, selection.profile_ref)
+    mode = profile.mode(selection.mode)
+    expected_outputs = {
+        "execution": "dns-assessment/execution.json",
+        "summary": "dns-assessment/summary.json",
+    }
+    if (
+        profile.dns_resolver is None
+        or selection.assessment_ref is None
+        or selection.native_network is not None
+        or spec.input_attachments != []
+        or selection.arguments
+        or selection.configuration_exceptions
+        or selection.credentials
+        or profile.entrypoint != ("python",)
+        or mode.argv != ("-I", "-m", "moonmind.security.dns_assessment_runner")
+        or mode.action_class != "dns-observation"
+        or mode.arguments
+        or profile.environment
+        or profile.caches
+        or profile.credentials
+        or profile.configuration_exceptions
+        or len(profile.outputs) != len(expected_outputs)
+        or {item.name: item.relative_path for item in profile.outputs} != expected_outputs
+        or selection.dns_assessment.timeout_seconds > spec.timeout_seconds
+    ):
+        raise ValueError("DNS assessment requires its fixed resolver profile and outputs")
+    return build_dns_query_plan(selection.dns_assessment, profile.dns_resolver)
+
+
 def resolve_profile_job(spec, profiles):
     """Return ``spec`` with its profile's concrete launch content.
 
@@ -366,8 +411,11 @@ def resolve_profile_job(spec, profiles):
             raise ValueError("native duration exceeds job timeout")
     elif profile.native_network is not None:
         raise ValueError("native profiles require an explicit native selection")
+    dns_plan = dns_profile_plan(spec, profiles)
+    if profile.dns_resolver is not None and dns_plan is None:
+        raise ValueError("DNS resolver profiles require an explicit DNS selection")
     inputs = frozenset(item.name for item in spec.input_attachments or ())
-    if not inputs:
+    if not inputs and dns_plan is None:
         raise ValueError("workload profile jobs read captured input attachments")
     declared = {argument.name: argument for argument in mode.arguments}
     if set(selection.arguments) - set(declared):
@@ -384,6 +432,8 @@ def resolve_profile_job(spec, profiles):
         if any(name not in rendered for name in names):
             continue
         command.append(_PLACEHOLDER.sub(lambda match: rendered[match.group(1)], entry))
+    if dns_plan is not None:
+        command = build_dns_command(dns_plan)
     exceptions = {item.name: item for item in profile.configuration_exceptions}
     if len(set(selection.configuration_exceptions)) != len(
         selection.configuration_exceptions
@@ -498,6 +548,7 @@ class AssessmentTarget(_Model):
         default_factory=dict, alias="webMessages", max_length=32
     )
     realtime: RealtimeScope | None = None
+    dns_assessment: DNSAssessment | None = Field(None, alias="dnsAssessment")
     native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
 
     @model_serializer(mode="wrap")
@@ -506,6 +557,9 @@ class AssessmentTarget(_Model):
         if self.native_network is None:
             value.pop("nativeNetwork", None)
             value.pop("native_network", None)
+        if self.dns_assessment is None:
+            value.pop("dnsAssessment", None)
+            value.pop("dns_assessment", None)
         if self.realtime is None:
             value.pop("realtime", None)
         return value
@@ -537,11 +591,12 @@ class AssessmentTarget(_Model):
             self.web_origin,
             self.cloud_account,
             self.native_network,
+            self.dns_assessment,
         ]
         if sum(item is not None for item in named) != 1:
             raise ValueError(
                 "exactly one of workspacePath, artifactRef, webOrigin or "
-                "cloudAccount or nativeNetwork is required"
+                "cloudAccount, nativeNetwork or dnsAssessment is required"
             )
         if (self.web_origin is not None) != bool(self.web_routes):
             raise ValueError("web origins, and only they, admit routes")
@@ -709,6 +764,8 @@ class AdmittedAssessmentScope(_Model):
 
     @model_validator(mode="after")
     def _single_native_budget(self):
+        if sum(target.dns_assessment is not None for target in self.targets) > 1:
+            raise ValueError("an assessment admits at most one DNS query budget")
         if sum(target.native_network is not None for target in self.targets) > 1:
             raise ValueError("an assessment admits at most one native network budget")
         return self
@@ -753,9 +810,29 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         or selection.profile_ref not in scope.profile_refs
         or not set(selection.configuration_exceptions)
         <= set(scope.configuration_exceptions)
-        or not spec.input_attachments
+        or (not spec.input_attachments and selection.dns_assessment is None)
     ):
         return False
+    if selection.dns_assessment is not None:
+        if (
+            spec.input_attachments != []
+            or selection.native_network is not None
+            or selection.arguments
+            or selection.configuration_exceptions
+            or selection.credentials
+            or "dns-observation" not in scope.action_classes
+            or (scope.max_requests_per_second is not None
+                and selection.dns_assessment.queries_per_second > scope.max_requests_per_second)
+        ):
+            return False
+        authority = next(
+            (t.dns_assessment for t in scope.targets if t.dns_assessment is not None),
+            None,
+        )
+        try:
+            require_dns_subset(selection.dns_assessment, authority)
+        except ValueError:
+            return False
     if selection.native_network is not None:
         authority = next(
             (t.native_network for t in scope.targets if t.native_network is not None),

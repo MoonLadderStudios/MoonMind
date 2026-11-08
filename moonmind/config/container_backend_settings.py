@@ -230,6 +230,19 @@ class ContainerBackendSettings:
                     require_native_subset(native, policy.native_network)
                 elif native is not None:
                     raise ValueError("native selection requires a native egress policy")
+                if profile is not None and profile.dns_assessment is not None:
+                    from urllib.parse import urlsplit
+                    from moonmind.security.workload_profiles import dns_profile_plan
+
+                    plan = dns_profile_plan(request.spec, self.workload_profiles)
+                    endpoint = urlsplit(plan.resolver.endpoint)
+                    if len(policy.destinations) != 1 or any(
+                        destination.host != endpoint.hostname
+                        or destination.protocol != "https"
+                        or destination.port != (endpoint.port or 443)
+                        for destination in policy.destinations
+                    ):
+                        raise ValueError("DNS egress may reach only its deployment resolver")
                 if request.spec.feed_refresh is not None:
                     from moonmind.security.scanner_feeds import feed_policy_admits
 
