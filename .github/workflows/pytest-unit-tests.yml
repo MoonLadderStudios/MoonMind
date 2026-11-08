@@ -6,8 +6,18 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      worker_comparison:
+        description: Compare separate and combined workers on matched disposable journeys
+        type: boolean
+        default: false
   workflow_call:
     inputs:
+      worker_comparison:
+        description: Compare separate and combined workers on matched disposable journeys
+        required: false
+        type: boolean
+        default: false
       candidate_image:
         description: Immutable assembled application manifest to exercise instead of rebuilding
         required: false
@@ -1365,9 +1375,25 @@ jobs:
         timeout-minutes: 20
         env:
           MOONMIND_IMAGE: ${{ env.CANDIDATE_IMAGE || 'moonmind-first-run-3938:ci' }}
+          WORKER_COMPARISON: ${{ inputs.worker_comparison && '1' || '0' }}
         run: |
           set -euo pipefail
-          ./tools/first_run_journey_3938.sh
+          if [[ "$WORKER_COMPARISON" == 1 ]]; then
+            for topology in separate combined; do
+              FIRST_RUN_3938_WORKER_TOPOLOGY="$topology" \
+                MOONMIND_TEST_COMPOSE_PROJECT_NAME="moonmind-test-workers-$topology" \
+                ./tools/first_run_journey_3938.sh
+              mv var/artifacts/first-run-3938/fresh "var/artifacts/first-run-3938/workers-$topology"
+            done
+            mkdir -p var/artifacts/first-run-3938/worker-comparison
+            python3 tools/worker_runtime_measurements.py compare \
+              --baseline var/artifacts/first-run-3938/workers-separate/worker-runtime-measurements.json \
+              --candidate var/artifacts/first-run-3938/workers-combined/worker-runtime-measurements.json \
+              > var/artifacts/first-run-3938/worker-comparison/worker-runtime-comparison.json
+            cat var/artifacts/first-run-3938/worker-comparison/worker-runtime-comparison.json
+          else
+            ./tools/first_run_journey_3938.sh
+          fi
       - name: Run eligible-upgrade journey
         # MoonLadderStudios/MoonMind#4356: work saved on an account-era
         # release (before the guarded single-user conversion, deployed from
@@ -1444,7 +1470,7 @@ jobs:
           mkdir -p "$out"
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
           if [[ "$JOURNEY_RESULT" == "success" ]]; then
-            for path in var/artifacts/first-run-3938/*/compose-startup-*.log var/artifacts/first-run-3938/*/resource-footprint-*.log; do
+            for path in var/artifacts/first-run-3938/*/compose-startup-*.log var/artifacts/first-run-3938/*/resource-footprint-*.log var/artifacts/first-run-3938/*/worker-runtime-*.json; do
               if [[ -f "$path" ]]; then
                 mode="$(basename "$(dirname "$path")")"
                 mkdir -p "$out/first-run-3938/$mode"

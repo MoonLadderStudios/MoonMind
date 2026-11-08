@@ -543,11 +543,38 @@ def describe_configured_worker(
     )
 
 
+def describe_configured_workers(
+    *,
+    fleet: str | None = None,
+    temporal_settings: TemporalSettings | None = None,
+    app_settings: AppSettings | None = None,
+    catalog: TemporalActivityCatalog | None = None,
+) -> tuple[TemporalWorkerTopology, ...]:
+    """Resolve process fleets, honoring an explicit single-fleet override."""
+
+    app_cfg = app_settings or settings
+    temporal_cfg = temporal_settings or app_cfg.temporal
+    fleets = (
+        (fleet,)
+        if fleet is not None
+        else (temporal_cfg.worker_fleets or (temporal_cfg.worker_fleet,))
+    )
+    return tuple(
+        build_worker_topology(
+            fleet=selected,
+            catalog=catalog,
+            temporal_settings=temporal_cfg,
+            app_settings=app_cfg,
+        )
+        for selected in fleets
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="moonmind-temporal-worker-bootstrap")
     parser.add_argument(
         "--fleet",
-        help="Temporal worker fleet to resolve. Defaults to TEMPORAL_WORKER_FLEET.",
+        help="Resolve only this fleet, overriding TEMPORAL_WORKER_FLEETS and TEMPORAL_WORKER_FLEET.",
     )
     parser.add_argument(
         "--describe-json",
@@ -561,24 +588,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint used by the shared worker launcher."""
 
     args = _build_parser().parse_args(argv)
-    temporal_cfg = settings.temporal
-    if args.fleet:
-        temporal_cfg = temporal_cfg.model_copy(update={"worker_fleet": args.fleet})
-
     try:
-        topology = describe_configured_worker(temporal_settings=temporal_cfg)
+        topologies = describe_configured_workers(fleet=args.fleet)
     except (TemporalActivityCatalogError, TemporalWorkerBootstrapError) as exc:
         raise SystemExit(str(exc)) from exc
 
-    payload = topology.to_payload()
+    payloads = [topology.to_payload() for topology in topologies]
     if args.describe_json:
+        payload = payloads[0] if len(payloads) == 1 else {"fleets": payloads}
         print(json.dumps(payload, sort_keys=True))
     else:
-        print(
-            f"{payload['service_name']} [{payload['fleet']}] "
-            f"queues={','.join(payload['task_queues'])} "
-            f"concurrency={payload['concurrency_limit']}"
-        )
+        for payload in payloads:
+            print(
+                f"{payload['service_name']} [{payload['fleet']}] "
+                f"queues={','.join(payload['task_queues'])} "
+                f"concurrency={payload['concurrency_limit']}"
+            )
     return 0
 
 
@@ -593,6 +618,7 @@ __all__ = [
     "build_worker_activity_bindings",
     "build_worker_topology",
     "describe_configured_worker",
+    "describe_configured_workers",
     "main",
     "normalize_worker_fleet",
     "require_fleet_capability_allowed",

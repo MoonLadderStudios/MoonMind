@@ -4302,9 +4302,10 @@ def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
 
     assert plan["nodes"][-1]["inputs"]["commitMessage"] == "Top-level commit text"
 
+
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
-@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_workers")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_workflow_fleet(
@@ -4326,7 +4327,7 @@ async def test_main_async_workflow_fleet(
     ]
     mock_topology.concurrency_limit = 7
     mock_topology.queue_concurrency_limits = {"mm.workflow.merge_automation": 2}
-    mock_describe.return_value = mock_topology
+    mock_describe.return_value = (mock_topology,)
 
     mock_client = MagicMock()
     mock_connect.return_value = mock_client
@@ -4462,7 +4463,7 @@ async def test_main_async_workflow_fleet(
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
-@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_workers")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
@@ -4485,7 +4486,7 @@ async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
     ]
     mock_topology.concurrency_limit = 8
     mock_topology.queue_concurrency_limits = {"mm.workflow.merge_automation": 2}
-    mock_describe.return_value = mock_topology
+    mock_describe.return_value = (mock_topology,)
     mock_connect.return_value = MagicMock()
 
     shutdowns: list[str] = []
@@ -4534,7 +4535,7 @@ async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
 @pytest.mark.parametrize("fleet", ["artifacts", SANDBOX_FLEET, AGENT_RUNTIME_FLEET])
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
-@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_workers")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_activity_fleet(
@@ -4561,7 +4562,7 @@ async def test_main_async_activity_fleet(
     mock_topology.task_queues = [f"mm.activity.{fleet}"]
     mock_topology.concurrency_limit = 3
     mock_topology.queue_concurrency_limits = {}
-    mock_describe.return_value = mock_topology
+    mock_describe.return_value = (mock_topology,)
 
     mock_client = MagicMock()
     mock_connect.return_value = mock_client
@@ -4576,6 +4577,11 @@ async def test_main_async_activity_fleet(
         return None
 
     mock_resources = AsyncMock()
+    mock_resources.container_job_backend = None
+    mock_resources.enforced_network_refs = ()
+    mock_resources.enforced_egress_profile_refs = ()
+    mock_resources.egress_attestation = None
+    mock_resources.egress_attestations = ()
     mock_runtime_activities.return_value = (mock_resources, [test_handler])
 
     # Run
@@ -5000,68 +5006,29 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
 
 
 @pytest.mark.asyncio
-async def test_build_runtime_activities_degraded_when_generic_not_ready():
-    """Missing resolved Omnigent images must not crash-loop the worker.
+async def test_process_transports_degraded_when_generic_not_ready():
+    """Missing resolved images must not crash-loop workers or leak transports."""
+    from contextlib import AsyncExitStack
 
-    Regression for mm:5151c917 where OMNIGENT_IMAGE_REF-less startup crashed
-    the agent_runtime worker during a 95-minute profile-bound turn, starving
-    heartbeats and producing activity Heartbeat timeout after 2 attempts.
-    """
-    from unittest.mock import MagicMock, patch
-
-    topology = MagicMock()
-    topology.activity_types = ["integration.omnigent.execute"]
-    topology.fleet = "other"
-
-    @asynccontextmanager
-    async def _fake_session_context():
-        yield "session"
-
+    topology = SimpleNamespace(
+        activity_types=["integration.omnigent.execute"], fleet="integrations"
+    )
     with (
-        patch(
-            "moonmind.omnigent.settings.generic_host_enabled",
-            return_value=True,
-        ),
+        patch("moonmind.omnigent.settings.generic_host_enabled", return_value=True),
         patch(
             "moonmind.omnigent.production.build_generic_omnigent_execution_services",
             side_effect=Exception("OMNIGENT_IMAGE_REF must identify digest"),
-        ),
+        ) as build,
         patch(
-            "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
-            side_effect=_fake_session_context,
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings",
-            return_value=[],
-        ),
+            "moonmind.omnigent.production.close_omnigent_transport_pool",
+            new_callable=AsyncMock,
+        ) as close,
     ):
-        resources, _handlers = await _build_runtime_activities(topology)
-
-    await resources.aclose()
+        async with AsyncExitStack() as resources:
+            await worker_runtime._initialize_process_transports([topology], resources)
+            build.assert_called_once()
+            close.assert_not_awaited()
+        close.assert_awaited_once()
 
 
 def test_gh_readiness_checks_the_cli_not_ambient_tokens(

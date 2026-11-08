@@ -46,6 +46,8 @@ class WorkerHealthState:
     pollers_started: bool = False
     readiness_metadata: dict[str, Any] = field(default_factory=dict)
     startup_error: str | None = None
+    event_loop_lag_seconds: float = 0.0
+    event_loop_lag_max_seconds: float = 0.0
     # Startup-recorded code identity (MoonLadderStudios/MoonMind#4224): the git
     # revision (or package digest) of the modules this process imported. It is
     # compared with an off-loop, bounded-age checkout snapshot so a
@@ -127,12 +129,28 @@ async def _refresh_code_identity(state: WorkerHealthState) -> None:
         state.record_checkout_identity(identity, started_at=started_at)
 
 
+async def _measure_event_loop_lag(
+    state: WorkerHealthState, *, interval: float = 1.0
+) -> None:
+    """Observe scheduling delay without changing worker admission or readiness."""
+    loop = asyncio.get_running_loop()
+    while True:
+        started = loop.time()
+        await asyncio.sleep(interval)
+        lag = max(0.0, loop.time() - started - interval)
+        state.event_loop_lag_seconds = lag
+        state.event_loop_lag_max_seconds = max(state.event_loop_lag_max_seconds, lag)
+        if lag >= 0.250:
+            logger.warning("Temporal worker event loop lag: %.6f seconds", lag)
+
+
 @dataclass(slots=True)
 class HealthcheckServer:
     """Own the HTTP listener and freshness task as one shutdown boundary."""
 
     server: asyncio.Server
     refresh_task: asyncio.Task[None]
+    lag_task: asyncio.Task[None]
 
     @property
     def sockets(self):
@@ -141,10 +159,11 @@ class HealthcheckServer:
     def close(self) -> None:
         self.server.close()
         self.refresh_task.cancel()
+        self.lag_task.cancel()
 
     async def wait_closed(self) -> None:
         await self.server.wait_closed()
-        await asyncio.gather(self.refresh_task, return_exceptions=True)
+        await asyncio.gather(self.refresh_task, self.lag_task, return_exceptions=True)
 
 
 def _is_enabled() -> bool:
@@ -168,7 +187,8 @@ def _build_response_body(
     readiness: bool = False,
 ) -> bytes:
     """Build the JSON health response payload."""
-    fleet = os.environ.get("TEMPORAL_WORKER_FLEET", "unknown")
+    metadata = state.readiness_metadata if state else {}
+    fleet = metadata.get("fleet") or os.environ.get("TEMPORAL_WORKER_FLEET", "unknown")
     uptime = int(time.monotonic() - _start_time)
 
     if not readiness:
@@ -207,6 +227,10 @@ def _build_response_body(
         # under new ones (MoonLadderStudios/MoonMind#4224).
         if code_identity.get("codeIdentityStatus") == "stale" and "reasonCode" not in body:
             body["reasonCode"] = "stale_code"
+    if "fleets" in metadata:
+        body["fleets"] = metadata["fleets"]
+    body["eventLoopLagSeconds"] = state.event_loop_lag_seconds if state else 0.0
+    body["eventLoopLagMaxSeconds"] = state.event_loop_lag_max_seconds if state else 0.0
     return json.dumps(body).encode("utf-8")
 
 
@@ -291,4 +315,8 @@ async def start_healthcheck_server(
         port,
     )
     logger.info("Worker healthcheck server listening on port %d", port)
-    return HealthcheckServer(server, asyncio.create_task(_refresh_code_identity(health_state)))
+    return HealthcheckServer(
+        server,
+        asyncio.create_task(_refresh_code_identity(health_state)),
+        asyncio.create_task(_measure_event_loop_lag(health_state)),
+    )

@@ -102,11 +102,12 @@ def test_agent_runtime_worker_startup_enforces_the_same_check(monkeypatch) -> No
     called: list[str] = []
     monkeypatch.setattr(
         worker_runtime,
-        "describe_configured_worker",
-        lambda: called.append("topology") or _unreachable_topology(),
+        "describe_configured_workers",
+        lambda **kwargs: called.append("topology") or _unreachable_topology(),
     )
     with pytest.raises(ObsoleteConfigurationError, match="no longer honored"):
         asyncio.run(worker_runtime.main_async())
+    assert called == []
 
 
 def test_agent_runtime_worker_startup_warns_during_deprecation(
