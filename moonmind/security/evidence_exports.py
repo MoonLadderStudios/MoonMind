@@ -113,6 +113,7 @@ def _validate_json(payload, *, hint: str):
         SecurityReview,
     )
     from moonmind.security.cloud_assessments import CloudAssessmentSummary
+    from moonmind.security.dns_assessments import DNSAssessmentSummary, DNSExecution
     from moonmind.security.image_assessments import ImageAssessmentSummary
     from moonmind.security.repository_scanners import ScannerSummary, _document
     from moonmind.security.service_inventory import ServiceInventorySummary
@@ -129,6 +130,8 @@ def _validate_json(payload, *, hint: str):
         "image-assessment/v1": ImageAssessmentSummary,
         "service-inventory/v1": ServiceInventorySummary,
         "tls-assessment/v1": TLSAssessmentSummary,
+        "dns-assessment/v1": DNSAssessmentSummary,
+        "dns-execution/v1": DNSExecution,
         "web-assessment/v1": WebAssessmentSummary,
         "cloud-posture/v1": CloudAssessmentSummary,
     }
