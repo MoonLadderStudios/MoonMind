@@ -165,8 +165,12 @@ async def fixture_server(mode="normal", signalr=False):
             async for message in socket:
                 state["sends"].append(message.data)
                 if signalr and len(state["sends"]) == 1:
-                    await socket.send_str("{")
-                    await socket.send_str("}\x1e")
+                    if mode == "single-handshake":
+                        await socket.send_str("{}\x1e")
+                    else:
+                        await socket.send_str("{")
+                        if mode != "incomplete-handshake":
+                            await socket.send_str("}\x1e")
                     continue
                 if mode == "blocked":
                     continue
@@ -370,7 +374,7 @@ def test_mutation_during_rate_wait_is_refused_at_send():
             await asyncio.wait_for(state["connected"].wait(), 1)
             request.payload["channel"] = "forbidden"
             with pytest.raises(PermissionError):
-                await task
+                await asyncio.wait_for(task, 2)
             assert not state["sends"]
 
     asyncio.run(run())
@@ -551,7 +555,7 @@ def test_direct_scope_mutation_during_rate_wait_is_refused():
             await asyncio.wait_for(state["connected"].wait(), 1)
             client.scope.realtime.max_connections = 8192
             with pytest.raises(PermissionError, match="scope changed"):
-                await task
+                await asyncio.wait_for(task, 2)
             assert not state["sends"]
 
     asyncio.run(run())
@@ -663,5 +667,46 @@ def test_proxy_upgrade_uses_admitted_http_request_target(protocol):
                 for target in state["request_targets"]
             )
             assert len(state["sends"]) == (2 if protocol == "signalr-json" else 1)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "mode,receive_limit,handshakes",
+    [
+        ("single-handshake", 1, 0),
+        ("single-handshake", 2, 1),
+        ("normal", 3, 1),
+        ("incomplete-handshake", 2, 1),
+    ],
+)
+def test_signalr_exhausted_receive_capacity_prevents_dispatch_and_next_read(
+    mode, receive_limit, handshakes
+):
+    async def run():
+        async with fixture_server(mode, signalr=True) as (proxy, state):
+            scope = realtime_scope("signalr-json", max_receive_messages=receive_limit)
+            client = ScopedTargetClient(scope, proxy=proxy)
+            reservation = client.reserve_transport(request_for(scope))
+            with pytest.raises(TargetStopped, match="transport_receive_budget"):
+                await asyncio.wait_for(client.exchange(request_for(scope)), 1)
+            assert len(state["sends"]) == handshakes
+            assert all(
+                json.loads(body.rstrip("\x1e")) == {"protocol": "json", "version": 1}
+                for body in state["sends"]
+            )
+            transcript = client.transport_transcript
+            assert (
+                sum(event.direction == "receive" for event in transcript)
+                == receive_limit
+            )
+            assert not any(event.stage == "application" for event in transcript)
+            assert client.requests_sent == (3 if handshakes else 1)
+            assert client.transport_budget.messages == len(transcript)
+            assert client.transport_budget.bytes == sum(
+                event.bytes for event in transcript
+            )
+            assert client.transport_budget.messages <= reservation.messages
+            assert client.transport_budget.bytes <= reservation.bytes
 
     asyncio.run(run())

@@ -519,8 +519,13 @@ class ScopedTargetClient:
         received = 0
         token = None
 
+        def require_receive_capacity():
+            if received >= limits.max_receive_messages:
+                raise TargetStopped("transport_receive_budget")
+
         async def receive_body(response):
             nonlocal received
+            require_receive_capacity()
             try:
                 body = await self._await(
                     response.content.readexactly(limits.max_message_bytes + 1)
@@ -528,8 +533,6 @@ class ScopedTargetClient:
             except asyncio.IncompleteReadError as exc:
                 body = exc.partial
             received += 1
-            if received > limits.max_receive_messages:
-                raise TargetStopped("transport_receive_budget")
             self._record(request, "negotiation", "receive", body)
             return body
 
@@ -580,6 +583,8 @@ class ScopedTargetClient:
                     or len(token) > 4096
                 ):
                     raise TargetStopped("unsupported_signalr_negotiation")
+            # Do not open a connection whose handshake cannot be observed.
+            require_receive_capacity()
             await self._turn()
             url += "?" + urlencode({"id": token})
         self.admit(request)
@@ -603,10 +608,9 @@ class ScopedTargetClient:
 
         async def receive(stage):
             nonlocal received
+            require_receive_capacity()
             message = await self._await(socket.receive())
             received += 1
-            if received > limits.max_receive_messages:
-                raise TargetStopped("transport_receive_budget")
             if message.type != aiohttp.WSMsgType.TEXT:
                 raise TargetStopped("unsupported_realtime_frame")
             data = message.data.encode()
@@ -634,6 +638,7 @@ class ScopedTargetClient:
             return value
 
         async def send(stage, payload):
+            require_receive_capacity()
             self.admit(request)
             body = json.dumps(payload, allow_nan=False)
             if request.protocol == "signalr-json":
@@ -643,10 +648,14 @@ class ScopedTargetClient:
 
         try:
             if request.protocol == "signalr-json":
+                require_receive_capacity()
                 await self._turn()
                 await send("handshake", {"protocol": "json", "version": 1})
                 if await record("handshake") != {} or pending or records:
                     raise TargetStopped("unsupported_signalr_handshake")
+            # Fragmented handshakes can consume the remaining receive budget.
+            # Never dispatch an application effect without room for its reply.
+            require_receive_capacity()
             await self._turn()
             # No await between revalidation, encoding and dispatch.
             if request.protocol == "websocket":

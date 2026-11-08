@@ -156,12 +156,21 @@ def compiled_proxy(port):
 
 @asynccontextmanager
 async def realtime_target(protocol):
-    state = {"paths": [], "messages": [], "redirect": False, "closed": asyncio.Event()}
+    state = {
+        "paths": [],
+        "messages": [],
+        "redirect_port": None,
+        "closed": asyncio.Event(),
+    }
 
     async def handler(request):
         state["paths"].append(request.path)
-        if state["redirect"]:
-            raise web.HTTPFound(state["redirect"])
+        if state["redirect_port"] is not None:
+            port = int(state["redirect_port"])
+            assert 1 <= port <= 65535
+            # The hostile redirect is confined to the fixture's other listener;
+            # no request value or arbitrary URL can select its host or path.
+            raise web.HTTPFound(f"http://127.0.0.1:{port}/elsewhere")
         if request.path == "/negotiate":
             return web.json_response(
                 {
@@ -279,7 +288,7 @@ def test_compiled_proxy_denies_realtime_host_port_and_redirect(protocol):
                         )
                     assert denied.value.status == 403
                 assert not target["paths"] and not forbidden["paths"]
-                target["redirect"] = f"http://127.0.0.1:{forbidden_port}/elsewhere"
+                target["redirect_port"] = forbidden_port
                 client, request = bounded_client(
                     protocol, f"http://realtime.example.test:{port}", proxy
                 )
