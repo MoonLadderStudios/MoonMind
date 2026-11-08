@@ -44,6 +44,11 @@ from moonmind.security.passive_repo_scan import (
 from moonmind.security.repository_scanners import ScannerSummary
 from moonmind.security.rgs_assessment import RgsAssessment
 from moonmind.security.rng_assessment import RngAssessment
+from moonmind.security.tls_assessments import (
+    TLSAssessment,
+    TLSAssessmentSummary,
+    summarize_tls_assessment,
+)
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -397,6 +402,63 @@ def _image_observation(
             "imageFeedSnapshot": (execution.database_digest if execution else None)
             or "unavailable",
             "imageScannerVersion": version,
+        },
+    )
+
+
+def _tls_observation(
+    request, summary: TLSAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """Positive sampled TLS evidence, without claiming backend-wide absence."""
+    if (
+        summary.origin not in request.scope.assets
+        or summary.origin in request.scope.exclusions
+    ):
+        raise ValueError("TLS origin outside admitted assessment scope")
+    findings = []
+    for item in summary.findings:
+        if (
+            item.get("evidenceRef") != summary.evidence_ref
+            or summary.evidence_ref == "unavailable"
+        ):
+            raise ValueError(
+                "TLS finding evidence differs from retained native records"
+            )
+        findings.append(
+            Finding(
+                source="tls",
+                tool="openssl",
+                rule_id=item["code"],
+                asset=summary.origin,
+                native_id=content_key(
+                    [item["code"], item["protocol"], item.get("cipher")]
+                ),
+                evidence_refs=[summary.evidence_ref],
+            )
+        )
+    if summary.execution.get("startedAt"):
+        created_at = datetime.fromisoformat(summary.execution["startedAt"])
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=findings,
+        coverage=[
+            Coverage(
+                source="tls",
+                tool="openssl",
+                assets=[summary.origin],
+                rule_ids=sorted({f.rule_id for f in findings}),
+                all_rules=False,
+                config_ref=summary.comparison_key,
+                status="partial",
+                evidence_method="deterministic_check",
+            )
+        ],
+        provenance={
+            "tlsSummary": ref,
+            "tlsNativeReport": summary.evidence_ref,
+            "tlsInterpretation": summary.interpretation,
         },
     )
 
@@ -1626,6 +1688,57 @@ class AssessmentExecution:
                                     ),
                                     "verification": image_summary.verification,
                                     "interpretation": image_summary.interpretation,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "tls-assessment/v1":
+                            tls_summary = TLSAssessmentSummary.model_validate(payload)
+                            # Recompute normalized findings and identity from the retained
+                            # native bytes, not editable summary assertions.
+                            native = {}
+                            if tls_summary.evidence_ref != "unavailable":
+                                _, native_body = await self.read(tls_summary.evidence_ref)
+                                native = json.loads(native_body)
+                            normalized = summarize_tls_assessment(
+                                TLSAssessment.model_validate(tls_summary.settings),
+                                native,
+                                tls_summary.evidence_ref,
+                                resolution=tls_summary.resolution,
+                            )
+                            if (
+                                normalized.comparison_key != tls_summary.comparison_key
+                                or normalized.findings != tls_summary.findings
+                                or normalized.origin != tls_summary.origin
+                                or normalized.execution != tls_summary.execution
+                                or normalized.unperformed_checks != tls_summary.unperformed_checks
+                            ):
+                                raise ValueError("TLS summary differs from retained evidence")
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _tls_observation(request, tls_summary, ref, observed_at)
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "openssl",
+                                    "target": tls_summary.origin,
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"execution": tls_summary.evidence_ref}
+                                        if tls_summary.evidence_ref != "unavailable"
+                                        else {}
+                                    ),
+                                    "coverage": "partial",
+                                    "execution": {
+                                        "probes": [
+                                            {k: p[k] for k in ("protocol", "cipher", "status", "trustResult")}
+                                            for p in tls_summary.execution.get("probes", [])
+                                        ],
+                                        "unperformedChecks": tls_summary.unperformed_checks,
+                                        "errors": tls_summary.execution.get("errors", []),
+                                    },
+                                    "limitations": sorted(tls_summary.limitations),
+                                    "unperformedChecks": tls_summary.unperformed_checks,
+                                    "verification": "observed" if tls_summary.execution else "unverified",
+                                    "interpretation": tls_summary.interpretation,
                                 }
                             )
                         elif payload.get("schemaVersion") == "web-assessment/v1":

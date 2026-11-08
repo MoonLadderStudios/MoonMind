@@ -4,7 +4,7 @@
 
 ## Purpose and ownership
 
-Assessments explain examined source, dependencies, images, cloud resources and applications, their coverage gaps, finding evidence and fix verification.
+Assessments explain coverage, findings and fix evidence across source, dependencies, images, cloud resources and applications.
 
 Omnigent owns reasoning. Security tools run separately on demand, never installed in the agent host.
 
@@ -63,7 +63,7 @@ Collection redacts credentials, cookies, and login bodies from the native report
 
 ## Packaging and recommended tools
 
-The maintained image contains **Opengrep, Gitleaks, Trivy, Git, CA certificates and the report runner**.
+The maintained image contains **Opengrep, Gitleaks, Trivy, OpenSSL, Git, CA certificates and assessment runners**.
 
 Cloud/application scanners use maintained upstream images. Jobs contain no agent/model credentials and have no Docker socket, nested Docker, host networking or privilege.
 
@@ -76,9 +76,10 @@ Cloud/application scanners use maintained upstream images. Jobs contain no agent
 | Dependencies, IaC, images, SBOMs | [Trivy](https://trivy.dev/docs/latest/), curated image | Explicit scanner selection; Gitleaks owns default repository secrets. SBOM generation is an explicit operation. |
 | Cloud posture | [Prowler](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment`, native JSON-OCSF; no Prowler server/database/UI/MCP stack. |
 | Web/API | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment`, rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plans. |
+| HTTPS TLS | OpenSSL and cryptography in the curated image | [Bounded CONNECT inspection](RestrictedEgress.md#bounded-https-tls-inspection), certificate/trust evidence and explicit protocol coverage gaps. |
 | Contextual review | Existing Omnigent agent and security Skills | Trust boundaries, authorization, business logic, evidence validation, prioritization and retesting; scanner findings are optional inputs. |
 
-Engine, rule, template, and Skill licenses are separate: ship only material whose terms permit the intended distribution and use, and deployment-provided rules keep their own terms. Adopting Opengrep does not remove restrictions on a separately obtained [Semgrep rule corpus](https://semgrep.dev/legal/rules-license).
+Engine, rule, template and Skill licenses remain separate. Distribution must respect each, including deployment-provided rules and the [Semgrep rule corpus](https://semgrep.dev/legal/rules-license).
 
 ### Conditional additions
 
@@ -188,7 +189,7 @@ Acquisition verifies Opengrep's Cosign signature/certificate, Trivy's Sigstore b
 
 The image's `/usr/local/share/repository-security/inventory.json` and `notices/` identify its contents. Job-owned `/tmp` stays executable because Opengrep extracts a child executable there. Actions retains tool/signature assets, Opengrep source, inventory/base identity, image digest, SBOM and qualification evidence for 90 days. Updating scanners does not rebuild the Omnigent host; its CLI follows that host's deployment lifecycle.
 
-`.github/workflows/upstream-assessment-images.yml` qualifies ZAP/Prowler `stable` weekly, on relevant changes and on dispatch (with optional image overrides). It executes rendered plans/argv against a local application and moto. Summaries must detect vulnerable targets and report repaired targets clean with complete coverage. Recorded image digests identify what ran; failures diagnose adapter compatibility without pinning future launches.
+`.github/workflows/upstream-assessment-images.yml` qualifies ZAP/Prowler against local application/moto fixtures and TLS against local certificates/CONNECT transport. Native TLS rows build the candidate Dockerfile, dependencies and Python payload with unchanged tools/rules from the published scanner image; they do not reverify fresh upstream releases. Weekly, relevant-change and dispatch runs retain actual image/provenance evidence without pinning future launches.
 
 Hermetic CI executes the Apache-2.0 corpus in `tests/fixtures/security_review/quality-cases.json`: source, cloud, web and ownership cases, separate held-out controls, and clean, vulnerable, repaired, partial, failed-authentication, malformed-output and canceled outcomes. Cloud/ZAP/native-scanner transports and harness responses are controlled. The passive detector and access probes execute code; saved fixture presets use the catalog, admitted CLI/MCP, artifact and report owners.
 

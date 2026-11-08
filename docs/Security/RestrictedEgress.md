@@ -224,7 +224,7 @@ Cleanup remains possible after the policy is revoked.
 
 The backend supplies immutable proxy environment defaults. Tool adapters can
 use `tool_proxy_options` from `moonmind.security.egress_policy` for HTTPX,
-Requests, and Chromium to configure clients
+Requests, Chromium, and the TLS adapter to configure clients
 that do not honor environment variables. Unsupported protocols produce an
 explicit error. Runtime evidence records policy identity, its pinned snapshot,
 and bounded per-job denials. Observed denials are persisted each poll and
@@ -239,6 +239,39 @@ Chromium requests. Required integration CI additionally runs
 `tools/test_scoped_egress.sh` against disposable `moonmind-test-*` resources
 through the real job backend. Managed workflows run the socket-free tests
 through the container-job service; they do not receive a Docker socket.
+
+### Bounded HTTPS TLS inspection
+
+`moonmind container tls-assessment --admission tls.json` submits a typed
+`tlsAssessment` job to the existing `repository-security` image source. The
+admitted scope must match `assessmentRef`, include profile `tls-assessment`,
+action `tls-inspection`, the exact HTTPS `webOrigin`, and `egressPolicyRef`.
+The selected policy contains only that origin's host and port as `live-target`.
+Its timeout remains within the assessment's job budget. Extra environment,
+commands, mounts, services and registry credentials are not TLS options.
+
+The OpenSSL adapter explicitly uses the enforced CONNECT proxy and derives SNI
+from the admitted origin. Every handshake shares one deadline and rate bound;
+there is no direct-network fallback. `protocols` selects TLS versions and
+`ciphers` selects individual cipher names, not expressions. A client that
+cannot attempt a selected algorithm leaves an explicit coverage gap; it does
+not establish that the server disabled it. Native non-HTTP TLS, STARTTLS and
+complete load-balancer/backend coverage remain unsupported.
+
+Optional `trustArtifactRef` must be an admitted artifact target containing only
+public CA certificates, mounted read-only as `tls-trust/ca.pem`. Otherwise the
+runner snapshots its system CA bundle. The captured chain is verified offline
+against those exact trust bytes at the recorded assessment time. Evidence
+records certificate fingerprints, validity, hostname match, selected protocol
+and cipher, trust source, and each performed or unperformed probe. Raw OpenSSL
+session diagnostics and private keys are never published.
+
+Collection retains sanitized native evidence and a `tls-assessment/v1` summary
+through ordinary artifact dependencies. Earlier observations survive a later
+failure or cancellation. `security.assess` rereads that evidence; comparison
+identity includes chain, pinned resolution, trust content, probe configuration
+and assessment time. Changed inputs and unobserved backends do not prove
+remediation.
 
 ## Lifecycle and evidence
 

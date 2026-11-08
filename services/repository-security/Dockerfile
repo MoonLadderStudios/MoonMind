@@ -4,9 +4,9 @@ FROM ${SECURITY_BASE_IMAGE}
 ARG SECURITY_BASE_IDENTITY=unknown
 
 RUN apt-get -o Acquire::Retries=3 update \
-    && apt-get install --no-install-recommends -y git ca-certificates libstdc++6 \
+    && apt-get install --no-install-recommends -y git ca-certificates openssl libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir 'pydantic>=2.12.5,<2.15.0' \
+    && python -m pip install --no-cache-dir 'pydantic>=2.12.5,<2.15.0' 'cryptography>=46.0.7,<50.1.0' \
     && useradd --uid 1000 --create-home --home-dir /home/scanner scanner \
     && mkdir -p /workspace /scan-output /opt/moonmind-scanner-db /opt/moonmind-scanner-feeds /opt/moonmind-scanner-rules \
     && chown 1000:1000 /scan-output /opt/moonmind-scanner-db /opt/moonmind-scanner-feeds

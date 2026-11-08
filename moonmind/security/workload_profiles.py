@@ -11,9 +11,9 @@ cannot run under a profile label it no longer matches.
 
 An admitted assessment scope is resolved from operator authority at the
 trusted launch boundary and signed into the session's container-job
-capability. A scoped session can submit only profile jobs and web and cloud
+capability. A scoped session can submit only profile jobs and web, TLS or cloud
 assessments inside that scope; generic image, entrypoint and
-repository-scanner submissions are refused. Web and cloud assessments run
+repository-scanner submissions are refused. Web, TLS and cloud assessments run
 only inside a scope, since reaching a target does not authorize acting on it.
 Other sessions keep their ordinary development flexibility.
 
@@ -633,6 +633,7 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
     """Request-level scope check shared by submission and persisted-job reads."""
 
     typed = {
+        "tls_assessment": tls_assessment_within_scope,
         "web_assessment": web_assessment_within_scope,
         "cloud_assessment": cloud_assessment_within_scope,
     }
@@ -672,6 +673,28 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         ):
             return False
     return True
+
+
+def tls_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
+    """TLS transport inspection requires its own target and action authority."""
+    tls = spec.tls_assessment
+    if tls.assessment_ref != scope.assessment_ref:
+        raise PermissionError("TLS assessment belongs to another assessment")
+    if (
+        "tls-assessment" not in scope.profile_refs
+        or "tls-inspection" not in scope.action_classes
+    ):
+        raise PermissionError("TLS inspection is not admitted")
+    if tls.egress_policy_ref not in scope.network_refs:
+        raise PermissionError("TLS network access is not admitted")
+    if spec.timeout_seconds > scope.max_job_seconds:
+        raise PermissionError("TLS timeout exceeds the assessment budget")
+    if not any(t.web_origin == tls.origin for t in scope.targets):
+        raise PermissionError("TLS origin is not an admitted target")
+    if tls.trust_artifact_ref and tls.trust_artifact_ref not in {
+        t.artifact_ref for t in scope.targets
+    }:
+        raise PermissionError("TLS trust artifact is not an admitted input")
 
 
 def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
@@ -757,6 +780,9 @@ def cloud_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
 def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) -> None:
     """Admission check of the rendered launch content against the scope."""
 
+    if getattr(spec, "tls_assessment", None) is not None:
+        tls_assessment_within_scope(spec, scope)
+        return
     if getattr(spec, "web_assessment", None) is not None:
         web_assessment_within_scope(spec, scope)
         return
@@ -825,5 +851,6 @@ __all__ = [
     "resolved_job_within_scope",
     "selection_within_scope",
     "validate_profile_launch",
+    "tls_assessment_within_scope",
     "web_assessment_within_scope",
 ]

@@ -591,3 +591,59 @@ class CloudAssessment(Contract):
 
 #: Prowler's native JSON-OCSF report and its error log.
 CLOUD_OUTPUT_FILES = {"report": "prowler.ocsf.json", "log": "prowler.log"}
+
+
+TLSProtocol = Literal["TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3"]
+
+
+class TLSAssessment(Contract):
+    origin: str
+    assessment_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    egress_policy_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    protocols: list[TLSProtocol] = Field(
+        default_factory=lambda: ["TLSv1.2", "TLSv1.3"], min_length=1, max_length=4
+    )
+    ciphers: list[str] = Field(default_factory=list, max_length=16)
+    trust_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    timeout_seconds: int = Field(120, ge=1, le=1800)
+    max_requests_per_second: int = Field(1, ge=1, le=10)
+    output_directory: str = "tls-assessment"
+
+    @field_validator("origin")
+    @classmethod
+    def https_origin(cls, value):
+        value = web_origin(value)
+        if not value.startswith("https://"):
+            raise ValueError("TLS inspection requires an admitted HTTPS origin")
+        return value
+
+    @field_validator("output_directory")
+    @classmethod
+    def relative(cls, value):
+        return relative_path(value)
+
+    @field_validator("ciphers")
+    @classmethod
+    def cipher_names(cls, values):
+        import re
+
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", v) for v in values):
+            raise ValueError("select individual cipher names, not cipher expressions")
+        return values
+
+    @model_validator(mode="after")
+    def unique(self):
+        if len(set(self.protocols)) != len(self.protocols) or len(
+            set(self.ciphers)
+        ) != len(self.ciphers):
+            raise ValueError("duplicate TLS probe")
+        return self
+
+    def outputs(self):
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{file}"}
+            for name, file in {
+                "execution": "execution.json",
+                "summary": "summary.json",
+            }.items()
+        ]

@@ -73,6 +73,7 @@ def container_job_matches_capability(
             return False
     elif (
         (profile is not None and profile.assessment_ref is not None)
+        or request.spec.tls_assessment is not None
         or request.spec.web_assessment is not None
         or request.spec.cloud_assessment is not None
     ):
