@@ -8,7 +8,13 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.schemas.repository_scanner_models import web_origin
@@ -32,7 +38,7 @@ Strings = Annotated[list[Text], Field(max_length=32)]
 
 
 class AssessmentBudget(ExecutionBudget):
-    model_config = {"extra": "forbid", "populate_by_name": True, "frozen": True}
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, frozen=True)
 
     @model_validator(mode="after")
     def bounded(self):
@@ -232,17 +238,17 @@ def resolve_assessment_project(
     )
     if configuration.id != environment.id:
         raise ValueError("Copy an environment in Settings to change its identity.")
-    value = dict(
-        schemaVersion="assessment-project/v1",
-        projectId=project.id,
-        projectName=project.name,
-        environmentId=configuration.id,
-        environmentName=configuration.name,
-        sourceVersion=version,
-        purpose=project.purpose,
-        boundaries=project.boundaries,
-        configuration=configuration.model_dump(mode="json", by_alias=True),
-    )
+    value = {
+        "schemaVersion": "assessment-project/v1",
+        "projectId": project.id,
+        "projectName": project.name,
+        "environmentId": configuration.id,
+        "environmentName": configuration.name,
+        "sourceVersion": version,
+        "purpose": project.purpose,
+        "boundaries": project.boundaries,
+        "configuration": configuration.model_dump(mode="json", by_alias=True),
+    }
     return AssessmentProjectSnapshot.model_validate({**value, "digest": _digest(value)})
 
 

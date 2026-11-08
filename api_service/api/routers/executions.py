@@ -8219,11 +8219,13 @@ def _apply_assessment_project_defaults(
     steps = workflow.get("steps")
     if steps is not None and not isinstance(steps, list):
         raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
-    resolved = AssessmentProjectSnapshot.model_validate(snapshot) if snapshot is not None else None
+    resolved = (
+        AssessmentProjectSnapshot.model_validate(snapshot)
+        if snapshot is not None
+        else None
+    )
     try:
-        apply_assessment_defaults(
-            workflow, resolved
-        )
+        apply_assessment_defaults(workflow, resolved)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
