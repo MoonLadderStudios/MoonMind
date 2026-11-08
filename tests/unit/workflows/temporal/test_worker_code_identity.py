@@ -190,10 +190,10 @@ def test_readiness_urls_from_env_derives_hostname_for_bare_workflow_url(
     monkeypatch.delenv("MOONMIND_WORKER_READINESS_URLS", raising=False)
     monkeypatch.setenv(
         "TEMPORAL_WORKFLOW_READINESS_URL",
-        "http://temporal-worker-workflow:8080/readyz",
+        "http://temporal-worker-core:8080/readyz",
     )
     assert readiness_urls_from_env() == [
-        ("workflow", "http://temporal-worker-workflow:8080/readyz"),
+        ("workflow", "http://temporal-worker-core:8080/readyz"),
     ]
 
 
@@ -660,14 +660,14 @@ def test_compose_service_for_worker_maps_lanes_and_hostnames() -> None:
         _compose_service_for_worker,
     )
 
-    assert _compose_service_for_worker("workflow") == "temporal-worker-workflow"
+    assert _compose_service_for_worker("workflow") == "temporal-worker-core"
     assert (
         _compose_service_for_worker("workflow/workflow-1")
-        == "temporal-worker-workflow"
+        == "temporal-worker-core"
     )
     assert (
-        _compose_service_for_worker("temporal-worker-workflow")
-        == "temporal-worker-workflow"
+        _compose_service_for_worker("temporal-worker-core")
+        == "temporal-worker-core"
     )
     assert _compose_service_for_worker("http://w:8080/readyz") is None
 

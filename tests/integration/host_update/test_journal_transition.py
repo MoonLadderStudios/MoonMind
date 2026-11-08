@@ -114,6 +114,17 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(
             **common, "environment": {**common["environment"], "TEMPORAL_WORKER_FLEET": fleet},
             "entrypoint": ["python", "/fixture/actor.py", mode],
         }
+    # Retained source topology for upgrade/rollback qualification. These three
+    # fleets do not own journals, but all their obsolete containers must retire.
+    legacy_workers = {
+        f"temporal-worker-{fleet}": {
+            **common,
+            "environment": {**common["environment"], "TEMPORAL_WORKER_FLEET": fleet},
+            "entrypoint": ["python", "-c", "import time; time.sleep(600)"],
+        }
+        for fleet in ("workflow", "llm", "integrations")
+    } if rename_sweeper else {}
+    config["services"].update(legacy_workers)
     config["services"]["postgres"] = {
         "image": "postgres:17", "environment": {
             "POSTGRES_PASSWORD": "journey-only", "POSTGRES_DB": "moonmind",
@@ -182,19 +193,22 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(
         return result
 
     target = {"project": project, "projectDir": str(tmp_path),
-              "composeFiles": [str(compose_file)], "services": ["postgres", WRITER, SWEEPER]}
+              "composeFiles": [str(compose_file)],
+              "services": ["postgres", WRITER, SWEEPER, *legacy_workers]}
     try:
         compose("up", "-d", "--wait", "postgres")
-        compose("up", "-d", "--no-deps", "--pull", "never", WRITER, SWEEPER)
+        compose("up", "-d", "--no-deps", "--pull", "never", WRITER, SWEEPER, *legacy_workers)
         before = await_record(state / "seeded.json", process_check=actors_healthy)
         await_record(state / "swept.json", process_check=actors_healthy)
         config["services"][WRITER]["entrypoint"][-1] = "writer-resume"
         candidate_sweeper = CORE if rename_sweeper else SWEEPER
         if rename_sweeper:
-            # Exercise deployment topology independently of the future combined
-            # worker implementation. Older discovery still sees its fleet marker.
+            # Exercise the production controller's topology transition; journal
+            # actors stand in for workers, with the same discovery fleet marker.
             config["services"][CORE] = config["services"].pop(SWEEPER)
             config["services"][CORE]["labels"] = {"moonmind.journal-consumer": "true"}
+            for service in legacy_workers:
+                del config["services"][service]
             target = {**target, "services": ["postgres", WRITER, CORE]}
         compose_file.write_text(json.dumps(config))
         operation = store.begin(stack="moonmind", desired_image=image,
@@ -222,10 +236,12 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(
         assert_installed_consumers(
             candidate_sweeper, absent=SWEEPER if rename_sweeper else None
         )
+        assert not set(legacy_workers) & {row.get("Service") for row in actor_rows()}
         if rename_sweeper:
             config["services"][SWEEPER] = config["services"].pop(CORE)
             config["services"][SWEEPER].pop("labels")
-            target = {**target, "services": ["postgres", WRITER, SWEEPER]}
+            config["services"].update(legacy_workers)
+            target = {**target, "services": ["postgres", WRITER, SWEEPER, *legacy_workers]}
         config["services"][WRITER]["entrypoint"][-1] = "legacy-reader"
         config["services"][SWEEPER]["entrypoint"][-1] = "legacy-sweeper"
         compose_file.write_text(json.dumps(config))
@@ -243,6 +259,8 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(
             SWEEPER,
         }
         assert_installed_consumers(SWEEPER, absent=CORE if rename_sweeper else None)
+        for service in legacy_workers:
+            assert_installed_consumers(service)
         for source in original_sources:
             run(["docker", "image", "inspect", source], env=env, cwd=tmp_path)
         await_record(state / "legacy-read.json", process_check=actors_healthy)

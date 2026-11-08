@@ -158,7 +158,7 @@ def test_shared_host_path_has_no_tools_volume_lifecycle() -> None:
         assert "/opt/moonmind-tools" not in volumes, name
         assert "moonmind-tools.sh" not in volumes, name
         assert "omnigent-tools-init" not in service.get("depends_on", {}), name
-    for worker in ("temporal-worker-agent-runtime", "temporal-worker-workflow"):
+    for worker in ("temporal-worker-agent-runtime", "temporal-worker-core"):
         environment = " ".join(
             str(item) for item in compose["services"][worker].get("environment", [])
         )

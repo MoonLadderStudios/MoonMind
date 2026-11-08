@@ -442,12 +442,14 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
     [
         "",
         "docker-proxy",
-        "temporal-worker-integrations",
+        "temporal-worker-core",
         # The previous .env-template default, still present in existing
         # operator .env files. The updater runs in its own one-off container,
         # so the obsolete runner exclusion is dropped rather than failing
         # every workflow-submitted update.
         "temporal-worker-deployment-control",
+        "temporal-worker-deployment-control,temporal-worker-core",
+        # Retained operator .env inputs while pre-core upgrades are supported.
         "temporal-worker-deployment-control,temporal-worker-integrations",
     ],
 )
