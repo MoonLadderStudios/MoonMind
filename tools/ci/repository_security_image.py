@@ -33,6 +33,7 @@ RUNNER_FILES = (
     "security/image_assessment_runner.py",
     "security/image_assessments.py",
     "security/assessments.py",
+    "security/assessment_projects.py",
     "security/frameworks.py",
     "security/identity_lifecycle.py",
     "security/oscal_export.py",
