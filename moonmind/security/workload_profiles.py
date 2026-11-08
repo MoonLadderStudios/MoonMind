@@ -29,7 +29,14 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from moonmind.schemas.repository_scanner_models import (
     CLOUD_ACTION_CLASS,
@@ -39,6 +46,7 @@ from moonmind.schemas.repository_scanner_models import (
     web_origin,
     web_route,
 )
+from moonmind.security.realtime_scope import RealtimeScope
 
 WORKLOAD_PROFILES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_WORKLOAD_PROFILES"
 TARGET_SCOPE_ENV = "MOONMIND_TARGET_ASSESSMENT_SCOPE"
@@ -468,6 +476,15 @@ class AssessmentTarget(_Model):
     web_messages: dict[str, tuple[str, ...]] = Field(
         default_factory=dict, alias="webMessages", max_length=32
     )
+    realtime: RealtimeScope | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        value = handler(self)
+        if self.realtime is None:
+            value.pop("realtime", None)
+        return value
+
     cloud_account: str | None = Field(
         None, alias="cloudAccount", pattern=r"^[0-9]{12}$"
     )
@@ -525,6 +542,21 @@ class AssessmentTarget(_Model):
                 raise ValueError(
                     "real-time channels need admitted, unexcluded GET routes"
                 )
+        if self.realtime is not None:
+            if self.web_origin is None:
+                raise ValueError("real-time authority belongs to a web origin")
+            for case in self.realtime.cases:
+                routes = [(case.path, "GET")]
+                if case.negotiation_path is not None:
+                    routes.append((case.negotiation_path, "POST"))
+                for path, method in routes:
+                    if not any(
+                        route_within(path, route.path) and method in route.methods
+                        for route in self.web_routes
+                    ) or any(route_within(path, e) for e in self.web_exclusions):
+                        raise ValueError(
+                            "real-time endpoints require admitted, unexcluded routes"
+                        )
         cloud = self.cloud_account is not None
         if cloud != (self.cloud_provider is not None) or cloud != bool(
             self.cloud_regions
@@ -824,6 +856,34 @@ def cloud_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
         raise PermissionError("cloud region is not admitted for this account")
 
 
+def _realtime_within_scope(requested: RealtimeScope, authority: RealtimeScope | None):
+    """Exact named operations and independent transport ceilings, never hints."""
+    if authority is None:
+        raise PermissionError("target real-time authority is not admitted")
+
+    def canonical(case):
+        # Python object equality considers True == 1. JSON authority does not.
+        return json.dumps(
+            case.model_dump(mode="json", by_alias=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    admitted = {case.case_ref: canonical(case) for case in authority.cases}
+    if any(admitted.get(case.case_ref) != canonical(case) for case in requested.cases):
+        raise PermissionError("target real-time case differs from admitted authority")
+    for limit in (
+        "max_connections",
+        "max_messages",
+        "max_bytes",
+        "max_message_bytes",
+        "max_receive_messages",
+    ):
+        if getattr(requested, limit) > getattr(authority, limit):
+            raise PermissionError("target real-time transport limit exceeds authority")
+
+
 def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) -> None:
     """Admission check of the rendered launch content against the scope."""
 
@@ -878,6 +938,8 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
                 "target observation egress policy differs from admission"
             )
         target = _web_target_within_scope(target_scope.web, scope)
+        if target_scope.realtime is not None:
+            _realtime_within_scope(target_scope.realtime, target.realtime)
         for path, messages in target_scope.messages.items():
             if not set(messages) <= set(target.web_messages.get(path, ())):
                 raise PermissionError("target real-time message type is not admitted")

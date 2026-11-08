@@ -85,6 +85,10 @@ class RgsTargetPlan(Contract):
 
 
 def _admit_plan(spec, plan, client):
+    if client.scope.realtime is not None:
+        raise ValueError(
+            "named real-time scope requires the application-access observer"
+        )
     if spec.authorization_matrix is None:
         raise ValueError("target observation requires a declared authorization matrix")
     operations = {(s.id, o.id): o for s in spec.scenarios for o in s.operations}

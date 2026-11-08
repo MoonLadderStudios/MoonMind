@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import html
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -122,6 +124,12 @@ def assessment_edit_material(
     return material
 
 
+def _review_text(value: str) -> str:
+    """Keep untrusted case content literal in text and Markdown review surfaces."""
+    value = html.escape(value, quote=False).replace("\n", "\\n").replace("\r", "\\r")
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", value)
+
+
 def build_assessment_proposal(
     payload: Mapping[str, Any], record: AssessmentAuthorization
 ) -> dict[str, Any]:
@@ -138,6 +146,7 @@ def build_assessment_proposal(
         ).encode()
     ).hexdigest()
     targets, exclusions = [], list(scope.exclusions)
+    realtime_operations = []
     for target in scope.targets:
         if target.web_origin:
             targets.extend(
@@ -150,6 +159,32 @@ def build_assessment_proposal(
             for path, messages in target.web_messages.items():
                 targets.append(
                     f'{target.web_origin}{path}: messages {", ".join(messages)}'
+                )
+            if target.realtime is not None:
+                for case in target.realtime.cases:
+                    identity = case.credential_ref or "anonymous"
+                    negotiation = (
+                        f"; negotiation POST {case.negotiation_path}"
+                        if case.negotiation_path
+                        else ""
+                    )
+                    realtime_operations.append(
+                        _review_text(
+                            f"Case {case.case_ref}: {case.protocol} GET "
+                            f"{target.web_origin}{case.path}{negotiation}; "
+                            f"identity {identity}; effect {case.effect}; "
+                            f"message type {case.message_type}; exact payload "
+                            + json.dumps(case.payload, sort_keys=True, ensure_ascii=True)
+                        )
+                    )
+                caps = target.realtime.model_dump(
+                    mode="json", by_alias=True, exclude={"cases"}
+                )
+                realtime_operations.append(
+                    _review_text(
+                        f"{target.web_origin}: transport caps "
+                        + json.dumps(caps, sort_keys=True)
+                    )
                 )
         elif target.cloud_account:
             targets.append(
@@ -263,6 +298,8 @@ def build_assessment_proposal(
             ],
         ),
     ]
+    if realtime_operations:
+        sections.insert(3, ("Real-time operations", realtime_operations))
     return {
         "schemaVersion": "assessment-engagement/v1",
         "authorizationRef": record.ref,
@@ -285,7 +322,9 @@ def validate_reviewed_proposal(
 ) -> dict[str, Any]:
     expected = build_assessment_proposal(payload, record)
     supplied = payload.get(REVIEW_KEY)
-    if not isinstance(supplied, Mapping) or dict(supplied) != expected:
+    if not isinstance(supplied, Mapping) or json.dumps(
+        dict(supplied), sort_keys=True, separators=(",", ":")
+    ) != json.dumps(expected, sort_keys=True, separators=(",", ":")):
         raise _denied(
             "The assessment plan or authorization changed. Review the current proposal before starting."
         )
