@@ -463,6 +463,8 @@ def test_real_openssl_version_is_retained(tmp_path, version):
         "OpenSSL 3.5.7 token: secret",
         "OpenSSL " + "3" * 300,
     ],
+    # Keep hostile fixture text out of streamed logs and retained JUnit IDs.
+    ids=["multiline", "terminal-escape", "invalid-library", "assignment", "overlong"],
 )
 def test_openssl_version_rejects_injected_output(text):
     from moonmind.security.tls_assessments import sanitize_openssl_version
