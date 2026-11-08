@@ -1032,3 +1032,166 @@ async def test_backend_transport_observation_preserves_tool_exit_and_scope_failu
     )
     assert observed.exit_code == exit_code
     assert (observed.egress_denial_observation is not None) == denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["open", "refused", "unreachable", "timed_out"])
+async def test_known_dial_observations_are_complete_without_legacy_rewrite(
+    native_setup, outcome
+):
+    value, docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(docker.files["snapshot.json"])
+    counters["attempts"] = 1
+    counters["bytesReserved"] = 0
+    counters["dialOutcomes"] = {outcome: 1}
+    counters["transportErrors"] = {}
+    docker.files["snapshot.json"] = json.dumps(counters).encode()
+    for evidence in (await value.attest(), await value.terminal_evidence()):
+        assert evidence["nativeNetwork"] == counters
+        assert evidence["transportErrorCount"] == 0
+        assert evidence["deniedConnectionCount"] == 0
+        assert "native_transport_errors" not in evidence["limitations"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        None,
+        [],
+        {"refused": True},
+        {"refused": -1},
+        {"refused": 2},
+        {"refused": 1, "open": 1},
+        {"made_up": 1},
+        {"denied": 1},
+        {"transport_error": 1},
+    ],
+)
+async def test_dial_outcomes_cannot_fabricate_attempts_or_hide_unknown_io(
+    native_setup, outcomes
+):
+    value, docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(docker.files["snapshot.json"])
+    counters["attempts"] = 1
+    counters["dialOutcomes"] = outcomes
+    docker.files["snapshot.json"] = json.dumps(counters).encode()
+    with pytest.raises(RuntimeError):
+        await value.attest()
+
+
+@pytest.mark.parametrize("seconds", [1, 5, 30])
+def test_typed_native_dial_timeout_is_bound_into_existing_config(seconds):
+    generic = lease(AsyncMock())
+    selected = ScopedEgressLease(
+        generic.runner,
+        generic.policy,
+        ownership=generic.ownership,
+        job_id=generic.job_id,
+        workload_ref=generic.workload_ref,
+        native_selection=generic.native_selection,
+        native_connect_timeout_seconds=seconds,
+    )
+    snapshot = {
+        "nativeSelection": generic.native_selection.model_dump(
+            mode="json", by_alias=True
+        ),
+        "addresses": {"scan.example.com": ["93.184.216.34"]},
+        "expiresAt": 2000000000,
+        "proxyAddress": "10.248.0.2",
+        "clientAddress": "10.248.0.3",
+    }
+    original = json.loads(generic._native_config(snapshot))
+    updated = json.loads(selected._native_config(snapshot))
+    assert original["connectSeconds"] == 10
+    assert updated == {**original, "connectSeconds": seconds}
+    assert (
+        NativeTCPConfig.from_mapping(updated).digest
+        != NativeTCPConfig.from_mapping(original).digest
+    )
+
+
+@pytest.mark.parametrize("seconds", [0, -1, 31, True, 1.5, "5"])
+def test_typed_native_dial_timeout_rejects_unbounded_values(seconds):
+    generic = lease(AsyncMock())
+    with pytest.raises(ValueError, match="dial timeout"):
+        ScopedEgressLease(
+            generic.runner,
+            generic.policy,
+            ownership=generic.ownership,
+            job_id=generic.job_id,
+            workload_ref=generic.workload_ref,
+            native_selection=generic.native_selection,
+            native_connect_timeout_seconds=seconds,
+        )
+
+
+@pytest.mark.asyncio
+async def test_selected_dial_timeout_is_checked_during_live_reconstruction(
+    native_setup,
+):
+    value, docker = native_setup
+    value.native_connect_timeout_seconds = 5
+    first = await value.prepare(timeout_seconds=120)
+    gateway = docker.container(value.gateway_ref)
+    env = dict(item.split("=", 1) for item in gateway["Config"]["Env"])
+    assert (
+        json.loads(base64.b64decode(env["MOONMIND_EGRESS_CONFIG"]))["connectSeconds"]
+        == 5
+    )
+    restored = ScopedEgressLease(
+        docker,
+        value.policy,
+        ownership=value.ownership,
+        job_id=value.job_id,
+        workload_ref=value.workload_ref,
+        native_selection=value.native_selection,
+        native_connect_timeout_seconds=5,
+    )
+    assert (await restored.prepare(timeout_seconds=120))["expiresAt"] == first[
+        "expiresAt"
+    ]
+    restored.native_connect_timeout_seconds = 6
+    with pytest.raises(RuntimeError):
+        await restored.prepare(timeout_seconds=120)
+
+
+@pytest.mark.asyncio
+async def test_typed_retained_receipt_binds_selected_dial_timeout(native_setup):
+    from moonmind.security.egress_conformance_evidence import attach_evidence_digest
+
+    value, _ = native_setup
+    value.native_connect_timeout_seconds = 1
+    live = await value.prepare(timeout_seconds=120)
+    assert live["nativeConnectTimeoutSeconds"] == 1
+    receipt = attach_evidence_digest(await value.terminal_evidence())
+    assert receipt["nativeConnectTimeoutSeconds"] == 1
+    value.validate_final_receipt(receipt)
+    for timeout in (30, None):
+        value.native_connect_timeout_seconds = timeout
+        with pytest.raises(RuntimeError, match="admitted attempt"):
+            value.validate_final_receipt(receipt)
+    value.native_connect_timeout_seconds = 1
+    for changed in (True, "1", None):
+        altered = attach_evidence_digest(
+            {**receipt, "nativeConnectTimeoutSeconds": changed}
+        )
+        with pytest.raises(RuntimeError, match="admitted attempt"):
+            value.validate_final_receipt(altered)
+
+
+@pytest.mark.asyncio
+async def test_legacy_retained_receipt_keeps_optional_timeout_absent(native_setup):
+    from moonmind.security.egress_conformance_evidence import attach_evidence_digest
+
+    value, _ = native_setup
+    live = await value.prepare(timeout_seconds=120)
+    assert "nativeConnectTimeoutSeconds" not in live
+    receipt = attach_evidence_digest(await value.terminal_evidence())
+    assert "nativeConnectTimeoutSeconds" not in receipt
+    value.validate_final_receipt(receipt)
+    typed = attach_evidence_digest({**receipt, "nativeConnectTimeoutSeconds": 5})
+    with pytest.raises(RuntimeError, match="admitted attempt"):
+        value.validate_final_receipt(typed)

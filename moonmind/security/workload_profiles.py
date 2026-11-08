@@ -343,6 +343,47 @@ _PROFILE_OWNED = (
 )
 
 
+def _service_inventory_command(spec, profile, mode) -> list[str] | None:
+    """Render the fixed, source-free inventory specialization of a profile."""
+    selection = spec.workload_profile
+    if selection.service_inventory is None:
+        return None
+    from moonmind.security.service_inventory import (
+        SERVICE_INVENTORY_OUTPUT_FILES,
+        build_service_inventory_command,
+        build_service_inventory_plan,
+    )
+
+    expected_outputs = {
+        f"service-inventory-{name}": f"service-inventory/{filename}"
+        for name, filename in SERVICE_INVENTORY_OUTPUT_FILES.items()
+    }
+    if (
+        selection.native_network is None
+        or spec.input_attachments != []
+        or selection.arguments
+        or selection.configuration_exceptions
+        or selection.credentials
+        or profile.entrypoint != ("python",)
+        or mode.argv != ("-I", "-m", "moonmind.security.service_inventory_runner")
+        or mode.action_class != "service-inventory"
+        or mode.arguments
+        or profile.environment
+        or profile.caches
+        or profile.credentials
+        or len(profile.outputs) != len(expected_outputs)
+        or {item.name: item.relative_path for item in profile.outputs}
+        != expected_outputs
+    ):
+        raise ValueError(
+            "service inventory requires its fixed native profile and outputs"
+        )
+    plan = build_service_inventory_plan(
+        selection.native_network, selection.service_inventory
+    )
+    return build_service_inventory_command(plan)
+
+
 def resolve_profile_job(spec, profiles):
     """Return ``spec`` with its profile's concrete launch content.
 
@@ -366,8 +407,9 @@ def resolve_profile_job(spec, profiles):
             raise ValueError("native duration exceeds job timeout")
     elif profile.native_network is not None:
         raise ValueError("native profiles require an explicit native selection")
+    inventory_command = _service_inventory_command(spec, profile, mode)
     inputs = frozenset(item.name for item in spec.input_attachments or ())
-    if not inputs:
+    if not inputs and inventory_command is None:
         raise ValueError("workload profile jobs read captured input attachments")
     declared = {argument.name: argument for argument in mode.arguments}
     if set(selection.arguments) - set(declared):
@@ -384,6 +426,8 @@ def resolve_profile_job(spec, profiles):
         if any(name not in rendered for name in names):
             continue
         command.append(_PLACEHOLDER.sub(lambda match: rendered[match.group(1)], entry))
+    if inventory_command is not None:
+        command = inventory_command
     exceptions = {item.name: item for item in profile.configuration_exceptions}
     if len(set(selection.configuration_exceptions)) != len(
         selection.configuration_exceptions
@@ -753,7 +797,11 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         or selection.profile_ref not in scope.profile_refs
         or not set(selection.configuration_exceptions)
         <= set(scope.configuration_exceptions)
-        or not spec.input_attachments
+        or (not spec.input_attachments and selection.service_inventory is None)
+    ):
+        return False
+    if selection.service_inventory is not None and (
+        selection.native_network is None or spec.input_attachments != []
     ):
         return False
     if selection.native_network is not None:

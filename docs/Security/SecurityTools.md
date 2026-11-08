@@ -16,7 +16,7 @@ Omnigent owns reasoning. Security tools run separately on demand, never installe
 | Tool execution, resource limits, logs, outputs, and cleanup | Existing [Container Jobs](../ManagedAgents/DockerBackendService.md) |
 | Evidence retention and operator presentation | Existing [report artifacts](../Artifacts/ReportArtifacts.md) and [artifact presentation](../Artifacts/ArtifactPresentationContract.md) |
 
-Adapters and Skills interpret scanner results; deterministic jobs do not acquire model capacity.
+Deterministic jobs do not acquire model capacity.
 
 ### Repository scanner jobs
 
@@ -77,9 +77,10 @@ Cloud/application scanners use maintained upstream images. Jobs contain no agent
 | Cloud posture | [Prowler](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment`, native JSON-OCSF; no Prowler server/database/UI/MCP stack. |
 | Web/API | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment`, rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plans. |
 | HTTPS TLS | OpenSSL and cryptography in the curated image | [Bounded CONNECT inspection](RestrictedEgress.md#bounded-https-tls-inspection), certificate/trust evidence and explicit protocol coverage gaps. |
+| Native services | Curated Python inventory runner | [Bounded TCP inventory](RestrictedEgress.md#bounded-service-inventory); fixed passive/HEAD probes, explicit uncertainty, no vulnerability inference. |
 | Contextual review | Existing Omnigent agent and security Skills | Trust boundaries, authorization, business logic, evidence validation, prioritization and retesting; scanner findings are optional inputs. |
 
-Engine, rule, template and Skill licenses remain separate. Distribution must respect each, including deployment-provided rules and the [Semgrep rule corpus](https://semgrep.dev/legal/rules-license).
+Respect separate engine, rule, template and Skill licenses, including deployment rules and the [Semgrep corpus](https://semgrep.dev/legal/rules-license).
 
 ### Conditional additions
 

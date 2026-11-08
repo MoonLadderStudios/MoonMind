@@ -359,6 +359,8 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
         "moonmind.security.scanner_feeds",
         "moonmind.security.image_assessment_runner",
         "moonmind.security.tls_assessment_runner",
+        "moonmind.security.service_inventory_runner",
+        "moonmind.security.native_tcp_gateway",
     ],
 )
 def test_packaged_runner_imports_with_only_its_declared_python_dependency(
@@ -620,3 +622,20 @@ def test_fresh_cache_volume_mountpoints_are_created_and_owned_by_scanner():
     }
     assert required <= created
     assert required <= owned
+
+
+def test_packaged_inventory_runner_refuses_missing_admission_without_console(tmp_path):
+    image.stage_runner(tmp_path)
+    result = subprocess.run(
+        [
+            "python",
+            "-I",
+            "-c",
+            f"import sys; sys.path.insert(0, {str(tmp_path)!r}); from moonmind.security.service_inventory_runner import main; raise SystemExit(main())",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert result.stdout == result.stderr == ""
