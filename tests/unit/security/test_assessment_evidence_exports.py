@@ -753,6 +753,81 @@ async def test_selected_sanitized_native_scanner_json_keeps_structure_and_identi
     assert first["scanRef"] == second["scanRef"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sanitize_producer", [False, True],
+    ids=["retained-native", "sanitized-native"],
+)
+async def test_selected_native_export_masks_credential_aliases_without_rewriting_source(
+    environment, sanitize_producer
+):
+    from moonmind.security.repository_scanners import sanitize_native
+    from tests.unit.security.test_scanner_assessment import summary
+
+    service = environment.service
+    native_input = {
+        "results": [
+            {
+                "check_id": "native-rule",
+                "path": "app.py",
+                "start": {"line": 42, "col": 1},
+                "end": {"line": 42, "col": 8},
+            }
+        ],
+        "errors": [],
+        "paths": {"scanned": ["app.py"]},
+        "passwordValue": "synthetic-canyon",
+        "secretValues": {"opaque": "synthetic-meadow", "number": 481902},
+        "authorizationBlob": 482901,
+    }
+    native = json.dumps(native_input).encode()
+    if sanitize_producer:
+        native = sanitize_native("opengrep", native)
+        # Existing native sanitation withholds arbitrary strings, but retains
+        # numeric native data. Disclosure must still classify its field names.
+        assert b"482901" in native and b"481902" in native
+    native_ref = await recurring.put(service, native)
+    retained = summary()
+    retained.native_refs = {"scan": native_ref}
+    for finding in retained.results["scan"].findings:
+        finding.evidence_refs = [native_ref]
+    summary_ref = await recurring.put(
+        service, retained.model_dump(mode="json", by_alias=True)
+    )
+    request = request_payload(
+        scope={"assets": ["app.py"]},
+        reportRefs=[summary_ref],
+        controlAssessment=None,
+        evidenceExport={"artifactRefs": [native_ref]},
+    )
+
+    result = await recurring.invoke(service, request)
+
+    assert result["evidenceExport"]["status"] == "exported", result["evidenceExport"]
+    archive, manifest = await unpack(service, result)
+    entry = manifest["entries"][0]
+    body = archive.read(entry["memberName"])
+    emitted = json.loads(body)
+    assert all(
+        canary not in body
+        for canary in (b"synthetic-canyon", b"synthetic-meadow", b"482901", b"481902")
+    )
+    alias_keys = ("passwordValue", "secretValues", "authorizationBlob")
+    assert {key: emitted[key] for key in alias_keys} == {
+        "passwordValue": "[REDACTED]",
+        "secretValues": "[REDACTED]",
+        "authorizationBlob": "[REDACTED]",
+    }
+    assert emitted["results"] == native_input["results"]
+    assert emitted["paths"] == native_input["paths"]
+    assert entry["sourceSha256"] == hashlib.sha256(native).hexdigest()
+    assert entry["memberSha256"] == hashlib.sha256(body).hexdigest()
+    _, original = await service.read(
+        artifact_id=native_ref, access=access_for_test("workflow:assessment")
+    )
+    assert original == native
+
+
 def test_oscal_projection_preserves_generated_ids_reference_graph_and_native_context():
     import copy
 

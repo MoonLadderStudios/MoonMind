@@ -900,6 +900,87 @@ async def test_structured_authorization_values_never_reach_metadata_only_preview
     )[1] == native
 
 
+@pytest.mark.parametrize("model_representation", ["preview", "native"])
+async def test_credential_aliases_never_reach_metadata_only_preview_or_model_input(
+    evidence_service, model_representation,
+):
+    from moonmind.workflows.skills.optional_quality_review import (
+        review_workflow_payload,
+    )
+
+    service, _ = evidence_service
+    native = json.dumps(
+        {
+            "passwordValue": "synthetic-canyon",
+            "secretValues": {"opaque": "synthetic-meadow", "number": 481902},
+            "authorizationBlob": 482901,
+            "path": "src/check.py",
+            "line": 42,
+        }
+    ).encode()
+    source = await put(service, native, "application/json")
+    reader = access_for_test("workflow:metadata-only")._with_verified_inputs(
+        [source.artifact_id]
+    )
+    _, _, _, policy = await service.get_metadata(
+        artifact_id=source.artifact_id, access=reader
+    )
+    assert not policy.raw_access_allowed
+    preview_ref = policy.default_read_ref.artifact_id
+    _, preview = await service.read(artifact_id=preview_ref, access=reader)
+    model_ref, model_body, model_access = preview_ref, preview, reader
+    if model_representation == "native":
+        model_ref, model_body = source.artifact_id, native
+        model_access = access_for_test("owner")
+    binding = {
+        "source": {"workflowId": "source", "runId": "source-run"},
+        "candidateDigest": "a" * 64,
+        "objective": "Review selected output",
+        "scope": "selected output only",
+        "runtime": {
+            "mode": "codex_cli",
+            "providerProfileRef": "review-profile",
+            "modelTier": 1,
+        },
+        "timeoutSeconds": 120,
+        "artifacts": [
+            {
+                "ref": "artifact://" + source.artifact_id,
+                "sha256": hashlib.sha256(native).hexdigest(),
+                "readRef": "artifact://" + model_ref,
+                "readSha256": hashlib.sha256(model_body).hexdigest(),
+                "readSizeBytes": len(model_body),
+            }
+        ],
+    }
+    payload = await review_workflow_payload(
+        binding, artifacts=service, access=model_access
+    )
+    delivered = json.loads(payload["workflow"]["instructions"].split("\n", 1)[1])
+    observed = delivered["artifacts"][0]
+    assert observed["transformation"]["sha256"] == hashlib.sha256(
+        observed["untrustedContent"].encode()
+    ).hexdigest()
+    for body in (preview, observed["untrustedContent"].encode()):
+        assert all(
+            canary not in body
+            for canary in (b"synthetic-canyon", b"synthetic-meadow", b"482901", b"481902")
+        )
+        assert json.loads(body) == {
+            "passwordValue": "[REDACTED]",
+            "secretValues": "[REDACTED]",
+            "authorizationBlob": "[REDACTED]",
+            "path": "src/check.py",
+            "line": 42,
+        }
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(artifact_id=source.artifact_id, access=reader)
+    _, original = await service.read(
+        artifact_id=source.artifact_id, access=access_for_test("owner")
+    )
+    assert original == native
+
+
 @pytest.mark.parametrize(
     "value",
     ["&canyon-meadow-lantern", "canyon<meadow>lantern", "`canyon-meadow-lantern"],

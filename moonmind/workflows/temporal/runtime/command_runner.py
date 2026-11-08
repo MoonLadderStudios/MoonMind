@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import command_secret_continuation, redact_command_output
 
 
 async def run_runtime_command(
@@ -33,7 +34,7 @@ async def run_runtime_command(
     )
 
     def sanitize(payload: bytes) -> bytes:
-        text = redact_sensitive_text(payload.decode("utf-8", errors="replace"))
+        text = redact_command_output(payload.decode("utf-8", errors="replace"))
         encoded = text.encode("utf-8")
         if output_limit_bytes is not None:
             return encoded[: max(0, output_limit_bytes)]
@@ -52,39 +53,90 @@ async def run_runtime_command(
     async def read_stream(name: str, reader: asyncio.StreamReader) -> bytes:
         retained = bytearray()
         pending = bytearray()
-        oversized = False
-        while chunk := await reader.read(8192):
-            pending.extend(chunk)
-            while b"\n" in pending:
-                line, _, remaining = pending.partition(b"\n")
-                pending = bytearray(remaining)
-                # Never publish a fragment of an oversized line: splitting a
-                # credential across fragments would defeat text redaction.
-                safe = (
-                    b"[oversized output line omitted]\n"
-                    if oversized or len(line) > 65536
-                    else sanitize(bytes(line) + b"\n")
-                )
-                oversized = False
-                retain(retained, safe)
-                try:
-                    await on_output(name, safe)
-                except Exception:
-                    pass  # Auxiliary evidence cannot change command success.
-            if len(pending) > 65536:
-                pending.clear()
-                oversized = True
-        if pending or oversized:
-            safe = (
-                b"[oversized output line omitted]\n"
-                if oversized
-                else sanitize(bytes(pending))
-            )
+        frame = bytearray()
+        json_record = False
+        continuation = None
+        withheld = False
+        limit = 65536
+        omission = b"[streamed output withheld: incomplete or excessive record]\n"
+
+        async def publish(safe: bytes) -> None:
             retain(retained, safe)
             try:
                 await on_output(name, safe)
             except Exception:
                 pass  # Auxiliary evidence cannot change command success.
+
+        async def consume(line: bytes, *, eof: bool = False) -> None:
+            nonlocal json_record, withheld, continuation
+            if len(frame) + len(line) > limit:
+                # Once the context is lost, even a later ordinary-looking
+                # line could be a secret body. Drain without retaining it.
+                withheld = True
+                frame.clear()
+                await publish(sanitize(omission))
+                return
+            frame.extend(line)
+            line_text = line.decode("utf-8", errors="replace")
+            if (
+                ((json_record or continuation is not None) and not line_text.strip())
+                or (
+                    continuation not in {None, "\n"}
+                    and continuation.casefold() not in line_text.casefold()
+                )
+            ):
+                # Whitespace cannot finish an already-open credential or JSON
+                # record. Likewise, quoted/key bodies need their delimiter.
+                # Retain these lines without rescanning the growing frame.
+                if eof:
+                    await publish(sanitize(omission))
+                    frame.clear()
+                return
+            text = frame.decode("utf-8", errors="replace")
+            incomplete_json = False
+            complete_json = False
+            if json_record or text.lstrip().startswith(("{", "[")):
+                try:
+                    json.loads(text)
+                    complete_json = True
+                except json.JSONDecodeError as error:
+                    # Bracketed progress such as '[build] running' is not a
+                    # partial JSON record and must be delivered promptly.
+                    incomplete_json = (
+                        json_record
+                        or error.pos >= len(text.rstrip())
+                        or error.msg.startswith("Unterminated string")
+                    )
+                except (ValueError, RecursionError):
+                    pass  # The canonical redactor fails closed on its bounds.
+            json_record = incomplete_json
+            # Complete JSON belongs wholly to the structured visitor, including
+            # strings whose contents merely resemble unfinished credentials.
+            continuation = None if complete_json else command_secret_continuation(text)
+            if incomplete_json or continuation is not None:
+                if eof:
+                    await publish(sanitize(omission))
+                    frame.clear()
+                return
+            await publish(sanitize(bytes(frame)))
+            frame.clear()
+
+        while chunk := await reader.read(8192):
+            if withheld:
+                continue
+            pending.extend(chunk)
+            while b"\n" in pending and not withheld:
+                line, _, remaining = pending.partition(b"\n")
+                pending = bytearray(remaining)
+                await consume(bytes(line) + b"\n")
+            if withheld or len(frame) + len(pending) > limit:
+                pending.clear()
+                frame.clear()
+                if not withheld:
+                    withheld = True
+                    await publish(sanitize(omission))
+        if not withheld and (pending or frame):
+            await consume(bytes(pending), eof=True)
         return bytes(retained)
 
     async def communicate_progress() -> tuple[bytes, bytes]:

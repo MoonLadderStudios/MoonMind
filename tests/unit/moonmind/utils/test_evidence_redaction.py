@@ -214,3 +214,36 @@ def test_structured_authorization_fields_are_redacted(key, value):
         "status": "observed",
     }
     assert logging.redact_sensitive_payload(payload)["headers"][key] == "[REDACTED]"
+
+
+@pytest.mark.parametrize("key", ["passwordValue", "secretValues", "authorizationBlob"])
+@pytest.mark.parametrize(
+    "value", ["canyon", {"opaque": "canyon"}, [482901], 482901],
+    ids=["string", "mapping", "list", "number"],
+)
+def test_evidence_projection_masks_canonical_assignment_aliases(key, value):
+    assert logging.redact_evidence_payload({key: value, "path": "src/check.py"}) == {
+        key: "[REDACTED]",
+        "path": "src/check.py",
+    }
+
+
+def test_evidence_alias_policy_keeps_stronger_projection_and_generic_owner_rules():
+    original = {
+        "secretRef": "secret://foo",
+        "credentialRef": "profile:allowed",
+        "fullName": "Synthetic Private Person",
+        "email": "operator@example.test",
+        "public_key": "ssh-ed25519 AAAA public comment",
+    }
+    safe = logging.redact_evidence_payload(original)
+    assert safe == {
+        **original,
+        "secretRef": "secret:[REDACTED]",
+        "fullName": "[REDACTED_PERSONAL_DATA]",
+        "email": "[REDACTED_PERSONAL_DATA]",
+    }
+    assert original["secretRef"] == "secret://foo"
+    assert logging.redact_sensitive_payload({"authorizationBlob": False}) == {
+        "authorizationBlob": False
+    }
