@@ -15,8 +15,10 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import aiohttp
 import pytest
 from aiohttp import web
+from pydantic import ValidationError
 
 from moonmind.security.egress_policy import ScopedEgressPolicy
 from moonmind.security.scoped_egress import render_scoped_proxy
@@ -208,7 +210,8 @@ async def realtime_target(protocol):
 
 
 def bounded_client(protocol, origin, proxy):
-    scope = realtime_scope(protocol, maxConnections=1, maxMessageBytes=2048)
+    # Include bounded Squid denial HTML as well as protocol fixture messages.
+    scope = realtime_scope(protocol, maxConnections=1, maxMessageBytes=16384)
     scope.web.origin = origin
     return ScopedTargetClient(scope, proxy=proxy, max_seconds=5), request_for(scope)
 
@@ -255,13 +258,27 @@ def test_compiled_proxy_denies_realtime_host_port_and_redirect(protocol):
                 # compiled network policy. Both listeners remain untouched.
                 for origin in (
                     f"http://unrelated.example.test:{port}",
-                    f"http://127.0.0.1:{port}",
                     f"http://realtime.example.test:{forbidden_port}",
                 ):
                     client, request = bounded_client(protocol, origin, proxy)
                     result = await client.exchange(request)
                     assert result.status == 403
                     assert not target["paths"] and not forbidden["paths"]
+                # Application scope rejects literal IPs before transport.
+                with pytest.raises(ValidationError, match="with a DNS name"):
+                    bounded_client(protocol, f"http://127.0.0.1:{port}", proxy)
+                assert not target["paths"] and not forbidden["paths"]
+                # Independently prove that bypassing the application client
+                # cannot bypass the proxy's literal-IP restriction either.
+                async with aiohttp.ClientSession(
+                    trust_env=False, timeout=aiohttp.ClientTimeout(total=5)
+                ) as session:
+                    with pytest.raises(aiohttp.WSServerHandshakeError) as denied:
+                        await session.ws_connect(
+                            f"http://127.0.0.1:{port}/ws", proxy=proxy
+                        )
+                    assert denied.value.status == 403
+                assert not target["paths"] and not forbidden["paths"]
                 target["redirect"] = f"http://127.0.0.1:{forbidden_port}/elsewhere"
                 client, request = bounded_client(
                     protocol, f"http://realtime.example.test:{port}", proxy
