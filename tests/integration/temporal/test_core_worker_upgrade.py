@@ -90,7 +90,8 @@ async def _ready(port: int) -> dict | None:
                 writer.close()
                 await writer.wait_closed()
     except (OSError, TimeoutError):
-        pass
+        # A transient probe failure leaves the worker pending for the next poll.
+        return None
     return None
 
 
