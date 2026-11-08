@@ -70,7 +70,9 @@ else:
     raise SystemExit('Omnigent internal service did not become ready')
 """
 TEMPORAL_READINESS_SCRIPT = """import asyncio
+import sys
 import time
+from datetime import timedelta
 
 from temporalio.api.workflowservice.v1 import DescribeNamespaceRequest
 from temporalio.client import Client
@@ -79,16 +81,30 @@ from temporalio.client import Client
 async def ready():
     # Stay inside the driver's per-command budget.
     deadline = time.monotonic() + 200
-    while time.monotonic() < deadline:
+    attempts = 0
+    last_failure = 'no attempt completed'
+    while (remaining := deadline - time.monotonic()) > 0:
+        attempts += 1
+        stage = 'connect'
         try:
-            client = await Client.connect('temporal:7233')
-            await client.workflow_service.describe_namespace(
-                DescribeNamespaceRequest(namespace='default')
-            )
+            # Bound both awaits together so a stalled SDK call cannot hide
+            # the overall deadline or prevent a fresh connection attempt.
+            budget = min(10, remaining)
+            async with asyncio.timeout(budget):
+                client = await Client.connect('temporal:7233')
+                stage = 'describe_namespace'
+                await client.workflow_service.describe_namespace(
+                    DescribeNamespaceRequest(namespace='default'),
+                    timeout=timedelta(seconds=budget),
+                )
             return
-        except Exception:
-            await asyncio.sleep(2)
-    raise SystemExit('Temporal did not serve the default namespace')
+        except Exception as exc:
+            last_failure = f'{stage}: {type(exc).__name__}: {exc}'
+            print(f'Temporal readiness attempt {attempts} failed during '
+                  f'{last_failure}', file=sys.stderr, flush=True)
+            await asyncio.sleep(min(2, max(0, deadline - time.monotonic())))
+    raise SystemExit('Temporal did not serve the default namespace '
+                     f'after {attempts} attempts; last failure: {last_failure}')
 
 
 asyncio.run(ready())
