@@ -85,7 +85,13 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
 )
-from moonmind.security.cloud_assessments import CloudImage, summarize_cloud_assessment
+from moonmind.security.cloud_assessments import (
+    CloudImage,
+    summarize_cloud_assessment,
+)
+from moonmind.security.cloud_assessments import (
+    parse_report as parse_cloud_report,
+)
 from moonmind.security.container_services import (
     SERVICE_DIGEST_LABEL,
     SERVICE_LABEL,
@@ -5170,11 +5176,29 @@ class DockerContainerJobBackend:
                 continue
             else:
                 try:
-                    native = json.loads(payload)
+                    try:
+                        native = json.loads(payload)
+                    except (ValueError, RecursionError):
+                        native, problem = parse_cloud_report(payload)
+                        if problem:
+                            limitations.append(problem)
+                        if not native or problem != "report_truncated":
+                            raise ValueError(
+                                "native report has no complete records"
+                            ) from None
+                        # Reuse the OCSF owner's complete-prefix recovery. Never
+                        # publish the incomplete tail, but keep its sole local
+                        # copy through the existing truncated-output lifecycle.
+                        status = ArtifactCollectionStatus.TRUNCATED
+                        limitations.append("incomplete_native_tail_withheld")
                     sanitized = _redact_strings(redact_sensitive_payload(native))
                     if sanitized != native:
-                        payload = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
                         limitations.append("credential_shaped_text_redacted")
+                    if (
+                        sanitized != native
+                        or status == ArtifactCollectionStatus.TRUNCATED
+                    ):
+                        payload = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
                     if len(payload) > cloud.max_report_bytes:
                         raise ValueError("sanitized report exceeds admission")
                 except (ValueError, TypeError, RecursionError):

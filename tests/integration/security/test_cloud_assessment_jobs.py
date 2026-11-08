@@ -642,11 +642,18 @@ async def test_unusable_output_and_cancellation_stay_incomplete_and_readable(
         # Complete records written before the stop are kept as findings.
         assert summary["outcome"] == "findings"
         assert "report_truncated" in summary["limitations"]
-    # Published evidence outlives job storage cleanup; an output collection
-    # declined to publish keeps storage, since it holds the only copy.
+    # Rejected or truncated publication is not a retained copy of the complete
+    # source. Keep it for recovery while already-published summaries stay usable.
+    native = artifact_names(harness, accepted)["report"]
+    assert native["collectionStatus"] == (
+        "truncated" if scenario == "canceled" else "rejected"
+    )
+    original = (storage.outputs / native["relativePath"]).read_bytes()
     assert attachments.release(
         storage, ownership_token=f"{accepted.job_id}:v1", retain_outputs=False
-    ) == ("outputs_retained" if scenario == "oversize" else "removed")
+    ) == "outputs_retained"
+    assert (storage.outputs / native["relativePath"]).read_bytes() == original
+    assert not storage.inputs.exists() and not storage.workload_credentials.exists()
     retained = artifact_names(harness, accepted)["summary"]["artifactRef"]
     _, payload = await environment.service.read(
         artifact_id=retained, access=ArtifactAccessContext.for_execution("assessment")
@@ -658,10 +665,19 @@ async def test_echoed_session_values_never_reach_published_evidence(
     environment, tmp_path, monkeypatch, provider
 ):
     harness = Harness(environment, tmp_path, monkeypatch, provider)
-    summary, _, _, accepted = await harness.run(assessment(), "echo", scenario="echo")
+    summary, _, storage, accepted = await harness.run(assessment(), "echo", scenario="echo")
     native = harness.published[f"{accepted.job_id}-output-report.json"]
-    assert b"[redacted]" in native
+    assert b"[REDACTED]" in native
     harness.assert_no_seed()
+    source = json.loads(
+        (storage.outputs / artifact_names(harness, accepted)["report"]["relativePath"]).read_bytes()
+    )
+    retained = json.loads(native)
+    assert len(retained) == len(source)
+    for original, sanitized in zip(source, retained, strict=True):
+        assert sanitized["finding_info"]["uid"] == original["finding_info"]["uid"]
+        assert sanitized["metadata"]["event_code"] == original["metadata"]["event_code"]
+        assert sanitized["resources"] == original["resources"]
     assert summary["status"] == "complete"
 
 

@@ -552,3 +552,80 @@ async def test_legacy_scoped_none_output_keeps_recorded_operator_access(
         ].text == "legacy retained logs"
         assert artifact.redaction_level is TemporalArtifactRedactionLevel.NONE
         assert not await job.service._repository.list_links(artifact.artifact_id)
+
+
+@pytest.mark.parametrize("terminal", ["canceled", "succeeded"])
+async def test_truncated_cloud_native_retains_sanitized_complete_records(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+    terminal,
+):
+    from moonmind.workflows.temporal import container_job_attachments as attachments
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", session_factory)
+    async with session_factory() as session:
+        job = await setup_job(session, tmp_path)
+        job.request.terminal_state = terminal
+        backend = DockerContainerJobBackend(
+            workspace_root=tmp_path,
+            evidence_publisher=worker_runtime._container_job_evidence_publisher(
+                job.service
+            ),
+        )
+        storage = backend._attachment_storage(job.request)
+        attachments.claim(storage, job.request.ownership_token)
+        storage.outputs.mkdir()
+        record = json.loads(cloud.fixture("basic.ocsf.json"))[0]
+        if terminal == "succeeded":
+            record["status_code"] = "PASS"
+        record["unmapped"]["apiKey"] = "synthetic-recovered-canary"
+        record["unmapped"]["notes"] = "token=synthetic-recovered-canary"
+        original = (
+            b"["
+            + json.dumps(record).encode()
+            + b', {"apiKey":"synthetic-incomplete-canary'
+        )
+        report_output = next(
+            item for item in job.request.request.spec.outputs if item.name == "report"
+        )
+        path = storage.outputs / report_output.relative_path
+        path.parent.mkdir(parents=True)
+        path.write_bytes(original)
+        manifest = await job.activity.run(
+            backend._collect_declared_outputs, job.request
+        )
+        report = next(item for item in manifest if item.name == "report")
+        assert report.collection_status == "truncated" and report.artifact_ref
+        _, body = await job.service.read(
+            artifact_id=report.artifact_ref, access=access_for_test("operator")
+        )
+        assert (
+            b"synthetic-recovered-canary" not in body
+            and b"synthetic-incomplete-canary" not in body
+        )
+        retained = json.loads(body)
+        assert len(retained) == 1
+        assert retained[0]["finding_info"]["uid"] == record["finding_info"]["uid"]
+        assert retained[0]["resources"] == record["resources"]
+        assert report.sha256 == hashlib.sha256(body).hexdigest()
+        assert path.read_bytes() == original
+        summary = next(item for item in manifest if item.name == "summary")
+        _, body = await job.service.read(
+            artifact_id=summary.artifact_ref, access=access_for_test("operator")
+        )
+        summary = json.loads(body)
+        assert summary["status"] == "partial" and summary["checkEvidence"]
+        assert summary["outcome"] != "clean"
+        assert {
+            "report_truncated",
+            "incomplete_native_tail_withheld",
+            "credential_shaped_text_redacted",
+        } <= set(summary["limitations"])
+        assert ("execution_canceled" in summary["limitations"]) == (
+            terminal == "canceled"
+        )
+        assert summary["nativeRef"] == report.artifact_ref
