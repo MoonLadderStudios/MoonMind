@@ -43,11 +43,12 @@ class AssessmentAuthorization(AssessmentEngagementTerms):
             raise ValueError(
                 "authorization records require explicit CPU and memory limits"
             )
-        if (
-            "web-assessment" in self.scope.profile_refs
-            and self.scope.max_requests_per_second is None
-        ):
-            raise ValueError("web authorizations require an explicit request rate")
+        if {"web-assessment", "tls-assessment"}.intersection(
+            self.scope.profile_refs
+        ) and self.scope.max_requests_per_second is None:
+            raise ValueError(
+                "web and TLS authorizations require an explicit request rate"
+            )
         return self
 
 

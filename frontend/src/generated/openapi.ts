@@ -6839,6 +6839,7 @@ export interface components {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
             feedRefresh?: components["schemas"]["FeedRefresh"] | null;
             imageAssessment?: components["schemas"]["ImageAssessment"] | null;
+            tlsAssessment?: components["schemas"]["TLSAssessment"] | null;
             webAssessment?: components["schemas"]["WebAssessment"] | null;
             cloudAssessment?: components["schemas"]["CloudAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
@@ -13850,6 +13851,36 @@ export interface components {
              * @default false
              */
             preserved: boolean;
+        };
+        /** TLSAssessment */
+        TLSAssessment: {
+            /** Origin */
+            origin: string;
+            /** Assessmentref */
+            assessmentRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef: string;
+            /** Protocols */
+            protocols?: ("TLSv1" | "TLSv1.1" | "TLSv1.2" | "TLSv1.3")[];
+            /** Ciphers */
+            ciphers?: string[];
+            /** Trustartifactref */
+            trustArtifactRef?: string | null;
+            /**
+             * Timeoutseconds
+             * @default 120
+             */
+            timeoutSeconds: number;
+            /**
+             * Maxrequestspersecond
+             * @default 1
+             */
+            maxRequestsPerSecond: number;
+            /**
+             * Outputdirectory
+             * @default tls-assessment
+             */
+            outputDirectory: string;
         };
         /**
          * TemporalArtifactEncryption

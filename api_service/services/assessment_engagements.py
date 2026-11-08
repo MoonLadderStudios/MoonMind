@@ -241,9 +241,9 @@ def build_assessment_proposal(
                 f"Each job: {scope.max_job_seconds} seconds, {scope.max_cpu_millis} millicores, {scope.max_memory_mib} MiB.",
                 f"Cumulative reserved job time: {record.max_total_job_seconds} seconds; retries do not renew reservations.",
                 (
-                    f"Web request rate per job: {scope.max_requests_per_second}/second."
+                    f"Web/TLS request rate per job: {scope.max_requests_per_second}/second."
                     if scope.max_requests_per_second
-                    else "No separate web request rate is admitted."
+                    else "No separate web/TLS request rate is admitted."
                 ),
             ],
         ),

@@ -80,13 +80,15 @@ def fixture_certificate(root):
 
 
 @contextmanager
-def fixture_servers(root, *, bind="127.0.0.1", http_port=0, https_port=0):
+def fixture_servers(root, *, bind="127.0.0.1", http_port=0, https_port=0, events=None):
     clear = ThreadingHTTPServer((bind, http_port), FixtureHandler)
     tls = ThreadingHTTPServer((bind, https_port), FixtureHandler)
     cert, key = fixture_certificate(root)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert, key)
+    if events is not None:
+        ctx.set_servername_callback(lambda _socket, name, _context: events.append(name))
     tls.socket = ctx.wrap_socket(tls.socket, server_side=True)
     threads = [
         threading.Thread(target=s.serve_forever, daemon=True) for s in (clear, tls)
@@ -103,15 +105,18 @@ def fixture_servers(root, *, bind="127.0.0.1", http_port=0, https_port=0):
             t.join(timeout=5)
 
 
-@pytest.mark.parametrize("adapter", ["sdk", "chromium"])
+@pytest.mark.parametrize("adapter", ["sdk", "chromium", "tls"])
 def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
     squid, chromium = shutil.which("squid"), shutil.which("chromium")
     assert squid, "test-runtime must supply the proxy fixture"
     if adapter == "chromium":
         assert chromium, "test-runtime must supply the browser fixture"
-    proxy_address = "127.0.0.2" if adapter == "sdk" else "127.0.0.3"
+    proxy_address = {"sdk": "127.0.0.2", "chromium": "127.0.0.3", "tls": "127.0.0.4"}[
+        adapter
+    ]
+    tls_events = []
     with (
-        fixture_servers(tmp_path) as (http_port, https_port),
+        fixture_servers(tmp_path, events=tls_events) as (http_port, https_port),
         tempfile.TemporaryDirectory(prefix="moonmind-test-scoped-proxy-") as proxy_root,
     ):
         proxy_path = Path(proxy_root)
@@ -267,6 +272,51 @@ def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
                 assert child.returncode == 0 and child.stdout.strip() == b"200", (
                     child.stderr.decode()
                 )
+                if adapter == "tls":
+                    from moonmind.schemas.repository_scanner_models import TLSAssessment
+                    from moonmind.security.tls_assessment_runner import inspect_tls
+                    from moonmind.security.tls_assessments import (
+                        summarize_tls_assessment,
+                    )
+
+                    assessment = TLSAssessment(
+                        origin=f"https://feeds.example.test:{https_port}",
+                        egress_policy_ref="connection-fixtures",
+                        protocols=["TLSv1.2", "TLSv1.3"],
+                        ciphers=["NOT-A-REAL-CIPHER"],
+                        max_requests_per_second=10,
+                        timeout_seconds=30,
+                    )
+                    execution = inspect_tls(assessment, tmp_path / "tls", environ=env)
+                    summary = summarize_tls_assessment(
+                        assessment, execution, "art_fixture"
+                    )
+                    assert execution["probes"][0]["status"] == "observed"
+                    assert execution["probes"][0]["certificates"]
+                    assert execution["probes"][0]["trustResult"] == "untrusted"
+                    assert execution["probes"][1]["status"] == "unsupported_client"
+                    assert summary.status == "partial" and summary.unperformed_checks
+                    assert "feeds.example.test" in tls_events
+                    before_denials = len(tls_events)
+                    for index, origin in enumerate(
+                        (
+                            f"https://unrelated.example.test:{https_port}",
+                            f"https://feeds.example.test:{http_port}",
+                        )
+                    ):
+                        denied = assessment.model_copy(
+                            update={
+                                "origin": origin,
+                                "protocols": ["TLSv1.2"],
+                                "ciphers": [],
+                            }
+                        )
+                        blocked = inspect_tls(
+                            denied, tmp_path / f"tls-denied-{index}", environ=env
+                        )
+                        assert blocked["probes"][0]["status"] == "blocked_handshake"
+                        assert not blocked["probes"][0]["certificates"]
+                    assert len(tls_events) == before_denials
                 if adapter == "chromium":
                     browser = subprocess.run(
                         [
@@ -300,6 +350,10 @@ def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
                     proxy.kill()
                     proxy.wait(timeout=5)
         access = log_path.read_bytes()
+        if adapter == "tls":
+            assert f"CONNECT feeds.example.test:{https_port}".encode() in access
+            assert f"CONNECT unrelated.example.test:{https_port}".encode() in access
+            assert f"CONNECT feeds.example.test:{http_port}".encode() in access
         assert denied_connection_count(access, client_address="127.0.0.1") >= 5
         assert (
             1
@@ -316,3 +370,51 @@ if __name__ == "__main__":
         fixture_servers(Path(root), bind="0.0.0.0", http_port=8080, https_port=8443),
     ):
         threading.Event().wait()
+
+
+@pytest.mark.parametrize(
+    "hostname,expired",
+    [
+        ("tls.example.test", False),
+        ("tls.example.test", True),
+        ("wrong.example.test", False),
+    ],
+)
+def test_tls_fixture_chain_and_controlled_clock(tmp_path, hostname, expired):
+    """Pure qualification of the same certificate fixture used inside the image."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    from moonmind.security.tls_assessment_runner import certificate_evidence
+    from tests.integration.security.tls_assessment_fixture import (
+        CLOCK,
+        HOST,
+        certificates,
+    )
+
+    chain, _key, ca = certificates(tmp_path, hostname=hostname, expired=expired)
+    evidence, findings, matched = certificate_evidence(chain.read_bytes(), HOST, CLOCK)
+    assert len(evidence) == 2
+    assert matched is (hostname == HOST)
+    assert ("certificate_expired" in findings) is expired
+    parsed = x509.load_pem_x509_certificates(chain.read_bytes())
+    leaf, intermediate = tmp_path / "leaf.pem", tmp_path / "intermediate.pem"
+    leaf.write_bytes(parsed[0].public_bytes(serialization.Encoding.PEM))
+    intermediate.write_bytes(parsed[1].public_bytes(serialization.Encoding.PEM))
+    verified = subprocess.run(
+        [
+            "openssl",
+            "verify",
+            "-CAfile",
+            str(ca),
+            "-untrusted",
+            str(intermediate),
+            "-attime",
+            str(int(CLOCK.timestamp())),
+            str(leaf),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert (verified.returncode == 0) is (not expired), verified.stderr.decode()

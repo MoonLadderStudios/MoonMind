@@ -37,6 +37,7 @@ from moonmind.schemas.repository_scanner_models import (
     FeedRefresh,
     ImageAssessment,
     RepositoryScan,
+    TLSAssessment,
     WebAssessment,
 )
 
@@ -476,6 +477,7 @@ class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
     image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
+    tls_assessment: TLSAssessment | None = Field(None, alias="tlsAssessment")
     web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
     cloud_assessment: CloudAssessment | None = Field(None, alias="cloudAssessment")
     workload_profile: WorkloadProfileSelection | None = Field(
@@ -583,6 +585,7 @@ class ContainerJobSpec(ContractModel):
                 self.image is not None
                 or self.repository_scan is not None
                 or self.image_assessment is not None
+                or self.tls_assessment is not None
                 or self.web_assessment is not None
                 or self.cloud_assessment is not None
             ):
@@ -622,8 +625,10 @@ class ContainerJobSpec(ContractModel):
         from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
+        from moonmind.security.tls_assessments import validate_tls_assessment_job
         from moonmind.security.web_assessments import validate_web_assessment_job
 
+        validate_tls_assessment_job(self)
         validate_scanner_job(self)
         validate_feed_refresh_job(self)
         validate_image_assessment_job(self)

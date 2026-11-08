@@ -56,6 +56,29 @@ def test_ui_and_direct_api_plan_aliases_compile_identically():
     assert "publish" in " ".join(first["limitations"]).lower()
 
 
+def test_tls_review_discloses_the_admitted_request_rate():
+    auth = record()
+    auth = auth.model_copy(
+        update={
+            "scope": auth.scope.model_copy(
+                update={
+                    "profile_refs": ("tls-assessment",),
+                    "action_classes": ("tls-inspection",),
+                    "max_requests_per_second": 3,
+                }
+            )
+        }
+    )
+    review = build_assessment_proposal(payload(), auth)
+    limits = next(
+        section["items"]
+        for section in review["sections"]
+        if section["label"] == "Rate and resource limits"
+    )
+    assert "Web/TLS request rate per job: 3/second." in limits
+    assert review["scope"]["maxRequestsPerSecond"] == 3
+
+
 def test_exact_review_accepts_and_any_plan_or_scope_edit_requires_review_again():
     auth = record()
     original = payload()
