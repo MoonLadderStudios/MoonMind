@@ -749,3 +749,180 @@ def test_native_numeric_snapshot_cannot_retarget_another_public_address():
         with pytest.raises(RuntimeError, match="numeric"):
             value._validate_native_answers({"93.184.216.34": addresses})
     value._validate_native_answers({"93.184.216.34": ["93.184.216.34"]})
+
+
+@pytest.mark.asyncio
+async def test_production_runner_preserves_native_archives_but_redacts_diagnostics(
+    tmp_path,
+):
+    import sys
+
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    executable = tmp_path / "docker-archive-fixture"
+    executable.write_text(
+        "#!" + sys.executable + "\n"
+        "import io,json,sys,tarfile\n"
+        'payload=json.dumps({"authority":"session.example.com:587"}).encode()\n'
+        "stream=io.BytesIO()\n"
+        'with tarfile.open(fileobj=stream,mode="w") as archive:\n'
+        ' info=tarfile.TarInfo("snapshot.json"); info.size=len(payload)\n'
+        " archive.addfile(info,io.BytesIO(payload))\n"
+        "sys.stdout.buffer.write(stream.getvalue())\n"
+        'sys.stderr.write("password=fixture-private-value")\n'
+    )
+    executable.chmod(0o700)
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, docker_binary=str(executable)
+    )
+    code, stdout, stderr = await backend._run(
+        ("cp", "a" * 64 + ":/var/lib/moonmind-native-egress/snapshot.json", "-")
+    )
+    assert code == 0
+    with tarfile.open(fileobj=io.BytesIO(stdout), mode="r:") as archive:
+        assert json.load(archive.extractfile("snapshot.json")) == {
+            "authority": "session.example.com:587"
+        }
+    assert b"fixture-private-value" not in stderr
+    _, ordinary, _ = await backend._run(("logs", "a" * 64))
+    assert b"session.example.com:587" not in ordinary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interruption",
+    ["lifecycle", "volume-rm", "network-rm", "completion-ack", "final-ack"],
+)
+async def test_native_cleanup_reconciles_durable_final_receipt_after_interruption(
+    lease_setup, native_setup, interruption
+):
+    _, _, request, backend, published = lease_setup
+    prototype, docker = native_setup
+    requested = selection().model_copy(
+        update={
+            "targets": (
+                selection()
+                .targets[0]
+                .model_copy(
+                    update={"hosts": ("session.example.com",), "ports": (587,)}
+                ),
+            )
+        }
+    )
+    request.request.spec.workload_profile = WorkloadProfileSelection(
+        profileRef="native", mode="probe", nativeNetwork=requested
+    )
+    backend._runner = docker
+    scoped = ScopedEgressLease(
+        docker,
+        prototype.policy.model_copy(
+            update={
+                "policy_ref": request.request.spec.egress_policy_ref,
+                "native_network": requested,
+            }
+        ),
+        ownership=request.ownership_token,
+        job_id=request.job_id,
+        workload_ref=backend._name(request),
+        native_selection=requested,
+    )
+    initial = await scoped.prepare(timeout_seconds=120)
+    durable = {}
+    original_publish = backend._publish
+
+    async def publish(req, name, data):
+        ref = await original_publish(req, name, data)
+        durable[name] = (ref, data)
+        if (
+            interruption == "lifecycle"
+            and name.endswith("-egress-lifecycle.json")
+            or interruption == "final-ack"
+            and name.endswith("-native-egress-final.json")
+        ):
+            raise RuntimeError("publication acknowledgement lost")
+        return ref
+
+    async def recover(req, name):
+        return durable.get(name)
+
+    backend._publish = publish
+    backend._reconcile_evidence = recover
+
+    async def interrupt_rm(args):
+        if (
+            interruption == "volume-rm"
+            and tuple(args[:2]) == ("volume", "rm")
+            or interruption == "network-rm"
+            and tuple(args[:2]) == ("network", "rm")
+        ):
+            return 1, b"", b"interrupted cleanup"
+        return await docker(args)
+
+    backend._runner = interrupt_rm
+    if interruption == "lifecycle":
+        with pytest.raises(RuntimeError, match="acknowledgement"):
+            await backend.cleanup(request)
+    else:
+        await backend.cleanup(request)
+    verified = durable[request.job_id + "-native-egress-final.json"]
+    assert (
+        json.loads(verified[1])["nativeNetwork"]["configDigest"]
+        == initial["nativeNetwork"]["configDigest"]
+    )
+    cp_count = len([call for call in docker.calls if call[0] == "cp"])
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    # A fresh worker has no process-local receipt or attachment ledger.
+    restored = DockerContainerJobBackend(
+        workspace_root=backend._workspace_root,
+        settings=backend._settings,
+        command_runner=docker,
+        evidence_publisher=original_publish,
+        evidence_reconciler=recover,
+    )
+    result = await restored.cleanup(request)
+    assert result.cleanup_succeeded is True
+    assert not docker.volumes
+    assert scoped.gateway_ref not in docker.containers
+    assert scoped.network_ref not in docker.networks
+    assert len([call for call in docker.calls if call[0] == "cp"]) == cp_count
+    assert (
+        published[request.job_id + "-native-egress-final.json"]["nativeNetwork"][
+            "attempts"
+        ]
+        == 0
+    )
+    assert (
+        published[request.job_id + "-egress-lifecycle.json"]["nativeEgressFinalRef"]
+        == verified[0]
+    )
+
+
+@pytest.mark.asyncio
+async def test_expanded_dns_snapshot_rejected_before_owned_allocation(
+    native_setup, monkeypatch
+):
+    value, docker = native_setup
+    data = selection().model_dump(by_alias=True)
+    data["targets"][0]["hosts"] = [f"host{i}.example.com" for i in range(256)]
+    requested = NativeNetworkSelection.model_validate(data)
+    value.native_selection = requested
+    value.policy = value.policy.model_copy(update={"native_network": requested})
+    monkeypatch.setattr(
+        scoped_egress.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", (f"93.184.216.{i}", 8443)) for i in range(1, 33)
+        ],
+    )
+    with pytest.raises(ValueError, match="transport"):
+        await value.prepare(timeout_seconds=120)
+    assert not docker.volumes
+    assert not any(
+        call[0] == "create" or call[:2] == ("network", "create")
+        for call in docker.calls
+    )

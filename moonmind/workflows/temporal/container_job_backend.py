@@ -183,6 +183,7 @@ from moonmind.workloads.gpu import (
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
+EvidenceReconciler = Callable[[ContainerJobActivityRequest, str], Awaitable[tuple[str, bytes] | None]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 AssessmentAuthority = Callable[[ContainerJobActivityRequest, bool], AbstractAsyncContextManager[datetime | None]]
 AssessmentEvidenceReader = Callable[[ContainerJobActivityRequest], Awaitable[dict | None]]
@@ -622,6 +623,7 @@ class DockerContainerJobBackend:
         backend_ref: str = "system",
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
+        evidence_reconciler: EvidenceReconciler | None = None,
         artifact_reader: ArtifactReader | None = None,
         projection_writer: ProjectionWriter | None = None,
         assessment_authority: AssessmentAuthority | None = None,
@@ -652,6 +654,7 @@ class DockerContainerJobBackend:
         self._runner = command_runner or self._run
         self._uses_default_runner = command_runner is None
         self._publish = evidence_publisher
+        self._reconcile_evidence = evidence_reconciler
         self._read_artifact = artifact_reader
         self._write_projection = projection_writer
         self._assessment_authority = assessment_authority
@@ -703,11 +706,29 @@ class DockerContainerJobBackend:
         env = os.environ.copy()
         if self._docker_host:
             env["DOCKER_HOST"] = self._docker_host
+        # Only fixed native evidence archives use binary transport. Text commands
+        # and stderr retain the shared redaction boundary; archive contents are
+        # validated by ScopedEgressLease before diagnostic publication.
+        archive = (
+            len(args) == 3
+            and args[0] == "cp"
+            and args[2] == "-"
+            and re.fullmatch(
+                r"[0-9a-f]{64}:/var/lib/moonmind-native-egress(?:/(?:startup|snapshot)\.json)?",
+                args[1],
+            )
+            is not None
+        )
         return await run_runtime_command(
             (self._docker_binary, *args),
             env=env,
             on_output=on_output,
             output_limit_bytes=_PULL_DIAGNOSTICS_MAX_BYTES if on_output else None,
+            **(
+                {"binary_stdout_limit_bytes": 1048576, "timeout_seconds": 30}
+                if archive
+                else {}
+            ),
         )
 
     async def _checked(self, *args: str) -> str:
@@ -5630,7 +5651,8 @@ class DockerContainerJobBackend:
                 workload_ref=request.container_ref or self._name(request),
                 native_selection=(
                     request.request.spec.workload_profile.native_network
-                    if request.request.spec.workload_profile else None
+                    if request.request.spec.workload_profile
+                    else None
                 ),
             )
             if request.request.spec.egress_policy_ref
@@ -5640,12 +5662,37 @@ class DockerContainerJobBackend:
             try:
                 if scoped.native_selection is not None:
                     await scoped.stop_native()
-                    final_evidence = await scoped.terminal_evidence()
-                    native_final_ref = await self._publish_scoped_egress(
-                        request, final_evidence, suffix="native-egress-final",
+                    retained = (
+                        await self._reconcile_evidence(
+                            request, f"{request.job_id}-native-egress-final.json"
+                        )
+                        if self._reconcile_evidence is not None
+                        else None
                     )
-                    if ("nativeNetwork" not in final_evidence
-                            and "nativeNoUseWitness" not in final_evidence):
+                    if retained is not None:
+                        native_final_ref, payload = retained
+                        if len(payload) > 1048576:
+                            raise RuntimeError(
+                                "native final receipt exceeds evidence bound"
+                            )
+                        final_evidence = json.loads(payload)
+                        scoped.validate_final_receipt(final_evidence)
+                        if (
+                            final_evidence.get("profileRef")
+                            != request.request.spec.egress_policy_ref
+                        ):
+                            raise RuntimeError("native final receipt policy mismatch")
+                    else:
+                        final_evidence = await scoped.terminal_evidence()
+                        native_final_ref = await self._publish_scoped_egress(
+                            request,
+                            final_evidence,
+                            suffix="native-egress-final",
+                        )
+                    if (
+                        "nativeNetwork" not in final_evidence
+                        and "nativeNoUseWitness" not in final_evidence
+                    ):
                         # Publishing a read failure is not retaining the counters.
                         # Preserve the stopped owner and volume for recovery.
                         raise RuntimeError("native final counters were not retained")

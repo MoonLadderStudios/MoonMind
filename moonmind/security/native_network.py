@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from typing import Literal
 
@@ -10,6 +11,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 MAX_NATIVE_ADDRESSES = 256
 MAX_NATIVE_ENDPOINTS = 1024
+# JSON bodies are base64-encoded into single Docker --env arguments. This leaves
+# room below Linux's 128 KiB per-argument floor, including the environment key.
+MAX_NATIVE_TRANSPORT_BYTES = 90 * 1024
+
+
+def require_native_transport_bytes(payload: bytes, *, overhead: int = 0) -> None:
+    if len(payload) + overhead > MAX_NATIVE_TRANSPORT_BYTES:
+        raise ValueError(
+            "native transport exceeds serialized byte budget; narrow targets, ports or exclusions"
+        )
+
+
 _DNS = re.compile(
     r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$"
 )
@@ -19,7 +32,7 @@ _DOCKER = r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
 def canonical_host(value: str) -> str:
     """Accept exact DNS or canonical IPv4 networks, never resolver shorthand."""
     if not isinstance(value, str):
-        raise ValueError("native targets must be strings")  # noqa: TRY004 - Pydantic validation error
+        raise ValueError("native targets must be strings")  # noqa: TRY004
     try:
         network = ipaddress.IPv4Network(value, strict=True)
     except ValueError:
@@ -78,6 +91,8 @@ class NativeNetworkTarget(_Model):
     @field_validator("ports", mode="before")
     @classmethod
     def normalize_ports(cls, values):
+        if not isinstance(values, (list, tuple)):
+            raise ValueError("native ports require a list")  # noqa: TRY004
         if any(type(value) is not int or not 1 <= value <= 65535 for value in values):
             raise ValueError("native ports must be bounded integers")
         return tuple(sorted(set(values)))
@@ -151,6 +166,29 @@ class NativeNetworkSelection(_Model):
             > MAX_NATIVE_ENDPOINTS
         ):
             raise ValueError("native selection exceeds endpoint bound")
+        # The endpoint product can fit its count limit while long repeated DNS
+        # names overflow execve's per-argument limit. Reserve the bounded config
+        # wrapper and use the longest canonical IPv4 string before resolution.
+        endpoints = sorted(
+            {entry for target in self.targets for entry in target.endpoints()}
+        )
+        require_native_transport_bytes(
+            json.dumps(
+                [
+                    {
+                        "authority": f"{host}:{port}",
+                        "address": "255.255.255.254",
+                        "port": port,
+                    }
+                    for host, port in endpoints
+                ],
+                separators=(",", ":"),
+            ).encode(),
+            overhead=1024,
+        )
+        require_native_transport_bytes(
+            self.model_dump_json(by_alias=True).encode(), overhead=1024
+        )
         identities = {}
         for target in self.targets:
             route = (

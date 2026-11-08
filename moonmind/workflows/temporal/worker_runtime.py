@@ -4,6 +4,7 @@ import uuid
 """Temporal worker runtime entrypoint."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import mimetypes
@@ -2449,13 +2450,16 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
     async def publish(request, name: str, payload: bytes) -> str:
         principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
         content_type = _container_job_evidence_content_type(name)
-        artifact, _ = await artifact_service.create(
+        artifact, _ = await artifact_service.create_for_activity(
             principal=principal,
             content_type=content_type,
             metadata_json={
                 "artifact_type": "container_job.evidence",
                 "name": name,
                 "container_job_id": request.job_id,
+                "ownership_digest": hashlib.sha256(
+                    request.ownership_token.encode()
+                ).hexdigest(),
             },
         )
         await artifact_service.write_complete(
@@ -2467,6 +2471,84 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
         return artifact.artifact_id
 
     return publish
+
+
+def _container_job_evidence_reconciler(artifact_service: TemporalArtifactService):
+    """Recover a completed native final artifact under current Activity authority."""
+    from temporalio import activity
+
+    from api_service.db.models import TemporalArtifactStatus
+    from api_service.services.assessment_authorizations import (
+        validate_job_assessment_authority,
+    )
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    async def recover(request, name):
+        if name != f"{request.job_id}-native-egress-final.json":
+            raise ValueError("unsupported container job evidence receipt")
+        async with get_async_session_context() as session:
+            record = await _container_job_admitted_record(session, request)
+            await validate_job_assessment_authority(
+                session, record, request.request, live=False
+            )
+        info = activity.info()
+        access = ArtifactAccessContext.for_activity()
+        candidates = await artifact_service.list_for_execution(
+            namespace=info.workflow_namespace,
+            workflow_id=info.workflow_id,
+            run_id=info.workflow_run_id,
+            access=access,
+            link_type="output.artifact",
+        )
+        principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        ownership = hashlib.sha256(request.ownership_token.encode()).hexdigest()
+        receipts = []
+        for artifact in candidates:
+            metadata = artifact.metadata_json or {}
+            if (
+                metadata.get("artifact_type") != "container_job.evidence"
+                or metadata.get("container_job_id") != request.job_id
+                or metadata.get("name") != name
+                or metadata.get("ownership_digest") != ownership
+                or artifact.created_by_principal != principal
+                or artifact.status != TemporalArtifactStatus.COMPLETE
+            ):
+                continue
+            if (
+                type(artifact.size_bytes) is not int
+                or not 0 < artifact.size_bytes <= 1048576
+            ):
+                raise RuntimeError("native final artifact has invalid size")
+            # Read through the owner again: listing is not a raw-read grant.
+            actual, payload = await artifact_service.read(
+                artifact_id=artifact.artifact_id, access=access
+            )
+            if (
+                actual.artifact_id != artifact.artifact_id
+                or len(payload) != artifact.size_bytes
+                or hashlib.sha256(payload).hexdigest() != artifact.sha256
+            ):
+                raise RuntimeError("native final artifact integrity mismatch")
+            evidence = json.loads(payload)
+            if not isinstance(evidence, dict):
+                raise RuntimeError(  # noqa: TRY004 - corrupt persisted evidence
+                    "native final artifact is malformed"
+                )
+            if evidence.get("coverage") == "unverified":
+                continue
+            if not (
+                isinstance(evidence.get("nativeNetwork"), dict)
+                or isinstance(evidence.get("nativeNoUseWitness"), dict)
+            ):
+                raise RuntimeError(  # noqa: TRY004 - corrupt persisted evidence
+                    "native final artifact has no verified counter receipt"
+                )
+            receipts.append((artifact.artifact_id, payload))
+        if len({payload for _, payload in receipts}) > 1:
+            raise RuntimeError("conflicting native final artifact receipts")
+        return min(receipts, key=lambda item: item[0]) if receipts else None
+
+    return recover
 
 
 def _container_job_artifact_reader(artifact_service: TemporalArtifactService):
@@ -3121,6 +3203,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 backend_ref=container_backend_settings.default_backend_ref,
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
                 evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                evidence_reconciler=_container_job_evidence_reconciler(artifact_service),
                 artifact_reader=_container_job_artifact_reader(artifact_service),
                 assessment_authority=_container_job_assessment_authority(container_backend_settings),
                 assessment_evidence_reader=_container_job_assessment_evidence_reader(),

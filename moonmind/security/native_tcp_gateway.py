@@ -419,6 +419,13 @@ class NativeTCPGateway:
                 allowed = (
                     *allowed,
                     [f"Host: {authority}", "Proxy-Connection: Keep-Alive"],
+                    # Bookworm curl preserves an empty field for --user-agent
+                    # ''. No nonempty client metadata is admitted or forwarded.
+                    [
+                        f"Host: {authority}",
+                        "User-Agent: ",
+                        "Proxy-Connection: Keep-Alive",
+                    ],
                 )
             if lines[1:-2] not in allowed:
                 raise ValueError("header")

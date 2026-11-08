@@ -275,3 +275,11 @@ def test_narrowed_target_does_not_inherit_unrelated_host_exclusions():
         },
     ]
     require_native_subset(native(), NativeNetworkSelection.model_validate(authority))
+
+
+@pytest.mark.parametrize("ports", [None, 443, "443", {443: "ignored"}])
+def test_native_ports_require_a_sequence_not_coercible_container(ports):
+    data = native().model_dump(by_alias=True)
+    data["targets"][0]["ports"] = ports
+    with pytest.raises(ValueError):
+        NativeNetworkSelection.model_validate(data)

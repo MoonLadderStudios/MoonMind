@@ -152,7 +152,8 @@ async def main():
     directory = Path(sys.argv[1])
     cert, key = certificate(directory)
     fixture = SMTPFixture(cert, key, directory / "counts.json")
-    server = await asyncio.start_server(fixture.handle, "0.0.0.0", 2525)
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 2525
+    server = await asyncio.start_server(fixture.handle, "0.0.0.0", port)
     (directory / "ready").write_text("ready")
     async with server:
         await server.serve_forever()

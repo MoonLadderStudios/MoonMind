@@ -206,7 +206,9 @@ class DockerLab:
             egress, "_EXPECTED_GATEWAY_NETWORKS", frozenset(networks.values())
         )
 
-    async def target(self, suffix, network, policy="native-fixtures", address=None):
+    async def target(
+        self, suffix, network, policy="native-fixtures", address=None, port=2525
+    ):
         name = self.prefix + "-" + suffix
         self.containers.append(name)
         await self.run(
@@ -217,6 +219,7 @@ class DockerLab:
             "--network",
             network,
             *(["--ip", address] if address else []),
+            *(["--user", "0:0"] if port < 1024 else []),
             "--label",
             "moonmind.test.owner=" + self.prefix,
             "--label",
@@ -228,6 +231,7 @@ class DockerLab:
             self.image,
             "/workspace/tests/integration/security/native_smtp_fixture.py",
             "/tmp/smtp",
+            str(port),
         )
         for _ in range(40):
             code, _, _ = await self.runner(
@@ -855,6 +859,7 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
         resolve_container_backend_settings,
     )
     from moonmind.schemas.container_job_models import (
+        AuxiliaryOutcome,
         ContainerJobActivityRequest,
         ContainerJobSpec,
     )
@@ -953,7 +958,10 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
     backend = DockerContainerJobBackend(
         workspace_root=lab.root,
         settings=settings,
-        command_runner=lab.runner,
+        # This is the same disposable daemon socket mounted by the dedicated
+        # driver. Exercise the production adapter, including native binary cp.
+        docker_binary="/usr/libexec/moonmind/docker-real",
+        docker_host="unix:///var/run/docker.sock",
         evidence_publisher=publish,
     )
     request = ContainerJobActivityRequest(
@@ -981,6 +989,8 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
             if observed.terminal_state:
                 break
             await asyncio.sleep(0.1)
+        request.terminal_state = observed.terminal_state
+        request.exit_code = observed.exit_code
         assert observed.terminal_state == "succeeded" and observed.exit_code == 0
         counts = await lab.counts(target)
         assert counts["connections"] == counts["starttls"] == counts["noop"] == 1
@@ -995,5 +1005,81 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
         assert set(inspect["NetworkSettings"]["Networks"]) == {lease.network_ref}
     finally:
         if request.container_ref:
+            # Exercise the actual terminal lifecycle, including failed tools.
+            # Unpublished output retention is intentional, not a cleanup defect.
+            published = await backend.publish_evidence(request)
+            for reference in (
+                published.logs_ref,
+                published.artifacts_ref,
+                published.diagnostics_ref,
+            ):
+                assert reference and (lab.root / reference).is_file()
+            request.publication = AuxiliaryOutcome(
+                state="succeeded",
+                diagnosticsRef=published.diagnostics_ref,
+            )
             await backend.remove_container(request)
-        assert (await backend.cleanup(request)).cleanup_succeeded
+        cleanup = await backend.cleanup(request)
+        assert cleanup.cleanup_succeeded, cleanup.model_dump(mode="json", by_alias=True)
+
+
+@docker_only
+@pytest.mark.asyncio
+async def test_native_docker_production_runner_preserves_archive_authority(docker_lab):
+    """Native authority is binary evidence, not text to rewrite as a secret."""
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    lab = docker_lab
+    network = await lab.network("target", policy="native-fixtures")
+    # Test-only root permits the standard SMTP port on hosts that retain the
+    # privileged-port boundary. No TLS client uses this different hostname.
+    target = await lab.target("target", network, port=587)
+    lease = await lab.new_lease(
+        network,
+        target,
+        start=False,
+        targets=[
+            {
+                "hosts": ["session.example.com"],
+                "ports": [587],
+                "purpose": "live-target",
+                "targetNetworkRef": network,
+                "targetContainerRef": target,
+            }
+        ],
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=lab.root,
+        docker_binary="/usr/libexec/moonmind/docker-real",
+        docker_host="unix:///var/run/docker.sock",
+    )
+    # Do not inject the raw fixture runner: use exactly the default production
+    # adapter whose normal text path deliberately applies secret redaction.
+    lease.runner = backend._runner
+    lease, initial = await lab.start_lease(lease)
+    result = json.loads(
+        await lab.client(lease, CONNECT, lease.proxy_url, "session.example.com:587")
+    )
+    assert result["accepted"]
+    live = await lease.attest(workload=True, expected_image=lab.image)
+    expected = [
+        {
+            "authority": "session.example.com:587",
+            "address": initial["resolvedAddresses"]["session.example.com"][0],
+            "port": 587,
+        }
+    ]
+    assert live["nativeNetwork"]["endpoints"] == expected
+    assert live["nativeNetwork"]["attempts"] == 1
+    await lease.stop_native()
+    final = await lab.evidence(lease, "production-runner-native-archive")
+    assert final["nativeNetwork"]["endpoints"] == expected
+    assert (
+        final["nativeNetwork"]["configDigest"] == live["nativeNetwork"]["configDigest"]
+    )
+    assert final["nativeNetwork"]["attempts"] == 1
+    counts = await lab.counts(target)
+    assert counts["connections"] == 1 and counts["starttls"] == counts["noop"] == 0
+    assert counts["commands"] == []

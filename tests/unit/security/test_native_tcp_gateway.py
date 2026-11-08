@@ -833,3 +833,32 @@ async def test_absolute_deadline_survives_clock_changes(
             target_writer.transport.abort()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_value", ["", "curl/7.88.1", "Bearer secret"])
+async def test_bookworm_curl_empty_agent_is_exactly_bounded(tmp_path, agent_value):
+    """Bookworm emits an empty User-Agent even with --user-agent ''."""
+    async with fixture(tmp_path) as (gateway, port):
+        authority = f"approved.test:{port}"
+        wire = (
+            f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n"
+            f"User-Agent: {agent_value}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+        ).encode()
+        reader, writer = await connect(gateway, port, wire)
+        try:
+            if agent_value:
+                assert await reader.read() == b""
+                assert gateway.snapshot()["attempts"] == 0
+            else:
+                assert (
+                    await reader.readuntil(b"\r\n\r\n")
+                    == b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                )
+                writer.write(b"hello")
+                await writer.drain()
+                assert await reader.readexactly(5) == b"hello"
+                assert gateway.snapshot()["attempts"] == 1
+        finally:
+            writer.close()
+            await writer.wait_closed()

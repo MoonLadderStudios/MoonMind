@@ -28,10 +28,12 @@ from moonmind.security.egress import (
     bounded_denial_diagnostics,
     denied_connection_count,
 )
+from moonmind.security.egress_conformance_evidence import verify_evidence_digest
 from moonmind.security.egress_policy import ScopedEgressPolicy, _canonical, _digest
 from moonmind.security.native_network import (
     NativeNetworkSelection,
     require_native_subset,
+    require_native_transport_bytes,
 )
 from moonmind.security.native_tcp_gateway import NativeTCPConfig
 from moonmind.utils.logging import redact_sensitive_text
@@ -467,7 +469,9 @@ class ScopedEgressLease:
                 "idleSeconds": 30,
             }
         )
-        return _canonical(config.to_mapping())
+        body = _canonical(config.to_mapping())
+        require_native_transport_bytes(body)
+        return body
 
     async def _attest_state_volume(self, expires, *, gateway=None, cleanup=False):
         state = await self._optional(self.state_ref, volume=True)
@@ -615,6 +619,26 @@ class ScopedEgressLease:
             ),
             "nativeSelectionDigest": _digest(snapshot["nativeSelection"]),
         }
+
+    def validate_final_receipt(self, evidence):
+        """Bind already persisted, artifact-owner-verified evidence to this attempt."""
+        selection = self.native_selection.model_dump(mode="json", by_alias=True)
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("gatewayRef") != self.gateway_ref
+            or evidence.get("networkRef") != self.network_ref
+            or evidence.get("nativeSelectionDigest") != _digest(selection)
+            or evidence.get("nativeLimits") != selection["limits"]
+            or evidence.get("coverage") == "unverified"
+            or not (
+                isinstance(evidence.get("nativeNetwork"), dict)
+                or isinstance(evidence.get("nativeNoUseWitness"), dict)
+            )
+        ):
+            raise RuntimeError(
+                "native final receipt does not match this admitted attempt"
+            )
+        verify_evidence_digest(evidence)
 
     async def stop_native(self):
         """Close transport before publishing final counters or removing state."""
@@ -816,6 +840,18 @@ class ScopedEgressLease:
                         addresses[d.host] = (str(numeric),)
         if self.native_selection is not None:
             self._validate_native_answers(addresses)
+            require_native_transport_bytes(
+                _canonical(
+                    {
+                        "nativeSelection": self.native_selection.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "addresses": addresses,
+                        "targetIdentities": targets,
+                    }
+                ),
+                overhead=1024,
+            )
         expires = math.floor(datetime.now(UTC).timestamp()) + timeout_seconds
         if self.native_selection is not None:
             expires = min(
@@ -957,6 +993,8 @@ class ScopedEgressLease:
                     f"type=volume,source={self.state_ref},destination={_NATIVE_STATE}",
                 )
             )
+        if self.native_selection is not None:
+            require_native_transport_bytes(_canonical(snapshot))
         for key, body in (
             ("CONFIG", config),
             ("HOSTS", hosts),

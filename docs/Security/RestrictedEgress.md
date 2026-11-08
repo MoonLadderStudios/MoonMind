@@ -255,8 +255,13 @@ The operation is `tcp-connect`. Each target declares `hosts`, `ports`,
 `exclusions`, `purpose: live-target`, and optional explicit private-container
 route references. Hosts are exact DNS names, canonical IPv4 addresses or
 bounded canonical IPv4 CIDRs. Expansion is limited before enumeration, and
-address-port products are bounded. Wildcards, shortened/octal addresses, IPv6,
-IPv4-mapped IPv6 and prohibited control routes are refused. Exclusions survive
+address-port products are bounded. Serialized gateway configuration and scope
+snapshots are capped at 90 KiB before base64 transport, so long names or large
+exclusion/resolution sets can require smaller selections even below the
+1,024-endpoint limit. Oversized declarations fail authoring; oversized resolved
+snapshots fail before lease allocation, without silently substituting targets.
+Wildcards, shortened/octal addresses, IPv6, IPv4-mapped IPv6 and prohibited
+control routes are refused. Exclusions survive
 narrowed selections and apply to resolved addresses as well as authored names.
 A hostname, banner or returned address never grants another target.
 
