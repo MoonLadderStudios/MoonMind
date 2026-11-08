@@ -12,6 +12,9 @@ import re
 
 from moonmind.utils.logging import redact_evidence_payload, redact_evidence_text
 
+MAX_REPORT_BYTES = 1024 * 1024
+MAX_FINDING_DETAIL_BYTES = 384 * 1024
+
 
 def _text(value):
     if isinstance(value, (dict, list, tuple)):
@@ -94,7 +97,9 @@ def render_assessment_details(
     annotations = (
         {row.finding_id: row for row in context.annotations} if context else {}
     )
+    finding_bytes = omitted_findings = 0
     for row in comparison["findings"]:
+        block_start = len(lines)
         finding = row["finding"]
         lines += [
             f"### Finding {row['findingId']}",
@@ -133,6 +138,19 @@ def render_assessment_details(
             lines.append(
                 "Severity, CVSS metrics and business risk: undefined. Reproduce using the retained native evidence, assess environment-specific impact, remediate the affected rule, and run a scope-matched retest. No authored remediation or management response was supplied."
             )
+        block_bytes = len(("\n".join(lines[block_start:]) + "\n").encode("utf-8"))
+        if finding_bytes + block_bytes > MAX_FINDING_DETAIL_BYTES:
+            del lines[block_start:]
+            omitted_findings += 1
+        else:
+            finding_bytes += block_bytes
+    if omitted_findings:
+        lines.append(
+            f"{omitted_findings} findings omitted from this presentation's detailed listing "
+            f"to respect its byte budget; all {len(comparison['findings'])} authoritative findings "
+            f"and their evidence remain in structured comparison {comparison_ref}. "
+            "Selection follows native order, not risk priority. Omission is not a clean result."
+        )
     if not comparison["findings"]:
         lines.append(
             "No findings recorded for these checks. Review incomplete or stale coverage before drawing conclusions."
@@ -206,3 +224,45 @@ def render_native_admission(native_reports):
                 "  Imported game mathematics is unclassified control evidence: a specification digest alone does not prove retained source inputs, actual execution, or deployed-game behavior."
             )
     return "\n".join(lines) + "\n"
+
+
+def bound_report_presentation(body: bytes, *, structured_refs: list[str]) -> bytes:
+    """Transform one bounded presentation with cumulative omission accounting.
+
+    Both byte-selection stages keep whole UTF-8 lines. The single final footer
+    is reserved before selection, never passed through a second truncation.
+    Native records and transformation limits are unchanged.
+    """
+    from moonmind.security.evidence_exports import presentation_provenance
+
+    lines = body.decode("utf-8").splitlines(keepends=True)
+    links = ", ".join(_text(ref) for ref in dict.fromkeys(structured_refs))
+    provenance = "\n" + presentation_provenance() + "\n"
+    notice = (
+        "\n\n## Presentation limit\n\n"
+        "{count} presentation lines omitted to respect the UTF-8 byte budget. "
+        "This is an abbreviated presentation, not a complete list of findings, "
+        "decisions, controls or limitations. No omitted material is a clean result. "
+        f"Full retained structured evidence and context: {links}. "
+        "Native records are unchanged; select their authorized artifacts separately for offline review.\n"
+    )
+    reserve = len((notice.format(count=len(lines)) + provenance).encode("utf-8"))
+    budget = MAX_REPORT_BYTES - reserve
+
+    def prefix(source):
+        kept, used = [], 0
+        for line in source:
+            size = len(line.encode("utf-8"))
+            if used + size > budget:
+                break
+            kept.append(line)
+            used += size
+        return "".join(kept), len(source) - len(kept)
+
+    selected, omitted = prefix(lines)
+    transformed = redact_evidence_text(selected)
+    selected, additional = prefix(transformed.splitlines(keepends=True))
+    omitted += additional
+    return (
+        selected + (notice.format(count=omitted) if omitted else "") + provenance
+    ).encode("utf-8")

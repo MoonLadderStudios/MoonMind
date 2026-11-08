@@ -64,7 +64,6 @@ from moonmind.security.tls_assessments import (
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import (
     EVIDENCE_TRANSFORMATION_VERSION,
-    redact_evidence_text,
     redact_sensitive_text,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -2749,19 +2748,17 @@ class AssessmentExecution:
                 summary += render_control_assessment(control_report).encode()
             elif request.control_assessment is not None:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
-            from moonmind.security.evidence_exports import presentation_provenance
+            from moonmind.security.assessment_reports import bound_report_presentation
 
-            summary = (
-                redact_evidence_text(summary.decode("utf-8"))
-                + "\n"
-                + presentation_provenance()
-                + "\n"
-            ).encode("utf-8")
+            structured_refs = [comparison_ref, *evidence]
+            if review_readable:
+                structured_refs.append(request.review_ref)
+            summary = bound_report_presentation(summary, structured_refs=structured_refs)
             summary_key = content_key(
                 [
                     report_key,
                     "summary",
-                    "professional-report/v2",
+                    "professional-report/v3",
                     request.report_context.model_dump(mode="json", by_alias=True)
                     if request.report_context
                     else None,
