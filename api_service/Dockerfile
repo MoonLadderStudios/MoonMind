@@ -172,6 +172,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
     apt-get install -y --no-install-recommends postgresql libatomic1 squid chromium fonts-liberation && \
+    install -d -o proxy -g proxy -m 0700 /var/lib/moonmind-native-egress && \
     ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     runuser -u app -- node --version && runuser -u app -- npm --version
@@ -196,7 +197,8 @@ FROM runtime-dependencies AS runtime-base
 # copies so source edits retain this layer. npm stays in the build/test images.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends squid libatomic1
+    apt-get update && apt-get install -y --no-install-recommends squid libatomic1 && \
+    install -d -o proxy -g proxy -m 0700 /var/lib/moonmind-native-egress
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=managed-tooling /opt/moonmind-managed-cli /opt/moonmind-managed-cli
 RUN ln -s /opt/moonmind-managed-cli/bin/codex /usr/local/bin/codex \

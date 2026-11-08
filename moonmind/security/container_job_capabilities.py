@@ -72,7 +72,7 @@ def container_job_matches_capability(
         if not selection_within_scope(request.spec, scope):
             return False
     elif (
-        (profile is not None and profile.assessment_ref is not None)
+        (profile is not None and (profile.assessment_ref is not None or profile.native_network is not None))
         or request.spec.tls_assessment is not None
         or request.spec.web_assessment is not None
         or request.spec.cloud_assessment is not None

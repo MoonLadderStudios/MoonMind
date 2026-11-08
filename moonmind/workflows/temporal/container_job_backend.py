@@ -2345,6 +2345,10 @@ class DockerContainerJobBackend:
             ownership=request.ownership_token,
             job_id=request.job_id,
             workload_ref=request.container_ref or self._name(request),
+            native_selection=(
+                request.request.spec.workload_profile.native_network
+                if request.request.spec.workload_profile else None
+            ),
         )
 
     async def _publish_scoped_egress(
@@ -5407,10 +5411,15 @@ class DockerContainerJobBackend:
         # missing container as drifted network evidence.
         scoped = self._scoped_lease(request)
         if scoped is not None and request.container_ref is not None:
-            evidence = await scoped.attest(
-                workload=True, expected_image=request.resolved_image_ref,
-                started_at=request.started_at, finished_at=request.finished_at,
-            )
+            try:
+                evidence = await scoped.attest(
+                    workload=True, expected_image=request.resolved_image_ref,
+                    started_at=request.started_at, finished_at=request.finished_at,
+                )
+            except Exception:
+                if scoped.native_selection is None:
+                    raise
+                evidence = await scoped.terminal_evidence()
             return self._safe_scoped_evidence(evidence)
         if request.request.spec.network_mode == "service" and request.container_ref is not None:
             _, evidence = await self._service_evidence(request, workload=True)
@@ -5611,6 +5620,7 @@ class DockerContainerJobBackend:
                 failure_code = failure_code or "attachment_storage_retained"
 
         diagnostics_ref = None
+        native_final_ref = None
         scoped = (
             ScopedEgressLease(
                 self._runner,
@@ -5618,12 +5628,27 @@ class DockerContainerJobBackend:
                 ownership=request.ownership_token,
                 job_id=request.job_id,
                 workload_ref=request.container_ref or self._name(request),
+                native_selection=(
+                    request.request.spec.workload_profile.native_network
+                    if request.request.spec.workload_profile else None
+                ),
             )
             if request.request.spec.egress_policy_ref
             else None
         )
         if scoped is not None:
             try:
+                if scoped.native_selection is not None:
+                    await scoped.stop_native()
+                    final_evidence = await scoped.terminal_evidence()
+                    native_final_ref = await self._publish_scoped_egress(
+                        request, final_evidence, suffix="native-egress-final",
+                    )
+                    if ("nativeNetwork" not in final_evidence
+                            and "nativeNoUseWitness" not in final_evidence):
+                        # Publishing a read failure is not retaining the counters.
+                        # Preserve the stopped owner and volume for recovery.
+                        raise RuntimeError("native final counters were not retained")
                 await scoped.cleanup()
             except Exception:
                 cleanup_succeeded = False
@@ -5657,6 +5682,7 @@ class DockerContainerJobBackend:
             )
             lifecycle = {
                 "schemaVersion": 1,
+                **({"nativeEgressFinalRef": native_final_ref} if native_final_ref else {}),
                 "profileRef": profile_ref,
                 **(
                     {}

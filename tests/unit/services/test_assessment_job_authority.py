@@ -721,3 +721,85 @@ async def test_legacy_reservations_count_without_reauthorizing_or_rebinding_hist
         await validate_job_assessment_authority(
             session, historical, old_request, live=False
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter",
+    [
+        "max_connections",
+        "max_bytes",
+        "max_connections_per_second",
+        "max_concurrent_connections",
+    ],
+)
+async def test_native_allocations_are_durable_across_failed_jobs_and_exact_replay(
+    session_factory, temporal, counter
+):
+    from dataclasses import replace
+    from moonmind.security.egress_policy import ScopedEgressPolicy
+    from moonmind.security.workload_profiles import WorkloadProfile
+    from tests.unit.security.test_native_network import native
+    from tests.unit.security.test_workload_profiles import PROFILE
+
+    allocation = native()
+    totals = allocation.limits.model_copy(
+        update={
+            name: getattr(allocation.limits, name) * (1 if name == counter else 3)
+            for name in (
+                "max_connections",
+                "max_bytes",
+                "max_connections_per_second",
+                "max_concurrent_connections",
+            )
+        }
+    )
+    authority = allocation.model_copy(update={"limits": totals})
+    profile = WorkloadProfile.model_validate(
+        {
+            **PROFILE,
+            "networkMode": "bridge",
+            "egressPolicyRef": "native",
+            "nativeNetwork": authority.model_dump(),
+        }
+    )
+    policy = ScopedEgressPolicy.model_validate(
+        {
+            "policyRef": "native",
+            "allowedWorkflowIds": ["workflow-1"],
+            "allowedImageSourceRefs": ["repository-security"],
+            "nativeNetwork": authority.model_dump(),
+        }
+    )
+    backend = replace(
+        settings(), workload_profiles=(profile,), egress_policies=(policy,)
+    )
+    scope = AdmittedAssessmentScope.model_validate(
+        {
+            **SCOPE,
+            "maxJobs": 10,
+            "networkRefs": ["native"],
+            "targets": [*SCOPE["targets"], {"nativeNetwork": authority.model_dump()}],
+        }
+    )
+    async with session_factory() as session:
+        await save_scope(session, scope)
+        cap = capability(scope)
+        jobs = ContainerJobService(
+            session, temporal=temporal, backend_settings=backend, capability=cap
+        )
+
+        def fresh(key):
+            return request(key=key).model_copy(
+                update={"spec": scoped(nativeNetwork=allocation.model_dump())}
+            )
+
+        first = await jobs.submit(owner=cap.owner, request=fresh("native-first"))
+        record = await session.get(ContainerJobRecord, first.job_id)
+        record.state = "failed"
+        record.terminal_outcome_json = {"failureClass": "execution", "state": "failed"}
+        await session.commit()
+        replay = await jobs.submit(owner=cap.owner, request=fresh("native-first"))
+        assert replay.replayed and replay.job_id == first.job_id
+        with pytest.raises(ContainerJobScopeDeniedError, match="native network budget"):
+            await jobs.submit(owner=cap.owner, request=fresh("native-next"))

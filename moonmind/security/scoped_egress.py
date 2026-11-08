@@ -1,9 +1,8 @@
-"""Deployment-admitted policies for leases of the existing Squid egress owner.
+"""Deployment-admitted HTTP and bounded native TCP leases of the egress owner.
 
-A job selects a reference, never destinations or Docker attachments. DNS is
-validated before admission and pinned in Squid's hosts file. An existing proxy
-retains that snapshot; loss before a create receipt permits revalidation under
-the same policy and any surviving owned network's original deadline.
+Jobs select deployment-admitted authority, never Docker attachments. DNS is
+validated once and pinned in the gateway snapshot. Native retries require the
+same live gateway and durable counters; retained state never grants a reset.
 """
 
 from __future__ import annotations
@@ -11,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import ipaddress
 import json
 import math
 import socket
+import tarfile
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from moonmind.security.egress import (
     _FORBIDDEN_NETWORKS,
@@ -27,6 +29,11 @@ from moonmind.security.egress import (
     denied_connection_count,
 )
 from moonmind.security.egress_policy import ScopedEgressPolicy, _canonical, _digest
+from moonmind.security.native_network import (
+    NativeNetworkSelection,
+    require_native_subset,
+)
+from moonmind.security.native_tcp_gateway import NativeTCPConfig
 from moonmind.utils.logging import redact_sensitive_text
 
 _CONFIG = "/tmp/moonmind-squid.conf"
@@ -48,6 +55,18 @@ _COMMAND = (
     "remaining=$((MOONMIND_EGRESS_DEADLINE - $(date +%s))); "
     '[ "$remaining" -gt 0 ]; '
     f'exec timeout --kill-after=5s "$remaining" squid -NYC -d 1 -f {_CONFIG}'
+)
+
+
+_NATIVE_STATE = "/var/lib/moonmind-native-egress"
+_NATIVE_SCRIPT = "/app/moonmind/security/native_tcp_gateway.py"
+_NATIVE_COMMAND = (
+    "set -eu; umask 077; "
+    f'printf %s "$MOONMIND_EGRESS_CONFIG" | base64 -d > {_CONFIG}; '
+    f'printf %s "$MOONMIND_EGRESS_HOSTS" | base64 -d > {_HOSTS}; '
+    f'printf %s "$MOONMIND_EGRESS_SNAPSHOT" | base64 -d > {_SNAPSHOT}; '
+    f"chmod 0444 {_CONFIG} {_HOSTS} {_SNAPSHOT}; "
+    f"exec python {_NATIVE_SCRIPT} --config {_CONFIG} --state-directory {_NATIVE_STATE}"
 )
 
 
@@ -167,8 +186,12 @@ class ScopedEgressLease:
         ownership: str,
         job_id: str,
         workload_ref: str,
+        native_selection: NativeNetworkSelection | None = None,
     ):
         self.runner, self.policy = runner, policy
+        self.native_selection = native_selection
+        if native_selection is not None and policy is not None:
+            require_native_subset(native_selection, policy.native_network)
         self.ownership, self.job_id, self.workload_ref = ownership, job_id, workload_ref
         self.gateway_ref = (
             "moonmind-egress-" + hashlib.sha256(ownership.encode()).hexdigest()[:20]
@@ -176,12 +199,46 @@ class ScopedEgressLease:
         self.network_ref = self.gateway_ref + "-internal"
         self.subnet_ref = self.network_ref + "-subnet"
         self.outbound_ref = self.gateway_ref + "-outbound"
+        self.state_ref = self.gateway_ref + "-native-state"
 
     @property
     def proxy_url(self) -> str:
         return f"http://{self.gateway_ref}:3128"
 
+    @property
+    def _destinations(self):
+        if self.native_selection is None:
+            return self.policy.destinations
+        return tuple(
+            SimpleNamespace(
+                host=host,
+                port=port,
+                purpose=target.purpose,
+                target_network_ref=target.target_network_ref,
+                target_container_ref=target.target_container_ref,
+            )
+            for target in self.native_selection.targets
+            for host, port in target.endpoints()
+        )
+
     def proxy_env(self) -> tuple[str, ...]:
+        if self.native_selection is not None:
+            return tuple(
+                f"{key}="
+                for key in (
+                    "HTTP_PROXY",
+                    "HTTPS_PROXY",
+                    "http_proxy",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "NO_PROXY",
+                    "no_proxy",
+                )
+            ) + (
+                f"MOONMIND_EGRESS_PROXY={self.proxy_url}",
+                f"MOONMIND_EGRESS_POLICY_REF={self.policy.policy_ref}",
+            )
         return tuple(
             f"{key}={self.proxy_url}"
             for key in (
@@ -210,15 +267,33 @@ class ScopedEgressLease:
             )
         return out
 
-    async def _optional(self, name: str, *, network: bool = False) -> dict | None:
-        args = ("network", "inspect") if network else ("inspect",)
+    async def _optional(
+        self, name: str, *, network: bool = False, volume: bool = False
+    ) -> dict | None:
+        args = (
+            ("volume", "inspect")
+            if volume
+            else ("network", "inspect")
+            if network
+            else ("inspect",)
+        )
         code, out, _ = await self.runner((*args, "--format", "{{json .}}", name))
         if code:
             # An unavailable daemon is not evidence of absence. A successful
             # ownership-filtered inventory must independently confirm absence.
-            listing = ("network", "ls") if network else ("ps", "-a")
+            listing = (
+                ("volume", "ls")
+                if volume
+                else ("network", "ls")
+                if network
+                else ("ps", "-a")
+            )
             listing_code, names, _ = await self.runner(
-                (*listing, "--format", "{{.Name}}" if network else "{{.Names}}")
+                (
+                    *listing,
+                    "--format",
+                    "{{.Name}}" if network or volume else "{{.Names}}",
+                )
             )
             if listing_code or name in names.decode().splitlines():
                 raise RuntimeError("scoped egress resource identity is unavailable")
@@ -249,7 +324,7 @@ class ScopedEgressLease:
     async def _private_addresses(
         self, *, gateway_id: str | None = None
     ) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
-        destinations = [d for d in self.policy.destinations if d.target_network_ref]
+        destinations = [d for d in self._destinations if d.target_network_ref]
         addresses, identities = {}, {}
         network_targets = {}
         for d in destinations:
@@ -283,6 +358,18 @@ class ScopedEgressLease:
                 raise RuntimeError("private egress target identity is unavailable")
             identities[d.target_container_ref] = target_id
             network_targets.setdefault(d.target_network_ref, set()).add(target_id)
+            try:
+                numeric = ipaddress.ip_address(d.host)
+            except ValueError:
+                numeric = None
+            if (
+                self.native_selection is not None
+                and numeric is not None
+                and numeric != address
+            ):
+                raise RuntimeError(
+                    "native numeric target differs from inspected container address"
+                )
             addresses[d.host] = (str(address),)
         for name, allowed in network_targets.items():
             network = await _json(
@@ -308,8 +395,365 @@ class ScopedEgressLease:
                 )
         return addresses, identities
 
+    def _validate_native_answers(self, addresses):
+        """Validate all answers, retaining the complete immutable DNS snapshot."""
+        if set(addresses) != {d.host for d in self._destinations}:
+            raise RuntimeError("native resolved authority differs from selection")
+        for target in self.native_selection.targets:
+            exclusions = []
+            for item in target.exclusions:
+                try:
+                    exclusions.append(ipaddress.IPv4Network(item))
+                except ValueError:
+                    # Exact excluded hostnames were removed by model expansion.
+                    continue
+            for host, _ in target.endpoints():
+                values = addresses[host]
+                if not isinstance(values, (list, tuple)) or not 1 <= len(values) <= 32:
+                    raise RuntimeError(
+                        "native DNS answer set is unavailable or unbounded"
+                    )
+                try:
+                    numeric_host = ipaddress.ip_address(host)
+                except ValueError:
+                    numeric_host = None
+                if numeric_host is not None and tuple(values) != (str(numeric_host),):
+                    raise RuntimeError(
+                        "native numeric target snapshot differs from selected address"
+                    )
+                for value in values:
+                    if not isinstance(value, str):
+                        raise RuntimeError("native DNS address must be a string")  # noqa: TRY004 - attestation failure
+                    address = ipaddress.ip_address(value)
+                    if address.version != 4:
+                        raise RuntimeError(
+                            "native TCP requires exclusively IPv4 answers"
+                        )
+                    if any(address in network for network in exclusions):
+                        raise RuntimeError("native DNS address is excluded")
+                if not target.target_network_ref:
+                    validate_public_answers(values)
+
+    def _native_config(self, snapshot) -> bytes:
+        if snapshot.get("nativeSelection") != self.native_selection.model_dump(
+            mode="json", by_alias=True
+        ):
+            raise RuntimeError("native selection differs from admitted snapshot")
+        self._validate_native_answers(snapshot["addresses"])
+        limits = self.native_selection.limits
+        config = NativeTCPConfig.from_mapping(
+            {
+                "leaseId": self.gateway_ref,
+                "deadlineUnix": snapshot["expiresAt"],
+                "listenHost": snapshot["proxyAddress"],
+                "listenPort": 3128,
+                "clientIp": snapshot["clientAddress"],
+                "endpoints": [
+                    {
+                        "authority": f"{host}:{port}",
+                        "address": min(snapshot["addresses"][host]),
+                        "port": port,
+                    }
+                    for host, port in sorted(
+                        {(d.host, d.port) for d in self._destinations}
+                    )
+                ],
+                "maxConnections": limits.max_connections,
+                "maxConcurrentConnections": limits.max_concurrent_connections,
+                "maxConnectionsPerSecond": limits.max_connections_per_second,
+                "maxBytes": limits.max_bytes,
+                "handshakeSeconds": 10,
+                "connectSeconds": 10,
+                "idleSeconds": 30,
+            }
+        )
+        return _canonical(config.to_mapping())
+
+    async def _attest_state_volume(self, expires, *, gateway=None, cleanup=False):
+        state = await self._optional(self.state_ref, volume=True)
+        self._owned(state or {}, network=True, cleanup=cleanup)
+        if (
+            state.get("Name") != self.state_ref
+            or state.get("Driver") != "local"
+            or state.get("Options")
+            or state.get("Scope") != "local"
+            or float(state["Labels"][_DEADLINE]) != float(expires)
+        ):
+            raise RuntimeError("native state volume identity is unattested")
+        consumers = (
+            (
+                await self._checked(
+                    "ps",
+                    "-a",
+                    "--no-trunc",
+                    "--filter",
+                    f"volume={self.state_ref}",
+                    "--format",
+                    "{{.ID}}",
+                )
+            )
+            .decode()
+            .splitlines()
+        )
+        if set(consumers) != ({gateway["Id"]} if gateway is not None else set()):
+            raise RuntimeError(
+                "native state volume is not exclusive to the owned gateway"
+            )
+        if gateway is not None:
+            if state["Labels"].get(_LABEL) != gateway["Config"]["Labels"].get(_LABEL):
+                raise RuntimeError("native state and gateway policy identities differ")
+            mounts = [
+                m
+                for m in gateway.get("Mounts", [])
+                if m.get("Destination") == _NATIVE_STATE
+            ]
+            if (
+                len(mounts) != 1
+                or mounts[0].get("Type") != "volume"
+                or mounts[0].get("Name") != self.state_ref
+                or mounts[0].get("RW") is not True
+                or mounts[0].get("Driver") != "local"
+            ):
+                raise RuntimeError("native state mount is unattested")
+
+    async def _native_counters(self, gateway, snapshot):
+        """Read fixed, bounded regular files even after the owned gateway stops."""
+        config = NativeTCPConfig.from_mapping(json.loads(self._native_config(snapshot)))
+        values = []
+        for name in ("startup.json", "snapshot.json"):
+            archive = await self._checked(
+                "cp", f"{gateway['Id']}:{_NATIVE_STATE}/{name}", "-"
+            )
+            if len(archive) > 1048576:
+                raise RuntimeError("native evidence archive exceeds bound")
+            try:
+                with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
+                    members = tar.getmembers()
+                    if (
+                        len(members) != 1
+                        or members[0].name != name
+                        or not members[0].isfile()
+                        or members[0].size > 524288
+                    ):
+                        raise ValueError("fixed regular evidence file required")
+                    values.append(json.load(tar.extractfile(members[0])))
+            except (ValueError, TypeError, tarfile.TarError, UnicodeDecodeError) as exc:
+                raise RuntimeError("native evidence archive is malformed") from exc
+        startup, counters = values
+        if (
+            not isinstance(startup, dict)
+            or set(startup)
+            != {"leaseId", "configDigest", "deadlineUnix", "pid", "processStart"}
+            or not isinstance(counters, dict)
+            or set(counters)
+            != {
+                "schemaVersion",
+                "leaseId",
+                "configDigest",
+                "deadlineUnix",
+                "pid",
+                "processStart",
+                "status",
+                "attempts",
+                "activeConnections",
+                "bytesReserved",
+                "denials",
+                "endpoints",
+            }
+        ):
+            raise RuntimeError("native evidence schema is invalid")
+        for value in values:
+            if (
+                not isinstance(value, dict)
+                or value.get("leaseId") != config.lease_id
+                or value.get("configDigest") != config.digest
+                or value.get("deadlineUnix") != config.deadline_unix
+            ):
+                raise RuntimeError("native counter evidence identity mismatch")
+        if (
+            counters.get("schemaVersion") != 1
+            or counters.get("status")
+            not in {"created", "starting", "running", "closed"}
+            or type(startup.get("pid")) is not int
+            or startup["pid"] < 1
+            or counters.get("pid") != startup["pid"]
+            or not isinstance(startup.get("processStart"), str)
+            or not startup["processStart"].isdigit()
+            or counters.get("processStart") != startup["processStart"]
+            or counters.get("endpoints") != config.to_mapping()["endpoints"]
+        ):
+            raise RuntimeError("native counter evidence process or endpoints mismatch")
+        for field, maximum in (
+            ("attempts", config.max_connections),
+            ("activeConnections", config.max_concurrent_connections),
+            ("bytesReserved", config.max_bytes),
+        ):
+            value = counters.get(field)
+            if type(value) is not int or not 0 <= value <= maximum:
+                raise RuntimeError("native counter evidence exceeds admitted bounds")
+        denials = counters.get("denials")
+        if (
+            not isinstance(denials, dict)
+            or len(denials) > 32
+            or any(
+                not isinstance(k, str)
+                or len(k) > 64
+                or type(v) is not int
+                or not 0 <= v <= 2**63 - 1
+                for k, v in denials.items()
+            )
+        ):
+            raise RuntimeError("native denial evidence is invalid")
+        return counters
+
+    def _native_attribution(self, snapshot):
+        return {
+            "resolvedAddresses": snapshot["addresses"],
+            "targetIdentities": snapshot["targetIdentities"],
+            "nativeLimits": self.native_selection.limits.model_dump(
+                mode="json", by_alias=True
+            ),
+            "nativeSelectionDigest": _digest(snapshot["nativeSelection"]),
+        }
+
+    async def stop_native(self):
+        """Close transport before publishing final counters or removing state."""
+        gateway = await self._optional(self.gateway_ref)
+        if gateway is not None:
+            self._owned(gateway, cleanup=True)
+            if (gateway.get("State") or {}).get("Running"):
+                await self._checked("stop", "--time", "5", gateway["Id"])
+
+    @staticmethod
+    def _never_started(gateway):
+        state = gateway.get("State") or {}
+        return (
+            state.get("Status") == "created"
+            and state.get("Running") is False
+            and state.get("StartedAt") == "0001-01-01T00:00:00Z"
+            and type(gateway.get("RestartCount")) is int
+            and gateway["RestartCount"] == 0
+        )
+
+    async def _native_no_use_witness(self, gateway, snapshot):
+        """Prove no runtime start and an empty state directory, never infer from I/O errors."""
+        if not self._never_started(gateway):
+            raise RuntimeError("native gateway has no verified never-started identity")
+        archive = await self._checked("cp", f"{gateway['Id']}:{_NATIVE_STATE}", "-")
+        if len(archive) > 65536 or len(archive) % 512:
+            raise RuntimeError(
+                "native empty-state archive exceeds bounds or is truncated"
+            )
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
+                members = tar.getmembers()
+                if (
+                    len(members) != 1
+                    or members[0].name
+                    not in {"moonmind-native-egress", "moonmind-native-egress/"}
+                    or not members[0].isdir()
+                    or members[0].size != 0
+                    or len(archive) < members[0].offset_data + 1024
+                    or any(archive[members[0].offset_data :])
+                ):
+                    raise ValueError(
+                        "state directory is not independently proven empty"
+                    )
+        except (ValueError, tarfile.TarError) as exc:
+            raise RuntimeError(
+                "native empty-state evidence is malformed or nonempty"
+            ) from exc
+        # Reconcile a concurrent start or replacement during the archive read.
+        observed = await self._optional(self.gateway_ref)
+        if (
+            not observed
+            or not self._never_started(observed)
+            or any(
+                observed.get(key) != gateway.get(key)
+                for key in ("Id", "Image", "Config", "HostConfig", "Mounts")
+            )
+        ):
+            raise RuntimeError("native gateway changed during no-use observation")
+        await self._attest_state_volume(
+            snapshot["expiresAt"], gateway=observed, cleanup=True
+        )
+        return {
+            "gatewayIdentity": gateway["Id"],
+            "stateDirectoryEmpty": True,
+            "stateArchiveDigest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+            "status": "created",
+            "startedAt": gateway["State"]["StartedAt"],
+            "restartCount": 0,
+        }
+
+    async def terminal_evidence(self):
+        """Retain counters without asserting live runtime health after cancellation."""
+        evidence = {
+            "coverage": "partial",
+            "limitations": ["native_runtime_not_live_attested"],
+            "deniedConnectionCount": 0,
+            "denialDiagnostics": [],
+            "gatewayRef": self.gateway_ref,
+            "networkRef": self.network_ref,
+        }
+        try:
+            gateway = await self._optional(self.gateway_ref)
+            self._owned(gateway or {}, cleanup=True)
+            cfg = gateway["Config"]
+            env = dict(item.split("=", 1) for item in cfg["Env"] if "=" in item)
+            snapshot = json.loads(
+                base64.b64decode(env["MOONMIND_EGRESS_SNAPSHOT"], validate=True)
+            )
+            if (
+                snapshot["policyDigest"] != cfg["Labels"][_LABEL]
+                or float(snapshot["expiresAt"]) != float(cfg["Labels"][_DEADLINE])
+                or base64.b64decode(env["MOONMIND_EGRESS_CONFIG"], validate=True)
+                != self._native_config(snapshot)
+                or cfg["Cmd"] != ["-c", _NATIVE_COMMAND]
+                or cfg.get("Entrypoint") != ["/bin/sh"]
+                or cfg.get("User") != "proxy"
+                or gateway.get("Image") != cfg.get("Image")
+                or gateway.get("Image") != snapshot["gatewayImageDigest"]
+                or int(env["MOONMIND_EGRESS_DEADLINE"]) != int(snapshot["expiresAt"])
+                or base64.b64decode(env["MOONMIND_EGRESS_HOSTS"], validate=True) != b""
+            ):
+                raise RuntimeError("native final evidence configuration is unattested")
+            await self._attest_state_volume(
+                snapshot["expiresAt"], gateway=gateway, cleanup=True
+            )
+            if (gateway.get("State") or {}).get("Status") == "created":
+                witness = await self._native_no_use_witness(gateway, snapshot)
+                evidence.update(
+                    nativeNoUseWitness=witness,
+                    limitations=["native_gateway_never_started"],
+                )
+                counters = None
+            else:
+                counters = await self._native_counters(gateway, snapshot)
+                evidence["nativeNetwork"] = counters
+            evidence.update(
+                **self._native_attribution(snapshot),
+                profileRef=snapshot["policyRef"],
+                profileDigest=snapshot["policyDigest"],
+                snapshotDigest=_digest(snapshot),
+                expiresAt=snapshot["expiresAt"],
+                deniedConnectionCount=sum(counters["denials"].values())
+                if counters
+                else 0,
+            )
+            if evidence["deniedConnectionCount"]:
+                evidence["limitations"].append("required_network_scope_denied")
+        except Exception as exc:  # noqa: BLE001 - preserve bounded diagnostics without certifying health
+            evidence["evidenceError"] = redact_sensitive_text(str(exc))[:512]
+            evidence["coverage"] = "unverified"
+            evidence["limitations"].append("native_counter_evidence_unavailable")
+        return evidence
+
     async def prepare(
-        self, *, timeout_seconds: int, previously_admitted: bool = False,
+        self,
+        *,
+        timeout_seconds: int,
+        previously_admitted: bool = False,
         deadline: datetime | None = None,
     ) -> dict:
         existing = await self._optional(self.gateway_ref)
@@ -323,7 +767,7 @@ class ScopedEgressLease:
                 )
                 expected = {self.network_ref, self.outbound_ref} | {
                     d.target_network_ref
-                    for d in self.policy.destinations
+                    for d in self._destinations
                     if d.target_network_ref
                 }
                 for network in sorted(expected - networks):
@@ -331,6 +775,13 @@ class ScopedEgressLease:
                 await self._checked("start", existing["Id"])
                 return await self._wait_ready()
             return await self.attest()
+        if (
+            self.native_selection is not None
+            and await self._optional(self.state_ref, volume=True) is not None
+        ):
+            raise RuntimeError(
+                "retained native state forbids replacement gateway or DNS admission"
+            )
         if previously_admitted:
             raise RuntimeError(
                 "saved scoped egress lease is unavailable; refusing new DNS admission"
@@ -341,10 +792,37 @@ class ScopedEgressLease:
             backend_ref="container-job/scoped",
         )
         addresses, targets = await self._private_addresses()
-        for d in self.policy.destinations:
+        for d in self._destinations:
             if not d.target_network_ref and d.host not in addresses:
-                addresses[d.host] = await _public_answers(d.host, d.port)
+                if self.native_selection is None:
+                    addresses[d.host] = await _public_answers(d.host, d.port)
+                else:
+                    try:
+                        numeric = ipaddress.ip_address(d.host)
+                    except ValueError:
+                        records = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                socket.getaddrinfo,
+                                d.host,
+                                d.port,
+                                type=socket.SOCK_STREAM,
+                            ),
+                            timeout=10,
+                        )
+                        addresses[d.host] = tuple(
+                            sorted({row[4][0] for row in records})
+                        )
+                    else:
+                        addresses[d.host] = (str(numeric),)
+        if self.native_selection is not None:
+            self._validate_native_answers(addresses)
         expires = math.floor(datetime.now(UTC).timestamp()) + timeout_seconds
+        if self.native_selection is not None:
+            expires = min(
+                expires,
+                math.floor(datetime.now(UTC).timestamp())
+                + self.native_selection.limits.max_duration_seconds,
+            )
         if deadline is not None:
             expires = min(expires, math.floor(deadline.timestamp()))
         if expires <= datetime.now(UTC).timestamp():
@@ -401,12 +879,6 @@ class ScopedEgressLease:
         if subnet.version != 4 or subnet.num_addresses < 8:
             raise RuntimeError("scoped egress network address space is invalid")
         proxy_address, client_address = str(subnet[2]), str(subnet[3])
-        config, hosts = render_scoped_proxy(
-            self.policy,
-            addresses,
-            listen_address=proxy_address,
-            client_address=client_address,
-        )
         snapshot = {
             "policyRef": self.policy.policy_ref,
             "policyDigest": self.policy.digest,
@@ -417,6 +889,30 @@ class ScopedEgressLease:
             "clientAddress": client_address,
             "expiresAt": expires,
         }
+        if self.native_selection is not None:
+            snapshot["nativeSelection"] = self.native_selection.model_dump(
+                mode="json", by_alias=True
+            )
+            config, hosts = self._native_config(snapshot), b""
+            await self._checked(
+                "volume",
+                "create",
+                "--label",
+                f"{_OWNER}={self.ownership}",
+                "--label",
+                f"{_LABEL}={self.policy.digest}",
+                "--label",
+                f"{_DEADLINE}={expires}",
+                self.state_ref,
+            )
+            await self._attest_state_volume(expires)
+        else:
+            config, hosts = render_scoped_proxy(
+                self.policy,
+                addresses,
+                listen_address=proxy_address,
+                client_address=client_address,
+            )
         seconds = math.ceil(expires - datetime.now(UTC).timestamp())
         if seconds <= 0:
             raise RuntimeError("scoped egress lease has expired")
@@ -454,6 +950,13 @@ class ScopedEgressLease:
             "--label",
             f"moonmind.egress.job={self.job_id}",
         ]
+        if self.native_selection is not None:
+            args.extend(
+                (
+                    "--mount",
+                    f"type=volume,source={self.state_ref},destination={_NATIVE_STATE}",
+                )
+            )
         for key, body in (
             ("CONFIG", config),
             ("HOSTS", hosts),
@@ -470,7 +973,7 @@ class ScopedEgressLease:
                 "/bin/sh",
                 installed.gateway_image_digest,
                 "-c",
-                _COMMAND,
+                _NATIVE_COMMAND if self.native_selection is not None else _COMMAND,
             )
         )
         await self._checked(*args)
@@ -486,7 +989,7 @@ class ScopedEgressLease:
             *sorted(
                 {
                     d.target_network_ref
-                    for d in self.policy.destinations
+                    for d in self._destinations
                     if d.target_network_ref
                 }
             ),
@@ -526,19 +1029,22 @@ class ScopedEgressLease:
             snapshot = json.loads(
                 base64.b64decode(env["MOONMIND_EGRESS_SNAPSHOT"], validate=True)
             )
-            config, hosts = render_scoped_proxy(
-                self.policy,
-                snapshot["addresses"],
-                listen_address=snapshot["proxyAddress"],
-                client_address=snapshot["clientAddress"],
-            )
+            if self.native_selection is not None:
+                config, hosts = self._native_config(snapshot), b""
+            else:
+                config, hosts = render_scoped_proxy(
+                    self.policy,
+                    snapshot["addresses"],
+                    listen_address=snapshot["proxyAddress"],
+                    client_address=snapshot["clientAddress"],
+                )
             saved_config = base64.b64decode(
                 env["MOONMIND_EGRESS_CONFIG"], validate=True
             )
             # Retain the exact stricter pre-upgrade configuration until those
             # bounded leases expire. Never rewrite a running proxy or broaden
             # its authority; live-file attestation below hashes its saved bytes.
-            if saved_config == config.replace(
+            if self.native_selection is None and saved_config == config.replace(
                 (_WEBSOCKET_UPGRADE + "\n").encode(), b"", 1
             ):
                 config = saved_config
@@ -553,19 +1059,19 @@ class ScopedEgressLease:
                 and base64.b64decode(env["MOONMIND_EGRESS_HOSTS"], validate=True)
                 == hosts
             )
-            if set(snapshot["addresses"]) != {d.host for d in self.policy.destinations}:
+            if set(snapshot["addresses"]) != {d.host for d in self._destinations}:
                 valid_snapshot = False
-            for d in self.policy.destinations:
+            for d in self._destinations:
                 if not d.target_network_ref:
                     validate_public_answers(snapshot["addresses"][d.host])
+            if self.native_selection is not None:
+                self._validate_native_answers(snapshot["addresses"])
         except (ValueError, KeyError, TypeError) as exc:
             raise RuntimeError(
                 "scoped egress proxy policy is unavailable or tampered"
             ) from exc
         expected_networks = {self.network_ref, self.outbound_ref} | {
-            d.target_network_ref
-            for d in self.policy.destinations
-            if d.target_network_ref
+            d.target_network_ref for d in self._destinations if d.target_network_ref
         }
         actual_networks = (gateway.get("NetworkSettings") or {}).get("Networks") or {}
         internal_address = (actual_networks.get(self.network_ref) or {}).get(
@@ -576,7 +1082,11 @@ class ScopedEgressLease:
         if (
             not valid_snapshot
             or cfg.get("Entrypoint") != ["/bin/sh"]
-            or cfg.get("Cmd") != ["-c", _COMMAND]
+            or cfg.get("Cmd")
+            != [
+                "-c",
+                _NATIVE_COMMAND if self.native_selection is not None else _COMMAND,
+            ]
             or cfg.get("User") != "proxy"
             or (not _pending and gateway.get("State", {}).get("Running") is not True)
             or (
@@ -599,11 +1109,21 @@ class ScopedEgressLease:
             )
             or internal_address != snapshot["proxyAddress"]
             or set(host.get("Tmpfs") or {}) != {"/tmp"}
-            or any(m.get("Destination") != "/tmp" for m in gateway.get("Mounts", []))
+            or any(
+                m.get("Destination")
+                not in (
+                    {"/tmp", _NATIVE_STATE}
+                    if self.native_selection is not None
+                    else {"/tmp"}
+                )
+                for m in gateway.get("Mounts", [])
+            )
         ):
             raise RuntimeError(
                 "scoped egress proxy launch, policy, or attachments are unattested"
             )
+        if self.native_selection is not None:
+            await self._attest_state_volume(snapshot["expiresAt"], gateway=gateway)
         private, identities = await self._private_addresses(gateway_id=gateway["Id"])
         if identities != snapshot["targetIdentities"] or any(
             list(v) != snapshot["addresses"].get(k) for k, v in private.items()
@@ -637,7 +1157,19 @@ class ScopedEgressLease:
             if forwarding.strip() != b"0":
                 raise RuntimeError("scoped egress proxy cannot forward IP packets")
             code, _, _ = await self.runner(
-                ("exec", gateway["Id"], "squid", "-k", "check", "-f", _CONFIG)
+                (
+                    "exec",
+                    gateway["Id"],
+                    "python",
+                    _NATIVE_SCRIPT,
+                    "--config",
+                    _CONFIG,
+                    "--state-directory",
+                    _NATIVE_STATE,
+                    "--check",
+                )
+                if self.native_selection is not None
+                else ("exec", gateway["Id"], "squid", "-k", "check", "-f", _CONFIG)
             )
             if code:
                 raise RuntimeError("scoped egress proxy process is unavailable")
@@ -703,14 +1235,29 @@ class ScopedEgressLease:
                 "evidenceStage": "created_unstarted",
                 "snapshotDigest": _digest(snapshot),
             }
-        log = await self._checked("exec", gateway["Id"], "cat", _LOG)
-        denied = denied_connection_count(
-            log,
-            client_address=snapshot["clientAddress"],
-            started_at=started_at,
-            finished_at=finished_at,
+        if self.native_selection is not None:
+            counters = await self._native_counters(gateway, snapshot)
+            denied = sum(counters["denials"].values())
+            log = b""
+        else:
+            counters = None
+            log = await self._checked("exec", gateway["Id"], "cat", _LOG)
+        denied = (
+            denied
+            if counters is not None
+            else denied_connection_count(
+                log,
+                client_address=snapshot["clientAddress"],
+                started_at=started_at,
+                finished_at=finished_at,
+            )
         )
         return {
+            **(
+                {"nativeNetwork": counters, **self._native_attribution(snapshot)}
+                if counters is not None
+                else {}
+            ),
             "profileRef": self.policy.policy_ref,
             "profileDigest": self.policy.digest,
             "networkRef": self.network_ref,
@@ -722,7 +1269,7 @@ class ScopedEgressLease:
             "clientAddress": snapshot["clientAddress"],
             "expiresAt": snapshot["expiresAt"],
             "resolution": "validated_pinned_job_snapshot",
-            "purposes": sorted({d.purpose for d in self.policy.destinations}),
+            "purposes": sorted({d.purpose for d in self._destinations}),
             "attachmentIdentity": self.workload_ref if target else None,
             "deniedConnectionCount": denied,
             "denialDiagnostics": list(
@@ -742,6 +1289,11 @@ class ScopedEgressLease:
         if gateway is not None:
             self._owned(gateway, cleanup=True)
             await self._checked("rm", "--force", gateway["Id"])
+        if self.native_selection is not None:
+            state = await self._optional(self.state_ref, volume=True)
+            if state is not None:
+                self._owned(state, network=True, cleanup=True)
+                await self._checked("volume", "rm", self.state_ref)
         for name in (self.network_ref, self.outbound_ref, self.subnet_ref):
             network = await self._optional(name, network=True)
             if network is not None:

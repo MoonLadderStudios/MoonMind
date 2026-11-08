@@ -10042,6 +10042,52 @@ export interface components {
              */
             mode: "read_only" | "read_write";
         };
+        /** NativeNetworkLimits */
+        NativeNetworkLimits: {
+            /** Maxconnections */
+            maxConnections: number;
+            /** Maxbytes */
+            maxBytes: number;
+            /** Maxconnectionspersecond */
+            maxConnectionsPerSecond: number;
+            /** Maxconcurrentconnections */
+            maxConcurrentConnections: number;
+            /** Maxdurationseconds */
+            maxDurationSeconds: number;
+        };
+        /** NativeNetworkSelection */
+        NativeNetworkSelection: {
+            /**
+             * Operation
+             * @default tcp-connect
+             * @constant
+             */
+            operation: "tcp-connect";
+            /** Targets */
+            targets: components["schemas"]["NativeNetworkTarget"][];
+            limits: components["schemas"]["NativeNetworkLimits"];
+        };
+        /** NativeNetworkTarget */
+        NativeNetworkTarget: {
+            /** Hosts */
+            hosts: string[];
+            /** Ports */
+            ports: number[];
+            /**
+             * Exclusions
+             * @default []
+             */
+            exclusions: string[];
+            /**
+             * Purpose
+             * @constant
+             */
+            purpose: "live-target";
+            /** Targetnetworkref */
+            targetNetworkRef?: string | null;
+            /** Targetcontainerref */
+            targetContainerRef?: string | null;
+        };
         /** NetworkPolicy */
         NetworkPolicy: {
             /** Attachmentref */
@@ -14471,6 +14517,7 @@ export interface components {
             configurationExceptions?: string[];
             /** Assessmentref */
             assessmentRef?: string | null;
+            nativeNetwork?: components["schemas"]["NativeNetworkSelection"] | null;
             /** Credentials */
             credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };
