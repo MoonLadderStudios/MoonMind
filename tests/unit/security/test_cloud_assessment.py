@@ -899,3 +899,28 @@ def test_mapping_count_and_aggregate_bounds_are_reported():
     assert mappings == [] and limits and remaining == 0
     mappings, limits, remaining = _compliance_mappings(record, 0, 20)
     assert len(mappings) == 1 and limits and 0 <= remaining < 20
+
+
+def test_future_check_cannot_borrow_an_earlier_same_day_observation_window():
+    from copy import deepcopy
+
+    row = json.loads(records("basic.ocsf.json", "PASS"))[0]
+    later = deepcopy(row)
+    later["finding_info"]["uid"] += "-later"
+    later["time"] = int((NOW + timedelta(hours=1)).timestamp())
+    later["time_dt"] = (NOW + timedelta(hours=1)).isoformat()
+    result = summarize_cloud_assessment(
+        admission(regions=["us-east-1"], checks=[row["metadata"]["event_code"]]),
+        image=IMAGE,
+        report=json.dumps([row, later]).encode(),
+        log=b"",
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_native",
+    )
+    assessed, observed, _ = evaluate_cloud_control(result, complete=True)
+    assert assessed.conclusion == "inconclusive"
+    assert not observed.complete(NOW)
+    assert observed.expires_at == datetime.fromtimestamp(row["time"], UTC) + timedelta(
+        days=1
+    )

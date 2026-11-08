@@ -497,15 +497,18 @@ def _cloud_control_evidence(summary: CloudAssessmentSummary):
                     raise ValueError("unknown timezone")
             else:
                 raise ValueError("no observation time")
-            observed.append(stamp)
+            observed.append(stamp.astimezone(UTC))
         except (ValueError, OverflowError, OSError):
             reasons.add("observation_time_unknown")
     if any(set(admission.regions) - regions for regions in by_rule.values()):
         reasons.add("region_population_incomplete")
     if len({stamp.date() for stamp in observed}) > 1:
         reasons.add("multiple_observation_dates")
-    return sorted(reasons), (
-        min(observed) if observed and len(observed) == len(checks) else None
+    known_times = observed and len(observed) == len(checks)
+    return (
+        sorted(reasons),
+        min(observed) if known_times else None,
+        max(observed) if known_times else None,
     )
 
 
@@ -531,12 +534,14 @@ def _cloud_observation(
         status = "failed"
     else:
         status = "partial"
-    control_limits, observed_at = _cloud_control_evidence(summary)
-    observed_at = observed_at or created_at
+    control_limits, earliest, latest = _cloud_control_evidence(summary)
+    # Every contributing record must already exist, while the oldest record
+    # still decides expiry. Neither future nor stale rows borrow another's age.
+    observed_at = latest or created_at
     return Observation(
         scope=request.scope,
         observed_at=observed_at,
-        expires_at=observed_at + timedelta(days=1),
+        expires_at=(earliest or created_at) + timedelta(days=1),
         findings=result.findings,
         coverage=[
             Coverage(
