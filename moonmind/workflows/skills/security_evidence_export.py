@@ -72,6 +72,10 @@ async def _write_retained(execution, payload, *, kind, content_type="application
     ):
         if (artifact.metadata_json or {}).get("subject") != digest:
             continue
+        # A matching upload intent is not a retained result. As with native
+        # saved work, only completed records can be read and reused.
+        if getattr(artifact.status, "value", artifact.status) != "complete":
+            continue
         observed, body = await execution.service.read(
             artifact_id=artifact.artifact_id, access=execution.access
         )

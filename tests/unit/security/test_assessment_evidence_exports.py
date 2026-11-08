@@ -393,6 +393,156 @@ async def test_export_publication_retry_reuses_sealed_native_and_package_work(
     assert len(packages) == 1
 
 
+@pytest.mark.parametrize(
+    "kind",
+    ["security.evidence-export-manifest", "security.evidence-export"],
+    ids=["manifest", "package"],
+)
+@pytest.mark.parametrize(
+    "state", ["pending_upload", "failed"], ids=["pending", "failed"]
+)
+@pytest.mark.asyncio
+async def test_export_retry_skips_interrupted_uploads_without_repeating_native_work(
+    environment, monkeypatch, kind, state
+):
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    request["evidenceExport"] = {"artifactRefs": [request["inventoryRef"]]}
+    write = service.write_payload_complete
+    interrupted = []
+
+    async def interrupt(**kwargs):
+        links = await service._repository.list_links(kwargs["artifact_id"])
+        if not interrupted and any(link.link_type == kind for link in links):
+            interrupted.append(kwargs["artifact_id"])
+            if state == "failed":
+                # The real upload owner rejects mismatched declared bytes and
+                # durably marks the logical artifact failed.
+                return await write(**{**kwargs, "payload": b"synthetic wrong upload"})
+            raise ConnectionError("synthetic upload interruption")
+        return await write(**kwargs)
+
+    monkeypatch.setattr(service, "write_payload_complete", interrupt)
+    first = await recurring.invoke(service, request)
+    assert first["scanOutcome"] == "completed"
+    assert first["publicationOutcome"] == "published"
+    assert first["evidenceExport"]["status"] == "failed"
+    assert len(interrupted) == 1
+    unfinished = await service._repository.get_artifact(interrupted[0])
+    assert unfinished.status.value == state
+    subject = unfinished.metadata_json["subject"]
+
+    def repeat_forbidden(*_args, **_kwargs):
+        raise AssertionError("completed native observation repeated")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        repeat_forbidden,
+    )
+    await environment.session.close()
+    async with environment.sessions() as session:
+        restarted = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(environment.storage_root),
+        )
+        second = await recurring.invoke(restarted, request)
+        assert second["scanRef"] == first["scanRef"]
+        assert second["comparisonRef"] == first["comparisonRef"]
+        assert recurring.report_ref(second) == recurring.report_ref(first)
+        assert second["evidenceExport"]["status"] == "exported", second[
+            "evidenceExport"
+        ]
+        await unpack(restarted, second)
+        third = await recurring.invoke(restarted, request)
+        assert (
+            third["evidenceExport"]["packageRef"]
+            == second["evidenceExport"]["packageRef"]
+        )
+        assert (
+            third["evidenceExport"]["manifestRef"]
+            == second["evidenceExport"]["manifestRef"]
+        )
+        rows = await restarted.list_for_execution(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="run",
+            link_type=kind,
+            access=access_for_test("workflow:assessment"),
+        )
+        assert len(rows) == 2
+        assert {row.metadata_json["subject"] for row in rows} == {subject}
+        assert {row.status.value for row in rows} == {state, "complete"}
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["security.evidence-export-manifest", "security.evidence-export"],
+    ids=["manifest", "package"],
+)
+@pytest.mark.parametrize("fault", ["corrupt", "revoked"], ids=["integrity", "access"])
+@pytest.mark.asyncio
+async def test_completed_export_retry_never_replaces_untrusted_retained_work(
+    environment, monkeypatch, kind, fault
+):
+    from sqlalchemy import delete
+
+    from api_service.db.models import TemporalArtifactLink
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    request["evidenceExport"] = {"artifactRefs": [request["inventoryRef"]]}
+    first = await recurring.invoke(service, request)
+    assert first["evidenceExport"]["status"] == "exported"
+    ref = first["evidenceExport"][
+        "manifestRef" if kind.endswith("manifest") else "packageRef"
+    ]
+    artifact = await service._repository.get_artifact(ref)
+    if fault == "corrupt":
+        service._store.write_bytes(
+            artifact.storage_key,
+            b"synthetic corrupted retained bytes",
+            content_type=artifact.content_type,
+        )
+    else:
+        await environment.session.execute(
+            delete(TemporalArtifactLink).where(
+                TemporalArtifactLink.artifact_id == ref,
+                TemporalArtifactLink.workflow_id == "assessment",
+                TemporalArtifactLink.link_type == "input.artifact.raw",
+            )
+        )
+        await environment.session.commit()
+
+    def repeat_forbidden(*_args, **_kwargs):
+        raise AssertionError("completed native observation repeated")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.security_assessment.observe_inventory",
+        repeat_forbidden,
+    )
+    second = await recurring.invoke(service, request)
+    assert second["scanRef"] == first["scanRef"]
+    assert second["comparisonRef"] == first["comparisonRef"]
+    assert second["publicationOutcome"] == "published"
+    assert "packageRef" not in second["evidenceExport"]
+    assert second["evidenceExport"]["status"] in {"failed", "unavailable"}
+    rows = await service.list_for_execution(
+        namespace="default",
+        workflow_id="assessment",
+        run_id="run",
+        link_type=kind,
+        access=access_for_test("workflow:assessment"),
+    )
+    assert [row.artifact_id for row in rows] == [ref]
+    assert rows[0].status.value == "complete"
+
+
 @pytest.mark.asyncio
 async def test_selected_sanitized_native_scanner_json_keeps_structure_and_identity(
     environment,
