@@ -930,6 +930,9 @@ RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
 RUN_ARTIFACT_BACKED_VERIFIER_INSTRUCTION_PATCH = (
     "run-artifact-backed-verifier-instruction-v1"
 )
+# Search diagnostics stay in trusted state/tool outputs; only new agent prompts
+# omit histories of candidates that were not selected.
+RUN_SELECTED_ISSUE_SEARCH_PROMPT_PATCH = "run-selected-issue-search-prompt-v1"
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = "run-moonspec-verify-remediation-index-v1"
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
 RUN_MOONSPEC_TITLE_ROLE_SKILL_BOUNDARY_PATCH = "run-moonspec-title-role-skill-boundary-v1"
@@ -10472,6 +10475,39 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
         )
         previous_outputs = node_inputs.get("previousOutputs")
+        omitted_search_candidates = False
+        if agent_kind is not None and isinstance(previous_outputs, Mapping):
+            source = self._trusted_issue_context or {}
+            issue = source.get("issue")
+            search = previous_outputs.get("searchEvidence")
+            if (
+                source.get("trustedSource") == "moonmind.github.get_issue"
+                and previous_outputs.get("trustedSource") == source["trustedSource"]
+                and isinstance(issue, Mapping)
+                and issue.get("repository")
+                and type(issue.get("number")) is int
+                and issue["number"] > 0
+                and previous_outputs.get("issue") == issue
+                and isinstance(search, Mapping)
+                and search == source.get("searchEvidence")
+                and isinstance(search.get("rejectedCandidates"), list)
+                and search["rejectedCandidates"]
+                and self._patched_or_false_outside_workflow(
+                    RUN_SELECTED_ISSUE_SEARCH_PROMPT_PATCH
+                )
+            ):
+                # Presentation only: preserve the selected issue, claim, author
+                # scope, aggregate diagnostics and all unknown fields. Tools and
+                # replay/recovery still consume the complete recorded context.
+                previous_outputs = {
+                    **previous_outputs,
+                    "searchEvidence": {
+                        key: value
+                        for key, value in search.items()
+                        if key not in {"rejectedCandidates", "rejectedCandidatesTruncated"}
+                    },
+                }
+                omitted_search_candidates = True
         artifact_backed_gate = False
         if (
             include_assessment
@@ -10520,6 +10556,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if not previous_context:
             return dict(node_inputs)
+        if omitted_search_candidates:
+            previous_context += (
+                "\nOther candidates' rejection details are omitted from this agent "
+                "handoff; the trusted issue-selection tool result retains them. "
+                "Continue the selected issue without repeating search."
+            )
         if artifact_backed_gate:
             previous_context += (
                 "\nRead the complete controlling verifier attachment, including all "
