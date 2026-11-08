@@ -28,7 +28,9 @@ CLOCK = datetime(2026, 6, 1, tzinfo=UTC)
 HOST = "tls.example.test"
 
 
-def certificates(root: Path, *, hostname=HOST, expired=False, valid_at=None):
+def certificates(
+    root: Path, *, hostname=HOST, expired=False, valid_at=None, common_name=None
+):
     """Root/intermediate/leaf chain with a controlled validity interval."""
     root.mkdir(parents=True, exist_ok=True)
     keys = [
@@ -36,7 +38,7 @@ def certificates(root: Path, *, hostname=HOST, expired=False, valid_at=None):
     ]
     names = [
         x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, v)])
-        for v in ("Fixture root", "Fixture intermediate", hostname)
+        for v in ("Fixture root", "Fixture intermediate", common_name or hostname)
     ]
     certs = []
     for index in range(3):
@@ -86,12 +88,20 @@ class _Server(socketserver.ThreadingTCPServer):
 
 @contextmanager
 def tls_server(
-    root: Path, *, hostname=HOST, expired=False, legacy=False, existing=False
+    root: Path,
+    *,
+    hostname=HOST,
+    expired=False,
+    legacy=False,
+    existing=False,
+    common_name=None,
 ):
     cert, key, ca = (
         (root / "chain.pem", root / "key.pem", root / "ca.pem")
         if existing
-        else certificates(root, hostname=hostname, expired=expired)
+        else certificates(
+            root, hostname=hostname, expired=expired, common_name=common_name
+        )
     )
     events = []
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -206,6 +216,9 @@ def qualify(output: Path):
                 else Path(private),
                 existing=scenario == "private-ca",
                 hostname="wrong.example.test" if scenario == "wrong-host" else HOST,
+                common_name="no protocols available, Cipher is NONE, New, TLSv1.3"
+                if scenario == "wrong-host"
+                else None,
                 expired=scenario == "expired",
                 legacy=scenario == "legacy",
             ) as (port, ca, server_events),

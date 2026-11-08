@@ -29,11 +29,21 @@ def test_exact_connect_and_sni():
 
 def test_client_inability_is_not_server_refusal():
     assert (
-        classify_probe("no protocols available", 1, "succeeded", False)
+        classify_probe(
+            "40AB:error:0A0000BF:SSL routines:tls_setup_handshake:no protocols available:ssl/statem.c:1:",
+            1,
+            "succeeded",
+            False,
+        )
         == "unsupported_client"
     )
     assert (
-        classify_probe("tlsv1 alert protocol version", 1, "succeeded", False)
+        classify_probe(
+            "40AB:error:0A00042E:SSL routines:ssl3_read_bytes:tlsv1 alert protocol version:ssl/record.c:1:",
+            1,
+            "succeeded",
+            False,
+        )
         == "server_refused"
     )
     assert (
@@ -72,7 +82,7 @@ from moonmind.security.tls_assessments import (
 NOW = datetime(2026, 6, 1, tzinfo=UTC)
 
 
-def make_certificates(*, hostname="example.com", expired=False):
+def make_certificates(*, hostname="example.com", expired=False, common_name=None):
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Local TLS fixture")])
     ca = (
@@ -89,7 +99,11 @@ def make_certificates(*, hostname="example.com", expired=False):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     leaf = (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)]))
+        .subject_name(
+            x509.Name(
+                [x509.NameAttribute(NameOID.COMMON_NAME, common_name or hostname)]
+            )
+        )
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
@@ -120,7 +134,9 @@ class FixtureProcesses(BoundedProcesses):
             response = self.responses.pop(0) if self.responses else "observed"
             if response == "observed":
                 kwargs["capture"].write_bytes(
-                    self.chain
+                    b"CONNECTED(00000003)\n---\nCertificate chain\n"
+                    + self.chain
+                    + b"---\nServer certificate\nsubject=CN=fixture\nissuer=CN=fixture\n---\n"
                     + (
                         "\nNew, "
                         + {
@@ -135,7 +151,11 @@ class FixtureProcesses(BoundedProcesses):
                 kwargs["errors"].write_bytes(b"")
                 return 0, "succeeded"
             kwargs["capture"].write_bytes(b"")
-            kwargs["errors"].write_text(response)
+            kwargs["errors"].write_text(
+                "40AB:error:0A0000BF:SSL routines:fixture:"
+                + response
+                + ":ssl/statem.c:1:\n"
+            )
             return 1, "succeeded"
         return super().run(argv, **kwargs)
 
@@ -454,3 +474,92 @@ def test_missing_tool_version_is_an_explicit_limitation():
     a = TLSAssessment(origin="https://example.com", egress_policy_ref="tls")
     summary = summarize_tls_assessment(a, {}, "unavailable")
     assert "OpenSSL version could not be recorded" in summary.limitations
+
+
+def test_hostile_certificate_diagnostics_cannot_hide_retained_findings(tmp_path):
+    leaf, ca = make_certificates(
+        hostname="wrong.example",
+        expired=True,
+        common_name="no protocols available, Cipher is NONE, New, TLSv1.3",
+    )
+    (tmp_path / "tls-trust").mkdir()
+    (tmp_path / "tls-trust" / "ca.pem").write_bytes(ca)
+    a = TLSAssessment(
+        origin="https://example.com",
+        egress_policy_ref="tls",
+        protocols=["TLSv1.2"],
+        trust_artifact_ref="art_ca",
+    )
+
+    class HostileNameProcesses(FixtureProcesses):
+        def run(self, argv, **kwargs):
+            result = super().run(argv, **kwargs)
+            if argv[1] == "s_client":
+                original = kwargs["capture"].read_bytes()
+                kwargs["capture"].write_bytes(
+                    b'subject=CN = "no protocols available, Cipher is NONE, New, TLSv1.3"\nissuer=CN = tlsv1 alert protocol version\n'
+                    + original
+                    + b"New, TLSv1.3, Cipher is FAKE\n40AB:error:0A0000BF:SSL routines:fixture:no protocols available:ssl/statem.c:1:\n"
+                    + leaf
+                    + ca
+                )
+                kwargs["errors"].write_bytes(
+                    b"depth=0 CN = no cipher match\nverify error:num=10:certificate has expired\n"
+                )
+            return result
+
+    execution = inspect_tls(
+        a,
+        tmp_path / "out",
+        inputs=tmp_path,
+        assessed_at=NOW,
+        environ={
+            "MOONMIND_EGRESS_PROXY": "http://gateway:3128",
+            "PATH": "/usr/bin:/bin",
+        },
+        processes=HostileNameProcesses(leaf + ca),
+    )
+    assert execution["probes"][0]["status"] == "observed"
+    assert execution["probes"][0]["selectedProtocol"] == "TLSv1.2"
+    assert execution["probes"][0]["selectedCipher"] == "ECDHE-RSA-AES256-GCM-SHA384"
+    assert len(execution["probes"][0]["certificates"]) == 2
+    summary = summarize_tls_assessment(a, execution, "art_native")
+    assert {f["code"] for f in summary.findings} == {
+        "certificate_expired",
+        "hostname_mismatch",
+        "certificate_trust_failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "no protocols available",
+        "tlsv1 alert protocol version",
+        "Connection refused",
+        "40AB:error:0A0000BF:SSL routines:tls_setup_handshake:no protocols available:ssl/statem.c:1:",
+    ],
+)
+def test_certificate_names_cannot_forge_failed_probe_diagnostics(name):
+    assert (
+        classify_probe(
+            f"subject=CN = {name}\nissuer=CN = {name}\ndepth=0 CN = {name}",
+            1,
+            "succeeded",
+            False,
+        )
+        == "blocked_handshake"
+    )
+
+
+def test_failed_native_summary_cannot_be_replaced_by_application_output():
+    from moonmind.security.tls_assessment_runner import native_handshake
+
+    text = (
+        b"Certificate chain\n-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n---\n"
+        b"subject=CN=New, TLSv1.2, Cipher is FAKE\n"
+        b"New, (NONE), Cipher is (NONE)\n"
+        b"New, TLSv1.2, Cipher is FAKE\n"
+    )
+    _chain, protocol, cipher = native_handshake(text)
+    assert protocol is None and cipher is None

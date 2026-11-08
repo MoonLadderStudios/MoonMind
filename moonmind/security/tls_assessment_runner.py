@@ -56,6 +56,8 @@ def probe_command(
         "-servername",
         u.hostname,
         "-showcerts",
+        "-nameopt",
+        "RFC2253",
         _FLAGS[protocol],
     ]
     if cipher:
@@ -64,45 +66,83 @@ def probe_command(
 
 
 def classify_probe(text: str, code: int | None, state: str, negotiated: bool) -> str:
-    text = text.lower()
-    if state in {"timed_out", "canceled"}:
-        return "transient_failure"
-    if any(
-        v in text
-        for v in (
-            "no protocols available",
-            "no ciphers available",
-            "no cipher match",
-            "unknown option",
-            "unsupported protocol",
-            "library has no ciphers",
-            "legacy sigalg disallowed",
-            "no suitable signature algorithm",
-            "ee key too small",
-            "ca md too weak",
-            "dh key too small",
-            "unsafe legacy renegotiation disabled",
-        )
-    ):
-        return "unsupported_client"
+    # A confirmed native negotiation wins over subsequent EOF, timeouts and
+    # peer-controlled names. Only OpenSSL's error-stack reason field supplies
+    # failure classification; source paths, data fields and DNs are not reasons.
     if negotiated:
         return "observed"
-    if "alert protocol version" in text:
+    if state in {"timed_out", "canceled"}:
+        return "transient_failure"
+    reasons = {
+        match.group(1).lower()
+        for match in re.finditer(
+            r"^[0-9A-Fa-f]+:error:[0-9A-Fa-f]+:[^:\r\n]*:[^:\r\n]*:([^:\r\n]*):",
+            text,
+            re.MULTILINE,
+        )
+    }
+    client_reasons = {
+        "no protocols available",
+        "no ciphers available",
+        "no cipher match",
+        "unsupported protocol",
+        "library has no ciphers",
+        "legacy sigalg disallowed",
+        "no suitable signature algorithm",
+        "ee key too small",
+        "ca md too weak",
+        "dh key too small",
+        "unsafe legacy renegotiation disabled",
+    }
+    if reasons & client_reasons or re.search(
+        r"^s_client: Unknown option: -[A-Za-z0-9_]+$", text, re.MULTILINE
+    ):
+        return "unsupported_client"
+    if "tlsv1 alert protocol version" in reasons:
         return "server_refused"
     if (
-        any(
-            v in text
-            for v in (
-                "connection refused",
-                "connection timed out",
-                "temporary failure",
-                "name or service not known",
-            )
-        )
+        reasons
+        & {
+            "connection refused",
+            "connection timed out",
+            "temporary failure",
+            "name or service not known",
+        }
+        or re.search(r"^connect:errno=[0-9]+$", text, re.MULTILINE)
         or state == "failed"
     ):
         return "transient_failure"
     return "blocked_handshake"
+
+
+def native_handshake(stdout: bytes) -> tuple[bytes, str | None, str | None]:
+    """Read native chain/summary before application output, never peer text.
+
+    RFC2253 name rendering escapes newlines, so a DN cannot create these native
+    section boundaries. Session data/application output after the first summary
+    cannot add a chain entry or replace a negotiated protocol/cipher.
+    """
+    text = stdout.decode(errors="replace")
+    section = re.search(
+        r"^Certificate chain\r?\n(.*?)^---\r?$", text, re.MULTILINE | re.DOTALL
+    )
+    if section is None:
+        return b"", None, None
+    line = re.search(r"^New, [^\r\n]*", text[section.end() :], re.MULTILINE)
+    summary = re.fullmatch(
+        r"New, (TLSv1(?:\.[0-3])?), Cipher is ([A-Za-z0-9_-]+)",
+        line.group(0) if line else "",
+    )
+    if summary is None:
+        return section.group(1).encode(), None, None
+    protocol, cipher = summary.groups()
+    if protocol == "TLSv1.0":
+        protocol = "TLSv1"
+    return (
+        section.group(1).encode(),
+        protocol,
+        None if cipher in {"NONE", "0000"} else cipher,
+    )
 
 
 def certificate_evidence(
@@ -280,31 +320,18 @@ def inspect_tls(
                     )
                 finally:
                     processes.deadline = outer_deadline
-                raw = _read(capture) + b"\n" + _read(errors)
-                text = raw.decode(errors="replace")
-                selected = re.search(
-                    r"(?:Cipher is |Cipher\s*:\s*)([A-Za-z0-9_-]+)", text
+                stdout, stderr = _read(capture), _read(errors)
+                chain_output, selected_protocol, selected_cipher = native_handshake(
+                    stdout
                 )
-                selected_cipher = (
-                    selected.group(1)
-                    if selected and selected.group(1) not in {"0000", "NONE"}
-                    else None
-                )
-                selected_version = re.search(
-                    r"(?:New, |Protocol\s*:\s*)(TLSv1(?:\.[0-3])?)", text
-                )
-                selected_protocol = (
-                    selected_version.group(1) if selected_version else None
-                )
-                # OpenSSL names TLS 1.0 differently from its selector enum.
-                if selected_protocol == "TLSv1.0":
-                    selected_protocol = "TLSv1"
                 negotiated = bool(
                     selected_cipher
-                    and _PEM.search(raw)
+                    and _PEM.search(chain_output)
                     and selected_protocol == protocol
                 )
-                status = classify_probe(text, code, state, negotiated)
+                status = classify_probe(
+                    stderr.decode(errors="replace"), code, state, negotiated
+                )
                 probe = {
                     "protocol": protocol,
                     "cipher": cipher,
@@ -320,7 +347,7 @@ def inspect_tls(
                 }
                 try:
                     chain, findings, hostname = certificate_evidence(
-                        raw, urlsplit(a.origin).hostname, assessed_at
+                        chain_output, urlsplit(a.origin).hostname, assessed_at
                     )
                     probe.update(
                         certificates=chain, hostnameMatch=hostname, findings=findings
