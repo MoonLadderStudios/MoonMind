@@ -55,7 +55,7 @@ describe('reusable assessment context browser journeys', () => {
     expect(screen.queryByRole('button', { name: 'Add assessment setup' })).toBeNull();
     await page.screenshot({ path: '../../../artifacts/create-ordinary-uncluttered.png' });
     // The segmented control's native radio is hidden behind its clickable label.
-    await userEvent.click(screen.getByRole('radio', { name: 'Tool', exact: true }).closest('label')!);
+    await userEvent.click(screen.getByRole('radio', { name: 'Tool' }).closest('label')!);
     await page.getByRole('button', { name: 'jira.get_issue', exact: true }).click();
     expect(screen.queryByLabelText('Assessment context')).toBeNull();
     await page.getByRole('button', { name: 'security.assess', exact: true }).click();
