@@ -1843,6 +1843,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/assessment-proposal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Assessment Proposal */
+        post: operations["review_assessment_proposal_api_executions_assessment_proposal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -6790,7 +6807,7 @@ export interface components {
          * ContainerJobFailureClass
          * @enum {string}
          */
-        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "credential_expired" | "credential_issuance_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "credential_expired" | "credential_issuance_failed" | "assessment_authority_denied" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
         /** ContainerJobLogEntry */
         ContainerJobLogEntry: {
             /** Sequence */
@@ -18048,6 +18065,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_assessment_proposal_api_executions_assessment_proposal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

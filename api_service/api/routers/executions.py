@@ -105,6 +105,13 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
+from api_service.services.assessment_engagements import (
+    AUTHORITY_KEYS,
+    admit_assessment_parameters,
+    assessment_edit_material,
+    compile_assessment_proposal,
+    validate_retained_assessment,
+)
 from api_service.services.assessment_projects import (
     apply_assessment_project_defaults as _apply_assessment_project_defaults,
 )
@@ -381,7 +388,10 @@ from moonmind.workflows.temporal.publication_recovery import (
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.service import reject_historical_control
+from moonmind.workflows.temporal.service import (
+    UPDATE_REQUEST_DIGEST_KEY,
+    reject_historical_control,
+)
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 
@@ -10619,8 +10629,14 @@ def _build_original_workflow_input_snapshot_payload(
         ),
     }
     workspace_value = payload.get("workspace")
-    if "assessmentProject" in payload:
-        draft["assessmentProject"] = copy.deepcopy(payload["assessmentProject"])
+    for key in (
+        "assessmentProject",
+        "assessmentAuthorizationRef",
+        "assessmentReview",
+        "assessmentScope",
+    ):
+        if key in payload:
+            draft[key] = copy.deepcopy(payload[key])
     if isinstance(workspace_value, Mapping):
         draft["workspace"] = copy.deepcopy(dict(workspace_value))
     for key in ("inputArtifactRef", "planArtifactRef"):
@@ -10681,8 +10697,14 @@ def _snapshot_source_payload_from_parameters(
         ),
     }
     workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
-    if "assessmentProject" in parameters:
-        payload["assessmentProject"] = copy.deepcopy(parameters["assessmentProject"])
+    for key in (
+        "assessmentProject",
+        "assessmentAuthorizationRef",
+        "assessmentReview",
+        "assessmentScope",
+    ):
+        if key in parameters:
+            payload[key] = copy.deepcopy(parameters[key])
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
     for key in ("inputArtifactRef", "planArtifactRef"):
@@ -11839,6 +11861,7 @@ async def _create_execution_from_workflow_request(
     access: ArtifactAccessContext,
     serialized_request: CreateExecutionRequest | None = None,
     creation_defaults_snapshot: WorkflowCreationDefaults | None = None,
+    assessment_already_admitted: bool = False,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     request_type = str(request.type).strip().lower()
     if request_type not in {"task", "workflow"}:
@@ -11939,6 +11962,10 @@ async def _create_execution_from_workflow_request(
         if existing_execution is not None:
             existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution)
+    if not assessment_already_admitted:
+        assessment_scope = await admit_assessment_parameters(
+            payload, session=session, user=user, access=access, principal=principal
+        )
     assessment_project = await _validate_assessment_project_parameter(
         payload, session=session, user=user, access=access
     )
@@ -12026,6 +12053,7 @@ async def _create_execution_from_workflow_request(
         request_payload=payload,
         user=user,
         session=session,
+        assessment_already_admitted=True,
     )
     if route.recurring_response is not None:
         return route.recurring_response
@@ -12574,6 +12602,9 @@ async def _create_execution_from_workflow_request(
         initial_parameters["batchTargets"] = list(payload["batchTargets"])
     if assessment_scope is not None:
         initial_parameters["assessmentScope"] = assessment_scope
+        for key in ("assessmentAuthorizationRef", "assessmentReview"):
+            if key in payload:
+                initial_parameters[key] = copy.deepcopy(payload[key])
     if assessment_project is not None:
         initial_parameters["assessmentProject"] = assessment_project
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
@@ -13662,6 +13693,7 @@ async def _handle_recurring_schedule(
     request_payload: dict[str, Any],
     user: OperatorAdmission,
     session: Any,
+    assessment_already_admitted: bool = False,
 ) -> ScheduleCreatedResponse:
     """Delegate recurring schedule creation to RecurringWorkflowsService."""
     from api_service.services.recurring_workflows_service import (
@@ -13702,6 +13734,7 @@ async def _handle_recurring_schedule(
             # legacy owner values persist as provenance on old rows.
             owner_user_id=None,
             target=target,
+            assessment_already_admitted=assessment_already_admitted,
             policy=schedule.policy,
             agent_profile_selection=agent_profile_selection,
             actor=user,
@@ -13754,6 +13787,7 @@ async def _resolve_schedule_routing(
     request_payload: dict[str, Any],
     user: OperatorAdmission,
     session: Any | None,
+    assessment_already_admitted: bool = False,
 ) -> _ScheduleRouteResult:
     """Shared schedule routing for both Temporal and task-shaped requests.
 
@@ -13779,6 +13813,7 @@ async def _resolve_schedule_routing(
             request_payload=request_payload,
             user=user,
             session=session,
+            assessment_already_admitted=assessment_already_admitted,
         )
         return _ScheduleRouteResult(recurring_response=response)
 
@@ -15422,9 +15457,21 @@ def _fresh_serialized_workflow_request(
     if len(set(resolve_launch_target_profile_selection({"initialParameters": parameters}).runtime_ids)) > 1:
         return None
     if set(parameters) - {
-        "workflow", "task", "targetRuntime", "profileId", "providerProfileRef",
-        "repository", "integration", "requiredCapabilities",
-        "workspaceSpec", "publishMode", "assessmentScope", "assessmentProject", "dependsOn",
+        "workflow",
+        "task",
+        "targetRuntime",
+        "profileId",
+        "providerProfileRef",
+        "repository",
+        "integration",
+        "requiredCapabilities",
+        "workspaceSpec",
+        "publishMode",
+        "assessmentScope",
+        "assessmentProject",
+        "dependsOn",
+        "assessmentAuthorizationRef",
+        "assessmentReview",
         "mergeAutomation",
     }:
         return None
@@ -15481,6 +15528,40 @@ def _fresh_serialized_workflow_request(
         parameters["idempotencyKey"] = request.idempotency_key
     return CreateJobRequest(
         type="workflow", payload=parameters, schedule=request.schedule
+    )
+
+
+@router.post("/assessment-proposal")
+async def review_assessment_proposal(
+    request: dict[str, Any] = Body(...),
+    session: AsyncSession = Depends(get_async_session),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: OperatorAdmission = Depends(get_instance_access),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+) -> dict[str, Any]:
+    ref = request.get("authorizationRef")
+    if not isinstance(ref, str) or not ref:
+        raise _invalid_workflow_request("Select an assessment authorization to review.")
+    material = request.get("payload")
+    if request.get("executionId") is not None:
+        if not isinstance(request["executionId"], str) or not isinstance(
+            material, Mapping
+        ):
+            raise _invalid_workflow_request(
+                "Review a valid execution and complete changed workflow."
+            )
+        record = await _get_owned_execution(
+            service=service, workflow_id=request["executionId"], user=user
+        )
+        material = assessment_edit_material(
+            record,
+            material,
+            input_artifact_ref=material.get("inputArtifactRef"),
+            plan_artifact_ref=material.get("planArtifactRef"),
+        )
+    return await compile_assessment_proposal(
+        material, ref, session=session, user=user, access=access
     )
 
 
@@ -15584,6 +15665,21 @@ async def create_execution(
         if existing is not None:
             existing = await service.ensure_create_started(existing)
             return _serialize_execution(existing, user=user)
+        assessment_scope = await admit_assessment_parameters(
+            request.initial_parameters,
+            session=session,
+            user=user,
+            access=access,
+            principal=(principal_context or {}).get("verified_principal"),
+            plan_overrides=request.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+                exclude_unset=True,
+                exclude={"initial_parameters"},
+            ),
+        )
+        payload["initialParameters"] = request.initial_parameters
         assessment_project = await _validate_assessment_project_parameter(
             request.initial_parameters, session=session, user=user, access=access
         )
@@ -15609,6 +15705,7 @@ async def create_execution(
             request_payload=payload,
             user=user,
             session=session,
+            assessment_already_admitted=True,
         )
         if route.recurring_response is not None:
             return route.recurring_response
@@ -15777,9 +15874,14 @@ async def create_execution(
                             provider_profile_inferred=True,
                         )
                     return await _create_execution_from_workflow_request(
-                        request=workflow_request, service=service, user=user,
-                        session=session, principal_context=principal_context,
-                        access=access, serialized_request=request,
+                        request=workflow_request,
+                        service=service,
+                        user=user,
+                        session=session,
+                        principal_context=principal_context,
+                        access=access,
+                        serialized_request=request,
+                        assessment_already_admitted=True,
                         creation_defaults_snapshot=creation_defaults,
                     )
 
@@ -19602,6 +19704,25 @@ def _pinned_continuation_source(
     return pinned
 
 
+def _require_unscoped_linked_continuation(*parameter_documents: Mapping[str, Any]) -> None:
+    if any(
+        parameters.get(key) is not None
+        for parameters in parameter_documents
+        for key in AUTHORITY_KEYS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "assessment_review_required",
+                "message": (
+                    "Linked continuations cannot review assessment authority. "
+                    "Use Create, select a saved authorization, and review the "
+                    "complete successor workflow before starting."
+                ),
+            },
+        )
+
+
 @router.post(
     "/{workflow_id}/continue",
     response_model=ContinueInNewWorkflowResponse,
@@ -19793,6 +19914,13 @@ async def continue_in_new_workflow(
             or []
         )
     else:
+        # This route authors a new turn and new copied inputs without a review
+        # preview. It must not inherit stale review, erase retained scope, or
+        # admit raw authored authority. Accepted destinations above still own
+        # their exact reconciliation; only new work needs the Create journey.
+        _require_unscoped_linked_continuation(
+            canonical.parameters or {}, payload.initial_parameters or {}
+        )
         # Author the destination through the ordinary create path. Inherit the
         # source's authored choices (sanitized like a rerun), layer operator-authored
         # overrides, then pin the source lineage so both Workflows present the linked
@@ -19807,6 +19935,7 @@ async def continue_in_new_workflow(
                 access=access,
             )
         )
+        _require_unscoped_linked_continuation(source_payload)
         # The artifact can own instructions, steps, and top-level settings even
         # when the retained parameters contain a partial task. Hydrate both layers
         # before sanitizing rerun-only state and applying the new authored turn.
@@ -20355,7 +20484,58 @@ async def update_execution(
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
+    request_digest = compute_request_digest(
+        payload.model_dump(mode="json", by_alias=True, exclude={"idempotency_key"})
+    )
+    cached = getattr(record, "last_update_response", None)
+    if (
+        payload.idempotency_key
+        and payload.idempotency_key == getattr(record, "last_update_idempotency_key", None)
+        and isinstance(cached, dict)
+        and cached.get(UPDATE_REQUEST_DIGEST_KEY)
+    ):
+        if cached[UPDATE_REQUEST_DIGEST_KEY] != request_digest:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "idempotency_conflict",
+                    "message": "This idempotency key was already used for a different update request.",
+                },
+            )
+        if cached.get("accepted") is True:
+            # Reconcile the existing durable receipt before rechecking mutable
+            # authority or the run identity changed by an accepted rerun. This
+            # does not dispatch work or grant permission for another action.
+            destination_id = str(cached.get("workflow_id") or record.workflow_id)
+            destination = record
+            if destination_id != record.workflow_id:
+                destination = await _get_owned_execution(
+                    service=service, workflow_id=destination_id, user=user
+                )
+            canonical_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+            if alias_used:
+                _mark_execution_alias_usage(
+                    response,
+                    raw_identifier=workflow_id,
+                    canonical_identifier=canonical_id,
+                )
+            return UpdateExecutionResponse(
+                **cached,
+                execution=_serialize_execution(destination, user=user),
+                refresh=ExecutionRefreshEnvelope(
+                    patched_execution=True,
+                    list_stale=True,
+                    refetch_suggested=True,
+                    refreshed_at=_compatibility_refreshed_at(destination),
+                ),
+            )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
+    assessment_update = is_task_editing_update and any(
+        (record.parameters or {}).get(key) is not None
+        or (payload.parameters_patch or {}).get(key) is not None
+        for key in AUTHORITY_KEYS
+    )
+    reviewed_run_id = record.run_id if assessment_update else None
     recorded_plan = (
         (getattr(record, "parameters", None) or {}).get("omnigentExecutionPlan")
         if isinstance(getattr(record, "parameters", None), Mapping)
@@ -20447,6 +20627,45 @@ async def update_execution(
             _admitted_assessment_scope_parameter(
                 effective_parameters["assessmentScope"], principal=None
             )
+        if exact_plan_rerun:
+            await validate_retained_assessment(effective_parameters, session=session)
+        elif any(
+            effective_parameters.get(key) is not None
+            or (record.parameters or {}).get(key) is not None
+            for key in AUTHORITY_KEYS
+        ):
+            # A patch cannot turn an admitted assessment into unrestricted
+            # work by clearing all three authority fields before this check.
+            reviewed_parameters = copy.deepcopy(dict(payload.parameters_patch or {}))
+            if not reviewed_parameters.get("assessmentAuthorizationRef"):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "assessment_review_required",
+                        "message": "Review the complete changed assessment with a saved authorization before applying edits.",
+                    },
+                )
+            await admit_assessment_parameters(
+                reviewed_parameters,
+                session=session,
+                user=user,
+                access=access,
+                plan_overrides=assessment_edit_material(
+                    record,
+                    reviewed_parameters,
+                    input_artifact_ref=payload.input_artifact_ref,
+                    plan_artifact_ref=payload.plan_artifact_ref,
+                ),
+            )
+            effective_parameters_patch = copy.deepcopy(
+                dict(effective_parameters_patch or {})
+            )
+            for key in (
+                "assessmentScope",
+                "assessmentAuthorizationRef",
+                "assessmentReview",
+            ):
+                effective_parameters_patch[key] = reviewed_parameters[key]
         if "assessmentProject" in effective_parameters and not exact_plan_rerun:
             effective_parameters_patch = copy.deepcopy(
                 dict(effective_parameters_patch or {})
@@ -20489,7 +20708,19 @@ async def update_execution(
             parameters_patch=effective_parameters_patch,
             title=payload.title,
             idempotency_key=payload.idempotency_key,
+            **(
+                {"request_digest": request_digest, "expected_run_id": reviewed_run_id}
+                if assessment_update else {}
+            ),
         )
+    except TemporalExecutionTargetRunChangedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "assessment_review_required",
+                "message": "The source run changed before applying this assessment update. Review the current workflow before trying again.",
+            },
+        ) from exc
     except (
         TemporalExecutionRerunPlanError,
         TemporalExecutionRerunSkillSnapshotError,
@@ -20943,6 +21174,7 @@ async def rerun_execution(
         _admitted_assessment_scope_parameter(
             initial_params["assessmentScope"], principal=None
         )
+    await validate_retained_assessment(initial_params, session=session)
     reserved_workflow_id = f"mm:{_uuid4()}"
     if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
         try:

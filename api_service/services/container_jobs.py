@@ -14,11 +14,20 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Protocol
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ContainerJobRecord
+from api_service.services.assessment_authorizations import (
+    AssessmentAuthorizationDenied,
+    assessment_marked,
+    assessment_reserved_budget,
+    bind_assessment_job,
+    capture_assessment_review,
+    lock_assessment_admission,
+    validate_job_assessment_authority,
+)
 from api_service.services.registry_authorization import (
     PrivateImageAuthorizationService,
     load_default_authorization_policy,
@@ -250,28 +259,6 @@ class ContainerJobRepository:
             )
         return existing
 
-    async def count_assessment_jobs(
-        self, *, owner: OwnerIdentity, assessment_ref: str
-    ) -> int:
-        spec = ContainerJobRecord.request_json["spec"]
-        profile = spec["workloadProfile"]["assessmentRef"].as_string()
-        web = spec["webAssessment"]["assessmentRef"].as_string()
-        cloud = spec["cloudAssessment"]["assessmentRef"].as_string()
-        return int(
-            await self._session.scalar(
-                select(func.count()).where(
-                    ContainerJobRecord.owner_id == owner.principal_id,
-                    ContainerJobRecord.owner_type == owner.principal_type,
-                    or_(
-                        profile == assessment_ref,
-                        web == assessment_ref,
-                        cloud == assessment_ref,
-                    ),
-                )
-            )
-            or 0
-        )
-
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
         result = await self._session.execute(
             select(ContainerJobRecord).where(
@@ -382,15 +369,10 @@ class ContainerJobService:
             update={"spec": resolve_profile_job(request.spec, profiles)}
         )
         scope = self._capability.assessment_scope if self._capability else None
-        if scope is None and (
-            request.spec.web_assessment is not None
-            or request.spec.tls_assessment is not None
-            or request.spec.cloud_assessment is not None
-        ):
+        if scope is None and assessment_marked(request.spec):
             # Reaching a target does not authorize acting on it.
             raise ContainerJobScopeDeniedError(
-                "web, TLS and cloud assessments run only inside an admitted "
-                "assessment scope"
+                "assessment jobs run only inside an admitted assessment scope"
             )
         if scope is not None:
             try:
@@ -471,13 +453,23 @@ class ContainerJobService:
             # by exact replay; new ones must read a captured input instead of
             # the live workspace.
             validate_scanner_job(request.spec, allow_legacy=False)
-            if scope is not None and (
-                await self.repository.count_assessment_jobs(
-                    owner=owner, assessment_ref=scope.assessment_ref
-                )
-                >= scope.max_jobs
-            ):
-                raise ContainerJobScopeDeniedError("assessment job budget is exhausted")
+            if scope is not None:
+                try:
+                    await lock_assessment_admission(
+                        self._session, scope, workflow_id=request.source.workflow_id
+                    )
+                    # Recheck after serialization: a concurrent exact request
+                    # may already own its one reservation.
+                    existing = await self.repository.find_exact_replay(owner=owner, request=request)
+                    if existing is None:
+                        jobs, seconds = await assessment_reserved_budget(self._session, scope)
+                        if jobs >= scope.max_jobs or (
+                            scope.engagement is not None
+                            and seconds + request.spec.timeout_seconds > scope.engagement.max_total_job_seconds
+                        ):
+                            raise AssessmentAuthorizationDenied("assessment job budget is exhausted")
+                except AssessmentAuthorizationDenied as exc:
+                    raise ContainerJobScopeDeniedError(str(exc)) from exc
             try:
                 require_explicit_resources(request.spec.resources)
             except ValueError as exc:
@@ -489,6 +481,11 @@ class ContainerJobService:
             record, replayed = await self.repository.create_or_replay(
                 owner=owner, request=request, authorization=authorization
             )
+            if scope is not None and not replayed:
+                bind_assessment_job(record, scope, request)
+                record.assessment_review_json = await capture_assessment_review(
+                    self._session, record, scope, request
+                )
 
         terminal = record.terminal_outcome_json
         recovering_start_failure = bool(
@@ -515,6 +512,11 @@ class ContainerJobService:
             return ContainerJobAccepted(
                 jobId=record.job_id, replayed=True, createdAt=record.created_at
             )
+        if scope is not None:
+            try:
+                await validate_job_assessment_authority(self._session, record, request)
+            except AssessmentAuthorizationDenied as exc:
+                raise ContainerJobScopeDeniedError(str(exc)) from exc
         if existing is not None:
             # A restart needs a grant covering a fresh budget; an exact replay
             # of admitted live work is checked as of its admission.
@@ -636,12 +638,13 @@ class ContainerJobService:
             raise ContainerJobNotFoundError(job_id)
         replayed = record.cancel_idempotency_key == request.idempotency_key
         terminal = record.state in {"succeeded", "failed", "canceled", "timed_out", "rejected"}
-        if not terminal and not replayed:
+        if not terminal:
             record.cancel_idempotency_key = request.idempotency_key
             record.state = ContainerJobState.CANCELING.value
-            await self.repository._session.flush()
-            await self._temporal.signal_container_job_cancel(job_id)
+            # A failed or uncertain signal cannot erase the stop intent. A
+            # repeated cancel safely redelivers the same idempotent signal.
             await self._session.commit()
+            await self._temporal.signal_container_job_cancel(job_id)
         return ContainerJobCancelResult(jobId=job_id, state=record.state, accepted=not terminal, replayed=replayed)
 
     async def logs(

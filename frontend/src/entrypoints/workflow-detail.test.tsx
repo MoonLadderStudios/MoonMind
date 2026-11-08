@@ -8436,6 +8436,18 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders recorded rules of engagement in workflow Details without creating new authority', async () => {
+    window.history.pushState({}, '', '/workflows/test-123/details?source=temporal');
+    const execution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', runId: 'recorded-run', temporalRunId: 'recorded-run', workflowType: 'MoonMind.UserWorkflow', title: 'Recorded assessment', summary: 'Retained assessment evidence', status: 'completed', state: 'completed', rawState: 'completed', temporalStatus: 'completed', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:01:00Z', actions: {}, inputParameters: { assessmentReview: { schemaVersion: 'assessment-engagement/v1', authorizationRef: 'payments', authorizationGeneration: 'recorded-generation', scopeDigest: 'scope', proposalDigest: 'proposal', scope: { maxJobs: 2 }, sections: [{ label: 'Allowed targets', items: ['Only payments.example.test'] }], limitations: ['No active exploitation'] } } };
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes('/artifacts') ? { artifacts: [] } : execution)));
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+    const review = await screen.findByLabelText('Recorded rules of engagement');
+    expect(within(review).getByText('Only payments.example.test')).toBeTruthy();
+    expect(within(review).getByText(/not a renewed authorization/)).toBeTruthy();
+    expect(within(review).queryByRole('button')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('assessment-proposal') || init?.method === 'POST')).toBe(false);
+  });
+
   it('renders live merge automation visibility from execution detail', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-live-merge-visibility/details?source=temporal');
     const mockExecution = {

@@ -16,6 +16,7 @@ import json
 import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
@@ -29,7 +30,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers import mcp_tools
 from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
-from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.auth.secret_refs import SecretMissingError
 from moonmind.config.container_backend_settings import (
     IMAGE_SOURCES_ENV_KEY,
@@ -47,6 +47,7 @@ from moonmind.security.container_job_capabilities import (
 )
 from moonmind.security.workload_profiles import WORKLOAD_PROFILES_ENV_KEY
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -56,6 +57,9 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 from moonmind.workflows.temporal.workflows import container_job
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
+)
+from tests.integration.security.assessment_admission import (
+    seed_legacy_assessment_admission,
 )
 from tests.unit.omnigent.test_generic_platform_production_services import _plan
 
@@ -281,6 +285,15 @@ async def journey(tmp_path, monkeypatch, sts):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    # Retain exactly the original trusted scope, including its grant expiries;
+    # generating scope() again would create a different canonical admission.
+    async with sessions() as session:
+        await seed_legacy_assessment_admission(
+            SimpleNamespace(session=session),
+            capability.assessment_scope,
+            workflow_id=capability.workflow_id,
+            run_id="run-1",
+        )
     temporal = AsyncMock()
     settings = resolve_container_backend_settings(
         {

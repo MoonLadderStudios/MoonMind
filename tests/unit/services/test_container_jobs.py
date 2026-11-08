@@ -443,7 +443,9 @@ async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temp
         first = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
         second = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
         assert first.accepted and second.replayed and second.state == "canceling"
-        temporal.signal_container_job_cancel.assert_awaited_once_with(accepted.job_id)
+        # Redelivery is safe and required after a prior uncertain signal.
+        assert temporal.signal_container_job_cancel.await_count == 2
+        temporal.signal_container_job_cancel.assert_awaited_with(accepted.job_id)
         await service.repository.record_observation(
             owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED
         )
@@ -761,3 +763,36 @@ async def test_exact_replay_of_admitted_legacy_scanner_job_keeps_its_identity(
             is None
         )
     assert temporal.start_container_job.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_intent_survives_signal_failure(session_factory, temporal):
+    from api_service.db.models import ContainerJobRecord
+
+    owner = OwnerIdentity(principalId="operator", principalType="user")
+    async with session_factory() as session:
+        accepted = await ContainerJobService(session, temporal=temporal).submit(
+            owner=owner, request=submission()
+        )
+    temporal.signal_container_job_cancel.side_effect = RuntimeError(
+        "Temporal unavailable"
+    )
+    async with session_factory() as session:
+        with pytest.raises(RuntimeError, match="Temporal unavailable"):
+            await ContainerJobService(session, temporal=temporal).cancel(
+                owner=owner,
+                job_id=accepted.job_id,
+                request=ContainerJobCancelRequest(idempotencyKey="stop-once"),
+            )
+    async with session_factory() as session:
+        record = await session.get(ContainerJobRecord, accepted.job_id)
+        assert record.cancel_idempotency_key == "stop-once"
+        assert record.state == "canceling"
+    temporal.signal_container_job_cancel.side_effect = None
+    async with session_factory() as session:
+        await ContainerJobService(session, temporal=temporal).cancel(
+            owner=owner,
+            job_id=accepted.job_id,
+            request=ContainerJobCancelRequest(idempotencyKey="stop-once"),
+        )
+    assert temporal.signal_container_job_cancel.await_count == 2

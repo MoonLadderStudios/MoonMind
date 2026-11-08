@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +12,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from api_service.db.models import (
+    TemporalExecutionCanonicalRecord,
+    WorkflowCheckpointBranchGitBinding,
+)
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
@@ -31,6 +36,10 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchTurnLaunchRequest,
 )
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+from moonmind.security.assessment_authorizations import (
+    AssessmentAuthorizations,
+    authorization_scope,
+)
 from moonmind.workflows.temporal.remediation_verification import (
     verification_contract_for,
 )
@@ -38,6 +47,9 @@ from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as branch_turn_module,
 )
 from tests.artifact_access import access_for_test
+from tests.unit.security.test_assessment_authorizations import (
+    current_saved_authorization,
+)
 
 
 class _ScalarResult:
@@ -330,8 +342,119 @@ async def test_profile_bound_coordinator_rejects_unenforceable_usd_budget_before
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("already_claimed", [False, True])
+@pytest.mark.parametrize(
+    "authority_kind",
+    [
+        "admitted_scope", "legacy_scope", "malformed_scope",
+        "authorization", "empty_authorization", "review", "empty_review",
+    ],
+)
+async def test_owner_refuses_assessment_branch_before_claim_artifacts_or_start(
+    monkeypatch: pytest.MonkeyPatch, authority_kind: str, already_claimed: bool,
+) -> None:
+    branch, turn, binding, original, checkpoint, profile, policy = _authority_graph()
+    scope = authorization_scope(
+        AssessmentAuthorizations.model_validate(
+            current_saved_authorization()
+        ).authorizations[0]
+    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+    if authority_kind == "legacy_scope":
+        scope.pop("engagement")
+    parameters = {
+        "admitted_scope": {"assessmentScope": scope},
+        "legacy_scope": {"assessmentScope": scope},
+        "malformed_scope": {"assessmentScope": {}},
+        "authorization": {"assessmentAuthorizationRef": "client-review"},
+        "empty_authorization": {"assessmentAuthorizationRef": ""},
+        "review": {"assessmentReview": {"scope": scope}},
+        "empty_review": {"assessmentReview": {}},
+    }[authority_kind]
+    source = TemporalExecutionCanonicalRecord(
+        workflow_id=original.workflow_id,
+        run_id=original.run_id,
+        namespace=original.namespace,
+        parameters=deepcopy(parameters),
+    )
+    if already_claimed:
+        turn.created_step_execution_id = "previously-claimed-execution"
+        turn.step_execution_manifest_ref = "artifact://previously-claimed-manifest"
+    # Model/caller metadata cannot clear the canonical source's restriction.
+    branch.diagnostics["runtimeSelection"]["assessmentScope"] = None
+    turn.diagnostics["assessmentScope"] = None
+    retained_diagnostics = deepcopy(branch.diagnostics)
+    session = _Session()
+    session.execute = AsyncMock(side_effect=[
+        SimpleNamespace(scalar_one_or_none=lambda: branch),
+        SimpleNamespace(scalar_one_or_none=lambda: turn),
+        _ScalarResult(),
+    ])
+    session.get = AsyncMock(side_effect=lambda model, identity, **_kwargs: {
+        WorkflowCheckpointBranchGitBinding: binding,
+        TemporalExecutionCanonicalRecord: source,
+    }[model])
+    commands = SimpleNamespace(
+        claim_with_repositories=AsyncMock(
+            return_value=SimpleNamespace(outcome=ControlPlaneOutcome.APPLIED)
+        ),
+        settle=AsyncMock(),
+    )
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        turn_command_service=commands,
+        access=access_for_test("service:test"),
+    )
+    # This source otherwise supports a fresh branch. Exercise the real graph
+    # load and launch boundary, not a detached scope-validation helper.
+    owner._validate_source_authority = AsyncMock(
+        return_value=(checkpoint, profile, policy)
+    )
+    owner._write_artifact = AsyncMock(return_value="artifact://would-copy-authority")
+    owner._start_claimed_turn = AsyncMock()
+    claim = AsyncMock(return_value=turn)
+    monkeypatch.setattr(CheckpointBranchService, "claim_turn_execution", claim)
+
+    with pytest.raises(CheckpointBranchTurnLaunchError) as error:
+        await owner.launch(
+            workflow_id=source.workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            intent={"idempotencyKey": "changed-assessment-instructions"},
+        )
+
+    assert error.value.code == "assessment_review_required"
+    assert "Create" in error.value.reason
+    assert "review" in error.value.reason.lower()
+    commands.claim_with_repositories.assert_not_awaited()
+    commands.settle.assert_not_awaited()
+    owner._write_artifact.assert_not_awaited()
+    owner._start_claimed_turn.assert_not_awaited()
+    claim.assert_not_awaited()
+    session.commit.assert_not_awaited()
+    assert source.parameters == parameters
+    assert branch.diagnostics == retained_diagnostics
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "authority_parameters",
+    [
+        pytest.param({}, id="no-assessment"),
+        pytest.param(
+            {
+                "assessmentScope": None,
+                "assessmentAuthorizationRef": None,
+                "assessmentReview": None,
+            },
+            id="null-assessment-defaults",
+        ),
+    ],
+)
 async def test_owner_allocates_and_claims_canonical_omnigent_request_before_start(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, authority_parameters: dict,
 ) -> None:
     session = _Session()
     client = SimpleNamespace()
@@ -353,6 +476,11 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         access=access_for_test("service:test"),
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
+    # Assessment vocabulary in ordinary authored text is not admission.
+    source.parameters = {
+        "workflow": {"instructions": "Document the assessmentScope field."},
+        **authority_parameters,
+    }
     branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] = {
         "profileId": "agent-profile-1",
         "version": 3,

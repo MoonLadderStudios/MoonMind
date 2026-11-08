@@ -62,6 +62,9 @@ from moonmind.workflows.temporal.container_job_backend import DockerContainerJob
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security import web_assessment_fixture_app as fixture
+from tests.integration.security.assessment_admission import (
+    seed_legacy_assessment_admission,
+)
 from tests.integration.security.test_recurring_assessments import invoke
 
 environment = recurring.environment
@@ -252,6 +255,7 @@ class Harness:
         self.app, self.gateway = app, gateway
         self.temporal = AsyncMock()
         self.settings = settings(app)
+        self.admitted = admitted or scope(app)
         self.jobs = ContainerJobService(
             environment.session,
             temporal=self.temporal,
@@ -260,7 +264,7 @@ class Harness:
                 PrivateImageAuthorizationPolicy.model_validate({"grants": []})
             ),
             backend_settings=self.settings,
-            capability=capability(admitted or scope(app)),
+            capability=capability(self.admitted),
         )
         self.published: dict[str, bytes] = {}
         self.commands: list[tuple] = []
@@ -323,6 +327,7 @@ class Harness:
         return artifact.artifact_id
 
     async def submit(self, web: WebAssessment, key: str):
+        await seed_legacy_assessment_admission(self.environment, self.admitted)
         submission = ContainerJobSubmitRequest(
             idempotencyKey=key,
             source={"source": "workflow", "workflowId": "assessment"},

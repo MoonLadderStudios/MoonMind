@@ -3,6 +3,10 @@
     "section": "providers-secrets",
     "type": "secret_ref"
   },
+  "security.assessment_authorizations": {
+    "section": "user-workspace",
+    "type": "object"
+  },
   "security.assessment_projects": {
     "section": "user-workspace",
     "type": "object"

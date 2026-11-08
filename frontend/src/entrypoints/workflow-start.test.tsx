@@ -19393,6 +19393,173 @@ describe("Task Create governed Tool authoring", () => {
     fetchSpy.mockRestore();
   });
 
+  describe('assessment engagement review', () => {
+    const review = {
+      schemaVersion: 'assessment-engagement/v1', authorizationRef: 'payments-review', authorizationGeneration: 'generation-3',
+      scopeDigest: 'a'.repeat(64), proposalDigest: 'b'.repeat(64),
+      scope: { assessmentRef: 'payments', maxJobs: 2, maxJobSeconds: 30 },
+      sections: [{ label: 'Targets and exclusions', items: ['Only payments.example.test; exclude /admin'] }, { label: 'Stop conditions', items: ['Stop when cancelled, revoked, expired, or exhausted.'] }],
+      limitations: ['No active exploitation.'],
+    };
+    function setupReview(reply: () => Promise<Response> = async () => new Response(JSON.stringify(review))) {
+      const original = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/settings/catalog')) return Promise.resolve(new Response(JSON.stringify({ categories: { security: [{ key: 'security.assessment_authorizations', value_version: 4, effective_value: { authorizations: [{ ref: 'payments-review', name: 'Payments authorization', enabled: true, generation: 'generation-3' }] } }] } })));
+        if (url === '/api/executions/assessment-proposal') return reply();
+        return original(input, init);
+      });
+    }
+    async function prepareReview(instructions = 'Inspect only the admitted targets.') {
+      const view = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      await screen.findByRole('option', { name: 'Payments authorization' });
+      fireEvent.change(screen.getByLabelText('Assessment authorization'), { target: { value: 'payments-review' } });
+      fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: instructions } });
+      fireEvent.submit(document.querySelector('#queue-submit-form')!);
+      return view;
+    }
+    const launches = () => fetchSpy.mock.calls.filter(([url, init]) => String(url) === '/api/executions' && init?.method === 'POST');
+    it('holds the canonical payload for explicit review and starts exactly once', async () => {
+      setupReview(); await prepareReview();
+      await screen.findByText('Only payments.example.test; exclude /admin');
+      expect(launches()).toHaveLength(0);
+      expect(screen.queryByRole('checkbox', { name: /authoriz/i })).toBeNull();
+      const proposal = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/assessment-proposal'));
+      const proposed = JSON.parse(String(proposal?.[1]?.body));
+      expect(proposed).not.toHaveProperty('executionId');
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      await waitFor(() => expect(launches()).toHaveLength(1));
+      expect(latestCreateRequest()).toMatchObject({ payload: { ...proposed.payload, assessmentAuthorizationRef: 'payments-review', assessmentReview: review } });
+      expect((latestCreateRequest().payload as Record<string, unknown>).assessmentScope).toBeUndefined();
+    });
+    it.each(['cancel', 'edit'])('invalidates a reviewed proposal on %s without starting', async (action) => {
+      setupReview(); await prepareReview(); await screen.findByText('Only payments.example.test; exclude /admin');
+      if (action === 'cancel') fireEvent.click(screen.getByRole('button', { name: 'Cancel review' }));
+      else fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'A changed assessment.' } });
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Start reviewed workflow' })).toBeNull());
+      expect(launches()).toHaveLength(0);
+      expect(screen.getByLabelText('Instructions')).toHaveProperty('value', action === 'cancel' ? 'Inspect only the admitted targets.' : 'A changed assessment.');
+    });
+    it('reviews the final artifact-backed payload and preserves it for launch', async () => {
+      setupReview(); await prepareReview('Inspect retained evidence. '.repeat(500));
+      await screen.findByText('Only payments.example.test; exclude /admin');
+      const proposalIndex = fetchSpy.mock.calls.findIndex(([url]) => String(url).endsWith('/assessment-proposal'));
+      const completeIndex = fetchSpy.mock.calls.findIndex(([url]) => String(url).endsWith('/complete'));
+      expect(completeIndex).toBeGreaterThan(-1);
+      expect(proposalIndex).toBeGreaterThan(completeIndex);
+      const proposed = JSON.parse(String(fetchSpy.mock.calls[proposalIndex]![1]?.body));
+      expect(proposed.payload.inputArtifactRef).toBe('art_01ACTIVEIMAGE00000000000');
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      await waitFor(() => expect(launches()).toHaveLength(1));
+      const { assessmentReview, ...actual } = latestCreateRequest().payload as Record<string, unknown>;
+      expect(actual).toEqual(proposed.payload); expect(assessmentReview).toEqual(review);
+    });
+    it('reuses the held exact review for an explicit uncertain retry after grant expiry', async () => {
+      let previews = 0;
+      setupReview(async () => ++previews === 1 ? new Response(JSON.stringify(review)) : new Response(JSON.stringify({ detail: 'Authorization expired' }), { status: 403 }));
+      const original = fetchSpy.getMockImplementation()!; let attempts = 0;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/executions' && init?.method === 'POST' && ++attempts === 1) return Promise.reject(new Error('Start acknowledgment lost'));
+        return original(input, init);
+      });
+      await prepareReview(); await screen.findByLabelText('Rules of engagement');
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      await screen.findByText('Start acknowledgment lost');
+      const first = JSON.parse(String(launches()[0]![1]?.body));
+      fireEvent.submit(document.querySelector('#queue-submit-form')!);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start reviewed workflow' })).toHaveProperty('disabled', false));
+      expect(attempts).toBe(1); expect(previews).toBe(1);
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      await waitFor(() => expect(launches()).toHaveLength(2));
+      expect(latestCreateRequest()).toEqual(first); expect(previews).toBe(1);
+    });
+    it('reconciles accepted bookkeeping without re-reviewing an expired authorization', async () => {
+      let previews = 0;
+      setupReview(async () => ++previews === 1 ? new Response(JSON.stringify(review)) : new Response(JSON.stringify({ detail: 'Authorization expired' }), { status: 403 }));
+      const original = fetchSpy.getMockImplementation()!;
+      let recordedLink: unknown;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/executions' && init?.method === 'POST') return Promise.resolve(new Response(JSON.stringify({ workflowId: 'mm:accepted', runId: 'run-accepted', namespace: 'default' })));
+        if (url.endsWith('/art_01ACTIVEIMAGE00000000000/links')) { recordedLink = JSON.parse(String(init?.body)); return Promise.resolve(new Response(JSON.stringify({ detail: 'Link acknowledgment lost' }), { status: 503 })); }
+        if (url === '/api/artifacts/art_01ACTIVEIMAGE00000000000') return Promise.resolve(new Response(JSON.stringify({ links: [recordedLink] })));
+        return original(input, init);
+      });
+      await prepareReview('Inspect retained evidence. '.repeat(500)); await screen.findByLabelText('Rules of engagement');
+      fireEvent.click(screen.getByRole('button', { name: 'Start reviewed workflow' }));
+      await screen.findByText(/Follow-up bookkeeping did not finish/);
+      fireEvent.submit(document.querySelector('#queue-submit-form')!);
+      await waitFor(() => expect(navigateTo).toHaveBeenCalled());
+      expect(previews).toBe(1); expect(launches()).toHaveLength(1);
+    });
+    it('retains a failed preview draft and retries without creating a workflow early', async () => {
+      let attempts = 0;
+      setupReview(async () => ++attempts === 1 ? new Response(JSON.stringify({ detail: 'Authorization changed. Review again.' }), { status: 409 }) : new Response(JSON.stringify(review)));
+      await prepareReview();
+      await screen.findByText(/Authorization changed. Review again./);
+      expect(launches()).toHaveLength(0);
+      expect(screen.getByLabelText('Assessment authorization')).toHaveProperty('value', 'payments-review');
+      fireEvent.submit(document.querySelector('#queue-submit-form')!);
+      await screen.findByText('Only payments.example.test; exclude /admin');
+      expect(attempts).toBe(2); expect(launches()).toHaveLength(0);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel review' }));
+    });
+    it('ignores a late preview after navigation away and back', async () => {
+      let finish!: (response: Response) => void;
+      setupReview(() => new Promise(resolve => { finish = resolve; }));
+      const view = await prepareReview(); await screen.findByText('Preparing rules of engagement…');
+      view.unmount(); window.history.pushState({}, '', '/workflows'); window.history.pushState({}, '', '/workflows/new');
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      await act(async () => finish(new Response(JSON.stringify(review))));
+      expect(screen.queryByRole('button', { name: 'Start reviewed workflow' })).toBeNull(); expect(launches()).toHaveLength(0);
+    });
+    it.each([['rerun', false], ['rerun', true], ['edit', true], ['compare', true]] as const)('preserves historical authority and binds changed %s inputs to their source (changed=%s)', async (mode, changed) => {
+      setupReview();
+      window.history.pushState({}, '', `/workflows/new?${mode === 'compare' ? 'rerun' : mode}ExecutionId=mm%3Aengagement-history${mode === 'compare' ? '&mode=compare' : ''}`);
+      const original = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith('/api/executions/mm%3Aengagement-history?')) return Promise.resolve(new Response(JSON.stringify({ workflowId: 'mm:engagement-history', runId: 'recorded-run', workflowType: 'MoonMind.UserWorkflow', state: mode === 'edit' ? 'executing' : 'completed', actions: { canRerun: true, canUpdateInputs: true }, inputParameters: { assessmentAuthorizationRef: 'payments-review', assessmentReview: review, assessmentScope: review.scope, workflow: { instructions: 'Original assessment.', runtime: { mode: 'codex_cli', profileId: 'profile:codex-default' }, publish: { mode: 'none' } } } })));
+        if (url === '/api/executions/mm%3Aengagement-history/update') return Promise.resolve(new Response(JSON.stringify({ applied: 'immediately' })));
+        return original(input, init);
+      });
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      await screen.findByLabelText('Recorded rules of engagement');
+      if (changed) fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Changed assessment.' } });
+      fireEvent.submit(document.querySelector('#queue-submit-form')!);
+      if (changed) {
+        await screen.findByLabelText('Rules of engagement');
+        const proposal = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/assessment-proposal'));
+        const body = JSON.parse(String(proposal?.[1]?.body));
+        if (mode === 'compare') expect(body).not.toHaveProperty('executionId');
+        else expect(body.executionId).toBe('mm:engagement-history');
+        expect(body.payload).not.toHaveProperty('executionId');
+        expect(body.payload.assessmentScope).toBeUndefined(); expect(body.payload.assessmentReview).toBeUndefined();
+        fireEvent.click(screen.getByRole('button', { name: mode === 'edit' ? 'Save reviewed changes' : 'Start reviewed workflow' }));
+      }
+      if (mode === 'compare') {
+        await waitFor(() => expect(launches()).toHaveLength(1));
+        expect(latestCreateRequest()).toMatchObject({ payload: { assessmentReview: review, task: { comparison: { sourceWorkflowId: 'mm:engagement-history' } } } });
+        return;
+      }
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/mm%3Aengagement-history/update'))).toBe(true));
+      const update = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/mm%3Aengagement-history/update'))?.[1]?.body));
+      expect(update.updateName).toBe(mode === 'edit' ? 'UpdateInputs' : 'RequestRerun');
+      if (changed) expect(update.parametersPatch.assessmentReview).toEqual(review);
+      else { expect(update.parametersPatch).toBeUndefined(); expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/assessment-proposal'))).toBe(false); }
+    });
+    it('ignores a late proposal after editing the draft', async () => {
+      let finish!: (response: Response) => void;
+      setupReview(() => new Promise(resolve => { finish = resolve; })); await prepareReview();
+      await screen.findByText('Preparing rules of engagement…');
+      fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Changed while preparing.' } });
+      await act(async () => finish(new Response(JSON.stringify(review))));
+      expect(screen.queryByRole('button', { name: 'Start reviewed workflow' })).toBeNull();
+      expect(launches()).toHaveLength(0);
+    });
+  });
+
   it("loads assessment context into ordinary schema fields and preserves explicit overrides across a failed Create retry", async () => {
     const snapshot: AssessmentProjectSnapshot = {
       schemaVersion: 'assessment-project/v1', projectId: 'payments', projectName: 'Payments',

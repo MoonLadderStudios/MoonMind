@@ -34,6 +34,7 @@ from api_service.db.models import (
     WorkflowCheckpointBranchGitBinding,
     WorkflowCheckpointBranchTurn,
 )
+from api_service.services.assessment_engagements import AUTHORITY_KEYS
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
@@ -107,6 +108,25 @@ class CheckpointBranchTurnLaunchError(ValueError):
         self.code = code
         self.reason = reason
         self.claimed_execution = dict(claimed_execution or {})
+
+
+def _reject_unreviewed_assessment_branch(
+    source: TemporalExecutionCanonicalRecord,
+) -> None:
+    """A fresh branch's instructions are not covered by its source's review."""
+
+    parameters = getattr(source, "parameters", None) or {}
+    # Consult canonical admission, never branch/model metadata. Even partial
+    # or malformed retained authority must not become an unrestricted turn.
+    # The branch launch contract has no changed-plan review input, so copying
+    # the old scope alone cannot authorize this successor's new instructions.
+    if any(parameters.get(key) is not None for key in AUTHORITY_KEYS):
+        raise CheckpointBranchTurnLaunchError(
+            "assessment_review_required",
+            "Checkpoint Branch turns cannot reuse an assessment review for new "
+            "instructions. Use Create to review and start the changed assessment "
+            "with a saved authorization.",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,7 +693,9 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "git_binding_missing", "isolated git binding is missing"
             )
-        source = await self._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        source = await self._session.get(
+            TemporalExecutionCanonicalRecord, workflow_id, populate_existing=True
+        )
         if source is None:
             raise CheckpointBranchTurnLaunchError(
                 "source_execution_missing", "source workflow is missing"
@@ -1265,6 +1287,7 @@ class CheckpointBranchTurnExecutionOwner:
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
         )
+        _reject_unreviewed_assessment_branch(source)
         self._artifact_link = {
             "namespace": source.namespace,
             "workflow_id": source.workflow_id,
@@ -1753,12 +1776,15 @@ class CheckpointBranchTurnExecutionOwner:
             "agentRunId": turn.runtime_agent_run_id,
         }
         source = await self._session.get(
-            TemporalExecutionCanonicalRecord, branch.workflow_id
+            TemporalExecutionCanonicalRecord, branch.workflow_id, populate_existing=True
         )
         if source is None:
             raise CheckpointBranchTurnLaunchError(
                 "source_execution_missing", "source workflow is missing"
             )
+        # Recheck at dispatch too: an older durable claim may already contain
+        # a manifest that omitted the source's assessment restrictions.
+        _reject_unreviewed_assessment_branch(source)
         try:
             async with self._artifact_service() as (_artifact_session, artifacts):
                 await admit_checkpoint_branch_turn_instruction(

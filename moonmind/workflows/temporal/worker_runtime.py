@@ -58,13 +58,11 @@ from moonmind.workflows.agent_skills.agent_skills_activities import (
 )
 from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
+    workflow_has_explicit_steps,
+    workflow_plan_tool_type,
 )
 from moonmind.workflows.executions.execution_contract import (
     dedupe_workflow_steps as _dedupe_repeated_step_entries,
-)
-from moonmind.workflows.executions.execution_contract import (
-    workflow_has_explicit_steps,
-    workflow_plan_tool_type,
 )
 from moonmind.workflows.executions.execution_contract import (
     workflow_step_tool_name as _selected_step_tool_name,
@@ -120,8 +118,8 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSkillActivities,
 )
 from moonmind.workflows.temporal.artifacts import (
-    ArtifactTransactionOwnership,
     ArtifactAccessContext,
+    ArtifactTransactionOwnership,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -2523,6 +2521,136 @@ def _container_job_artifact_reader(artifact_service: TemporalArtifactService):
     return read
 
 
+async def _container_job_admitted_record(session, request):
+    from temporalio import activity
+
+    from api_service.services.assessment_authorizations import (
+        AssessmentAuthorizationDenied,
+    )
+    from moonmind.schemas.container_job_models import container_job_workflow_id
+
+    if (
+        not activity.in_activity()
+        or activity.info().workflow_id != container_job_workflow_id(request.job_id)
+    ):
+        raise AssessmentAuthorizationDenied(
+            "assessment requires its actual container job Activity"
+        )
+    record = await session.get(ContainerJobRecord, request.job_id)
+    if record is None or (record.owner_id, record.owner_type) != (
+        request.owner.principal_id,
+        request.owner.principal_type,
+    ):
+        raise AssessmentAuthorizationDenied(
+            "container job has no matching durable admission"
+        )
+    return record
+
+
+def _container_job_assessment_evidence_reader():
+    from api_service.services.assessment_authorizations import (
+        AssessmentAuthorizationDenied,
+        assessment_marked,
+        persisted_assessment_scope,
+        redact_assessment_evidence,
+        unavailable_assessment_review,
+        utc,
+        validate_job_assessment_authority,
+    )
+
+    async def read(request):
+        async with get_async_session_context() as session:
+            record = await _container_job_admitted_record(session, request)
+            await validate_job_assessment_authority(
+                session, record, request.request, live=False
+            )
+            if record.assessment_scope_json is None and not assessment_marked(
+                request.request.spec
+            ):
+                return None
+            try:
+                scope = await persisted_assessment_scope(
+                    session, record, request.request
+                )
+            except AssessmentAuthorizationDenied:
+                return {
+                    "contractVersion": "v1",
+                    "jobId": request.job_id,
+                    "state": "unavailable",
+                    "reason": "Retained canonical assessment admission is unavailable.",
+                    "assessmentReview": record.assessment_review_json
+                    or unavailable_assessment_review(),
+                }
+            snapshot = {
+                "contractVersion": "v1",
+                "jobId": request.job_id,
+                "assessmentScope": scope.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "originalDeadline": utc(record.assessment_deadline_at).isoformat(),
+                "assessmentReview": record.assessment_review_json
+                or unavailable_assessment_review(),
+            }
+            await session.commit()
+            redacted = redact_assessment_evidence(snapshot)
+            if redacted != snapshot:
+                redacted["limitations"] = [
+                    "Credential-shaped text was redacted from retained engagement evidence."
+                ]
+            return redacted
+
+    return read
+
+
+def _container_job_assessment_authority(backend_settings):
+    """Bind authority to the real Activity and the API-owned job admission."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from api_service.services.assessment_authorizations import (
+        AssessmentAuthorizationDenied,
+        validate_job_assessment_authority,
+    )
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+    )
+
+    @asynccontextmanager
+    async def authority(request, live=True):
+        try:
+            async with get_async_session_context() as session:
+                record = await _container_job_admitted_record(session, request)
+                deadline = await validate_job_assessment_authority(
+                    session,
+                    record,
+                    request.request,
+                    live=live,
+                    profiles=backend_settings.workload_profiles,
+                )
+                if live:
+                    # Lock order is canonical source, Settings, then job, matching admission.
+                    # Keep only the brief actual start within this transaction.
+                    await session.flush()
+                    await session.refresh(record, with_for_update=True)
+                    if record.cancel_idempotency_key:
+                        raise AssessmentAuthorizationDenied(
+                            "container job cancellation was requested"
+                        )
+                yield deadline
+                await session.commit()
+        except (AssessmentAuthorizationDenied, SQLAlchemyError, ValueError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                str(exc)
+                if isinstance(exc, AssessmentAuthorizationDenied)
+                else "assessment authority storage is unavailable or invalid",
+            ) from exc
+
+    return authority
+
+
 def _container_job_projection_writer(backend_kind: str, backend_ref: str):
     """Build a projection writer bound to the deployment-selected backend."""
 
@@ -2994,6 +3122,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
                 evidence_publisher=_container_job_evidence_publisher(artifact_service),
                 artifact_reader=_container_job_artifact_reader(artifact_service),
+                assessment_authority=_container_job_assessment_authority(container_backend_settings),
+                assessment_evidence_reader=_container_job_assessment_evidence_reader(),
                 projection_writer=_container_job_projection_writer(
                     container_backend_settings.kind,
                     container_backend_settings.default_backend_ref,

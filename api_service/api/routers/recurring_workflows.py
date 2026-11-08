@@ -713,8 +713,19 @@ async def create_recurring_workflow(
             _recurring_workflow_payload,
             _resolve_recurring_runtime_selection,
         )
+        from api_service.services.assessment_engagements import AUTHORITY_KEYS
 
         target = copy.deepcopy(payload.target)
+        parameters = target.get("initialParameters", target.get("initial_parameters"))
+        assessment_already_admitted = False
+        if isinstance(parameters, dict) and any(
+            parameters.get(key) is not None for key in AUTHORITY_KEYS
+        ):
+            # Review the authored request before runtime/default resolution
+            # adds server-owned fields. Only this successful admission permits
+            # create_definition to retain the stamped scope afterward.
+            target = await service._admit_target_inputs(target, actor=user)
+            assessment_already_admitted = True
         selection = await _resolve_recurring_runtime_selection(
             target, session=session, user=user
         )
@@ -768,6 +779,7 @@ async def create_recurring_workflow(
                 else None
             ),
             actor=user,
+            assessment_already_admitted=assessment_already_admitted,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(

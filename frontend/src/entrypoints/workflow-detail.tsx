@@ -1,3 +1,5 @@
+import { AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
+import { copyAssessmentReview } from "../lib/assessmentEngagement";
 import { Button } from '../components/Button';
 import {
   useEffect,
@@ -10879,6 +10881,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               {runSummary.nextAction ? <p className="small">Next action: {runSummary.nextAction}</p> : null}
             </section>
           ) : null}
+
+          {detailsTabActive ? (() => {
+            const review = copyAssessmentReview(execution.inputParameters.assessmentReview);
+            return review ? <AssessmentEngagementReview review={review} historical /> : null;
+          })() : null}
 
           {detailsTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />

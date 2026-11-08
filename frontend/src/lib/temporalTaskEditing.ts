@@ -1,3 +1,4 @@
+import { copyAssessmentReview, type AssessmentEngagementReview } from "./assessmentEngagement";
 import { readModelSelection, type ModelSelection } from "./modelSelection";
 import { copyAssessmentSnapshot, type AssessmentProjectSnapshot } from "./assessmentProjects";
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
@@ -107,6 +108,9 @@ export type TemporalSubmissionDraftPresetPayload = {
 };
 
 export type TemporalSubmissionDraft = {
+  assessmentAuthorizationRef: string;
+  assessmentReview: AssessmentEngagementReview | null;
+  assessmentScope: Record<string, unknown> | null;
   assessmentProject: AssessmentProjectSnapshot | null;
   runtime: string | null;
   providerProfile: string | null;
@@ -1049,7 +1053,13 @@ export function buildTemporalSubmissionDraftFromExecution(
     ),
   });
 
+  const assessmentValue = (key: string): unknown => Object.hasOwn(snapshotDraft, key)
+    ? snapshotDraft[key] : Object.hasOwn(params, key) ? params[key] : artifactParams[key];
+  const historicalScope = objectValue(assessmentValue('assessmentScope'));
   const draft: TemporalSubmissionDraft = {
+    assessmentAuthorizationRef: String(assessmentValue('assessmentAuthorizationRef') ?? ''),
+    assessmentReview: copyAssessmentReview(assessmentValue('assessmentReview')),
+    assessmentScope: Object.keys(historicalScope).length ? structuredClone(historicalScope) : null,
     assessmentProject: copyAssessmentSnapshot(
       Object.hasOwn(snapshotDraft, "assessmentProject") ? snapshotDraft.assessmentProject
         : Object.hasOwn(params, "assessmentProject") ? params.assessmentProject

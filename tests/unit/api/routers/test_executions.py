@@ -9814,36 +9814,26 @@ def _assessment_workflow_request(scope: Any) -> dict[str, Any]:
     }
 
 
-def test_create_task_shaped_execution_forwards_operator_assessment_scope(
+def test_new_assessment_scope_requires_record_backed_review(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
-    service.create_execution.return_value = _build_execution_record()
-
+    admission = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access",
+            "get_instance_access_optional",
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: admission
     response = test_client.post(
         "/api/executions", json=_assessment_workflow_request(_ASSESSMENT_SCOPE)
     )
-
-    assert response.status_code == 201, response.text
-    initial_parameters = service.create_execution.await_args.kwargs[
-        "initial_parameters"
-    ]
-    # The run workflow reads only this run parameter as the operator's scope.
-    assert initial_parameters["assessmentScope"] == {
-        **_ASSESSMENT_SCOPE,
-        "targets": [
-            {
-                "workspacePath": "app",
-                "webRoutes": [],
-                "webExclusions": [],
-                "webMessages": {},
-                "cloudRegions": [],
-            }
-        ],
-        "configurationExceptions": [],
-        "networkRefs": [],
-        "grants": [],
-    }
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "assessment_review_required"
+    service.create_execution.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -24152,3 +24142,413 @@ def test_assessment_project_canonicalizes_both_retained_workflow_containers(
         assert "assessmentProject" not in inputs
     else:
         assert inputs["assessmentProject"] == selected
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_assessment_preview_and_create_bind_exact_reviewed_plan(
+    client, monkeypatch, serialized
+):
+    from api_service.services import assessment_authorizations
+    from moonmind.security.assessment_authorizations import AssessmentAuthorizations
+    from tests.unit.security.test_assessment_authorizations import (
+        current_saved_authorization as saved,
+    )
+
+    test_client, service, _ = client
+    admission = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access",
+            "get_instance_access_optional",
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: admission
+    record = AssessmentAuthorizations.model_validate(saved()).authorizations[0]
+    monkeypatch.setattr(
+        assessment_authorizations,
+        "load_assessment_authorization",
+        AsyncMock(return_value=record),
+    )
+    body = _assessment_workflow_request(None)
+    body["payload"].pop("assessmentScope")
+    body["payload"]["assessmentAuthorizationRef"] = record.ref
+    parameters = body["payload"]
+    reviewed_payload = (
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": parameters,
+            "title": "Reviewed assessment",
+            "failurePolicy": "continue",
+        }
+        if serialized
+        else parameters
+    )
+    preview = test_client.post(
+        "/api/executions/assessment-proposal",
+        json={"payload": reviewed_payload, "authorizationRef": record.ref},
+    )
+    assert preview.status_code == 200, preview.text
+    service.create_execution.assert_not_awaited()
+    parameters["assessmentReview"] = preview.json()
+    submitted = reviewed_payload if serialized else body
+    edited = copy.deepcopy(submitted)
+    edited_parameters = edited["initialParameters"] if serialized else edited["payload"]
+    edited_parameters["workflow"]["instructions"] += " Also assess another target."
+    rejected = test_client.post("/api/executions", json=edited)
+    assert rejected.status_code == 409, rejected.text
+    service.create_execution.assert_not_awaited()
+    service.create_execution.return_value = _build_execution_record()
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["assessmentScope"] == preview.json()["scope"]
+    assert (
+        parameters["assessmentReview"]["proposalDigest"]
+        == preview.json()["proposalDigest"]
+    )
+    assert parameters["assessmentReview"]["admission"]["via"] == "loopback"
+
+
+@pytest.mark.parametrize("operation", ["workflow", "task", "UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize("initial_key", ["initialParameters", "initial_parameters"])
+def test_assessment_nested_envelope_cannot_hide_changed_executed_plan(
+    client, monkeypatch, operation, initial_key
+):
+    from api_service.services import assessment_authorizations
+    from api_service.services.assessment_engagements import assessment_edit_material
+    from moonmind.security.assessment_authorizations import (
+        AssessmentAuthorizations,
+        authorization_scope,
+    )
+    from tests.unit.security.test_assessment_authorizations import (
+        current_saved_authorization,
+    )
+
+    test_client, service, _ = client
+    operator = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access",
+            "get_instance_access_optional",
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: operator
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    authorization = AssessmentAuthorizations.model_validate(
+        current_saved_authorization()
+    ).authorizations[0]
+    monkeypatch.setattr(
+        assessment_authorizations,
+        "load_assessment_authorization",
+        AsyncMock(return_value=authorization),
+    )
+    source = _build_execution_record(has_workflow_input_snapshot=False)
+    source.parameters = {
+        "assessmentScope": authorization_scope(authorization).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+        "workflow": {"instructions": "Original", "runtime": {"mode": "codex"}},
+    }
+    service.describe_execution.return_value = source
+    service.create_execution.return_value = _build_execution_record()
+    service.update_execution.return_value = {
+        "workflow_id": source.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "Accepted",
+    }
+    monkeypatch.setattr(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    parameters = _assessment_workflow_request(None)["payload"]
+    parameters.pop("assessmentScope")
+    parameters["assessmentAuthorizationRef"] = authorization.ref
+    workflow_key = "task" if operation == "task" else "workflow"
+    if workflow_key == "task":
+        parameters["task"] = parameters.pop("workflow")
+    editing = operation in {"UpdateInputs", "RequestRerun"}
+    preview_request = {
+        "authorizationRef": authorization.ref,
+        "payload": parameters,
+        **({"executionId": source.workflow_id} if editing else {}),
+    }
+    preview = test_client.post(
+        "/api/executions/assessment-proposal", json=preview_request
+    )
+    assert preview.status_code == 200, preview.text
+    reviewed_material = (
+        assessment_edit_material(source, parameters) if editing else copy.deepcopy(parameters)
+    )
+    parameters["assessmentReview"] = preview.json()
+    parameters["workflowType"] = "MoonMind.UserWorkflow"
+    parameters[initial_key] = reviewed_material
+    parameters[workflow_key]["instructions"] = "Different work that was never reviewed"
+    if editing:
+        response = test_client.post(
+            f"/api/executions/{source.workflow_id}/update",
+            json={"updateName": operation, "parametersPatch": parameters},
+        )
+    else:
+        response = test_client.post(
+            "/api/executions", json={"type": operation, "payload": parameters}
+        )
+    assert response.status_code == 422, response.text
+    service.create_execution.assert_not_awaited()
+    service.update_execution.assert_not_awaited()
+    rejected_preview = test_client.post(
+        "/api/executions/assessment-proposal", json=preview_request
+    )
+    assert rejected_preview.status_code == 422, rejected_preview.text
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_assessment_edit_cannot_clear_retained_authority_to_skip_review(
+    client, monkeypatch, update_name, legacy
+):
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_engagements import record as authorization_record
+
+    test_client, service, _ = client
+    operator = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access",
+            "get_instance_access_optional",
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: operator
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    authorization = authorization_record()
+    source = _build_execution_record(has_workflow_input_snapshot=False)
+    source.parameters = {
+        "assessmentScope": (
+            authorization.scope if legacy else authorization_scope(authorization)
+        ).model_dump(mode="json", by_alias=True, exclude_none=True),
+        "workflow": {"instructions": "Scoped work", "runtime": {"mode": "codex"}},
+    }
+    if not legacy:
+        source.parameters["assessmentAuthorizationRef"] = authorization.ref
+        source.parameters["assessmentReview"] = {"retained": "readable review"}
+    service.describe_execution.return_value = source
+    service.update_execution.return_value = {
+        "workflow_id": source.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "Accepted",
+    }
+    monkeypatch.setattr(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    response = test_client.post(
+        f"/api/executions/{source.workflow_id}/update",
+        json={
+            "updateName": update_name,
+            "parametersPatch": {
+                "assessmentScope": None,
+                "assessmentAuthorizationRef": None,
+                "assessmentReview": None,
+                "workflow": {
+                    "instructions": "Unrestricted changed work",
+                    "runtime": {"mode": "codex"},
+                },
+            },
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "assessment_review_required"
+    service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("later_change", ["run_advanced", "revoked"])
+@pytest.mark.parametrize("retry_change", ["same", "parameters", "action", "key"])
+def test_assessment_edit_reconciles_only_exact_accepted_receipt(
+    client, monkeypatch, later_change, retry_change
+):
+    from api_service.services import assessment_authorizations
+    from api_service.services.assessment_authorizations import AssessmentAuthorizationDenied
+    from api_service.services.assessment_engagements import assessment_edit_material, build_assessment_proposal
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_engagements import record as authorization_record
+
+    test_client, service, _ = client
+    operator = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access", "get_instance_access_optional", "_current_user_fallback",
+            "_strict_current_user", "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: operator
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    authorization = authorization_record()
+    source = _build_execution_record(has_workflow_input_snapshot=False)
+    source.parameters = {
+        "assessmentScope": authorization_scope(authorization).model_dump(mode="json", by_alias=True),
+        "assessmentAuthorizationRef": authorization.ref,
+        "workflow": {"instructions": "Original", "runtime": {"mode": "codex"}},
+    }
+    patch = {
+        "assessmentAuthorizationRef": authorization.ref,
+        "workflow": {"instructions": "Reviewed change", "runtime": {"mode": "codex"}},
+    }
+    patch["assessmentReview"] = build_assessment_proposal(
+        assessment_edit_material(source, patch), authorization
+    )
+    request = {
+        "updateName": "RequestRerun", "parametersPatch": patch,
+        "idempotencyKey": "accepted-reviewed-edit",
+    }
+    accepted = {
+        "accepted": True, "applied": "continue_as_new", "message": "Already accepted",
+        "workflow_id": source.workflow_id,
+    }
+    source.last_update_idempotency_key = request["idempotencyKey"]
+    source.last_update_response = {
+        **accepted,
+        "requestDigest": executions_module.compute_request_digest(
+            executions_module.UpdateExecutionRequest.model_validate(request).model_dump(
+                mode="json", by_alias=True, exclude={"idempotency_key"}
+            )
+        ),
+    }
+    source.parameters = {**source.parameters, **patch}
+    if later_change == "run_advanced":
+        source.run_id = "accepted-successor-run"
+    loader = AsyncMock(return_value=authorization)
+    if later_change == "revoked":
+        loader.side_effect = AssessmentAuthorizationDenied("assessment was revoked")
+    monkeypatch.setattr(assessment_authorizations, "load_assessment_authorization", loader)
+    service.describe_execution.return_value = source
+    service.update_execution.return_value = accepted
+    snapshot = AsyncMock(return_value="")
+    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", snapshot)
+    if retry_change == "parameters":
+        request["parametersPatch"]["workflow"]["instructions"] = "Different work"
+    elif retry_change == "action":
+        request["updateName"] = "SetTitle"
+        request["title"] = "Different action"
+    elif retry_change == "key":
+        request["idempotencyKey"] = "new-unaccepted-edit"
+    response = test_client.post(f"/api/executions/{source.workflow_id}/update", json=request)
+    if retry_change == "same":
+        assert response.status_code == 200, response.text
+        assert response.json()["message"] == "Already accepted"
+        loader.assert_not_awaited()
+    else:
+        assert response.status_code in {403, 409}, response.text
+    service.update_execution.assert_not_awaited()
+    snapshot.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_assessment_edit_cannot_replace_plan_artifact_after_review(
+    client, monkeypatch, update_name, reviewed
+):
+    from api_service.services import assessment_authorizations
+    from api_service.services.assessment_engagements import (
+        build_assessment_proposal,
+        assessment_edit_material,
+    )
+    from moonmind.security.assessment_authorizations import (
+        AssessmentAuthorizations,
+        authorization_scope,
+    )
+    from tests.unit.security.test_assessment_authorizations import (
+        current_saved_authorization as saved,
+    )
+
+    test_client, service, _ = client
+    operator = OperatorAdmission(via="loopback")
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "get_instance_access",
+            "get_instance_access_optional",
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: operator
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    authorization = AssessmentAuthorizations.model_validate(saved()).authorizations[0]
+    monkeypatch.setattr(
+        assessment_authorizations,
+        "load_assessment_authorization",
+        AsyncMock(return_value=authorization),
+    )
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {
+        "assessmentScope": authorization_scope(authorization).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+        "workflow": {"instructions": "Original", "runtime": {"mode": "codex"}},
+    }
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    monkeypatch.setattr(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    patch = {
+        "workflow": {
+            "instructions": "Reviewed revised work",
+            "runtime": {"mode": "codex"},
+        },
+        "assessmentAuthorizationRef": authorization.ref,
+    }
+    if reviewed:
+        patch.update({"workspace": None, "planArtifactRef": "art_unreviewed"})
+    patch["assessmentReview"] = build_assessment_proposal(
+        (
+            assessment_edit_material(
+                record, patch, plan_artifact_ref=patch.get("planArtifactRef")
+            )
+            if reviewed
+            else patch
+        ),
+        authorization,
+    )
+    response = test_client.post(
+        f"/api/executions/{record.workflow_id}/update",
+        json={
+            "updateName": update_name,
+            "parametersPatch": patch,
+            "planArtifactRef": "art_unreviewed",
+        },
+    )
+    if reviewed:
+        assert response.status_code == 200, response.text
+        applied = service.update_execution.await_args.kwargs
+        assert applied["request_digest"] == executions_module.compute_request_digest(
+            UpdateExecutionRequest(
+                updateName=update_name,
+                parametersPatch=patch,
+                planArtifactRef="art_unreviewed",
+            ).model_dump(mode="json", by_alias=True, exclude={"idempotency_key"})
+        )
+        assert applied["parameters_patch"]["workspaceSpec"] is None
+        assert applied["plan_artifact_ref"] == "art_unreviewed"
+        assert (
+            applied["parameters_patch"]["assessmentReview"]["proposalDigest"]
+            == patch["assessmentReview"]["proposalDigest"]
+        )
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "assessment_review_required"
+        service.update_execution.assert_not_awaited()

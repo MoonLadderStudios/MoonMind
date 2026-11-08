@@ -210,6 +210,55 @@ async def _dispatch_claimed(fixture):
     return client
 
 
+@pytest.mark.parametrize("cached_source", [False, True])
+async def test_claimed_assessment_turn_cannot_admit_instruction_or_dispatch(
+    instruction_authority, cached_source,
+):
+    fixture = instruction_authority
+    # Simulate an old claimed turn whose manifest omitted the scoped policy.
+    # Recovery must consult the canonical source before copying its authority.
+    async with fixture.sessions() as session:
+        original_links = (
+            await session.scalars(select(TemporalArtifactLink))
+        ).all()
+        original_link_ids = {link.id for link in original_links}
+    client = SimpleNamespace(start_workflow=AsyncMock())
+    async with fixture.sessions() as session:
+        if cached_source:
+            cached_record = await session.get(TemporalExecutionCanonicalRecord, "source")
+            assert cached_record.parameters == {}
+            await session.commit()
+        async with fixture.sessions() as writer:
+            source = await writer.get(TemporalExecutionCanonicalRecord, "source")
+            source.parameters = {"assessmentScope": {"assessmentRef": "retained-scope"}}
+            await writer.commit()
+        owner = CheckpointBranchTurnExecutionOwner(
+            session,
+            principal=fixture.producer,
+            client=client,
+            access=access_for_test(fixture.producer),
+        )
+        with pytest.raises(CheckpointBranchTurnLaunchError) as error:
+            await owner._start_claimed_turn(
+                branch=await session.get(WorkflowCheckpointBranch, "branch"),
+                turn=await session.get(WorkflowCheckpointBranchTurn, "turn"),
+                binding=SimpleNamespace(base_commit="base"),
+            )
+        assert error.value.code == "assessment_review_required"
+        client.start_workflow.assert_not_awaited()
+        links = list((await session.scalars(select(TemporalArtifactLink))).all())
+        assert {link.id for link in links} == original_link_ids
+        # Denying new work does not delete or change the retained claim/input.
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn")
+        assert turn.created_step_execution_id == fixture.identity.step_execution_id
+        assert turn.instruction_ref == fixture.ref
+        _artifact, content = await fixture.artifacts(session).read(
+            artifact_id=fixture.ref.removeprefix("artifact://"),
+            access=access_for_test(fixture.producer),
+        )
+        assert content == fixture.text
+
+
 @pytest.mark.parametrize(
     "auth_mode", ["accounts", "oidc", "header", "disabled"], indirect=True
 )

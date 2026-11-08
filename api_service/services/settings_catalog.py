@@ -439,6 +439,7 @@ _CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
         "workflow.default_provider_profile_ref",
         "workflow.operation_mode",
         "security.assessment_projects",
+        "security.assessment_authorizations",
         "skills.policy_mode",
         "skills.canary_percent",
         "integrations.github.token_ref",
@@ -485,6 +486,15 @@ def _canonical_setting_value(key: str, value: Any) -> Any:
 
     if key == _DEFAULT_RUNTIME_KEY and isinstance(value, str) and value.strip():
         return normalize_runtime_id(value)
+    if key == "security.assessment_authorizations":
+        from moonmind.security.assessment_authorizations import AssessmentAuthorizations
+
+        try:
+            return AssessmentAuthorizations.model_validate(value).model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        except (TypeError, ValueError):
+            return value
     if key == "security.assessment_projects":
         from moonmind.security.assessment_projects import AssessmentProjects
 
@@ -499,6 +509,20 @@ def _canonical_setting_value(key: str, value: Any) -> Any:
 
 
 _REGISTRY: tuple[SettingRegistryEntry, ...] = (
+    SettingRegistryEntry(
+        key="security.assessment_authorizations",
+        title="Assessment authorizations",
+        description="Operator-recorded testing authority, validity and cumulative limits. Revocation stops assessment actions; evidence remains readable.",
+        category="Security assessments",
+        section="user-workspace",
+        value_type="object",
+        ui="assessment_authorizations",
+        default_value={"authorizations": []},
+        apply_mode="immediate",
+        applies_to=("workflow_creation", "security_assessment"),
+        audit=SettingAuditPolicy(store_old_value=False, store_new_value=False),
+        order=76,
+    ),
     SettingRegistryEntry(
         key="security.assessment_projects",
         title="Assessment projects",
@@ -1494,12 +1518,19 @@ class SettingsCatalogService:
                     )
                 )
                 continue
-            if key == "security.assessment_projects" and key not in expected_versions:
+            if (
+                key
+                in {
+                    "security.assessment_projects",
+                    "security.assessment_authorizations",
+                }
+                and key not in expected_versions
+            ):
                 validation_issues.append(
                     self._validation_issue(
                         entry,
                         code="expected_version_required",
-                        message="Reload assessment projects and include their current value version before saving.",
+                        message="Reload the assessment collection and include its current value version before saving.",
                         boundary="write_request",
                         rule="optimistic_version",
                     )
@@ -1547,6 +1578,17 @@ class SettingsCatalogService:
         if pre_persistence_issues:
             raise SettingsValidationError(pre_persistence_issues)
 
+        if "security.assessment_authorizations" in validated:
+            from moonmind.security.assessment_authorizations import (
+                prepare_authorizations_update,
+            )
+
+            key = "security.assessment_authorizations"
+            row = current_rows.get(key)
+            validated[key] = prepare_authorizations_update(
+                validated[key], row.value_json if row is not None else None
+            )
+
         changed_at = datetime.now(timezone.utc)
         change_events: list[SettingsChangeEvent] = []
         for key, value in validated.items():
@@ -1556,7 +1598,15 @@ class SettingsCatalogService:
             if row is None:
                 # The shared collection's first write must invalidate another
                 # editor that loaded the inherited empty document at version 1.
-                first_version = 2 if key == "security.assessment_projects" else 1
+                first_version = (
+                    2
+                    if key
+                    in {
+                        "security.assessment_projects",
+                        "security.assessment_authorizations",
+                    }
+                    else 1
+                )
                 row = SettingsOverride(
                     key=key, value_json=value, value_version=first_version
                 )
@@ -1651,11 +1701,19 @@ class SettingsCatalogService:
         row = rows.get(key)
         if row is not None:
             old_value = row.value_json
-            if key == "security.assessment_projects":
+            if key in {
+                "security.assessment_projects",
+                "security.assessment_authorizations",
+            }:
                 # Keep the shared collection's generation after clearing it:
                 # deleting/recreating this row would let an old editor reuse a
                 # version and silently overwrite a newer accepted collection.
-                row.value_json = {"projects": []}
+                collection = (
+                    "projects"
+                    if key == "security.assessment_projects"
+                    else "authorizations"
+                )
+                row.value_json = {collection: []}
                 row.value_version += 1
             else:
                 await self._session.delete(row)
@@ -2836,19 +2894,38 @@ class SettingsCatalogService:
         # This typed document deliberately contains opaque reference fields.
         # Validate every key first, then retain the ordinary secret-value guard;
         # no other Settings key gains an exception for credential/artifact data.
-        if entry.key == "security.assessment_projects":
+        if entry.key in {
+            "security.assessment_projects",
+            "security.assessment_authorizations",
+        }:
             from moonmind.security.assessment_projects import AssessmentProjects
+            from moonmind.security.assessment_authorizations import (
+                AssessmentAuthorizations,
+            )
 
             try:
-                AssessmentProjects.model_validate(value)
+                model = (
+                    AssessmentProjects
+                    if entry.key == "security.assessment_projects"
+                    else AssessmentAuthorizations
+                )
+                model.model_validate(value)
             except (TypeError, ValueError):
                 return [
                     self._validation_issue(
                         entry,
-                        code="invalid_assessment_projects",
-                        message="Assessment projects contain an invalid field, reference, or duplicate identity.",
+                        code=(
+                            "invalid_assessment_projects"
+                            if entry.key == "security.assessment_projects"
+                            else "invalid_assessment_authorizations"
+                        ),
+                        message="The assessment collection contains an invalid field, reference, window, or duplicate identity.",
                         boundary=boundary,
-                        rule="assessment_projects_schema",
+                        rule=(
+                            "assessment_projects_schema"
+                            if entry.key == "security.assessment_projects"
+                            else "assessment_authorizations_schema"
+                        ),
                     )
                 ]
 

@@ -66,6 +66,9 @@ from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
 from tests.integration.security import test_recurring_assessments as recurring
+from tests.integration.security.assessment_admission import (
+    seed_legacy_assessment_admission,
+)
 from tests.integration.security.test_recurring_assessments import invoke
 
 environment = recurring.environment
@@ -297,6 +300,7 @@ class Harness:
         self.provider = provider
         self.temporal = AsyncMock()
         self.settings = settings()
+        self.admitted = admitted or scope()
         self.jobs = ContainerJobService(
             environment.session,
             temporal=self.temporal,
@@ -305,7 +309,7 @@ class Harness:
                 PrivateImageAuthorizationPolicy.model_validate({"grants": []})
             ),
             backend_settings=self.settings,
-            capability=capability(admitted or scope()),
+            capability=capability(self.admitted),
         )
         self.published: dict[str, bytes] = {}
         self.commands: list[tuple] = []
@@ -342,6 +346,7 @@ class Harness:
         return artifact.artifact_id
 
     async def submit(self, cloud: CloudAssessment, key: str, jobs=None):
+        await seed_legacy_assessment_admission(self.environment, self.admitted)
         submission = ContainerJobSubmitRequest(
             idempotencyKey=key,
             source={"source": "workflow", "workflowId": "assessment"},
@@ -671,15 +676,6 @@ async def test_scope_refuses_unadmitted_cloud_work_before_any_job(
     ):
         with pytest.raises(ContainerJobScopeDeniedError, match=message):
             await harness.submit(cloud, hashlib.sha256(message.encode()).hexdigest())
-    other_grant = Harness(
-        environment,
-        tmp_path,
-        monkeypatch,
-        provider,
-        admitted=scope(grants=[]),
-    )
-    with pytest.raises(ContainerJobScopeDeniedError, match="credential reference"):
-        await other_grant.submit(assessment(), "no-grant")
     unscoped = ContainerJobService(
         environment.session,
         temporal=AsyncMock(),
@@ -691,6 +687,24 @@ async def test_scope_refuses_unadmitted_cloud_work_before_any_job(
     with pytest.raises(ValidationError, match="cloud provider azure is unsupported"):
         assessment(provider="azure")
     harness.temporal.start_container_job.assert_not_called()
+    assert ProviderApi.calls == []
+
+
+async def test_scope_refuses_unadmitted_cloud_credential_before_any_job(
+    environment, tmp_path, monkeypatch, provider
+):
+    # A separate operator admission, not a second scope for the same retained
+    # canonical workflow. Keep the credential-specific denial observable.
+    other_grant = Harness(
+        environment,
+        tmp_path,
+        monkeypatch,
+        provider,
+        admitted=scope(grants=[]),
+    )
+    with pytest.raises(ContainerJobScopeDeniedError, match="credential reference"):
+        await other_grant.submit(assessment(), "no-grant")
+    other_grant.temporal.start_container_job.assert_not_called()
     assert ProviderApi.calls == []
 
 

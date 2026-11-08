@@ -69,6 +69,9 @@ from tests.integration.security import test_image_assessment_jobs as image
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security import test_repository_scanner_jobs as repo
 from tests.integration.security import test_web_assessment_jobs as web
+from tests.integration.security.assessment_admission import (
+    seed_legacy_assessment_admission,
+)
 
 environment = recurring.environment
 target = web.target
@@ -88,6 +91,7 @@ class Session:
 
     def __init__(self, environment, monkeypatch, *, scope=None, workspace_id="assess"):
         self.environment, self.monkeypatch = environment, monkeypatch
+        self.scope = scope
         token = mint_container_job_session_capability(
             secret=SECRET,
             owner=OWNER,
@@ -154,6 +158,7 @@ class Session:
 
     async def submit(self, tmp_path, command, admission, *, temporal, **service):
         """Run the CLI command, then send its exact request to the API route."""
+        await seed_legacy_assessment_admission(self.environment, self.scope)
         self.service = {"temporal": temporal, **service}
         sent = []
 
@@ -606,3 +611,51 @@ async def test_web_assessment_cli_job_keeps_native_report_after_cleanup(
         [native],
         [web.origin(app)],
     )
+
+
+@pytest.mark.parametrize("change", ["missing", "changed"])
+async def test_scoped_cli_does_not_replace_missing_or_changed_canonical_admission(
+    environment, tmp_path, monkeypatch, change
+):
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    original = cloud.scope()
+    session = Session(environment, monkeypatch, scope=original)
+    temporal = AsyncMock()
+    admission = cloud.assessment().model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    await session.submit(
+        tmp_path,
+        "cloud-assessment",
+        admission,
+        temporal=temporal,
+        backend_settings=cloud.settings(),
+        authorizer=NO_GRANTS,
+    )
+    canonical = await environment.session.get(
+        TemporalExecutionCanonicalRecord, "assessment"
+    )
+    assert canonical.parameters["assessmentScope"] == original.model_dump(
+        mode="json", by_alias=True
+    )
+    if change == "missing":
+        await environment.session.delete(canonical)
+    else:
+        canonical.parameters = {
+            "assessmentScope": original.model_copy(update={"max_jobs": 1}).model_dump(
+                mode="json", by_alias=True
+            )
+        }
+    await environment.session.commit()
+    temporal.reset_mock()
+    with pytest.raises(AssertionError, match="assessment_scope_denied"):
+        await session.submit(
+            tmp_path,
+            "cloud-assessment",
+            admission,
+            temporal=temporal,
+            backend_settings=cloud.settings(),
+            authorizer=NO_GRANTS,
+        )
+    temporal.start_container_job.assert_not_awaited()

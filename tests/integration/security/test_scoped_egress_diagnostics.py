@@ -112,21 +112,24 @@ class DiagnosticDocker(LeaseDocker):
                     "http://fixture:do-not-retain@unrelated.example:8080/private?token=do-not-retain - HIER_NONE/- -\n"
                 )
                 self.files["/tmp/moonmind-access.log"] = row.encode() * 25
-            if args[:3] == ("inspect", "--format", "{{json .State}}"):
-                self.observations += 1
-                if self.observations == 1:
-                    # The first poll has read a valid denial. Fail only the
-                    # next attestation, after its Activity result is recorded.
-                    if self.fault == "tamper":
-                        self.files["/tmp/moonmind-hosts"] += b"tampered\n"
-                    elif self.fault == "unavailable":
-                        self.proxy_healthy = False
-                    else:
-                        self.files["/tmp/moonmind-access.log"] = b""
-                        target["State"].update(
-                            Status="exited", Running=False, ExitCode=0
-                        )
         return result
+
+    def fail_after_first_observation(self):
+        self.observations += 1
+        if self.observations != 1:
+            return
+        # Inject the fault after one complete observation has retained denial
+        # evidence, not after an incidental Docker read within that Activity.
+        # The next Activity must recover the recorded observation independently.
+        if self.fault == "tamper":
+            self.files["/tmp/moonmind-hosts"] += b"tampered\n"
+        elif self.fault == "unavailable":
+            self.proxy_healthy = False
+        else:
+            self.files["/tmp/moonmind-access.log"] = b""
+            for target in self.containers.values():
+                if target["Config"]["Labels"].get("moonmind.container_job"):
+                    target["State"].update(Status="exited", Running=False, ExitCode=0)
 
 
 @pytest.mark.parametrize("fault", ["tamper", "unavailable", "log-loss"])
@@ -214,7 +217,10 @@ async def test_denials_survive_worker_reconstruction_failure_cleanup_and_replay(
                             container_job_backend=backend
                         )
                         invocations.append(op)
-                        return await getattr(runtime, "container_job_" + op)(payload)
+                        result = await getattr(runtime, "container_job_" + op)(payload)
+                        if op == "observe_container":
+                            daemon.fail_after_first_observation()
+                        return result
 
                 return handler
 

@@ -6770,6 +6770,215 @@ async def test_request_rerun_can_override_inputs_and_parameters(
         assert "artifact://plan/new" in refreshed.artifact_refs
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("update_name", "source_state"),
+    [
+        ("UpdateInputs", "running"),
+        ("RequestRerun", "running"),
+        ("RequestRerun", "closed"),
+        ("RequestRerun", "closed_race"),
+    ],
+)
+async def test_update_receipt_preserves_exact_request_after_run_advance(
+    tmp_path, mock_client_adapter, monkeypatch, update_name, source_state
+):
+    from fastapi import Response
+
+    from api_service.api.routers import executions
+    from api_service.services import assessment_authorizations
+    from moonmind.schemas.temporal_models import UpdateExecutionRequest
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Original task"},
+                "assessmentAuthorizationRef": "reviewed-authorization",
+            },
+            idempotency_key=None,
+        )
+        created = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert created is not None
+        if source_state == "closed":
+            created.state = MoonMindWorkflowState.COMPLETED
+            await session.commit()
+            await session.refresh(created)
+        elif source_state == "closed_race":
+            mock_client_adapter.update_workflow.side_effect = RuntimeError(
+                "workflow execution already completed"
+            )
+        payload = UpdateExecutionRequest(
+            updateName=update_name,
+            parametersPatch={"workflow": {"instructions": "Reviewed edit"}},
+            idempotencyKey="reviewed-edit",
+        )
+        request_digest = executions.compute_request_digest(
+            payload.model_dump(mode="json", by_alias=True, exclude={"idempotency_key"})
+        )
+        request = {
+            "workflow_id": created.workflow_id,
+            "update_name": update_name,
+            "parameters_patch": {"workflow": {"instructions": "Reviewed edit"}},
+            "idempotency_key": "reviewed-edit",
+            "request_digest": request_digest,
+        }
+        response = await service.update_execution(**request)
+        assert response["accepted"] is True
+        await session.refresh(created)
+        assert created.last_update_response == {
+            **response,
+            "requestDigest": request_digest,
+        }
+        created.run_id = "successor-run"
+        await session.commit()
+        await session.refresh(created)
+        mock_client_adapter.update_workflow.reset_mock()
+        mock_client_adapter.start_workflow.reset_mock()
+
+        assert await service.update_execution(**request) == response
+        loader = AsyncMock(
+            side_effect=AssertionError("Accepted replay rechecked authority")
+        )
+        monkeypatch.setattr(
+            assessment_authorizations, "load_assessment_authorization", loader
+        )
+        snapshot = AsyncMock(
+            side_effect=AssertionError("Accepted replay repeated effects")
+        )
+        monkeypatch.setattr(
+            executions,
+            "_persist_original_workflow_input_snapshot_from_parameters",
+            snapshot,
+        )
+        reconciled = await executions.update_execution(
+            workflow_id=created.workflow_id,
+            payload=payload,
+            response=Response(),
+            service=service,
+            session=session,
+            user=OperatorAdmission(via="loopback"),
+            _actions_enabled=None,
+            access=ArtifactAccessContext.for_operator(
+                OperatorAdmission(via="loopback")
+            ),
+        )
+        assert reconciled.accepted is True
+        assert reconciled.execution.workflow_id == response.get(
+            "workflow_id", created.workflow_id
+        )
+        loader.assert_not_awaited()
+        snapshot.assert_not_awaited()
+        with pytest.raises(TemporalExecutionValidationError, match="Idempotency"):
+            await service.update_execution(
+                **{**request, "request_digest": "different-request-digest"}
+            )
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        mock_client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_assessment_update_refuses_run_changed_before_dispatch(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    from fastapi import HTTPException, Response
+
+    from api_service.api.routers import executions
+    from api_service.services import assessment_authorizations
+    from api_service.services.assessment_engagements import (
+        assessment_edit_material,
+        build_assessment_proposal,
+    )
+    from moonmind.schemas.temporal_models import UpdateExecutionRequest
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from moonmind.security.operator_admission import OperatorAdmission
+    from tests.unit.services.test_assessment_engagements import (
+        record as authorization_record,
+    )
+
+    authorization = authorization_record()
+    monkeypatch.setattr(
+        assessment_authorizations,
+        "load_assessment_authorization",
+        AsyncMock(return_value=authorization),
+    )
+    monkeypatch.setattr(
+        executions,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Original task"},
+                "assessmentScope": authorization_scope(authorization).model_dump(
+                    mode="json", by_alias=True
+                ),
+                "assessmentAuthorizationRef": authorization.ref,
+            },
+            idempotency_key=None,
+        )
+        patch = {
+            "workflow": {"instructions": "Reviewed edit"},
+            "assessmentAuthorizationRef": authorization.ref,
+        }
+        patch["assessmentReview"] = build_assessment_proposal(
+            assessment_edit_material(created, patch), authorization
+        )
+        dispatch = service.update_execution
+
+        async def _advance_then_dispatch(**kwargs):
+            # Another accepted rerun completes after route admission, before
+            # this request reaches the canonical service/Temporal boundary.
+            await dispatch(
+                workflow_id=created.workflow_id,
+                update_name="RequestRerun",
+                idempotency_key="concurrent-rerun",
+            )
+            return await dispatch(**kwargs)
+
+        service.update_execution = _advance_then_dispatch
+        with pytest.raises(HTTPException) as rejected:
+            await executions.update_execution(
+                workflow_id=created.workflow_id,
+                payload=UpdateExecutionRequest(
+                    updateName="UpdateInputs",
+                    parametersPatch=patch,
+                    idempotencyKey="reviewed-edit",
+                ),
+                response=Response(),
+                service=service,
+                session=session,
+                user=OperatorAdmission(via="loopback"),
+                _actions_enabled=None,
+                access=ArtifactAccessContext.for_operator(
+                    OperatorAdmission(via="loopback")
+                ),
+            )
+        assert rejected.value.status_code == 409
+        assert mock_client_adapter.update_workflow.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_new_cause(
     tmp_path, mock_client_adapter
 ):

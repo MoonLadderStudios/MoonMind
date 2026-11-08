@@ -20,9 +20,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import mcp_tools
-from api_service.db.models import Base, ContainerJobRecord
+from api_service.db.models import (
+    Base,
+    ContainerJobRecord,
+    TemporalExecutionCanonicalRecord,
+)
 from api_service.services.container_jobs import ContainerJobService
-from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.config.container_backend_settings import (
     CACHE_SOURCES_ENV_KEY,
     IMAGE_SOURCES_ENV_KEY,
@@ -41,6 +44,7 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
 from moonmind.security.workload_profiles import WORKLOAD_PROFILES_ENV_KEY
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -220,6 +224,14 @@ async def journey(tmp_path, monkeypatch):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    # Retained operator admission is the authority for legacy scoped sessions,
+    # including a replacement session whose signed capability is unchanged.
+    async with sessions() as session:
+        session.add(TemporalExecutionCanonicalRecord(
+            workflow_id="workflow-1", run_id="run-1", workflow_type="MoonMind.UserWorkflow",
+            entry="run", parameters={"assessmentScope": SCOPE},
+        ))
+        await session.commit()
     temporal = AsyncMock()
     settings = backend_settings()
     monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", SECRET)

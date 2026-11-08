@@ -122,3 +122,73 @@ def test_gpu_observation_migration_adds_and_drops_column(monkeypatch) -> None:
             for column in sa.inspect(connection).get_columns("container_jobs")
         }
         assert "gpu_observation_json" not in columns
+
+
+def test_assessment_authority_migration_retains_reservations(monkeypatch):
+    import pytest
+
+    from api_service.db.models import Base
+
+    migration = importlib.import_module(
+        "api_service.migrations.versions.411_assessment_job_authority"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        # Exercise the real predecessor shape rather than create_all with new
+        # columns already present.
+        Base.metadata.tables["settings_overrides"].create(connection)
+        connection.execute(
+            sa.text(
+                "CREATE TABLE container_jobs (job_id TEXT PRIMARY KEY, request_json JSON)"
+            )
+        )
+        connection.execute(
+            sa.text("INSERT INTO container_jobs VALUES ('retained', '{}')")
+        )
+        monkeypatch.setattr(
+            migration, "op", Operations(MigrationContext.configure(connection))
+        )
+        migration.upgrade()
+        row = connection.execute(
+            sa.text(
+                "SELECT assessment_scope_json, assessment_deadline_at, assessment_review_json FROM container_jobs"
+            )
+        ).one()
+        assert row == (None, None, None)
+        assert (
+            connection.execute(
+                sa.text(
+                    "SELECT value_json FROM settings_overrides WHERE key='security.assessment_authorizations'"
+                )
+            ).scalar()
+            == '{"authorizations": []}'
+        )
+        connection.execute(
+            sa.text(
+                'UPDATE container_jobs SET assessment_scope_json = \'{"assessmentRef":"saved"}\''
+            )
+        )
+        with pytest.raises(RuntimeError, match="repair forward"):
+            migration.downgrade()
+        assert (
+            connection.execute(
+                sa.text("SELECT assessment_scope_json FROM container_jobs")
+            ).scalar()
+            is not None
+        )
+        # A retained readable review must also prevent destructive downgrade,
+        # even if the corresponding scope cannot currently be recovered.
+        connection.execute(
+            sa.text(
+                "UPDATE container_jobs SET assessment_scope_json = NULL, "
+                "assessment_review_json = '{\"state\":\"retained\"}'"
+            )
+        )
+        with pytest.raises(RuntimeError, match="repair forward"):
+            migration.downgrade()
+        assert (
+            connection.execute(
+                sa.text("SELECT assessment_review_json FROM container_jobs")
+            ).scalar()
+            is not None
+        )

@@ -2948,12 +2948,16 @@ def test_settings_registry_migration_gate_skipped_when_no_ledger():
 def test_settings_registry_default_uses_catalog_key_ledger():
     assert "workflow.default_runtime" in _CATALOG_KEY_LEDGER
     assert "security.assessment_projects" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 9
+    assert "security.assessment_authorizations" in _CATALOG_KEY_LEDGER
+    assert len(_CATALOG_KEY_LEDGER) == 10
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 8
+    assert len(registry.entries) == 9
+    assert "security.assessment_authorizations" in {
+        entry.key for entry in registry.entries
+    }
 
 
 def test_settings_catalog_builder_filters_by_section():

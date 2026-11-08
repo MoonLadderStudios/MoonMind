@@ -1,3 +1,5 @@
+import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
+import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
 import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, resolveSchemaProperty, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
 import { RepositoryScannerReadiness } from '../components/RepositoryScannerReadiness';
@@ -6199,6 +6201,37 @@ function WorkflowStartPageContent({
   const [modelSelection, setModelSelection] = useState<ModelSelection>({});
   const [assessmentProject, setAssessmentProject] = useState<AssessmentProjectSnapshot | null>(null);
   const [assessmentProjectProblem, setAssessmentProjectProblem] = useState<string | null>(null);
+  const [assessmentAuthorizationRef, setAssessmentAuthorizationRef] = useState('');
+  const [historicalAssessmentReview, setHistoricalAssessmentReview] = useState<AssessmentReview | null>(null);
+  const [historicalAssessmentScope, setHistoricalAssessmentScope] = useState<Record<string, unknown> | null>(null);
+  const [assessmentReview, setAssessmentReview] = useState<AssessmentReview | null>(null);
+  const [assessmentReviewLoading, setAssessmentReviewLoading] = useState(false);
+  const [assessmentReviewAwaiting, setAssessmentReviewAwaiting] = useState(false);
+  const [assessmentReviewReconciliation, setAssessmentReviewReconciliation] = useState(false);
+  const assessmentReviewPanelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (assessmentReviewLoading || assessmentReviewAwaiting) {
+      assessmentReviewPanelRef.current?.focus();
+      assessmentReviewPanelRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }
+  }, [assessmentReviewLoading, assessmentReviewAwaiting]);
+  const assessmentReviewRequestRef = useRef<AbortController | null>(null);
+  const assessmentReviewDecisionRef = useRef<((start: boolean) => void) | null>(null);
+  // Keep the already-reviewed request only in this page's memory. The existing
+  // Create intent owns uncertain admission; never store scope in sessionStorage.
+  const assessmentReviewedCreateRef = useRef<{ intentKey: string; payload: string; review: AssessmentReview } | null>(null);
+  function invalidateAssessmentReview() {
+    assessmentReviewedCreateRef.current = null;
+    assessmentReviewRequestRef.current?.abort();
+    assessmentReviewRequestRef.current = null;
+    assessmentReviewDecisionRef.current?.(false);
+    assessmentReviewDecisionRef.current = null;
+    setAssessmentReview(null);
+    setAssessmentReviewLoading(false);
+    setAssessmentReviewAwaiting(false);
+    setAssessmentReviewReconciliation(false);
+  }
+
   const [repository, setRepository] = useState(initialRepository);
   const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
@@ -6328,10 +6361,14 @@ function WorkflowStartPageContent({
     // Route changes invalidate responses even after Back returns to the old URL.
     createDraftRevisionRef.current += 1;
     setAcceptedCreatePath(null);
+    invalidateAssessmentReview();
     submitExpansionInFlightRef.current = false;
     setIsSubmitting(false);
     return () => {
       createMountedRef.current = false;
+      assessmentReviewRequestRef.current?.abort();
+      assessmentReviewDecisionRef.current?.(false);
+      assessmentReviewDecisionRef.current = null;
       createDraftRevisionRef.current += 1;
       submitExpansionRequestIdRef.current += 1;
     };
@@ -6517,8 +6554,9 @@ function WorkflowStartPageContent({
     const markCreateInteraction = (event: MouseEvent) => {
       const target = event.target;
       const button = target instanceof Element ? target.closest("button") : null;
-      if (button && button.closest("#queue-submit-form") && button.type !== "submit") {
+      if (button && button.closest("#queue-submit-form") && button.type !== "submit" && !button.closest("[data-assessment-review-actions]")) {
         createDraftRevisionRef.current += 1;
+        invalidateAssessmentReview();
       }
     };
     document.addEventListener("click", markCreateInteraction);
@@ -7015,6 +7053,10 @@ function WorkflowStartPageContent({
     }
     const draft = temporalDraftQuery.data.draft;
     temporalDraftAppliedRef.current = applyKey;
+    setAssessmentAuthorizationRef(draft.assessmentAuthorizationRef);
+    setHistoricalAssessmentReview(draft.assessmentReview);
+    setHistoricalAssessmentScope(draft.assessmentScope);
+    invalidateAssessmentReview();
     setAssessmentProject(draft.assessmentProject);
     setAssessmentProjectProblem(null);
 
@@ -8827,6 +8869,7 @@ function WorkflowStartPageContent({
   // Custom controls, file drops, and asynchronous authored mutations need the
   // same draft ownership and leave-page protection as native input/change.
   function markDraftEdited() {
+    invalidateAssessmentReview();
     routeGuardDirtyRef.current = true;
     createDraftRevisionRef.current += 1;
     retainedRemediationSubmissionRef.current = null;
@@ -10012,7 +10055,7 @@ function WorkflowStartPageContent({
     );
     const isCurrentCreate = () => (
       isCurrentSubmission() &&
-      (pageMode.mode !== "create" || createDraftRevisionRef.current === createRevision)
+      ((pageMode.mode !== "create" && !assessmentAuthorizationRef) || createDraftRevisionRef.current === createRevision)
     );
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
@@ -11405,6 +11448,7 @@ function WorkflowStartPageContent({
       priority,
       maxAttempts,
       payload: {
+        ...(assessmentAuthorizationRef || recordedDraft?.assessmentAuthorizationRef ? { assessmentAuthorizationRef: assessmentAuthorizationRef || null } : {}),
         ...(assessmentProject || pageMode.mode !== "create" ? { assessmentProject } : {}),
         ...(normalizedRepository ? { repository: submittedRepository } : {}),
         // Edit and rerun always state the source so the backend re-admits it
@@ -11640,6 +11684,8 @@ function WorkflowStartPageContent({
       );
       const rerunFormChanged = isExactRerunRequest
         ? !rerunDraft ||
+          assessmentAuthorizationRef !== rerunDraft.assessmentAuthorizationRef ||
+          (Boolean(assessmentAuthorizationRef) && routeGuardDirtyRef.current) ||
           JSON.stringify(assessmentProject) !== JSON.stringify(rerunDraft.assessmentProject) ||
           selectedAttachmentFiles.length > 0 ||
           normalizedRepository !== String(rerunDraft.repository || "").trim() ||
@@ -11677,7 +11723,18 @@ function WorkflowStartPageContent({
           JSON.stringify(taskLevelAttachmentRefs) !==
             JSON.stringify(rerunDraft.inputAttachments)
         : false;
-      const isExactRerun = isExactRerunRequest && !rerunFormChanged;
+      // An untouched scoped rerun must use the recorded plan, not incidental
+      // current UI defaults introduced while reconstructing an older draft.
+      const isExactRerun = isExactRerunRequest && (historicalAssessmentReview || historicalAssessmentScope
+        ? !routeGuardDirtyRef.current && assessmentAuthorizationRef === rerunDraft?.assessmentAuthorizationRef
+        : !rerunFormChanged);
+      if (!isExactRerun && !assessmentAuthorizationRef && (historicalAssessmentReview || historicalAssessmentScope)) {
+        throw new Error('Select an assessment authorization to review this changed assessment.');
+      }
+      if (!isExactRerun) {
+        delete artifactPayload.assessmentScope;
+        delete artifactPayload.assessmentReview;
+      }
       const artifactWorkflowPayload = mergeRecordValues(
         taskPayload,
         workflowRecord(artifactPayload),
@@ -11716,6 +11773,43 @@ function WorkflowStartPageContent({
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
+      if (!isCurrentCreate()) return;
+      if (assessmentAuthorizationRef && !isExactRerun && !createIntent?.accepted) {
+        // The server reviews the final immutable artifact-backed plan. Keep
+        // this continuation and payload intact until the explicit Start action.
+        // Historical grants are context, never UI-authored renewed authority.
+        artifactPayload.assessmentAuthorizationRef = assessmentAuthorizationRef;
+        const reviewedPayload = JSON.stringify(artifactPayload);
+        const retained = assessmentReviewedCreateRef.current;
+        const heldReview = createIntent?.uncertain && retained?.intentKey === createIntent.key && retained.payload === reviewedPayload
+          ? retained.review : null;
+        const controller = new AbortController();
+        assessmentReviewRequestRef.current = controller;
+        setAssessmentReview(null);
+        setAssessmentReviewLoading(!heldReview);
+        setAssessmentReviewReconciliation(Boolean(heldReview));
+        let reviewed: AssessmentReview;
+        try {
+          // A lost acknowledgment must reach existing idempotency reconciliation
+          // even if today's preview would reject an expired or revoked grant.
+          reviewed = heldReview ?? await reviewAssessmentProposal(
+            artifactPayload, assessmentAuthorizationRef, controller.signal,
+            pageMode.mode !== 'create' && pageMode.intent !== 'comparison' ? pageMode.executionId ?? undefined : undefined,
+          );
+        } finally {
+          if (assessmentReviewRequestRef.current === controller) setAssessmentReviewLoading(false);
+        }
+        if (!isCurrentCreate() || controller.signal.aborted) return;
+        setAssessmentReview(reviewed);
+        setAssessmentReviewAwaiting(true);
+        releaseSubmitArrowExit();
+        const start = await new Promise<boolean>(resolve => { assessmentReviewDecisionRef.current = resolve; });
+        setAssessmentReviewAwaiting(false);
+        if (!start || !isCurrentCreate() || controller.signal.aborted) return;
+        if (createIntent) assessmentReviewedCreateRef.current = { intentKey: createIntent.key, payload: reviewedPayload, review: reviewed };
+        artifactPayload.assessmentReview = reviewed;
+        holdSubmitArrowExitUntilNavigation();
+      }
       if (!isCurrentCreate()) return;
       if (
         pageMode.mode === "edit" ||
@@ -11894,7 +11988,9 @@ function WorkflowStartPageContent({
   const visiblePageTitle =
     pageMode.mode === "create" ? workflowStartHeadingQuote : pageTitle;
   const primaryCta =
-    pageMode.intent === "comparison"
+    pageMode.mode === "create" && assessmentAuthorizationRef
+      ? "Review rules of engagement"
+      : pageMode.intent === "comparison"
       ? "Start Comparison Run"
       : pageMode.intent === "edit"
       ? "Save Changes"
@@ -12315,6 +12411,28 @@ function WorkflowStartPageContent({
           onChange={changeAssessmentProject}
           onStatusChange={setAssessmentProjectProblem}
         />
+        <AssessmentAuthorizationPicker value={assessmentAuthorizationRef} onChange={value => {
+          markDraftEdited(); setAssessmentAuthorizationRef(value);
+        }} />
+        {historicalAssessmentReview ? <AssessmentEngagementReview review={historicalAssessmentReview} historical /> : historicalAssessmentScope ? <section className="card stack" aria-label="Historical assessment scope">
+          <h2>Historical assessment scope</h2><p>This recorded scope is not a renewed authorization. Select a saved authorization to review changes before starting another assessment.</p>
+          <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(historicalAssessmentScope, null, 2)}</pre>
+        </section> : null}
+        {assessmentReviewLoading || assessmentReview ? <div className="stack" data-assessment-review-actions ref={assessmentReviewPanelRef} tabIndex={-1} role="region" aria-label="Assessment review decision">
+          {assessmentReviewLoading ? <p role="status">Preparing rules of engagement…</p> : null}
+          {assessmentReviewReconciliation ? <p className="notice">The previous start is unconfirmed. Retry this identical reviewed request to check for the accepted result. No new authorization is created; the server validates current authority if it has not already accepted the request.</p> : null}
+          {assessmentReview ? <AssessmentEngagementReview review={assessmentReview} /> : null}
+          <div className="actions">
+            {assessmentReview ? <Button type="button" disabled={!assessmentReviewAwaiting} onClick={() => {
+              const decide = assessmentReviewDecisionRef.current;
+              assessmentReviewDecisionRef.current = null;
+              setAssessmentReviewAwaiting(false); decide?.(true);
+            }}>{pageMode.mode === 'edit' && pageMode.intent === 'edit' ? 'Save reviewed changes' : 'Start reviewed workflow'}</Button> : null}
+            {assessmentReviewLoading || assessmentReviewAwaiting ? <Button type="button" variant="secondary" onClick={() => {
+              createDraftRevisionRef.current += 1; invalidateAssessmentReview();
+            }}>Cancel review</Button> : null}
+          </div>
+        </div> : null}
         <section
           className="card queue-steps-section stack"
           data-canonical-create-section="Steps"

@@ -583,6 +583,37 @@ class CredentialGrant(_Model):
         return self
 
 
+class AssessmentEngagementTerms(_Model):
+    """Reusable authority description and absolute testing limits."""
+
+    authority_kind: Literal["self_hosted", "client_engagement"] = Field(
+        alias="authorityKind"
+    )
+    authority_source: str = Field(
+        alias="authoritySource", min_length=1, max_length=1000
+    )
+    valid_from: datetime = Field(alias="validFrom")
+    valid_until: datetime = Field(alias="validUntil")
+    max_total_job_seconds: int = Field(alias="maxTotalJobSeconds", ge=1, le=86400000)
+
+    @model_validator(mode="after")
+    def _window(self) -> "AssessmentEngagementTerms":
+        if self.valid_from.tzinfo is None or self.valid_until.tzinfo is None:
+            raise ValueError("assessment validity must include a timezone")
+        if self.valid_until <= self.valid_from:
+            raise ValueError("assessment validity must end after it begins")
+        return self
+
+
+class AssessmentEngagement(AssessmentEngagementTerms):
+    """Original operator-admitted authorization, never renewed by a retry."""
+
+    authorization_ref: str = Field(alias="authorizationRef", pattern=_REF)
+    authorization_generation: str = Field(
+        alias="authorizationGeneration", min_length=1, max_length=64
+    )
+
+
 class AdmittedAssessmentScope(_Model):
     """Compact operator-admitted authority for one assessment's container jobs.
 
@@ -609,8 +640,14 @@ class AdmittedAssessmentScope(_Model):
     network_refs: tuple[str, ...] = Field((), alias="networkRefs", max_length=16)
     max_jobs: int = Field(alias="maxJobs", ge=1, le=1000)
     max_job_seconds: int = Field(alias="maxJobSeconds", ge=1, le=86400)
+    max_cpu_millis: int | None = Field(None, alias="maxCpuMillis", ge=1, le=128000)
+    max_memory_mib: int | None = Field(None, alias="maxMemoryMiB", ge=16, le=1048576)
+    max_requests_per_second: int | None = Field(
+        None, alias="maxRequestsPerSecond", ge=1, le=100
+    )
     evidence_intent: str = Field(alias="evidenceIntent", min_length=1, max_length=500)
     grants: tuple[CredentialGrant, ...] = Field((), max_length=16)
+    engagement: AssessmentEngagement | None = None
 
     @field_validator("exclusions")
     @classmethod
@@ -689,6 +726,11 @@ def tls_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
         raise PermissionError("TLS network access is not admitted")
     if spec.timeout_seconds > scope.max_job_seconds:
         raise PermissionError("TLS timeout exceeds the assessment budget")
+    if (
+        scope.max_requests_per_second is not None
+        and tls.max_requests_per_second > scope.max_requests_per_second
+    ):
+        raise PermissionError("TLS request rate exceeds the assessment limit")
     if not any(t.web_origin == tls.origin for t in scope.targets):
         raise PermissionError("TLS origin is not an admitted target")
     if tls.trust_artifact_ref and tls.trust_artifact_ref not in {
@@ -721,6 +763,11 @@ def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
 
 def _web_target_within_scope(web, scope: AdmittedAssessmentScope):
     """One route/exclusion authority for scanners and target observations."""
+    if (
+        scope.max_requests_per_second is not None
+        and web.max_requests_per_second > scope.max_requests_per_second
+    ):
+        raise PermissionError("web request rate exceeds the assessment limit")
     targets = [t for t in scope.targets if t.web_origin == web.origin]
     if not targets:
         raise PermissionError("web origin is not an admitted target")
@@ -780,6 +827,16 @@ def cloud_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
 def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) -> None:
     """Admission check of the rendered launch content against the scope."""
 
+    if scope.max_cpu_millis is not None and (
+        spec.resources.cpu_millis <= 0
+        or spec.resources.cpu_millis > scope.max_cpu_millis
+    ):
+        raise PermissionError("CPU request exceeds the assessment resource limit")
+    if (
+        scope.max_memory_mib is not None
+        and spec.resources.memory_mib > scope.max_memory_mib
+    ):
+        raise PermissionError("memory request exceeds the assessment resource limit")
     if getattr(spec, "tls_assessment", None) is not None:
         tls_assessment_within_scope(spec, scope)
         return

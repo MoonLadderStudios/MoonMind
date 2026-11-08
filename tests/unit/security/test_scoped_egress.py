@@ -798,3 +798,18 @@ def test_offline_admission_does_not_load_proxy_configuration(tmp_path):
         timeout=15,
     )
     assert result.returncode == 0, result.stderr.decode()
+
+
+@pytest.mark.asyncio
+async def test_assessment_deadline_caps_gateway_lifetime_and_retry(lease_setup):
+    from datetime import UTC, datetime, timedelta
+
+    _module, _docker, request, backend, _published = lease_setup
+    lease = backend._scoped_lease(request)
+    deadline = datetime.now(UTC) + timedelta(seconds=80)
+    first = await lease.prepare(timeout_seconds=300, deadline=deadline)
+    assert first["expiresAt"] <= deadline.timestamp()
+    second = await lease.prepare(
+        timeout_seconds=600, deadline=deadline + timedelta(minutes=10)
+    )
+    assert second["expiresAt"] == first["expiresAt"]
