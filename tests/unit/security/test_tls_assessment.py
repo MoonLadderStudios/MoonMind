@@ -391,3 +391,66 @@ def test_invalid_trust_digest_cannot_be_published(tmp_path):
     result["trust"]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="digest"):
         validate_tls_execution(a, result)
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)",
+        "OpenSSL 1.1.1w 11 Sep 2023",
+    ],
+)
+def test_real_openssl_version_is_retained(tmp_path, version):
+    leaf, ca = make_certificates()
+    (tmp_path / "tls-trust").mkdir()
+    (tmp_path / "tls-trust" / "ca.pem").write_bytes(ca)
+    a = TLSAssessment(
+        origin="https://example.com",
+        egress_policy_ref="tls",
+        protocols=["TLSv1.2"],
+        trust_artifact_ref="art_ca",
+    )
+
+    class VersionProcesses(FixtureProcesses):
+        def run(self, argv, **kwargs):
+            if argv == ["openssl", "version"]:
+                kwargs["capture"].write_text(version + "\n")
+                kwargs["errors"].write_bytes(b"")
+                return 0, "succeeded"
+            return super().run(argv, **kwargs)
+
+    result = inspect_tls(
+        a,
+        tmp_path / "out",
+        inputs=tmp_path,
+        assessed_at=NOW,
+        environ={
+            "MOONMIND_EGRESS_PROXY": "http://gateway:3128",
+            "PATH": "/usr/bin:/bin",
+        },
+        processes=VersionProcesses(leaf + ca),
+    )
+    assert result["tool"]["version"] == version
+    assert validate_tls_execution(a, result) == result
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "OpenSSL 3.5.7\nsecret: injected",
+        "OpenSSL 3.5.7\x1b[31m",
+        "OpenSSL 3.5.7 (Library: secret)",
+        "OpenSSL 3.5.7 token: secret",
+        "OpenSSL " + "3" * 300,
+    ],
+)
+def test_openssl_version_rejects_injected_output(text):
+    from moonmind.security.tls_assessments import sanitize_openssl_version
+
+    assert sanitize_openssl_version(text) == "unavailable"
+
+
+def test_missing_tool_version_is_an_explicit_limitation():
+    a = TLSAssessment(origin="https://example.com", egress_policy_ref="tls")
+    summary = summarize_tls_assessment(a, {}, "unavailable")
+    assert "OpenSSL version could not be recorded" in summary.limitations

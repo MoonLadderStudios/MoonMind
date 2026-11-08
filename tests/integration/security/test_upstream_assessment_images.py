@@ -288,5 +288,9 @@ def test_tls_scanner_image_inspects_local_connect_fixtures(tmp_path):
     }
     for scenario, result in results.items():
         print(f"TLS {scenario}: {result['summary']['execution']['tool']}")
+        assert result["summary"]["execution"]["tool"]["version"] not in {
+            None,
+            "unavailable",
+        }
         assert result["gatewayEvents"]
         assert result["summary"]["execution"]["probes"]

@@ -17,6 +17,21 @@ INTERPRETATION = (
 )
 
 
+def sanitize_openssl_version(value: str) -> str:
+    """Retain a bounded OpenSSL release line, including its library version.
+
+    Accept the documented binary/library diagnostic, not arbitrary colon-bearing
+    text or multiline process output. Unknown formats remain explicit gaps.
+    """
+    import re
+
+    release = r"[0-9][A-Za-z0-9.+_-]{0,63}(?: [0-9]{1,2} [A-Za-z]{3} [0-9]{4})?"
+    pattern = rf"OpenSSL {release}(?: \(Library: OpenSSL {release}\))?"
+    return (
+        value if len(value) <= 256 and re.fullmatch(pattern, value) else "unavailable"
+    )
+
+
 def build_tls_assessment_job(
     assessment: TLSAssessment, *, image_source_ref="repository-security"
 ) -> dict:
@@ -184,6 +199,12 @@ def summarize_tls_assessment(
         "chains": [p.get("certificates", []) for p in probes],
         "assessedAt": execution.get("startedAt"),
     }
+    limitations = [
+        "Incomplete backend/load-balancer coverage",
+        "Native TLS and STARTTLS are not inspected",
+    ]
+    if execution.get("tool", {}).get("version") in {None, "unavailable"}:
+        limitations.append("OpenSSL version could not be recorded")
     return TLSAssessmentSummary(
         origin=assessment.origin,
         status=(
@@ -196,6 +217,7 @@ def summarize_tls_assessment(
         findings=findings,
         unperformed_checks=unperformed,
         comparison_key=content_key(identity),
+        limitations=limitations,
     )
 
 
@@ -251,7 +273,7 @@ def validate_tls_execution(assessment: TLSAssessment, execution: dict) -> dict:
     if execution["tool"]["name"] != "OpenSSL" or (
         version is not None
         and version != "unavailable"
-        and not re.fullmatch(r"OpenSSL [A-Za-z0-9 .()+_/-]{1,200}", version)
+        and sanitize_openssl_version(version) != version
     ):
         raise ValueError("TLS tool evidence is invalid")
     if execution["resolution"] != {"status": "proxy_pinned", "backendAddress": None}:

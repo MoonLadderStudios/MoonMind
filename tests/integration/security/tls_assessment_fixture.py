@@ -183,6 +183,7 @@ def qualify(output: Path):
     from moonmind.security.tls_assessment_runner import inspect_tls
     from moonmind.security.tls_assessments import (
         build_tls_assessment_job,
+        sanitize_openssl_version,
         summarize_tls_assessment,
     )
 
@@ -232,6 +233,7 @@ def qualify(output: Path):
                 a, root / "result", inputs=inputs, environ=env, assessed_at=CLOCK
             )
             summary = summarize_tls_assessment(a, execution, "art_fixture")
+            assert execution["tool"]["version"] not in {None, "unavailable"}
             probes = execution["probes"]
             assert probes
             if scenario == "legacy":
@@ -312,6 +314,11 @@ def qualify(output: Path):
                 )
                 assert done.returncode == 0, done.stderr.decode()
                 saved = json.loads((root / "cli" / "execution.json").read_text())
+                assert saved["tool"]["version"] not in {None, "unavailable"}
+                assert (
+                    sanitize_openssl_version(saved["tool"]["version"])
+                    == saved["tool"]["version"]
+                )
                 assert saved["probes"][0]["status"] == "observed"
                 assert saved["probes"][0]["trustResult"] == (
                     "trusted" if scenario == "private-ca" else "untrusted"

@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 
 from moonmind.security.egress_policy import tool_proxy_options
 from moonmind.security.repository_scanner_runner import BoundedProcesses
-from moonmind.security.tls_assessments import TLSAssessment
+from moonmind.security.tls_assessments import TLSAssessment, sanitize_openssl_version
 
 _FLAGS = {
     "TLSv1": "-tls1",
@@ -250,11 +250,7 @@ def inspect_tls(
             ["openssl", "version"], cwd=root, env=env, capture=capture, errors=errors
         )
         version = _read(capture).decode(errors="replace").strip()
-        execution["tool"]["version"] = (
-            version
-            if re.fullmatch(r"OpenSSL [A-Za-z0-9 .()+_/-]{1,200}", version)
-            else "unavailable"
-        )
+        execution["tool"]["version"] = sanitize_openssl_version(version)
         _write(output / "execution.json", execution)
         next_attempt = time.monotonic()
         for protocol in a.protocols:
