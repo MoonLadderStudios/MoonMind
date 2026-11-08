@@ -2119,26 +2119,72 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
-    @staticmethod
-    def _active_journal_reference_exists(artifact_id: Any) -> Any:
+    def _active_journal_reference_exists(self, artifact_id: Any) -> Any:
         from moonmind.omnigent.bridge_store import (
-            _TERMINAL_STATUSES,
             SEALED_JOURNAL_CHUNKS_KEY,
+            _TERMINAL_STATUSES,
         )
 
         bridge = db_models.OmnigentBridgeSession
+        array = bridge.metadata_[SEALED_JOURNAL_CHUNKS_KEY]
+        if self._session.get_bind().dialect.name == "postgresql":
+            array = cast(array, JSONB)
+            safe_array = case(
+                (func.jsonb_typeof(array) == "array", array), else_=cast([], JSONB)
+            )
+            chunks = (
+                func.jsonb_array_elements(safe_array)
+                .table_valued("value")
+                .render_derived()
+            )
+            chunk = cast(chunks.c.value, JSONB)
+            raw, normalized = chunk["raw"].astext, chunk["normalized"].astext
+        else:
+            safe_array = case(
+                (func.json_type(array) == "array", array), else_=func.json("[]")
+            )
+            chunks = func.json_each(safe_array).table_valued("value", "type")
+            # json_each returns scalar strings without JSON quoting. Only
+            # object entries may be passed to json_extract as chunk pairs.
+            chunk = case(
+                (chunks.c.type == "object", chunks.c.value), else_=func.json("{}")
+            )
+            raw = func.json_extract(chunk, "$.raw")
+            normalized = func.json_extract(chunk, "$.normalized")
+
+        def reference(value):
+            return or_(
+                value.startswith("art_", autoescape=True),
+                value.startswith("artifact:art_", autoescape=True),
+            )
+
+        def matches(value):
+            return value.in_((artifact_id, "artifact:" + artifact_id))
+
+        paired = and_(reference(raw), reference(normalized))
+        pending = exists(select(1).select_from(chunks).where(paired)).correlate_except(
+            chunks
+        )
+        sealed_reference = exists(
+            select(1)
+            .select_from(chunks)
+            .where(paired, or_(matches(raw), matches(normalized)))
+        ).correlate_except(chunks)
+        # A failed terminal capture can leave only chunked recovery history.
+        # The existing compactor owns it until a complete ref swap removes the
+        # pending pairs. Exact fields, never arbitrary metadata strings, retain
+        # bytes; this predicate grants no metadata or raw read authority.
         return exists().where(
-            bridge.status.not_in(_TERMINAL_STATUSES),
             or_(
-                bridge.raw_events_ref == artifact_id,
-                bridge.raw_events_ref == "artifact:" + artifact_id,
-                bridge.normalized_events_ref == artifact_id,
-                bridge.normalized_events_ref == "artifact:" + artifact_id,
-                # Completed chunks precede the current pair in the same journal.
-                bridge.metadata_[SEALED_JOURNAL_CHUNKS_KEY]
-                .as_string()
-                .contains(artifact_id + '"'),
-            ),
+                and_(
+                    or_(bridge.status.not_in(_TERMINAL_STATUSES), pending),
+                    or_(
+                        matches(bridge.raw_events_ref),
+                        matches(bridge.normalized_events_ref),
+                    ),
+                ),
+                sealed_reference,
+            )
         )
 
     @_artifact_authority_boundary
@@ -2506,7 +2552,7 @@ class TemporalArtifactRepository:
 
     @_artifact_authority_boundary
     async def has_active_journal_reference(self, artifact_id: str) -> bool:
-        """The current journal remains recovery data until its bridge is terminal."""
+        """Live or still-uncompacted journals remain existing recovery data."""
         return bool(
             await self._session.scalar(
                 select(self._active_journal_reference_exists(artifact_id))

@@ -751,8 +751,8 @@ operations; unresolved work remains observable for the next hourly pass.
 
 Retention is assigned on creation/linking. Migrations shorten expiry only when
 every link matches the changed class, measured from the latest link, never before
-creation. Pins and live claims protect every artifact. Non-terminal bridge sessions
-also protect recovery journals; ordinary retention resumes when sessions end.
+creation. Pins and live claims protect artifacts. Live bridges and uncompacted
+terminal chunks protect exact journal pairs; compaction releases replaced chunks.
 
 Trusted plan, Skill, saved-work and security assessment producers seal a flat
 dependency set with the owning transaction: logical IDs, original digests,
@@ -853,7 +853,7 @@ A tombstone alone never authorizes purge: the row needs no deletion intent, and
 either another live row owns its shared bytes or the store reports the key
 absent. Present or unknown bytes return to deletion-intent reconciliation; a
 store error is not progress, so an outage hands over at most a page per pass.
-Pin rows, live use claims, non-terminal journal refs and remediation context
+Pin rows, live use claims, retained journal refs and remediation context
 refs keep the tombstone; a `PINNED` class left by deletion does not. Pin
 and link requests lock the row first; candidates are locked with
 `SKIP LOCKED` and rechecked, so a concurrent protection wins or finds the
