@@ -417,8 +417,10 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
                 ]) == 1
                 tools = [r for r in activities if r["activityType"] == "mm.tool.execute"]
                 assert len(tools) == 2
+                # Production admission may select its existing publication
+                # lane. Both steps must keep the queue observed before upgrade.
                 assert all(
-                    row["taskQueue"] == settings.temporal.activity_sandbox_task_queue
+                    row["taskQueue"] == confirmed_tool["taskQueue"]
                     for row in tools
                 )
                 recorded_tool = await _result(
