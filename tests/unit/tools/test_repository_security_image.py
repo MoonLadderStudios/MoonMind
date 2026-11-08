@@ -360,6 +360,7 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
         "moonmind.security.image_assessment_runner",
         "moonmind.security.tls_assessment_runner",
         "moonmind.security.dns_assessments",
+        "moonmind.security.dns_assessment_runner",
         "moonmind.security.service_inventory_runner",
         "moonmind.security.native_tcp_gateway",
     ],

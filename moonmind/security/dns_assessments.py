@@ -802,7 +802,9 @@ def _derived_response(question: DNSQuestion, response: DNSResponse) -> dict:
         else (
             "resolver_reported_failure"
             if validation_failure
-            else "resolver_asserted" if response.authenticated_data else "unverified"
+            else "resolver_asserted"
+            if response.authenticated_data
+            else "unverified"
         )
     )
     ttl = None
@@ -823,7 +825,9 @@ def _derived_response(question: DNSQuestion, response: DNSResponse) -> dict:
     cache = (
         "unknown"
         if response.http_age_seconds is None
-        else "cached" if response.http_age_seconds > 0 else "not_reported_cached"
+        else "cached"
+        if response.http_age_seconds > 0
+        else "not_reported_cached"
     )
     remaining = (
         None
@@ -1289,10 +1293,14 @@ def _record_expiry(observation, records):
 
 def _tag_pairs(text):
     """One grammar for first-tag selection and complete policy parsing."""
-    for item in text.split(";"):
+    items = text.split(";")
+    for index, item in enumerate(items):
         if not item.strip():
-            continue
+            if index == len(items) - 1 and index > 0:
+                continue
+            raise ValueError("empty policy tag")
         name, sep, value = item.strip().partition("=")
+        name = name.rstrip(" \t")
         if not sep or not re.fullmatch(r"[a-z][a-z0-9_]*", name):
             raise ValueError("invalid policy tags")
         yield name, value.strip()

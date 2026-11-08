@@ -547,6 +547,71 @@ def container_service_inventory(
     _print_container_job_result(result)
 
 
+@container_app.command(
+    "dns-assessment", help="Query admitted DNS names through the deployment HTTPS resolver."
+)
+def container_dns_assessment(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    cpu_millis: int = typer.Option(1000, "--cpu-millis", min=1, max=128000),
+    memory_mib: int = typer.Option(256, "--memory-mib", min=16, max=1048576),
+    timeout_seconds: int | None = typer.Option(
+        None, "--timeout-seconds", min=1, max=86400
+    ),
+) -> None:
+    from moonmind.schemas.container_job_models import (
+        ContainerJobSpec,
+        WorkloadProfileSelection,
+    )
+
+    try:
+        with admission.open("rb") as stream:
+            raw = stream.read(96 * 1024 + 1)
+        if len(raw) > 96 * 1024:
+            raise ValueError("DNS admission exceeds the input bound")
+        selected = WorkloadProfileSelection.model_validate_json(raw)
+        if (
+            selected.dns_assessment is None
+            or selected.assessment_ref is None
+            or selected.native_network is not None
+            or selected.service_inventory is not None
+            or selected.arguments
+            or selected.configuration_exceptions
+            or selected.credentials
+        ):
+            raise ValueError("DNS requires a typed query-only profile selection")
+        duration = selected.dns_assessment.timeout_seconds
+        timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else min(86400, duration + 15)
+        )
+        if timeout < duration:
+            raise ValueError("job timeout cannot shorten admitted DNS duration")
+        spec = ContainerJobSpec.model_validate(
+            {
+                "workloadProfile": selected.model_dump(mode="json", by_alias=True),
+                "inputAttachments": [],
+                "resources": {
+                    "cpuMillis": cpu_millis,
+                    "memoryMiB": memory_mib,
+                    "pids": 64,
+                },
+                "timeoutSeconds": timeout,
+            }
+        )
+        result = run_container_job(spec.model_dump(mode="json", by_alias=True))
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        typer.secho(
+            "Invalid DNS assessment admission or container job unavailable.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
 @worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion

@@ -47,10 +47,16 @@ from moonmind.schemas.repository_scanner_models import (
     web_route,
 )
 from moonmind.security.dns_assessments import (
-    DNSAssessment, DNSResolverConfig, build_dns_command, build_dns_query_plan,
+    DNSAssessment,
+    DNSResolverConfig,
+    build_dns_command,
+    build_dns_query_plan,
     require_dns_subset,
 )
-from moonmind.security.native_network import NativeNetworkSelection, require_native_subset
+from moonmind.security.native_network import (
+    NativeNetworkSelection,
+    require_native_subset,
+)
 from moonmind.security.realtime_scope import RealtimeScope
 
 WORKLOAD_PROFILES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_WORKLOAD_PROFILES"
@@ -272,7 +278,9 @@ class WorkloadProfile(_Model):
 
     @model_validator(mode="after")
     def _unambiguous(self) -> "WorkloadProfile":
-        if self.dns_resolver is not None and (self.network_mode != "bridge" or self.native_network is not None):
+        if self.dns_resolver is not None and (
+            self.network_mode != "bridge" or self.native_network is not None
+        ):
             raise ValueError("DNS resolver profiles require only scoped HTTPS egress")
         if self.native_network is not None and self.network_mode != "bridge":
             raise ValueError("native profiles require scoped bridge egress")
@@ -854,7 +862,11 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         or selection.profile_ref not in scope.profile_refs
         or not set(selection.configuration_exceptions)
         <= set(scope.configuration_exceptions)
-        or (not spec.input_attachments and selection.dns_assessment is None and selection.service_inventory is None)
+        or (
+            not spec.input_attachments
+            and selection.dns_assessment is None
+            and selection.service_inventory is None
+        )
     ):
         return False
     if selection.service_inventory is not None and (
@@ -865,13 +877,15 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         if (
             spec.input_attachments != []
             or selection.native_network is not None
-        or selection.service_inventory is not None
+            or selection.service_inventory is not None
             or selection.arguments
             or selection.configuration_exceptions
             or selection.credentials
             or "dns-observation" not in scope.action_classes
-            or (scope.max_requests_per_second is not None
-                and selection.dns_assessment.queries_per_second > scope.max_requests_per_second)
+            or (
+                scope.max_requests_per_second is not None
+                and selection.dns_assessment.queries_per_second > scope.max_requests_per_second
+            )
         ):
             return False
         authority = next(

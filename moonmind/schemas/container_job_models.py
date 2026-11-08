@@ -15,10 +15,18 @@ from pydantic import (
     StrictInt,
     StrictStr,
     field_validator,
-    model_validator,
     model_serializer,
+    model_validator,
 )
 
+from moonmind.schemas.repository_scanner_models import (
+    CloudAssessment,
+    FeedRefresh,
+    ImageAssessment,
+    RepositoryScan,
+    TLSAssessment,
+    WebAssessment,
+)
 from moonmind.schemas.workload_models import (
     WorkloadGpuCapability,
     WorkloadGpuRequest,
@@ -32,18 +40,10 @@ from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WorkspaceLocator,
 )
-from moonmind.utils.logging import redact_sensitive_text
 from moonmind.security.dns_assessments import DNSAssessment
 from moonmind.security.native_network import NativeNetworkSelection
 from moonmind.security.service_inventory import ServiceInventoryOptions
-from moonmind.schemas.repository_scanner_models import (
-    CloudAssessment,
-    FeedRefresh,
-    ImageAssessment,
-    RepositoryScan,
-    TLSAssessment,
-    WebAssessment,
-)
+from moonmind.utils.logging import redact_sensitive_text
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024

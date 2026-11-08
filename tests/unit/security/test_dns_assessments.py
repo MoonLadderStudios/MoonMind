@@ -617,8 +617,9 @@ def test_multiple_cname_targets_are_not_collapsed_by_wire_parser():
 
 def test_explicit_dmarc_fallback_keeps_exact_subject_first_and_provenance():
     subject = "z.example.com"
-    q, fallback = question("_dmarc." + subject, "TXT"), question(
-        "_dmarc.example.com", "TXT"
+    q, fallback = (
+        question("_dmarc." + subject, "TXT"),
+        question("_dmarc.example.com", "TXT"),
     )
     selection = DNSCheckSelection(
         check="dmarc", subject=subject, organizational_domain="example.com"
@@ -1445,8 +1446,9 @@ def test_delegation_attributes_only_exact_or_validated_alias_terminal_addresses(
 def test_dmarc_fallback_scheduling_matches_exact_policy_detection(text, should_follow):
     from moonmind.security.dns_assessments import followup_questions
 
-    q, fallback = question("_dmarc.a.example.com", "TXT"), question(
-        "_dmarc.example.com", "TXT"
+    q, fallback = (
+        question("_dmarc.a.example.com", "TXT"),
+        question("_dmarc.example.com", "TXT"),
     )
     check = DNSCheckSelection(
         check="dmarc", subject="a.example.com", organizational_domain="example.com"
@@ -1545,7 +1547,7 @@ def test_bounded_details_keep_unsupported_critical_caa_semantics():
     [
         ("dkim", "v=DKIM1; p=", " v=DKIM10; p=", "revoked"),
         ("dkim", " v=DKIM1; p=", "   v=DKIM10; p=", "revoked"),
-        ("dkim", "p=", "; v=DKIM10; p=", "revoked"),
+        ("dkim", "p=", "; v=DKIM10; p=", "malformed"),
         ("dkim", "v=DKIM1; p=", " v=DKIM10; future syntax", "revoked"),
         ("dmarc", " v=DMARC1; p=reject", " v=DMARC10; p=none", "observed"),
     ],
@@ -1573,8 +1575,9 @@ def test_mail_version_selection_uses_the_same_first_tag_grammar(
 def test_dmarc_first_tag_whitespace_does_not_schedule_inapplicable_fallback():
     from moonmind.security.dns_assessments import followup_questions
 
-    q, fallback = question("_dmarc.a.example.com", "TXT"), question(
-        "_dmarc.example.com", "TXT"
+    q, fallback = (
+        question("_dmarc.a.example.com", "TXT"),
+        question("_dmarc.example.com", "TXT"),
     )
     p = plan(
         assessment(
@@ -1593,3 +1596,43 @@ def test_dmarc_first_tag_whitespace_does_not_schedule_inapplicable_fallback():
         q, parsed(q, [(q.name, 120, "IN", "TXT", '" v=DMARC1; p=reject"')])
     )
     assert followup_questions(p, row) == ()
+
+
+@pytest.mark.parametrize("unknown", ["", "v = DKIM10; p = "])
+def test_dkim_tag_whitespace_preserves_version_selection(unknown):
+    q = question("s1._domainkey.example.com", "TXT")
+    p = plan(
+        assessment(
+            questions=[q],
+            checks=(
+                DNSCheckSelection(
+                    check="dkim", subject="example.com", selectors=("s1",)
+                ),
+            ),
+        )
+    )
+    values = [json.dumps("v = DKIM1; p = ")]
+    if unknown:
+        values.append(json.dumps(unknown))
+    row = observation(q, parsed(q, [(q.name, 120, "IN", "TXT", *values)]))
+    check = summarize_dns_assessment(p, execution(p, row), "art_test").checks[0]
+    assert check.status == "revoked"
+    assert check.code == "dkim_key_revoked"
+
+
+@pytest.mark.parametrize("text", ["v=DKIM1;;p=", ";v=DKIM1;p="])
+def test_dkim_empty_interior_tag_is_malformed(text):
+    q = question("s1._domainkey.example.com", "TXT")
+    p = plan(
+        assessment(
+            questions=[q],
+            checks=(
+                DNSCheckSelection(
+                    check="dkim", subject="example.com", selectors=("s1",)
+                ),
+            ),
+        )
+    )
+    row = observation(q, parsed(q, [(q.name, 120, "IN", "TXT", json.dumps(text))]))
+    check = summarize_dns_assessment(p, execution(p, row), "art_test").checks[0]
+    assert check.status == "malformed"

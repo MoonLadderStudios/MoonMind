@@ -615,7 +615,8 @@ def _withholds_console(spec) -> bool:
         or spec.cloud_assessment is not None
         or (
             spec.workload_profile is not None
-            and spec.workload_profile.service_inventory is not None
+            and (spec.workload_profile.service_inventory is not None
+                 or spec.workload_profile.dns_assessment is not None)
         )
     )
 
@@ -4263,6 +4264,8 @@ class DockerContainerJobBackend:
         if request.request.spec.tls_assessment is not None:
             return await self._collect_tls_assessment_outputs(request)
         profile = request.request.spec.workload_profile
+        if profile is not None and profile.dns_assessment is not None:
+            return await self._collect_dns_assessment_outputs(request)
         if profile is not None and profile.service_inventory is not None:
             return await self._collect_service_inventory_outputs(request)
         if request.request.spec.web_assessment is not None:
@@ -5079,6 +5082,122 @@ class DockerContainerJobBackend:
             native_receipt_mismatch=receipt_mismatch,
         )
         await publish("summary", summary.model_dump_json(by_alias=True).encode())
+        return manifest
+
+    async def _collect_dns_assessment_outputs(self, request: ContainerJobActivityRequest):
+        """Recompute DNS artifacts from the persisted deployment-resolved invocation."""
+        from moonmind.security.dns_assessments import (
+            DNS_RUNNER_MODULE,
+            decode_dns_query_plan,
+            serialize_dns_artifacts,
+            validate_dns_execution,
+        )
+
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        # The persisted command is rendered by admission, never supplied by the
+        # runner. Do not switch historical resolver identity on a config update.
+        if spec.entrypoint != ["python"] or spec.command[:3] != [
+            "-I",
+            "-m",
+            DNS_RUNNER_MODULE,
+        ]:
+            raise ValueError("DNS collection requires its fixed admitted invocation")
+        plan = decode_dns_query_plan(spec.command[3:])
+        if plan.assessment != spec.workload_profile.dns_assessment:
+            raise ValueError("DNS invocation differs from admitted selection")
+        entries = await asyncio.to_thread(
+            self._build_output_entries,
+            self._output_root(request),
+            [output for output in spec.outputs if output.name == "execution"],
+        )
+        if len(entries) != 1:
+            raise ValueError("DNS execution output is unavailable")
+        entry = entries[0]
+        manifest = []
+
+        def rejected(name, detail, status="rejected"):
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=f"dns-assessment/{name}.json",
+                    collectionStatus=status,
+                    detail=detail,
+                )
+            )
+
+        if entry["payload"] is None:
+            rejected("execution", entry["detail"], entry["status"])
+            return manifest
+        try:
+            if len(entry["payload"]) > plan.assessment.max_output_bytes:
+                raise ValueError("DNS execution exceeds admitted output budget")
+            execution = validate_dns_execution(plan, json.loads(entry["payload"]))
+            if str(request.terminal_state) != "succeeded":
+                # Retain completed answers on failure/cancellation; a container
+                # that did not finish cannot assert complete job coverage.
+                execution = execution.model_copy(
+                    update={
+                        "stop_reason": "canceled"
+                        if str(request.terminal_state) == "canceled"
+                        else "failed",
+                        "finished_at": execution.checkpoint_at,
+                        "observations": tuple(
+                            row.model_copy(update={"transport_outcome": "interrupted"})
+                            if row.transport_outcome == "in_flight"
+                            else row
+                            for row in execution.observations
+                        ),
+                    }
+                )
+            bodies = serialize_dns_artifacts(plan, execution, "execution.json")
+        except (ValueError, TypeError, KeyError, RecursionError, UnicodeDecodeError):
+            rejected(
+                "execution", "DNS evidence failed admitted plan or semantic validation."
+            )
+            return manifest
+        remaining = min(
+            self._settings.max_output_total_bytes, plan.assessment.max_output_bytes
+        )
+        files = self._settings.max_output_files
+
+        async def publish(name, body):
+            nonlocal remaining, files
+            if len(body) > remaining or files < 1:
+                rejected(name, "DNS output exceeds collection bounds.")
+                return None
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", body
+            )
+            if not ref:
+                raise RuntimeError("DNS artifact could not be persisted")
+            remaining -= len(body)
+            files -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=f"dns-assessment/{name}.json",
+                    artifactRef=ref,
+                    sizeBytes=len(body),
+                    sha256=hashlib.sha256(body).hexdigest(),
+                    mediaType="application/json",
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        native_ref = await publish("execution", bodies["execution.json"])
+        if native_ref:
+            try:
+                # The retained reference is larger than the runner-local name;
+                # apply the original combined limit again, preserving native
+                # progress even when the summary cannot fit.
+                bodies = serialize_dns_artifacts(plan, execution, native_ref)
+            except ValueError:
+                rejected("summary", "DNS summary exceeds original combined output budget.")
+            else:
+                await publish("summary", bodies["summary.json"])
         return manifest
 
     async def _collect_tls_assessment_outputs(self, request: ContainerJobActivityRequest):

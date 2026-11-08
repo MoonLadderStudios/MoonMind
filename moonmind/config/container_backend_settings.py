@@ -232,6 +232,7 @@ class ContainerBackendSettings:
                     raise ValueError("native selection requires a native egress policy")
                 if profile is not None and profile.dns_assessment is not None:
                     from urllib.parse import urlsplit
+
                     from moonmind.security.workload_profiles import dns_profile_plan
 
                     plan = dns_profile_plan(request.spec, self.workload_profiles)
