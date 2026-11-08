@@ -11,6 +11,7 @@ import os
 import shutil
 from contextlib import AsyncExitStack
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -157,8 +158,7 @@ from moonmind.workflows.temporal.workers import (
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
     build_worker_spec,
-    describe_configured_worker,
-    list_registered_workflow_types,
+    describe_configured_workers,
 )
 from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
@@ -2834,19 +2834,16 @@ class _ArtifactServiceProxy:
         return wrapper
 
 
-async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
-    """Build activity handlers for the configured non-workflow fleet.
-
-    Agent execution is handled by MoonMind.AgentRun (a child workflow on the
-    workflow fleet).  Plan generation and skill dispatch are handled by
-    activity fleets (llm, sandbox, etc.).
-    """
-    resources = AsyncExitStack()
-    activity_types = set(getattr(topology, "activity_types", []) or [])
+async def _initialize_process_transports(topologies, resources: AsyncExitStack) -> None:
+    """Acquire singleton transports once, before any fleet starts polling."""
+    activity_types = {
+        name for topology in topologies for name in topology.activity_types
+    }
     uses_omnigent_transport = bool(
-        getattr(topology, "fleet", "") == AGENT_RUNTIME_FLEET
+        any(topology.fleet == AGENT_RUNTIME_FLEET for topology in topologies)
         or any(
-            str(name).startswith("integration.omnigent") or str(name).startswith("omnigent.")
+            str(name).startswith("integration.omnigent")
+            or str(name).startswith("omnigent.")
             for name in activity_types
         )
     )
@@ -2862,7 +2859,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         await init_shared_pool_client()
         resources.push_async_callback(aclose_shared_pool_client)
-    if "integration.omnigent.execute" in topology.activity_types:
+    if "integration.omnigent.execute" in activity_types:
         from moonmind.omnigent.settings import generic_host_enabled
 
         if generic_host_enabled():
@@ -2894,6 +2891,16 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     "continuing degraded: %s",
                     exc,
                 )
+
+
+async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
+    """Build activity handlers for the configured non-workflow fleet.
+
+    Agent execution is handled by MoonMind.AgentRun (a child workflow on the
+    workflow fleet).  Plan generation and skill dispatch are handled by
+    activity fleets (llm, sandbox, etc.).
+    """
+    resources = AsyncExitStack()
     container_job_backend = None
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []
@@ -3112,7 +3119,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             resolve_external_adapter,
             external_adapter_execution_style,
         ]
-    except Exception:
+    except BaseException:
         await resources.aclose()
         raise
 
@@ -3141,7 +3148,7 @@ def _build_queue_workers(client, topology, worker_kwargs) -> list[Worker]:
     ]
 
 
-async def main_async() -> None:
+async def main_async(*, fleet: str | None = None) -> None:
     """Run the Temporal worker."""
     # This worker is separately restartable and consumes the same legacy
     # Omnigent image/environment identities as the API, so it runs the shared
@@ -3162,22 +3169,44 @@ async def main_async() -> None:
         resolve_bridge_config()
     except BridgeConfigError as exc:
         raise SystemExit(f"invalid Omnigent bridge configuration: {exc}") from exc
-    topology = describe_configured_worker()
-
-    logger.info(
-        f"Starting {topology.service_name} [{topology.fleet}] "
-        f"queues={','.join(topology.task_queues)} "
-        f"concurrency={topology.concurrency_limit} "
-        f"queue_concurrency={topology.queue_concurrency_limits}"
+    topologies = describe_configured_workers(fleet=fleet)
+    service_name = (
+        topologies[0].service_name if len(topologies) == 1 else "temporal-worker-multi"
     )
+    log_fields = default_log_fields_from_env()
+    log_fields["worker_fleet"] = ",".join(topology.fleet for topology in topologies)
+    if not any(
+        os.environ.get(name)
+        for name in (
+            "MOONMIND_SERVICE_NAME",
+            "MOONMIND_SERVICE",
+            "OTEL_SERVICE_NAME",
+            "SERVICE_NAME",
+        )
+    ):
+        log_fields["service"] = service_name
+    if not any(
+        os.environ.get(name)
+        for name in ("MOONMIND_COMPONENT", "MOONMIND_COMPONENT_NAME")
+    ):
+        log_fields["component"] = (
+            topologies[0].fleet if len(topologies) == 1 else "temporal-worker"
+        )
+    _configure_worker_logging(
+        enable_opentelemetry=os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0")
+        == "1",
+        default_fields=log_fields,
+    )
+    for topology in topologies:
+        logger.info(
+            "Starting %s [%s] queues=%s concurrency=%s queue_concurrency=%s",
+            topology.service_name,
+            topology.fleet,
+            ",".join(topology.task_queues),
+            topology.concurrency_limit,
+            topology.queue_concurrency_limits,
+        )
 
-    # Liveness starts immediately. Readiness remains false until the Temporal
-    # connection, executable spec, SDK workers, and polling tasks all exist.
-    # The startup code identity is recorded before any activity executes so
-    # post-incident analysis can tell which revision ran each step, and so the
-    # /readyz projection can report stale_code when a host git pull rewrites
-    # the bind-mounted sources under a long-lived worker
-    # (MoonLadderStudios/MoonMind#4224).
     from moonmind.workflows.temporal.worker_code_identity import (
         record_worker_startup_identity,
     )
@@ -3193,168 +3222,238 @@ async def main_async() -> None:
         _startup_code_identity.revision or "unknown",
         _startup_code_identity.source,
     )
-    healthcheck_server = await start_healthcheck_server(health_state)
-
-    import os
-
-    interceptors = []
-    runtime = None
-    if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
-        try:
-            from temporalio.contrib.opentelemetry import TracingInterceptor
-
-            from moonmind.observability.telemetry import (
-                TelemetrySettings,
-                initialize_telemetry,
-            )
-
-            initialize_telemetry(
-                TelemetrySettings.from_env(service_name=topology.service_name)
-            )
-            interceptors.append(TracingInterceptor())
-
-            # Setup Prometheus metrics for worker health and queue polling behavior.
-            # Bind address can be configured via MOONMIND_PROMETHEUS_BIND_ADDRESS.
-            # Default to localhost-only to avoid exposing metrics on all interfaces.
-            prometheus_bind_address = os.environ.get(
-                "MOONMIND_PROMETHEUS_BIND_ADDRESS",
-                "127.0.0.1:9090",
-            )
-            runtime = Runtime(
-                telemetry=TelemetryConfig(
-                    metrics=PrometheusConfig(bind_address=prometheus_bind_address)
-                )
-            )
-
-            logger.info(
-                "OpenTelemetry tracing enabled for Temporal worker with "
-                "service.name=%s.",
-                topology.service_name,
-            )
-        except ImportError as e:
-            logger.warning(
-                f"OpenTelemetry tracing requested but failed to initialize: {e}"
-            )
-
-    client_kwargs = {
-        "namespace": settings.temporal.namespace,
-        "data_converter": pydantic_data_converter,
-        "interceptors": interceptors,
+    health_state.readiness_metadata = {
+        "fleet": topologies[0].fleet if len(topologies) == 1 else "multi",
+        "fleets": [topology.fleet for topology in topologies],
     }
-    if runtime:
-        client_kwargs["runtime"] = runtime
-
     try:
-        client = await Client.connect(settings.temporal.address, **client_kwargs)
-        health_state.temporal_connected = True
-    except Exception as exc:
-        health_state.startup_error = exc.__class__.__name__
-        raise
+        async with AsyncExitStack() as process_resources:
+            healthcheck_server = await start_healthcheck_server(health_state)
+            if healthcheck_server is not None:
+                process_resources.push_async_callback(
+                    _close_healthcheck, healthcheck_server
+                )
+            interceptors = []
+            runtime = None
+            if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
+                try:
+                    from temporalio.contrib.opentelemetry import TracingInterceptor
 
-    workflows = []
-    activities = []
-    runtime_resources: AsyncExitStack | None = None
+                    from moonmind.observability.telemetry import (
+                        TelemetrySettings,
+                        initialize_telemetry,
+                    )
 
-    if topology.fleet == WORKFLOW_FLEET:
-        workflows = workflow_fleet_workflow_classes()
-        activities = workflow_fleet_activity_handlers()
-        logger.info(
-            "Temporal workflow fleet registrations: %s",
-            ", ".join(list_registered_workflow_types()),
-        )
-    else:
-        runtime_resources, activities = await _build_runtime_activities(topology)
+                    initialize_telemetry(
+                        replace(
+                            TelemetrySettings.from_env(service_name=service_name),
+                            worker_fleet=",".join(
+                                topology.fleet for topology in topologies
+                            ),
+                        )
+                    )
+                    interceptors.append(TracingInterceptor())
 
-    try:
-        spec = build_worker_spec(
-            topology=topology,
-            workflows=workflows,
-            activities=activities,
-        )
-        worker_kwargs = {
-            "workflows": spec.workflows,
-            "activities": spec.activities,
-            "workflow_runner": UnsandboxedWorkflowRunner(),
-        }
-        from moonmind.workflows.temporal.worker_lifecycle import (
-            WORKER_DRAIN_TIMEOUT,
-            serve_workers,
-        )
+                    # Setup Prometheus metrics for worker health and queue polling behavior.
+                    # Bind address can be configured via MOONMIND_PROMETHEUS_BIND_ADDRESS.
+                    # Default to localhost-only to avoid exposing metrics on all interfaces.
+                    prometheus_bind_address = os.environ.get(
+                        "MOONMIND_PROMETHEUS_BIND_ADDRESS",
+                        "127.0.0.1:9090",
+                    )
+                    runtime = Runtime(
+                        telemetry=TelemetryConfig(
+                            metrics=PrometheusConfig(
+                                bind_address=prometheus_bind_address
+                            )
+                        )
+                    )
 
-        worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
-        workers = _build_queue_workers(client, topology, worker_kwargs)
-        health_state.workers_constructed = True
-        health_state.readiness_metadata = spec.readiness_payload()
-        if topology.fleet == AGENT_RUNTIME_FLEET:
-            container_job_backend = getattr(
-                runtime_resources, "container_job_backend", None
-            )
-            enforced_network_refs = getattr(
-                runtime_resources, "enforced_network_refs", ()
-            )
-            enforced_egress_profile_refs = getattr(
-                runtime_resources, "enforced_egress_profile_refs", ()
-            )
-            health_state.readiness_metadata["containerBackend"] = {
-                "ready": container_job_backend is not None,
-                "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
-                "enforcedEgressProfileRefs": sorted(set(enforced_egress_profile_refs)),
+                    logger.info(
+                        "OpenTelemetry tracing enabled for Temporal worker with "
+                        "service.name=%s.",
+                        service_name,
+                    )
+                except ImportError as e:
+                    logger.warning(
+                        f"OpenTelemetry tracing requested but failed to initialize: {e}"
+                    )
+
+            client_kwargs = {
+                "namespace": settings.temporal.namespace,
+                "data_converter": pydantic_data_converter,
+                "interceptors": interceptors,
             }
-            egress_attestation = getattr(runtime_resources, "egress_attestation", None)
-            if egress_attestation is not None:
-                health_state.readiness_metadata["containerBackend"][
-                    "egressAttestation"
-                ] = egress_attestation.model_dump(by_alias=True, mode="json")
-            egress_attestations = getattr(runtime_resources, "egress_attestations", ())
-            if egress_attestations:
-                health_state.readiness_metadata["containerBackend"][
-                    "egressAttestations"
-                ] = [
-                    attestation.model_dump(by_alias=True, mode="json")
-                    for attestation in egress_attestations
-                ]
+            if runtime:
+                client_kwargs["runtime"] = runtime
 
-        logger.info(
-            "Temporal executable worker specification: %s",
-            json.dumps(spec.readiness_payload(), sort_keys=True),
-        )
+            client = await Client.connect(settings.temporal.address, **client_kwargs)
+            health_state.temporal_connected = True
+            await _initialize_process_transports(topologies, process_resources)
+            workers = []
+            fleet_specs = {}
+            for topology in topologies:
+                runtime_resources = None
+                if topology.fleet == WORKFLOW_FLEET:
+                    workflows = workflow_fleet_workflow_classes()
+                    activities = workflow_fleet_activity_handlers()
+                else:
+                    workflows = []
+                    runtime_resources, activities = await _build_runtime_activities(
+                        topology
+                    )
+                    process_resources.push_async_callback(runtime_resources.aclose)
+                spec = build_worker_spec(
+                    topology=topology, workflows=workflows, activities=activities
+                )
+                from moonmind.workflows.temporal.worker_lifecycle import (
+                    WORKER_DRAIN_TIMEOUT,
+                    serve_workers,
+                )
 
-        # Workers poll ordinary task queues: no Worker Deployment version,
-        # routing bootstrap or promotion runs at startup. The deployment
-        # controller owns the one-time cutover of older versioned
-        # installations (moonmind/workflows/temporal/unversioned_cutover.py).
-        async def mark_ready():
-            health_state.pollers_started = True
-            logger.info(
-                "Worker ready, polling task queues: %s",
-                ", ".join(topology.task_queues),
+                workers.extend(
+                    _build_queue_workers(
+                        client,
+                        topology,
+                        {
+                            "workflows": spec.workflows,
+                            "activities": spec.activities,
+                            "workflow_runner": UnsandboxedWorkflowRunner(),
+                            "graceful_shutdown_timeout": WORKER_DRAIN_TIMEOUT,
+                        },
+                    )
+                )
+                payload = spec.readiness_payload()
+                if topology.fleet == AGENT_RUNTIME_FLEET:
+                    container_job_backend = getattr(
+                        runtime_resources, "container_job_backend", None
+                    )
+                    enforced_network_refs = getattr(
+                        runtime_resources, "enforced_network_refs", ()
+                    )
+                    enforced_egress_profile_refs = getattr(
+                        runtime_resources, "enforced_egress_profile_refs", ()
+                    )
+                    payload["containerBackend"] = {
+                        "ready": container_job_backend is not None,
+                        "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+                        "enforcedEgressProfileRefs": sorted(
+                            set(enforced_egress_profile_refs)
+                        ),
+                    }
+                    egress_attestation = getattr(
+                        runtime_resources, "egress_attestation", None
+                    )
+                    if egress_attestation is not None:
+                        payload["containerBackend"]["egressAttestation"] = (
+                            egress_attestation.model_dump(by_alias=True, mode="json")
+                        )
+                    egress_attestations = getattr(
+                        runtime_resources, "egress_attestations", ()
+                    )
+                    if egress_attestations:
+                        payload["containerBackend"]["egressAttestations"] = [
+                            attestation.model_dump(by_alias=True, mode="json")
+                            for attestation in egress_attestations
+                        ]
+                fleet_specs[topology.fleet] = payload
+                logger.info(
+                    "Temporal executable worker specification: %s",
+                    json.dumps(payload, sort_keys=True),
+                )
+            health_state.workers_constructed = True
+            if len(topologies) == 1:
+                health_state.readiness_metadata.update(next(iter(fleet_specs.values())))
+            else:
+                # Existing capability and release probes consume these process-level
+                # fields. Keep fleet-specific fingerprints and registrations below.
+                for key in ("taskQueues", "workflowTypes", "activityTypes"):
+                    health_state.readiness_metadata[key] = sorted(
+                        {
+                            value
+                            for payload in fleet_specs.values()
+                            for value in payload.get(key, [])
+                        }
+                    )
+                for source, target in (
+                    ("buildId", "buildIds"),
+                    ("registryFingerprint", "registryFingerprints"),
+                ):
+                    health_state.readiness_metadata[target] = sorted(
+                        {
+                            payload[source]
+                            for payload in fleet_specs.values()
+                            if payload.get(source)
+                        }
+                    )
+                first_spec = next(iter(fleet_specs.values()))
+                for key in (
+                    "buildId",
+                    "buildSha",
+                    "imageDigest",
+                    "workerCodeRevision",
+                    "deploymentMode",
+                    "resolverCore",
+                ):
+                    if key in first_spec and all(
+                        payload.get(key) == first_spec[key]
+                        for payload in fleet_specs.values()
+                    ):
+                        health_state.readiness_metadata[key] = first_spec[key]
+                if AGENT_RUNTIME_FLEET in fleet_specs:
+                    health_state.readiness_metadata["containerBackend"] = fleet_specs[
+                        AGENT_RUNTIME_FLEET
+                    ]["containerBackend"]
+            health_state.readiness_metadata.update(
+                {
+                    "fleetSpecs": fleet_specs,
+                    "immutableReleaseIdentity": all(
+                        payload.get("immutableReleaseIdentity") is True
+                        for payload in fleet_specs.values()
+                    ),
+                }
             )
 
-        # Recreate-in-place serves one fleet at one version, so there is no
-        # retained cohort to relaunch and no route to restore. A fleet that is
-        # down is started by Compose, not by a background supervisor.
-        await serve_workers(
-            workers,
-            ready=mark_ready,
-            stopping=lambda: setattr(health_state, "pollers_started", False),
-        )
-    except Exception as exc:
+            async def mark_ready():
+                health_state.pollers_started = True
+                logger.info(
+                    "Worker ready, polling task queues: %s",
+                    ", ".join(
+                        queue
+                        for topology in topologies
+                        for queue in topology.task_queues
+                    ),
+                )
+
+            await serve_workers(
+                workers,
+                ready=mark_ready,
+                stopping=lambda: setattr(health_state, "pollers_started", False),
+            )
+    except BaseException as exc:
         health_state.startup_error = exc.__class__.__name__
         raise
     finally:
-        if runtime_resources is not None:
-            await runtime_resources.aclose()
-        if healthcheck_server is not None:
-            healthcheck_server.close()
-            await healthcheck_server.wait_closed()
+        health_state.pollers_started = False
+
+
+async def _close_healthcheck(server) -> None:
+    server.close()
+    await server.wait_closed()
 
 
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
 
-    def __init__(self, name: str = "") -> None:
+    def __init__(
+        self, name: str = "", *, default_fields: Mapping[str, str] | None = None
+    ) -> None:
         super().__init__(name)
-        self._default_fields = default_log_fields_from_env()
+        self._default_fields = (
+            dict(default_fields)
+            if default_fields is not None
+            else default_log_fields_from_env()
+        )
 
     def filter(self, record: logging.LogRecord) -> bool:
         for key, value in self._default_fields.items():
@@ -3415,11 +3514,17 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         return True
 
 
-def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
+def _configure_worker_logging(
+    *, enable_opentelemetry: bool, default_fields: Mapping[str, str] | None = None
+) -> None:
     configure_logging(
         level=os.environ.get("LOG_LEVEL", "INFO"),
         structured=None,
-        default_fields=default_log_fields_from_env(),
+        default_fields=(
+            default_fields
+            if default_fields is not None
+            else default_log_fields_from_env()
+        ),
     )
     if not enable_opentelemetry:
         return
@@ -3431,13 +3536,17 @@ def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
             isinstance(existing_filter, OpenTelemetryLoggingFilter)
             for existing_filter in handler.filters
         ):
-            handler.addFilter(OpenTelemetryLoggingFilter())
+            handler.addFilter(OpenTelemetryLoggingFilter(default_fields=default_fields))
 
 
 if __name__ == "__main__":
-    import os
+    import argparse
 
-    _configure_worker_logging(
-        enable_opentelemetry=os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1"
+    parser = argparse.ArgumentParser(
+        description="Run configured Temporal worker fleets"
     )
-    asyncio.run(main_async())
+    parser.add_argument(
+        "--fleet", help="Run only this fleet, overriding configured fleet lists"
+    )
+    args = parser.parse_args()
+    asyncio.run(main_async(fleet=args.fleet))

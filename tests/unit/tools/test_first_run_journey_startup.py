@@ -71,7 +71,14 @@ entry = {
     "credentials": [key for key in config["credential_keys"] if key in os.environ],
     "workspace_volume": os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"),
     "control_network": os.environ.get("MOONMIND_CONTROL_PLANE_NETWORK"),
+    "overrides": [json.loads(Path(args[index + 1]).read_text())
+                  for index, item in enumerate(args[:-1])
+                  if item == "-f" and args[index + 1].endswith(".json")],
 }
+phase_file = Path(os.environ["FIRST_RUN_3938_LOG_DIR"]) / "fresh/state/measurement-phase"
+entry["measurement_phase"] = (
+    next(reversed(json.loads(phase_file.read_text())), None) if phase_file.exists() else None
+)
 with calls.open("a") as output:
     output.write(json.dumps(entry) + "\n")
 if startup:
@@ -107,6 +114,8 @@ elif command[:1] == ["top"]:
     raise SystemExit(footprint.get("top_status", 0))
 elif command[:1] == ["logs"]:
     print("cleanup sk-startup_test_secret ghp_startup_test_secret github_pat_startup_test_secret key=startup_test_secret")
+elif command[:6] == ["exec", "-T", "api", "python", "-", "--project"]:
+    print(json.dumps({"status": "completed", "artifactBytes": 42, "memoryDecisions": 0}))
 else:
     print("external Docker observation")
 time.sleep(config.get("cleanup_sleep", 0) if command[:1] in (["logs"], ["ps"], ["down"]) else 0)
@@ -182,6 +191,12 @@ def journey(tmp_path: Path) -> Journey:
     tools = repo / "tools"
     tools.mkdir(parents=True)
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
+    (tools / "worker_runtime_measurements.py").write_text(
+        (SCRIPT.parent / "worker_runtime_measurements.py").read_text()
+    )
+    (tools / "worker_runtime_activity_probe.py").write_text(
+        (SCRIPT.parent / "worker_runtime_activity_probe.py").read_text()
+    )
     (tools / "single_user_journey_checks.py").write_text(API_COUNTERPART)
     (tools / "single_user_journey_cutover.py").write_text(
         f"import sys\nsys.path.insert(0, {str(SCRIPT.parents[1])!r})\n"
@@ -623,6 +638,105 @@ def test_generated_execution_uses_only_project_owned_storage_and_cleans_before_d
     assert phases[-2][0] == "generate"
     assert phases[-1][0] == "generated_verify" and "--cleanup-receipt" in phases[-1]
     assert calls[0]["directory"] != str(journey.repo)
+    journey.assert_cleaned()
+
+
+@pytest.mark.parametrize("topology", ["separate", "combined"])
+def test_worker_comparison_runs_same_journey_with_measured_topology(journey, topology):
+    from tests.unit.tools.test_worker_runtime_measurements import model
+
+    journey.env.update(
+        FIRST_RUN_3938_WORKER_TOPOLOGY=topology,
+        FIRST_RUN_3938_MEASUREMENT_INTERVAL="0.01",
+        FIRST_RUN_3938_MEASUREMENT_IDLE_SECONDS="0.03",
+    )
+    result = journey.run(candidate_statuses=[0], lines=1, compose_config=model())
+    assert result.returncode == 0, result.stdout + result.stderr
+    startup = journey.startups()[0]
+    overrides = [
+        entry for entry in startup["overrides"] if "PYTHONASYNCIODEBUG" in str(entry)
+    ]
+    assert len(overrides) == 1
+    workflow = overrides[0]["services"]["temporal-worker-workflow"]
+    assert workflow["environment"]["PYTHONASYNCIODEBUG"] == "1"
+    if topology == "combined":
+        assert workflow["environment"]["TEMPORAL_WORKER_FLEET"] == "artifacts"
+        assert "integrations" in workflow["environment"]["TEMPORAL_WORKER_FLEETS"]
+    report = json.loads(
+        (journey.logs / "fresh/worker-runtime-measurements.json").read_text()
+    )
+    assert report["topology"] == topology
+    assert "Unverified" in report["normalUseObservation"]
+    assert list(report["phaseStartedAt"]) == [
+        "startup",
+        "cold_idle",
+        "workload",
+        "restart",
+        "post_restart_workload",
+        "warm_idle",
+        "stop",
+    ]
+    restart_calls = [
+        call for call in journey.calls() if call["command"][:1] == ["restart"]
+    ]
+    assert restart_calls and all(
+        call["measurement_phase"] == "restart" for call in restart_calls
+    )
+    restarted_wait = [
+        call
+        for call in journey.calls()
+        if call["command"][:1] == ["up"]
+        and "300" in call["command"]
+        and call["command"][-1] == "temporal-worker-workflow"
+    ]
+    assert restarted_wait and all(
+        call["measurement_phase"] == "restart" for call in restarted_wait
+    )
+    probe_calls = [
+        call
+        for call in journey.calls()
+        if call["command"][:6] == ["exec", "-T", "api", "python", "-", "--project"]
+    ]
+    assert probe_calls[0]["measurement_phase"] == "post_restart_workload"
+    assert not any(
+        "secret" in key.lower()
+        for worker in report["workers"].values()
+        for key in worker
+    )
+    receipt = json.loads(
+        (journey.logs / "fresh/worker-runtime-activity-probe.json").read_text()
+    )
+    assert receipt["status"] == "completed"
+    assert (
+        sum(
+            call["command"][:6] == ["exec", "-T", "api", "python", "-", "--project"]
+            for call in journey.calls()
+        )
+        == 1
+    )
+    journey.assert_cleaned()
+
+
+def test_failed_measurement_stop_marker_does_not_skip_teardown_or_env_restore(journey):
+    from tests.unit.tools.test_worker_runtime_measurements import model
+
+    tool = journey.repo / "tools/worker_runtime_measurements.py"
+    tool.write_text(
+        tool.read_text()
+        .replace("default=1200", "default=3")
+        .replace(
+            'if __name__ == "__main__":\n    main()',
+            'if __name__ == "__main__":\n    if sys.argv[-1] == "stop":\n        raise SystemExit(11)\n    main()',
+        )
+    )
+    journey.env.update(
+        FIRST_RUN_3938_WORKER_TOPOLOGY="separate",
+        FIRST_RUN_3938_MEASUREMENT_INTERVAL="0.01",
+        FIRST_RUN_3938_MEASUREMENT_IDLE_SECONDS="0.03",
+    )
+    result = journey.run(candidate_statuses=[0], lines=1, compose_config=model())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "measurement stop marker unavailable" in result.stderr
     journey.assert_cleaned()
 
 

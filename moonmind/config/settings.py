@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import Annotated, Any, Literal, Optional, Sequence
@@ -77,6 +78,9 @@ class TemporalSettings(BaseSettings):
     address: str = Field("temporal:7233", validation_alias="TEMPORAL_ADDRESS")
     namespace: str = Field("default", validation_alias="TEMPORAL_NAMESPACE")
     worker_fleet: str = Field("workflow", validation_alias="TEMPORAL_WORKER_FLEET")
+    worker_fleets: Annotated[tuple[str, ...] | None, NoDecode] = Field(
+        None, validation_alias="TEMPORAL_WORKER_FLEETS"
+    )
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
     )
@@ -224,6 +228,38 @@ class TemporalSettings(BaseSettings):
                 "deployment"
             )
         return normalized
+
+    @field_validator("worker_fleets", mode="before")
+    @classmethod
+    def _normalize_worker_fleets(cls, value: Any) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        values = value
+        if isinstance(value, str):
+            if value.lstrip().startswith("["):
+                try:
+                    values = json.loads(value)
+                except ValueError as exc:
+                    raise ValueError(
+                        "TEMPORAL_WORKER_FLEETS must be valid JSON or CSV"
+                    ) from exc
+            else:
+                values = value.split(",")
+        if not isinstance(values, (list, tuple)) or not values:
+            raise ValueError("TEMPORAL_WORKER_FLEETS must be a nonempty fleet list")
+        normalized = []
+        for item in values:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("TEMPORAL_WORKER_FLEETS must not contain blank fleets")
+            try:
+                fleet = cls._normalize_worker_fleet(item)
+            except ValueError as exc:
+                raise ValueError(
+                    str(exc).replace("TEMPORAL_WORKER_FLEET", "TEMPORAL_WORKER_FLEETS")
+                ) from exc
+            if fleet not in normalized:
+                normalized.append(fleet)
+        return tuple(normalized)
 
     @field_validator("user_workflow_v2_task_queue", mode="before")
     @classmethod
