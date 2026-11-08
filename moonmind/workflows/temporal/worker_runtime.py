@@ -2504,6 +2504,10 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             },
             **({"redaction_level": "restricted"} if scoped else {}),
         )
+        if scoped:
+            await artifact_service.grant_operator_output_read(
+                artifact_id=artifact.artifact_id
+            )
         await artifact_service.write_complete(
             artifact_id=artifact.artifact_id,
             principal=principal,

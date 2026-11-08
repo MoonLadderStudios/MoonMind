@@ -969,6 +969,7 @@ class AssessmentExecution:
             content_type=content_type,
             scope="security-assessments",
             redaction_level="restricted",
+            operator_output=True,
             link={**self.execution, "link_type": kind},
             metadata_json={
                 "artifact_type": "security_assessment",

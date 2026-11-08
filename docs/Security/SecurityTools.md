@@ -152,7 +152,7 @@ Scanner jobs are bounded CLI executions, not persistent browser or proxy endpoin
 
 ## Evidence, findings, and remediation
 
-New assessment outputs retain sanitized native SARIF, JSON-OCSF, CycloneDX, SPDX or tool JSON through existing restricted artifacts and report links. Versioned summaries reference evidence, not a universal vulnerability database. Reports distinguish:
+New assessment outputs retain sanitized native SARIF, JSON-OCSF, CycloneDX, SPDX or tool JSON through existing restricted artifacts and report links. Their producing Activity records explicit operator download authority before completion, independent of a SYSTEM-owned or missing parent execution. Current paired producer/publication grants, quarantine and retention govern raw reads; metadata links alone grant none. Existing retained rows keep their recorded classification and grants. Versioned summaries reference evidence, not a universal vulnerability database. Reports distinguish:
 
 - **Execution:** requested operations, termination and usable outputs; findings exit codes differ from crashes.
 - **Coverage:** examined, skipped, unavailable and incomplete inputs, languages, resources, routes, rules and snapshots.

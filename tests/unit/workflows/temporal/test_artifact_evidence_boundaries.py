@@ -353,7 +353,9 @@ async def test_quarantined_source_keeps_only_authorized_transformed_diagnostics(
     evidence_service,
 ):
     service, session = evidence_service
-    source = await put(service, b'token=synthetic-quarantine-value\nUseful reproduction')
+    source = await put(
+        service, b"token=synthetic-quarantine-value\nUseful reproduction"
+    )
     source.metadata_json = {**source.metadata_json, "quarantine": True}
     await session.commit()
     ref = await service.compute_preview(
@@ -412,28 +414,452 @@ async def test_legacy_assessment_retry_preserves_recorded_access_without_new_gra
 ):
     service, _ = evidence_service
     context = {
-        "namespace": "default", "workflow_id": "assessment", "run_id": "run",
+        "namespace": "default",
+        "workflow_id": "assessment",
+        "run_id": "run",
         "node_id": "assess",
     }
     source, _ = await service.create(
         principal="workflow:assessment",
         content_type="application/json",
         metadata_json={"sensitivity": "restricted", "subject": "legacy-fixture"},
-        link={**{key: context[key] for key in ("namespace", "workflow_id", "run_id")}, "link_type": "security.scan"},
+        link={
+            **{key: context[key] for key in ("namespace", "workflow_id", "run_id")},
+            "link_type": "security.scan",
+        },
     )
     raw = b'{"safe":"retained legacy work"}'
     await service.write_complete(
         artifact_id=source.artifact_id, principal="workflow:assessment", payload=raw
     )
     execution = AssessmentExecution(
-        service, principal="workflow:assessment", context=context,
+        service,
+        principal="workflow:assessment",
+        context=context,
         access=access_for_test("workflow:assessment"),
     )
     assert await execution.saved(kind="security.scan", key="legacy-fixture") == (
-        source.artifact_id, {"safe": "retained legacy work"}
+        source.artifact_id,
+        {"safe": "retained legacy work"},
     )
     assert source.redaction_level is TemporalArtifactRedactionLevel.NONE
     assert not source.metadata_json.get("preview_artifact_id")
     assert source.sha256 == hashlib.sha256(raw).hexdigest()
     links = await service._repository.list_links(source.artifact_id)
     assert [link.link_type for link in links] == ["security.scan"]
+
+
+@pytest.mark.parametrize(
+    "kind", ["security.scan", "security.report", "security.evidence-export"]
+)
+async def test_system_assessment_outputs_download_for_operator_without_owner_aliases(
+    evidence_service,
+    kind,
+):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from api_service.api.routers import temporal_artifacts as router
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    service, session = evidence_service
+    session.add(
+        TemporalExecutionCanonicalRecord(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="run",
+            workflow_type="MoonMind.UserWorkflow",
+            entry="run",
+            owner_type="system",
+            owner_id=None,
+            state="completed",
+        )
+    )
+    await session.commit()
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        namespace="default",
+        workflow_id="assessment",
+        workflow_run_id="run",
+    )
+    raw = (
+        b"retained binary export"
+        if kind.endswith("export")
+        else b'{"native":"retained"}'
+    )
+
+    async def produce():
+        execution = AssessmentExecution(
+            service,
+            principal="workflow:assessment",
+            context={
+                "namespace": "default",
+                "workflow_id": "assessment",
+                "run_id": "run",
+                "node_id": "assess",
+            },
+            access=ArtifactAccessContext.for_activity(),
+        )
+        return await execution.write(
+            raw,
+            kind=kind,
+            key="system-fixture",
+            content_type="application/octet-stream"
+            if kind.endswith("export")
+            else "application/json",
+        )
+
+    ref = await environment.run(produce)
+    app = FastAPI()
+    app.include_router(router.router)
+    app.dependency_overrides[router._get_temporal_artifact_service] = lambda: service
+    app.dependency_overrides[router.get_artifact_access] = lambda: access_for_test(
+        "operator"
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        metadata = await client.get(f"/api/artifacts/{ref}?include_download=true")
+        assert metadata.status_code == 200 and metadata.json()["raw_access_allowed"]
+        download = await client.get(f"/api/artifacts/{ref}/download")
+        assert download.status_code == 200 and download.content == raw
+        assert (
+            await client.post(f"/api/artifacts/{ref}/presign-download")
+        ).status_code == 200
+    artifact = await service._repository.get_artifact(ref)
+    assert artifact.created_by_principal == "workflow:assessment"
+    assert not artifact.operator_recovery_granted
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(
+            artifact_id=ref,
+            access=access_for_test("workflow:foreign")._with_verified_inputs([ref]),
+        )
+
+
+@pytest.mark.parametrize(
+    "surface", ["create", "link", "activity_create", "content_addressed"]
+)
+async def test_operator_output_grants_cannot_be_authored(evidence_service, surface):
+    service, _ = evidence_service
+    link = {
+        "namespace": "default",
+        "workflow_id": "producer",
+        "run_id": "run",
+        "link_type": "output.artifact.operator",
+    }
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        if surface == "link":
+            artifact = await put(service)
+            await service.link_artifact(
+                artifact_id=artifact.artifact_id, principal="owner", execution_ref=link
+            )
+        elif surface == "activity_create":
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                namespace="default",
+                workflow_id="producer",
+                workflow_run_id="run",
+            )
+
+            async def create():
+                return await service.create_for_activity(
+                    principal="owner", link=link, redaction_level="restricted"
+                )
+
+            await environment.run(create)
+        elif surface == "content_addressed":
+            await service.put_content_addressed_payload_complete(
+                principal="owner",
+                payload=b"fixture",
+                content_type="text/plain",
+                scope="test",
+                link=link,
+                redaction_level="restricted",
+            )
+        else:
+            await service.create(
+                principal="owner", link=link, redaction_level="restricted"
+            )
+
+
+def producer_environment(*, namespace="default", workflow="assessment", run="run"):
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        namespace=namespace,
+        workflow_namespace=namespace,
+        workflow_id=workflow,
+        workflow_run_id=run,
+    )
+    return environment
+
+
+async def new_operator_output(service):
+    artifact, _ = await service.create_for_activity(
+        principal="workflow:assessment",
+        redaction_level="restricted",
+        content_type="text/plain",
+    )
+    await service.grant_operator_output_read(artifact_id=artifact.artifact_id)
+    return artifact
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["operator", "producer", "run", "namespace", "workflow", "quarantine", "expiry"],
+)
+async def test_operator_output_requires_current_paired_grants_and_lifecycle(
+    evidence_service, mutation
+):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from api_service.api.routers import temporal_artifacts as router
+
+    service, session = evidence_service
+    environment = producer_environment()
+    artifact = await environment.run(new_operator_output, service)
+    # A pending grant publishes intent only, never incomplete bytes.
+    with pytest.raises(TemporalArtifactStateError):
+        await service.read(
+            artifact_id=artifact.artifact_id, access=access_for_test("operator")
+        )
+    await environment.run(
+        service.write_complete,
+        artifact_id=artifact.artifact_id,
+        principal="workflow:assessment",
+        payload=b"retained operator output",
+    )
+    links = await service._repository.list_links(artifact.artifact_id)
+    operator = next(
+        link for link in links if link.link_type == "output.artifact.operator"
+    )
+    producer = next(link for link in links if link.link_type == "input.artifact.raw")
+    if mutation in {"operator", "producer"}:
+        await session.delete(operator if mutation == "operator" else producer)
+    elif mutation in {"run", "namespace", "workflow"}:
+        setattr(
+            operator,
+            {"run": "run_id", "workflow": "workflow_id"}.get(mutation, mutation),
+            "foreign",
+        )
+    elif mutation == "quarantine":
+        artifact.metadata_json = {**(artifact.metadata_json or {}), "quarantine": True}
+    else:
+        artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+    await session.commit()
+    app = FastAPI()
+    app.include_router(router.router)
+    app.dependency_overrides[router._get_temporal_artifact_service] = lambda: service
+    app.dependency_overrides[router.get_artifact_access] = lambda: access_for_test(
+        "operator"
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        assert (
+            await client.get(f"/api/artifacts/{artifact.artifact_id}/download")
+        ).status_code in {403, 409}
+        assert (
+            await client.post(f"/api/artifacts/{artifact.artifact_id}/presign-download")
+        ).status_code in {403, 409}
+    assert (
+        artifact.created_by_principal == "workflow:assessment"
+        and not artifact.operator_recovery_granted
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "no_activity",
+        "foreign_workflow",
+        "foreign_run",
+        "foreign_namespace",
+        "empty_run",
+        "metadata_only",
+        "delegated_input",
+    ],
+)
+async def test_operator_output_grant_requires_real_producing_activity(
+    evidence_service, case
+):
+    service, _ = evidence_service
+    environment = producer_environment()
+
+    async def create():
+        return (
+            await service.create_for_activity(
+                principal="workflow:assessment", redaction_level="restricted"
+            )
+        )[0]
+
+    if case in {"metadata_only", "delegated_input"}:
+        artifact, _ = await service.create(
+            principal="owner", redaction_level="restricted"
+        )
+        await service.link_artifact(
+            artifact_id=artifact.artifact_id,
+            principal="workflow:assessment",
+            execution_ref={
+                "namespace": "default",
+                "workflow_id": "assessment",
+                "run_id": "run",
+                "link_type": "output.artifact",
+            },
+        )
+        if case == "delegated_input":
+            # Admission grants have empty runs; a forged ordinary output label
+            # must not upgrade this input to an operator-owned output.
+            from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+            await service._repository.add_link(
+                artifact_id=artifact.artifact_id,
+                execution=ExecutionRef(
+                    namespace="default",
+                    workflow_id="assessment",
+                    run_id="",
+                    link_type="input.artifact.raw",
+                ),
+            )
+            await service._repository.commit()
+    else:
+        artifact = await environment.run(create)
+    if case == "foreign_workflow":
+        environment = producer_environment(workflow="foreign")
+    elif case == "foreign_run":
+        environment = producer_environment(run="foreign")
+    elif case == "foreign_namespace":
+        environment = producer_environment(namespace="foreign")
+    elif case == "empty_run":
+        environment = producer_environment(run="")
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        if case == "no_activity":
+            await service.grant_operator_output_read(artifact_id=artifact.artifact_id)
+        else:
+            await environment.run(
+                service.grant_operator_output_read, artifact_id=artifact.artifact_id
+            )
+    assert not any(
+        link.link_type == "output.artifact.operator"
+        for link in await service._repository.list_links(artifact.artifact_id)
+    )
+
+
+async def test_operator_grant_failure_cannot_leave_complete_saved_output(
+    evidence_service, monkeypatch
+):
+    from api_service.db.models import TemporalArtifactStatus
+
+    service, _ = evidence_service
+    environment = producer_environment()
+    original_add = service._repository.add_link
+    failed_refs = []
+
+    async def fail_grant(*, artifact_id, execution):
+        if execution.link_type == "output.artifact.operator":
+            failed_refs.append(artifact_id)
+            raise RuntimeError("injected grant persistence failure")
+        return await original_add(artifact_id=artifact_id, execution=execution)
+
+    async def write_or_reuse():
+        execution = AssessmentExecution(
+            service,
+            principal="workflow:assessment",
+            context={
+                "namespace": "default",
+                "workflow_id": "assessment",
+                "run_id": "run",
+                "node_id": "assess",
+            },
+            access=ArtifactAccessContext.for_activity(),
+        )
+        saved = await execution.saved(kind="security.scan", key="retry")
+        if saved:
+            return saved[0]
+        return await execution.write(
+            b'{"native":"retained retry"}', kind="security.scan", key="retry"
+        )
+
+    monkeypatch.setattr(service._repository, "add_link", fail_grant)
+    with pytest.raises(RuntimeError, match="injected grant"):
+        await environment.run(write_or_reuse)
+    failed = await service._repository.get_artifact(failed_refs[0])
+    assert failed.status is TemporalArtifactStatus.PENDING_UPLOAD
+    monkeypatch.setattr(service._repository, "add_link", original_add)
+    ref = await environment.run(write_or_reuse)
+    assert ref != failed.artifact_id and await environment.run(write_or_reuse) == ref
+    assert (await service.read(artifact_id=ref, access=access_for_test("operator")))[
+        1
+    ] == b'{"native":"retained retry"}'
+    with pytest.raises(TemporalArtifactStateError, match="new restricted upload"):
+        await environment.run(service.grant_operator_output_read, artifact_id=ref)
+
+
+async def test_operator_output_intent_cannot_arrive_as_activity_payload(
+    evidence_service,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    service, _ = evidence_service
+    activities = TemporalArtifactActivities(service)
+    with pytest.raises(TypeError):
+        await producer_environment().run(
+            activities.artifact_create,
+            principal="workflow:assessment",
+            redaction_level="restricted",
+            operator_output=True,
+        )
+
+
+async def test_delegated_source_revocation_does_not_revoke_distinct_operator_output(
+    evidence_service,
+):
+    service, session = evidence_service
+    environment = producer_environment()
+    artifact = await environment.run(new_operator_output, service)
+    await environment.run(
+        service.write_complete,
+        artifact_id=artifact.artifact_id,
+        principal="workflow:assessment",
+        payload=b"independent output",
+    )
+    await service.delegate_read_access(
+        artifact_ids=[artifact.artifact_id],
+        workflow_id="consumer",
+        access=access_for_test("workflow:assessment"),
+    )
+    links = await service._repository.list_links(artifact.artifact_id)
+    await session.delete(next(link for link in links if link.workflow_id == "consumer"))
+    await session.commit()
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(
+            artifact_id=artifact.artifact_id,
+            access=access_for_test("workflow:consumer"),
+        )
+    assert (
+        await service.read(
+            artifact_id=artifact.artifact_id, access=access_for_test("operator")
+        )
+    )[1] == b"independent output"
+
+
+async def test_empty_run_pair_cannot_grant_operator_output(evidence_service):
+    service, session = evidence_service
+    artifact = await producer_environment().run(new_operator_output, service)
+    await producer_environment().run(
+        service.write_complete,
+        artifact_id=artifact.artifact_id,
+        principal="workflow:assessment",
+        payload=b"retained",
+    )
+    for link in await service._repository.list_links(artifact.artifact_id):
+        if link.link_type in {"input.artifact.raw", "output.artifact.operator"}:
+            link.run_id = ""
+    await session.commit()
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(
+            artifact_id=artifact.artifact_id, access=access_for_test("operator")
+        )

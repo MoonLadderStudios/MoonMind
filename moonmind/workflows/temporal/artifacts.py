@@ -88,6 +88,10 @@ _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _DELEGATED_INPUT_LINK_TYPE = "input.artifact.admitted"
 _DELEGATED_RAW_LINK_TYPE = "input.artifact.raw"
+_OPERATOR_OUTPUT_LINK_TYPE = "output.artifact.operator"
+_RESERVED_READ_LINK_TYPES = frozenset(
+    {_DELEGATED_INPUT_LINK_TYPE, _DELEGATED_RAW_LINK_TYPE, _OPERATOR_OUTPUT_LINK_TYPE}
+)
 _SCHEDULE_ARTIFACT_REF_PATHS = (
     ("inputArtifactRef",),
     ("planArtifactRef",),
@@ -3494,6 +3498,25 @@ class TemporalArtifactService:
             for link in await self._repository.list_links(artifact.artifact_id)
         ):
             return True
+        if (
+            access.is_operator
+            and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+        ):
+            links = await self._repository.list_links(artifact.artifact_id)
+            producer_runs = {
+                (link.namespace, link.workflow_id, link.run_id)
+                for link in links
+                if link.link_type == _DELEGATED_RAW_LINK_TYPE
+                and link.namespace
+                and link.workflow_id
+                and link.run_id
+            }
+            if any(
+                link.link_type == _OPERATOR_OUTPUT_LINK_TYPE
+                and (link.namespace, link.workflow_id, link.run_id) in producer_runs
+                for link in links
+            ):
+                return True
         candidates = access.candidates
         for candidate in candidates:
             if self._is_service_principal(candidate):
@@ -4142,8 +4165,7 @@ class TemporalArtifactService:
             link = self._coerce_execution_ref(normalized_kwargs.get("link"))
             if link is not None and (
                 link.workflow_id != info.workflow_id
-                or link.link_type
-                in {_DELEGATED_RAW_LINK_TYPE, _DELEGATED_INPUT_LINK_TYPE}
+                or link.link_type in _RESERVED_READ_LINK_TYPES
             ):
                 raise TemporalArtifactAuthorizationError(
                     "artifact creation target is outside the active execution"
@@ -4177,6 +4199,61 @@ class TemporalArtifactService:
             )
             await self._finish_mutation()
         return artifact, upload
+
+    async def grant_operator_output_read(self, *, artifact_id: str) -> None:
+        """Mark a new assessment deliverable before its bytes become complete.
+
+        Only the actual producing Activity can publish this intent. Paired links
+        preserve its creator/quota provenance and allow either grant to be revoked.
+        Pending-first ordering prevents retries from finding a completed output
+        whose operator grant failed to persist. Historical rows are not upgraded.
+        """
+        from temporalio import activity
+
+        if not activity.in_activity():
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producing Activity"
+            )
+        info = activity.info()
+        identity = (info.workflow_namespace, info.workflow_id, info.workflow_run_id)
+        if not all(identity):
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producing Activity"
+            )
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
+        self._assert_not_quarantined(artifact)
+        if (
+            artifact.status is not db_models.TemporalArtifactStatus.PENDING_UPLOAD
+            or artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
+            raise TemporalArtifactStateError(
+                "operator output grant requires a new restricted upload"
+            )
+        links = await self._repository.list_links(artifact_id)
+        if not any(
+            link.link_type == _DELEGATED_RAW_LINK_TYPE
+            and (link.namespace, link.workflow_id, link.run_id) == identity
+            for link in links
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producer raw grant"
+            )
+        if not any(
+            link.link_type == _OPERATOR_OUTPUT_LINK_TYPE
+            and (link.namespace, link.workflow_id, link.run_id) == identity
+            for link in links
+        ):
+            await self._repository.add_link(
+                artifact_id=artifact_id,
+                execution=ExecutionRef(
+                    namespace=identity[0],
+                    workflow_id=identity[1],
+                    run_id=identity[2],
+                    link_type=_OPERATOR_OUTPUT_LINK_TYPE,
+                ),
+            )
+        await self._finish_mutation()
 
     async def _recover_activity_creation(self, artifact_id: str) -> None:
         """Drain retained creates that predate producer links, from run history.
@@ -4337,6 +4414,13 @@ class TemporalArtifactService:
                 raise TemporalArtifactValidationError("size_bytes must be non-negative")
 
         execution_ref = self._coerce_execution_ref(link)
+        if (
+            execution_ref is not None
+            and execution_ref.link_type in _RESERVED_READ_LINK_TYPES
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "read grants require trusted publication or admission"
+            )
         if execution_ref is not None:
             from moonmind.workflows.temporal.report_artifacts import (
                 validate_report_artifact_contract,
@@ -4452,6 +4536,7 @@ class TemporalArtifactService:
         link: dict[str, Any] | ExecutionRef | None = None,
         metadata_json: dict[str, Any] | None = None,
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
+        operator_output: bool = False,
     ) -> tuple[db_models.TemporalArtifact, bool]:
         """Create a logical artifact backed by one digest-addressed blob.
 
@@ -4478,6 +4563,8 @@ class TemporalArtifactService:
             content_addressed_scope=scope,
             redaction_level=redaction_level,
         )
+        if operator_output:
+            await self.grant_operator_output_read(artifact_id=artifact.artifact_id)
         # The logical row is committed before this lock. Concurrent publishers
         # therefore converge on one visible storage-key group, and only the
         # lock owner that still observes a cold blob performs the upload.
@@ -5947,10 +6034,7 @@ class TemporalArtifactService:
         # between this read and the link's foreign-key check.
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
-        if coerced_execution_ref.link_type in {
-            _DELEGATED_RAW_LINK_TYPE,
-            _DELEGATED_INPUT_LINK_TYPE,
-        }:
+        if coerced_execution_ref.link_type in _RESERVED_READ_LINK_TYPES:
             raise TemporalArtifactAuthorizationError(
                 "read grants require trusted input admission"
             )

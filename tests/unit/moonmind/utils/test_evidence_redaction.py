@@ -55,6 +55,15 @@ def test_evidence_text_keeps_useful_details_and_ordinary_logging_contract():
     assert "alice.fixture@example.test" in logging.redact_sensitive_text(value)
 
 
+def test_email_redaction_bounds_untrusted_local_parts_without_partial_matches():
+    valid = "a" * 64 + "@example.test"
+    invalid = "a" * 65 + "@example.test"
+    punctuation = "!" * 100000
+    text = f"{punctuation} {valid} {invalid} alice.fixture@example.test"
+    safe = logging.redact_evidence_text(text)
+    assert safe == f"{punctuation} [REDACTED_EMAIL] {invalid} [REDACTED_EMAIL]"
+
+
 def test_cyclic_evidence_is_rejected_with_bounded_error():
     payload = []
     payload.append(payload)

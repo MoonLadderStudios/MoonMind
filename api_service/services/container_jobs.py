@@ -18,7 +18,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import ContainerJobRecord
+from api_service.db.models import ContainerJobRecord, TemporalArtifactRedactionLevel
 from api_service.services.assessment_authorizations import (
     AssessmentAuthorizationDenied,
     assessment_marked,
@@ -38,6 +38,7 @@ from moonmind.config.container_backend_settings import (
     RegistryImageSource,
     resolve_container_backend_settings,
 )
+from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
@@ -80,7 +81,6 @@ from moonmind.security.workload_profiles import (
 )
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
-    TemporalArtifactAuthorizationError,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
@@ -752,27 +752,32 @@ class ContainerJobService:
             raise ContainerJobEvidenceUnavailableError("evidence is outside the admitted job")
         try:
             access = ArtifactAccessContext.require(self._artifact_access)
-            try:
-                _artifact, payload = await self._artifacts.read(
-                    artifact_id=artifact_ref,
-                    access=access._with_verified_inputs(
-                        [artifact_ref.removeprefix("artifact://").removeprefix("artifact:")]
-                    ),
+            access = access._with_verified_inputs(
+                [artifact_ref.removeprefix("artifact://").removeprefix("artifact:")]
+            )
+            saved = ContainerJobSubmitRequest.model_validate(record.request_json)
+            if record.assessment_scope_json is not None or assessment_marked(saved.spec):
+                _artifact, links, _pinned, _policy = await self._artifacts.get_metadata(
+                    artifact_id=artifact_ref, access=access
                 )
-            except TemporalArtifactAuthorizationError:
-                saved = ContainerJobSubmitRequest.model_validate(record.request_json)
-                if record.assessment_scope_json is None and not assessment_marked(saved.spec):
-                    raise
-                # The public owner/capability check selected this exact durable
-                # pointer. Its actual producer grant permits terminal evidence
-                # reads even after the parent projection leaves retention.
-                # A forged/foreign pointer still lacks this job's raw grant.
-                _artifact, payload = await self._artifacts.read(
-                    artifact_id=artifact_ref,
-                    access=ArtifactAccessContext.for_execution(
-                        container_job_workflow_id(record.job_id), principal=access.principal
-                    ),
-                )
+                # Provenance validates this job's exact pointer, not read rights.
+                # The artifact owner still checks the caller's current raw grant.
+                if (
+                    _artifact.redaction_level is TemporalArtifactRedactionLevel.RESTRICTED
+                    and not any(
+                        link.workflow_id == container_job_workflow_id(record.job_id)
+                        and link.link_type == "input.artifact.raw"
+                        and link.namespace == settings.temporal.namespace
+                        and link.run_id
+                        for link in links
+                    )
+                ):
+                    raise ContainerJobEvidenceUnavailableError(
+                        "evidence is outside the admitted job"
+                    )
+            _artifact, payload = await self._artifacts.read(
+                artifact_id=artifact_ref, access=access
+            )
         except ContainerJobEvidenceUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error

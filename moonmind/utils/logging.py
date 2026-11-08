@@ -239,7 +239,9 @@ EVIDENCE_TRANSFORMATION_LIMITATIONS = (
 _EVIDENCE_MAX_TEXT_CHARS = 4 * 1024 * 1024
 _EVIDENCE_EMAIL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])"
-    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    # A valid email local part is at most 64 characters. Bound the scan even
+    # when untrusted evidence contains long punctuation runs without an @.
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@"
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9-])"
 )

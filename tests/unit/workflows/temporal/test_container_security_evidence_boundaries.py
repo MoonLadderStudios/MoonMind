@@ -261,10 +261,42 @@ async def test_terminal_publication_and_owner_api_survive_lost_canonical_and_rev
         foreign_ref = await foreign.activity.run(
             publish, foreign.request, "other.txt", b"foreign private evidence"
         )
+        assert (
+            await job.service.read(
+                artifact_id=foreign_ref, access=access_for_test("operator")
+            )
+        )[1] == b"foreign private evidence"
         job.record.logs_ref = foreign_ref
         await session.commit()
         with pytest.raises(ContainerJobEvidenceUnavailableError):
             await jobs.logs(owner=job.owner, job_id=job.record.job_id)
+        job.record.logs_ref = logs
+        for ref in (logs, manifest):
+            links = await job.service._repository.list_links(ref)
+            await session.delete(
+                next(
+                    link
+                    for link in links
+                    if link.link_type == "output.artifact.operator"
+                )
+            )
+        await session.commit()
+        # Exact producer provenance cannot replace revoked operator read rights.
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for suffix in ("logs", "artifacts"):
+                response = await client.get(
+                    f"/api/v1/container-jobs/{job.record.job_id}/{suffix}"
+                )
+                assert response.status_code != 200
+                assert "Retained terminal evidence" not in response.text
+        # The separately admitted source consumer retains its own exact raw grant.
+        assert (
+            await job.service.read(
+                artifact_id=logs, access=access_for_test("workflow:assessment")
+            )
+        )[1] == b"Retained terminal evidence"
 
 
 async def test_actual_cloud_collection_sanitizes_before_retention_and_retry(
@@ -442,3 +474,81 @@ async def test_malformed_cloud_native_is_withheld_with_safe_diagnostic(
         )
         assert b"report_sanitization_failed" in body
         assert b"synthetic-malformed-canary" not in body
+
+
+@pytest.mark.parametrize("parent", ["system", "missing"])
+async def test_native_container_outputs_use_generic_operator_download_after_parent_loss(
+    session_factory,
+    tmp_path,
+    monkeypatch,
+    parent,
+):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from api_service.api.routers import temporal_artifacts as router
+
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", session_factory)
+    async with session_factory() as session:
+        job = await setup_job(session, tmp_path, canonical=parent != "missing")
+        if parent == "system":
+            source = await session.get(TemporalExecutionCanonicalRecord, "assessment")
+            source.owner_type, source.owner_id = "system", None
+            await session.commit()
+        native = b'{"findingUid":"native-fixture","resource":"aws:fixture"}'
+        ref = await job.activity.run(
+            worker_runtime._container_job_evidence_publisher(job.service),
+            job.request,
+            "native.json",
+            native,
+        )
+        app = FastAPI()
+        app.include_router(router.router)
+        app.dependency_overrides[router._get_temporal_artifact_service] = lambda: (
+            job.service
+        )
+        app.dependency_overrides[router.get_artifact_access] = lambda: access_for_test(
+            "operator"
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (
+                await client.get(f"/api/artifacts/{ref}?include_download=true")
+            ).json()["raw_access_allowed"]
+            response = await client.get(f"/api/artifacts/{ref}/download")
+            assert response.status_code == 200 and response.content == native
+            assert (
+                await client.post(f"/api/artifacts/{ref}/presign-download")
+            ).status_code == 200
+        app.dependency_overrides[router.get_artifact_access] = lambda: access_for_test(
+            "workflow:foreign"
+        )._with_verified_inputs([ref])
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (
+                await client.get(f"/api/artifacts/{ref}/download")
+            ).status_code == 403
+
+
+async def test_legacy_scoped_none_output_keeps_recorded_operator_access(
+    session_factory, tmp_path
+):
+    async with session_factory() as session:
+        job = await setup_job(session, tmp_path, canonical=False)
+        artifact, _ = await job.service.create(
+            principal=f"user:{job.owner.principal_id}", content_type="text/plain"
+        )
+        await job.service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=f"user:{job.owner.principal_id}",
+            payload=b"legacy retained logs",
+        )
+        job.record.logs_ref = artifact.artifact_id
+        await session.commit()
+        assert (await job.jobs.logs(owner=job.owner, job_id=job.record.job_id)).entries[
+            0
+        ].text == "legacy retained logs"
+        assert artifact.redaction_level is TemporalArtifactRedactionLevel.NONE
+        assert not await job.service._repository.list_links(artifact.artifact_id)
