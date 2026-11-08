@@ -301,6 +301,8 @@ def _first_mapping_value(
 
 def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     target = dict(target_payload)
+    if "scheduled_input_artifact_ref" in target or "scheduledInputArtifactRef" in target:
+        raise RecurringWorkflowValidationError("schedule input authority is server-owned")
     workflow_type = str(
         target.get("workflowType") or target.get("workflow_type") or ""
     ).strip()
@@ -553,6 +555,11 @@ class RecurringWorkflowsService:
                     raise RecurringWorkflowValidationError(
                         "saved schedule execution plan is unavailable"
                     )
+                from moonmind.workflows.temporal.schedule_mapping import (
+                    scheduled_input_scope,
+                )
+
+                root_id = binding.plan_artifact_ref.removeprefix("artifact://").removeprefix("artifact:")
                 if access is None:
                     if definition_id is None:
                         raise RecurringWorkflowValidationError(
@@ -562,7 +569,7 @@ class RecurringWorkflowsService:
                     access = await frozen_execution_artifact_access(
                         self._session,
                         binding,
-                        workflow_id=f"mm-schedule:{definition_id}",
+                        workflow_id=scheduled_input_scope(definition_id, root_id),
                     )
                 await ensure_verified_execution_plan_dependencies(
                     artifacts=artifacts,
@@ -588,19 +595,42 @@ class RecurringWorkflowsService:
                         else None
                     ),
                 )
-                return binding.plan_artifact_ref.removeprefix(
-                    "artifact://"
-                ).removeprefix("artifact:")
+                if definition_id is not None:
+                    # Only declared inputs, never the transitive retention
+                    # closure, receive the saved revision's raw-read grant.
+                    direct_ids = schedule_input_artifact_ids({
+                        key: value for key, value in target.items()
+                        if key != "omnigentAuthorityArtifactRefs"
+                    })
+                    await artifacts.delegate_read_access(
+                        artifact_ids=direct_ids | {root_id},
+                        workflow_id=scheduled_input_scope(definition_id, root_id),
+                        access=access._with_verified_inputs(direct_ids | {root_id}),
+                    )
+                return root_id
 
             if access is None:
                 if definition_id is None:
                     raise RecurringWorkflowValidationError(
                         "saved schedule dependency verification requires its identity"
                     )
+                saved = await self._session.get(
+                    RecurringWorkflowDefinition, definition_id
+                )
+                if (
+                    saved is None
+                    or not isinstance(saved.target, Mapping)
+                    or dict(saved.target) != dict(target)
+                ):
+                    raise RecurringWorkflowValidationError(
+                        "saved definition cannot read artifact outside its admitted target"
+                    )
+                # A persisted legacy selection admits metadata for exactly its
+                # ordinary inputs. It cannot reconstruct restricted raw rights.
                 access = ArtifactAccessContext.for_execution(
                     f"mm-schedule:{definition_id}",
                     principal="service:recurring-workflows",
-                )
+                )._with_verified_inputs(ids)
             dependencies = []
             for artifact_id in sorted(ids):
                 artifact, _body = await artifacts.read(
@@ -632,6 +662,16 @@ class RecurringWorkflowsService:
                 # transaction. Children retain the original caller scope.
                 access=access._with_verified_inputs({root_id}),
             )
+            if definition_id is not None:
+                from moonmind.workflows.temporal.schedule_mapping import (
+                    scheduled_input_scope,
+                )
+
+                await artifacts.delegate_read_access(
+                    artifact_ids=ids | {root_id},
+                    workflow_id=scheduled_input_scope(definition_id, root_id),
+                    access=access._with_verified_inputs({root_id}),
+                )
             return root_id
         except TemporalArtifactError as exc:
             raise RecurringWorkflowValidationError(
@@ -767,6 +807,7 @@ class RecurringWorkflowsService:
         name: str,
         owner_user_id: UUID | None,
         target_payload: Mapping[str, Any],
+        input_artifact_root_id: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         workflow_type = str(target_payload["workflowType"])
         # MoonLadderStudios/MoonMind#4192: retired product. Targets are
@@ -808,6 +849,8 @@ class RecurringWorkflowsService:
             "input_artifact_ref": target_payload.get("inputArtifactRef"),
             "plan_artifact_ref": target_payload.get("planArtifactRef"),
             "failure_policy": target_payload.get("failurePolicy"),
+            **({"scheduled_input_artifact_ref": input_artifact_root_id}
+               if input_artifact_root_id else {}),
         }
 
     def decode_recurring_workflow_input(
@@ -1365,11 +1408,49 @@ class RecurringWorkflowsService:
         and attempts that already started keep the plan they recorded.
         """
 
+        from temporalio import activity
+
         from api_service.services.omnigent_execution_plan_service import (
             readmit_frozen_execution_plan,
         )
+        from moonmind.workflows.temporal.artifacts import (
+            ExecutionRef,
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+            schedule_input_artifact_ids,
+        )
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
         try:
+            if activity.in_activity() and scheduled_definition_id(workflow_id):
+                info = activity.info()
+                artifacts = self._artifact_service or TemporalArtifactService(
+                    TemporalArtifactRepository(self._session)
+                )
+                from api_service.db.models import TemporalArtifactRedactionLevel
+
+                selected = schedule_input_artifact_ids(
+                    {"initialParameters": initial_parameters}
+                )
+                restricted = any(
+                    [
+                        (await artifacts._repository.get_artifact(ref)).redaction_level
+                        is TemporalArtifactRedactionLevel.RESTRICTED
+                        for ref in sorted(selected)
+                    ]
+                )
+                if restricted:
+                    await artifacts.readmit_scheduled_inputs(
+                        artifact_ids=None,
+                        execution=ExecutionRef(
+                            namespace=info.namespace,
+                            workflow_id=workflow_id,
+                            run_id=info.workflow_run_id,
+                            link_type="input.execution_plan",
+                        ),
+                    )
             return await readmit_frozen_execution_plan(
                 db_session=self._session,
                 artifact_service=self._artifact_service,
@@ -1377,6 +1458,13 @@ class RecurringWorkflowsService:
                 initial_parameters=initial_parameters,
                 subject="Scheduled occurrence",
             )
+        except TemporalArtifactNotFoundError:
+            raise RecurringWorkflowValidationError(
+                "scheduled input authority is unavailable"
+            ) from None
+        except TemporalArtifactAuthorizationError as exc:
+            # The shared model admission owner supplies a bounded policy reason.
+            raise RecurringWorkflowValidationError(str(exc)) from None
         except ValueError as exc:
             raise RecurringWorkflowValidationError(
                 "scheduled Omnigent execution-plan authority is invalid"
@@ -2167,6 +2255,7 @@ class RecurringWorkflowsService:
             # immutable launch snapshot. Build the durable schedule input from
             # that authoritative target, not the pre-resolution request copy.
             target_payload=definition.target,
+            input_artifact_root_id=definition.input_artifact_root_id,
         )
 
         start_metadata = await self._workflow_start_metadata(
@@ -2892,6 +2981,7 @@ class RecurringWorkflowsService:
             name=dfn.name or "",
             owner_user_id=dfn.owner_user_id,
             target_payload=_normalize_target(target_payload),
+            input_artifact_root_id=dfn.input_artifact_root_id,
         )
 
     async def _recreate_temporal_schedule(

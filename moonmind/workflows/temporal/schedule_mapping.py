@@ -7,7 +7,8 @@ into ``temporalio.client`` schedule dataclasses.
 
 from __future__ import annotations
 
-from datetime import timedelta
+import re
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from temporalio.client import (
@@ -116,12 +117,35 @@ def make_scheduled_workflow_id_base(definition_id: UUID) -> str:
     """
     return f"mm:{definition_id}"
 
+
+def scheduled_definition_id(workflow_id: str) -> UUID | None:
+    """Recognize only the product scheduler's complete occurrence identity."""
+    match = re.fullmatch(
+        r"mm:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-"
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)",
+        workflow_id,
+    )
+    if match is None:
+        return None
+    try:
+        datetime.fromisoformat(match[2])
+        return UUID(match[1])
+    except ValueError:
+        return None
+
+
+def scheduled_input_scope(definition_id: UUID, root_id: str) -> str:
+    """Existing execution-link grant scope for one immutable saved revision."""
+    return f"mm-schedule-input:{definition_id}:{root_id}"
+
 __all__ = [
     "build_schedule_policy",
     "build_schedule_spec",
     "build_schedule_state",
-    "make_scheduled_workflow_id_base",
     "make_schedule_id",
+    "make_scheduled_workflow_id_base",
     "map_catchup_window",
     "map_overlap_policy",
+    "scheduled_definition_id",
+    "scheduled_input_scope",
 ]

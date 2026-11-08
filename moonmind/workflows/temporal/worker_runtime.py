@@ -2447,9 +2447,54 @@ def _container_job_evidence_content_type(name: str) -> str:
 
 def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):
     async def publish(request, name: str, payload: bytes) -> str:
+        from api_service.services.assessment_authorizations import (
+            AssessmentAuthorizationDenied,
+            assessment_marked,
+            validate_job_assessment_authority,
+        )
+        from moonmind.schemas.container_job_models import ContainerJobSubmitRequest
+
+        source_workflow = None
+        source_link = None
+        requested_assessment = assessment_marked(request.request.spec)
+        scoped = False
         principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        async with get_async_session_context() as session:
+            record = await session.get(ContainerJobRecord, request.job_id)
+            if record is not None:
+                try:
+                    saved = ContainerJobSubmitRequest.model_validate(
+                        {**record.request_json, "source": record.source_json}
+                    )
+                except ValueError:
+                    raise AssessmentAuthorizationDenied(
+                        "container job retained admission is invalid"
+                    ) from None
+                scoped = record.assessment_scope_json is not None or assessment_marked(saved.spec)
+            if scoped or requested_assessment:
+                record = await _container_job_admitted_record(session, request)
+                # Finished effects survive revocation, cancellation and loss of
+                # canonical scope. Only the actual job and saved request grant
+                # publication; authored owner/source labels do not.
+                await validate_job_assessment_authority(
+                    session, record, request.request, live=False
+                )
+                principal = f"{record.owner_type}:{record.owner_id}"
+                source_workflow = saved.source.workflow_id
+                source = (
+                    await session.get(TemporalExecutionCanonicalRecord, source_workflow)
+                    if source_workflow else None
+                )
+                if source is not None and source.run_id:
+                    source_link = {
+                        "namespace": source.namespace,
+                        "workflow_id": source.workflow_id,
+                        "run_id": source.run_id,
+                        "link_type": "output.container-job",
+                    }
         content_type = _container_job_evidence_content_type(name)
-        artifact, _ = await artifact_service.create(
+        create = artifact_service.create_for_activity if scoped else artifact_service.create
+        artifact, _ = await create(
             principal=principal,
             content_type=content_type,
             metadata_json={
@@ -2457,6 +2502,7 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                 "name": name,
                 "container_job_id": request.job_id,
             },
+            **({"redaction_level": "restricted"} if scoped else {}),
         )
         await artifact_service.write_complete(
             artifact_id=artifact.artifact_id,
@@ -2464,6 +2510,17 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             payload=payload,
             content_type=content_type,
         )
+        if scoped and source_workflow:
+            await artifact_service.delegate_read_access(
+                artifact_ids=[artifact.artifact_id],
+                workflow_id=source_workflow,
+                access=ArtifactAccessContext.for_activity(),
+            )
+        if source_link is not None:
+            await artifact_service.link_artifact(
+                artifact_id=artifact.artifact_id, principal=principal,
+                execution_ref=source_link,
+            )
         return artifact.artifact_id
 
     return publish
@@ -3184,6 +3241,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 enforced_egress_profile_refs = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
+                session_factory=get_async_session_context,
                 run_store=run_store,
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
@@ -3224,6 +3282,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             agent_runtime_activities=agent_runtime_activities,
             review_activities=TemporalReviewActivities(
                 reviewer=ConfiguredStepReviewer(settings) if topology.fleet == LLM_FLEET else None,
+                session_factory=get_async_session_context,
             ),
             agent_skills_activities=AgentSkillsActivities(
                 artifact_service=artifact_service,

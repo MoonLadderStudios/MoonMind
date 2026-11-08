@@ -150,7 +150,7 @@ from moonmind.security.workload_profiles import (
     WORKLOAD_CREDENTIALS_TARGET,
     validate_profile_launch,
 )
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal import container_job_attachments as attachments
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
@@ -5032,6 +5032,24 @@ class DockerContainerJobBackend:
                 )
                 continue
             else:
+                try:
+                    native = json.loads(payload)
+                    sanitized = _redact_strings(redact_sensitive_payload(native))
+                    if sanitized != native:
+                        payload = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
+                        limitations.append("credential_shaped_text_redacted")
+                    if len(payload) > cloud.max_report_bytes:
+                        raise ValueError("sanitized report exceeds admission")
+                except (ValueError, TypeError, RecursionError):
+                    limitations.append("report_sanitization_failed")
+                    manifest.append(
+                        ContainerJobArtifact(
+                            name=name, relativePath=relative,
+                            collectionStatus=ArtifactCollectionStatus.REJECTED,
+                            detail="Native report could not be safely retained.",
+                        )
+                    )
+                    continue
                 bodies[name] = payload
                 media_type = "application/json"
             suffix = os.path.splitext(relative)[1]

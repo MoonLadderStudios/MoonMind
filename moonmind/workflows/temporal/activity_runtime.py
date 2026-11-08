@@ -1456,20 +1456,20 @@ def _temporal_snapshot_from_payload(
     )
 
 
-async def _verified_artifact_parent_access(
+async def _verified_temporal_parent_identity(
     *,
     info: Any,
-    parent_workflow_id: str,
-    parent_run_id: str | None,
+    parent_workflow_id: str | None = None,
+    parent_run_id: str | None = None,
     parent_temporal_run_id: str | None = None,
-) -> ArtifactAccessContext | None:
+) -> tuple[str, str] | None:
     """Delegate only to this exact Activity run's server-recorded parent.
 
     Retained AgentRun histories may carry provider-authored parent metadata.
     It cannot grant artifact access without independent Temporal ancestry.
     Pass ``None`` when the server alone supplies the parent run identity.
     """
-    if info is None or not parent_workflow_id or parent_run_id == "":
+    if info is None or parent_workflow_id == "" or parent_run_id == "":
         return None
     from temporalio.api.common.v1 import WorkflowExecution
     from temporalio.api.workflowservice.v1 import (
@@ -1500,7 +1500,8 @@ async def _verified_artifact_parent_access(
                 record.execution.workflow_id != info.workflow_id
                 or record.execution.run_id != info.workflow_run_id
                 or not record.HasField("parent_execution")
-                or record.parent_execution.workflow_id != parent_workflow_id
+                or not record.parent_execution.workflow_id
+                or (parent_workflow_id is not None and record.parent_execution.workflow_id != parent_workflow_id)
                 or not record.parent_execution.run_id
                 or not record.parent_namespace_id
             ):
@@ -1578,9 +1579,25 @@ async def _verified_artifact_parent_access(
         raise ArtifactParentAuthorityUnavailable(
             f"Artifact parent authority is unavailable for {info.workflow_id}"
         ) from exc
-    return ArtifactAccessContext.for_execution(
-        parent_workflow_id, principal="system:agent_runtime"
+    return record.parent_execution.workflow_id, record.parent_execution.run_id
+
+
+async def _verified_artifact_parent_access(
+    *,
+    info: Any,
+    parent_workflow_id: str,
+    parent_run_id: str | None,
+    parent_temporal_run_id: str | None = None,
+) -> ArtifactAccessContext | None:
+    if not parent_workflow_id:
+        return None
+    identity = await _verified_temporal_parent_identity(
+        info=info, parent_workflow_id=parent_workflow_id,
+        parent_run_id=parent_run_id, parent_temporal_run_id=parent_temporal_run_id,
     )
+    if identity is None:
+        return None
+    return ArtifactAccessContext.for_execution(identity[0], principal="system:agent_runtime")
 
 
 async def _read_json_artifact(
@@ -6258,6 +6275,7 @@ class TemporalAgentRuntimeActivities:
         self,
         *,
         artifact_service: TemporalArtifactService | None = None,
+        session_factory: Any = None,
         run_store: "ManagedRunStore | None" = None,
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
@@ -6273,6 +6291,7 @@ class TemporalAgentRuntimeActivities:
         workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
+        self._session_factory = session_factory
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
@@ -6303,6 +6322,42 @@ class TemporalAgentRuntimeActivities:
             run_store=run_store,
         )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
+
+    async def _require_assessment_model_delivery(self, *, profile_ref: str | None) -> None:
+        if self._session_factory is None:
+            return
+        from api_service.services.assessment_model_delivery import (
+            assessment_processing_for_execution,
+            require_model_delivery,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactStateError,
+        )
+
+        try:
+            identity = temporal_activity.info()
+            async with self._session_factory() as session:
+                try:
+                    processing = await assessment_processing_for_execution(
+                        session, identity.workflow_id, identity.workflow_run_id,
+                    )
+                except TemporalArtifactStateError:
+                    # Legacy AgentRun Activities have no canonical API row.
+                    # Only server-recorded ancestry may nominate their parent.
+                    parent = await _verified_temporal_parent_identity(info=identity)
+                    if parent is None:
+                        raise
+                    processing = await assessment_processing_for_execution(session, *parent)
+            require_model_delivery(processing, profile_ref=profile_ref)
+        except (TemporalArtifactAuthorizationError, TemporalArtifactStateError) as exc:
+            # The existing Activity wrapper marks these deterministic denials
+            # non-retryable. Do not serialize a payload-bearing cause chain.
+            raise type(exc)(str(exc)) from None
+        except Exception:  # noqa: BLE001 - Missing trusted authority must not launch a model.
+            raise TemporalArtifactStateError(
+                "Assessment processing context is unavailable; retained evidence is preserved."
+            ) from None
 
     async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
         """Translate a publication checkpoint into the typed managed restore plane."""
@@ -8531,6 +8586,7 @@ class TemporalAgentRuntimeActivities:
 
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
+        await self._require_assessment_model_delivery(profile_ref=profile.profile_id)
         workspace_path = payload.get("workspace_path")
         # When the restoration producer supplies verified evidence in the launch
         # payload, verify it here as defense-in-depth before the agent starts.
@@ -10707,6 +10763,9 @@ class TemporalAgentRuntimeActivities:
         validated, profile = self._coerce_launch_session_request_payload(
             request
         )
+        await self._require_assessment_model_delivery(
+            profile_ref=profile.profile_id if profile is not None else None
+        )
         validated = await self._shape_launch_session_request(
             validated,
             profile=profile,
@@ -11736,6 +11795,9 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.send_turn",
             model_type=SendCodexManagedSessionTurnRequest,
         )
+        # Legacy session locators do not prove a Provider Profile. Explicit
+        # profile restrictions therefore remain blocked on this route.
+        await self._require_assessment_model_delivery(profile_ref=None)
         bridge_publication = validated.bridge_publication
 
         async def _publish_active_observations(
@@ -11806,6 +11868,9 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.steer_turn",
             model_type=SteerCodexManagedSessionTurnRequest,
         )
+        # Legacy session locators do not prove a Provider Profile. Explicit
+        # profile restrictions therefore remain blocked on this route.
+        await self._require_assessment_model_delivery(profile_ref=None)
         response = await _await_with_activity_heartbeats(
             controller.steer_turn(validated),
             heartbeat_payload={
@@ -17020,8 +17085,9 @@ def _bind_activity_handler(
 class TemporalReviewActivities:
     """Implementation helpers for ``step.review`` activities."""
 
-    def __init__(self, *, reviewer: Any = None) -> None:
+    def __init__(self, *, reviewer: Any = None, session_factory: Any = None) -> None:
         self._reviewer = reviewer
+        self._session_factory = session_factory
 
     async def step_review(
         self,
@@ -17031,7 +17097,27 @@ class TemporalReviewActivities:
             step_review_activity,
         )
 
-        return await step_review_activity(payload, reviewer=self._reviewer)
+        processing = None
+        if self._session_factory is not None:
+            from api_service.services.assessment_model_delivery import (
+                assessment_processing_for_execution,
+            )
+            from moonmind.workflows.temporal.activities.step_review import _unavailable
+
+            try:
+                identity = temporal_activity.info()
+                async with self._session_factory() as session:
+                    processing = await assessment_processing_for_execution(
+                        session, identity.workflow_id, identity.workflow_run_id,
+                    )
+            except Exception:  # noqa: BLE001 - A missing trusted source must not send evidence.
+                return _unavailable(
+                    "evidence_delivery_context_unavailable",
+                    "admitted assessment processing context could not be verified",
+                )
+        return await step_review_activity(
+            payload, reviewer=self._reviewer, processing_policy=processing,
+        )
 
 
 def _compact_artifact_ref_text(artifact: Any) -> str:

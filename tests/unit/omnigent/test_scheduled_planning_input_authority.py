@@ -597,6 +597,15 @@ async def test_admission_does_not_bypass_protected_raw_inputs(
     artifact_id = saved.input_id if target == "input" else saved.skills.manifest_id
     await authority_fixtures._protect(artifacts, artifact_id, protection)
     if target == "input" and protection == "restricted":
+        # A retained legacy start has no raw admission receipt. It may retain
+        # metadata planning rights, but cannot gain raw source access.
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        async def original_start(self, workflow_id, *, run_id):
+            return saved.action
+        async def client(self):
+            return SimpleNamespace(namespace="default")
+        monkeypatch.setattr(TemporalClientAdapter, "read_scheduled_workflow_start_input", original_start)
+        monkeypatch.setattr(TemporalClientAdapter, "get_client", client)
         await _admit(saved.action)
     else:
         with pytest.raises(
@@ -651,3 +660,86 @@ async def test_recorded_scope_survives_creator_provenance_change(
                 artifact_id=saved.snapshot_id,
                 access=access_for_test("workflow:unrelated"),
             )
+
+
+async def test_initial_plan_admission_delegates_selected_restricted_inputs(artifacts):
+    from api_service.db.models import TemporalArtifactRedactionLevel
+
+    saved = await _schedule(artifacts)
+    async with artifacts() as session:
+        for ref in (saved.input_id, saved.plan_id):
+            artifact = await session.get(TemporalArtifact, ref)
+            artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+        await session.commit()
+    plan = await DbExecutionPlanStore(artifacts).load(saved.binding.plan_ref)
+    await link_verified_execution_plan_inputs(
+        session_factory=artifacts,
+        plan=plan,
+        binding=saved.binding,
+        workflow_id="mm:admitted-direct-inputs",
+        run_id="run",
+        access=access_for_test(OWNER),
+    )
+    async with artifacts() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        for ref in (saved.input_id, saved.plan_id):
+            await service.read(
+                artifact_id=ref,
+                access=access_for_test("workflow:mm:admitted-direct-inputs"),
+            )
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await service.read(
+                artifact_id=saved.input_id, access=access_for_test("workflow:foreign")
+            )
+
+
+async def test_saved_plan_revision_delegates_restricted_input_to_actual_occurrence(
+    artifacts, monkeypatch
+):
+    from api_service.db.models import TemporalArtifactRedactionLevel
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    saved = await _schedule(artifacts)
+    target = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "inputArtifactRef": saved.input_id,
+        "planArtifactRef": saved.plan_id,
+        "initialParameters": saved.action["initial_parameters"],
+    }
+    async with artifacts() as session:
+        artifact = await session.get(TemporalArtifact, saved.input_id)
+        artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+        await session.commit()
+        owner = RecurringWorkflowsService(session)
+        root = await owner._retain_target_artifacts(
+            target, definition_id=DEFINITION, access=access_for_test(OWNER)
+        )
+        _, action = owner._workflow_bundle_for_target(
+            definition_id=DEFINITION,
+            name="Saved",
+            owner_user_id=None,
+            target_payload=target,
+            input_artifact_root_id=root,
+        )
+        await session.commit()
+    _activity_context(monkeypatch, artifacts)
+
+    async def original_start(self, workflow_id, *, run_id):
+        assert workflow_id == WORKFLOW and run_id == RUN
+        return action
+
+    async def client(self):
+        return SimpleNamespace(namespace="default")
+
+    monkeypatch.setattr(
+        TemporalClientAdapter, "read_scheduled_workflow_start_input", original_start
+    )
+    monkeypatch.setattr(TemporalClientAdapter, "get_client", client)
+    await _admit(action)
+    await _admit(action)
+    async with artifacts() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        _, body = await service.read(
+            artifact_id=saved.input_id, access=access_for_test(f"workflow:{WORKFLOW}")
+        )
+        assert json.loads(body)["instructions"] == "Inspect the repository"

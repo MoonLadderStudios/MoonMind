@@ -12,7 +12,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_LIMITATIONS,
+    EVIDENCE_TRANSFORMATION_VERSION,
+    redact_evidence_payload,
+    redact_evidence_text,
+)
 from moonmind.workflows.temporal.activities.step_review import (
     EVIDENCE_SECTION_MAX_BYTES,
     PROMPT_BUDGET_BYTES,
@@ -78,6 +83,7 @@ async def bind_review_selection(
     source: Any,
     artifacts: TemporalArtifactService,
     access: ArtifactAccessContext,
+    delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Authorize every selected ref, including on reuse, before any inference."""
     if source.run_id != request.source_run_id or not source.close_status:
@@ -175,7 +181,8 @@ async def bind_review_selection(
         "objective": request.objective,
         "scope": request.scope,
         "artifacts": selections,
-        "runtime": request.runtime,
+        "runtime": delivery["runtime"] if delivery is not None else request.runtime,
+        **({"delivery": delivery} if delivery is not None else {}),
         "timeoutSeconds": request.timeout_seconds,
     }
 
@@ -219,11 +226,42 @@ async def review_workflow_payload(
             )
         try:
             text = payload.decode("utf-8")
-        except UnicodeError as exc:
+        except UnicodeError:
             raise TemporalArtifactValidationError(
                 "review requires bounded UTF-8 text artifacts"
-            ) from exc
-        evidence.append({**row, "untrustedContent": redact_sensitive_text(text)})
+            ) from None
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            safe_text = redact_evidence_text(text)
+        else:
+            safe_text = json.dumps(redact_evidence_payload(decoded), ensure_ascii=False)
+        evidence.append({
+            **row,
+            "untrustedContent": safe_text,
+            "transformation": {
+                "version": EVIDENCE_TRANSFORMATION_VERSION,
+                "sha256": hashlib.sha256(safe_text.encode()).hexdigest(),
+                "piiLimitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
+            },
+        })
+    delivery = binding.get("delivery") or {}
+    receipt = {
+        **(delivery.get("receipt") or {}),
+        "artifacts": [
+            {key: value for key, value in row.items() if key != "untrustedContent"}
+            for row in evidence
+        ],
+        "transformation": {
+            "version": EVIDENCE_TRANSFORMATION_VERSION,
+            "piiLimitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
+        },
+    }
+    # Saved configuration may contain unrelated customer references. Only the
+    # selected evidence and compact delivery receipt enter model instructions.
+    prompt_binding = {key: value for key, value in binding.items() if key != "delivery"}
+    prompt_binding["evidenceDelivery"] = receipt
+    prompt_binding = redact_evidence_payload(prompt_binding)
     instructions = (
         "Use the existing moonspec-verify Skill for this explicit optional quality/risk review. "
         "The review objective and scope below are the verification baseline. Review only the supplied "
@@ -238,7 +276,7 @@ async def review_workflow_payload(
         "state that limit and do not claim to have reviewed the unavailable raw bytes. "
         "Name missing observations as partial/unavailable; absence is not a clean bill of health. "
         "Include the exact source, candidate digest and scope in the report. No numeric score is requested.\n"
-        + json.dumps({**binding, "artifacts": evidence}, ensure_ascii=False)
+        + json.dumps(redact_evidence_payload({**prompt_binding, "artifacts": evidence}), ensure_ascii=False)
     )
     if len(instructions.encode()) > PROMPT_BUDGET_BYTES:
         raise TemporalArtifactValidationError(
@@ -247,6 +285,9 @@ async def review_workflow_payload(
     return {
         "idempotencyKey": optional_review_identity(binding),
         "workspace": {"workspaceSource": {"kind": "scratch"}},
+        **({"assessmentProject": delivery["assessmentProject"]} if delivery.get("assessmentProject") is not None else {}),
+        **({"omnigent": delivery["omnigent"]} if delivery.get("omnigent") else {}),
+        **({"agentProfile": delivery["agentProfile"]} if delivery.get("agentProfile") else {}),
         "workflow": {
             "title": "Optional artifact quality/risk review",
             "instructions": instructions,
@@ -259,7 +300,7 @@ async def review_workflow_payload(
                     "type": "skill",
                     "skill": {"id": "moonspec-verify"},
                     "annotations": {"optionalReview": True},
-                    "inputs": {"optionalReview": binding},
+                    "inputs": {"optionalReview": prompt_binding},
                     "timeoutPolicy": {
                         "timeout_seconds": binding["timeoutSeconds"],
                         "max_timeout_seconds": binding["timeoutSeconds"],
@@ -277,6 +318,7 @@ async def review_workflow_payload(
                     "objective": binding["objective"],
                     "scope": binding["scope"],
                     "requestIdentity": optional_review_identity(binding),
+                    "evidenceDelivery": receipt,
                 },
             },
         },

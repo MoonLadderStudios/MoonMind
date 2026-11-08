@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from base64 import b64encode
@@ -21,15 +22,22 @@ _CLOUD_TOKEN_PATTERN = re.compile(
 _SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b", re.IGNORECASE)
 _COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b((?:set-)?cookie\s*:)\s*[^\r\n]+")
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b([A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|api[_-]?key|credential)"
-    r"[A-Z0-9_.-]{0,80})(\s*[:=]\s*)"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
+    r"(?i)(?<![A-Z0-9_.-])(?P<quote>\\*[\"'])?"
+    r"(?P<key>[A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|(?:api|access|private|secret)[_-]?key|credential)"
+    r"[A-Z0-9_.-]{0,80})(?(quote)(?P=quote))(?P<separator>\s*[:=]\s*)"
+    r"(?P<value>\\*\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?|[^\s,;&\"'<>`]+)"
 )
 _AUTHORIZATION_PATTERN = re.compile(
-    r"(?i)\b(authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
+    r"(?i)\b(?:(?:proxy-)?authorization\s*[:=]\s*(?:basic|token|bearer)\s+|bearer\s+)"
+    r"[A-Za-z0-9._~+/=-]+"
 )
-_PRIVATE_KEY_BEGIN = "-----BEGIN "
+_URL_USERINFO_PATTERN = re.compile(
+    r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/?#\"'<>`]+@"
+)
 _PRIVATE_KEY_END = "-----END "
+_PRIVATE_KEY_BEGIN_PATTERN = re.compile(
+    r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)\b(?:-----)?", re.IGNORECASE
+)
 _AUTH_PATH_MARKERS = (
     ".codex",
     ".claude",
@@ -50,6 +58,12 @@ _NON_SECRET_SENTINEL_VALUES = frozenset(
 _MIN_REDACTABLE_SECRET_LENGTH = 4
 _NON_SECRET_REF_KEYS = frozenset(
     {
+        "public_key",
+        "publickey",
+        "public_key_fingerprint",
+        "publickeyfingerprint",
+        "key_fingerprint",
+        "keyfingerprint",
         "auth_actions",
         "authactions",
         "auth_readiness",
@@ -71,6 +85,7 @@ def _is_sensitive_key(key: str) -> bool:
     return bool(
         _SENSITIVE_KEY_PATTERN.search(key)
         or re.search(r"(?:Token|Secret|Password|Credential|Auth)(?:$|[A-Z])", key)
+        or re.search(r"(?i)(?:api|access|private|secret)[_-]?key$", key)
     )
 
 def _is_non_secret_sentinel(value: str) -> bool:
@@ -99,20 +114,15 @@ def scrub_github_tokens(text: str) -> str:
 def _redact_private_key_blocks(text: str) -> str:
     redacted = text
     while True:
-        upper = redacted.upper()
-        begin = upper.find(_PRIVATE_KEY_BEGIN)
-        if begin == -1:
+        match = _PRIVATE_KEY_BEGIN_PATTERN.search(redacted)
+        if match is None:
             return redacted
-        key_suffix = upper.find("PRIVATE KEY-----", begin)
-        if key_suffix == -1:
-            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end_marker = upper.find(_PRIVATE_KEY_END, key_suffix)
+        begin = match.start()
+        footer = _PRIVATE_KEY_END + match.group("label").upper() + "-----"
+        end_marker = redacted.upper().find(footer, match.end())
         if end_marker == -1:
             return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end_suffix = upper.find("PRIVATE KEY-----", end_marker)
-        if end_suffix == -1:
-            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end = end_suffix + len("PRIVATE KEY-----")
+        end = end_marker + len(footer)
         redacted = (
             redacted[:begin]
             + "[REDACTED_PRIVATE_KEY]"
@@ -150,6 +160,25 @@ def _redact_auth_paths(text: str) -> str:
         index = end
     return "".join(output)
 
+def _redact_secret_assignment(match: re.Match[str]) -> str:
+    key = match.group("key")
+    normalized = key.lower().replace("_", "")
+    value = match.group("value")
+    quote = match.group("quote") or ""
+    compact = re.fullmatch(r"[A-Za-z0-9_./:-]+", value.strip("\"'"))
+    if compact and (
+        normalized in _NON_SECRET_REF_KEYS
+        or normalized.endswith("ref")
+        or value.strip("\"'").startswith(("env://", "secret://", "vault://", "ref://"))
+        # A compact reference URI is not a credential assignment. Quoted
+        # JSON keys and colon-space fields still denote credential values.
+        or (normalized == "credential" and not quote and match.group("separator") == ":")
+    ):
+        return match.group(0)
+    replacement = '"[REDACTED]"' if quote and value.startswith('"') else "[REDACTED]"
+    return f"{quote}{key}{quote}{match.group('separator')}{replacement}"
+
+
 def redact_sensitive_text(text: str | None) -> str:
     """Scrub common credential-shaped values from browser/artifact text."""
 
@@ -160,7 +189,8 @@ def redact_sensitive_text(text: str | None) -> str:
     redacted = _redact_private_key_blocks(redacted)
     redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
     redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
-    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", redacted)
+    redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED_USERINFO]@", redacted)
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, redacted)
     redacted = _redact_auth_paths(redacted)
     return redacted
 
@@ -198,6 +228,130 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     if isinstance(payload, tuple):
         return tuple(redact_sensitive_payload(item, key=key) for item in payload)
     return payload
+
+
+EVIDENCE_TRANSFORMATION_VERSION = "evidence-redaction/v1"
+EVIDENCE_TRANSFORMATION_LIMITATIONS = (
+    "Credential patterns, email addresses and explicitly named personal-data fields are redacted.",
+    "This is not full anonymization: arbitrary names, private business details and unrecognized personal data may remain.",
+    "Only selected authorized evidence should be delivered; redaction grants no access or publication authority.",
+)
+_EVIDENCE_MAX_TEXT_CHARS = 4 * 1024 * 1024
+_EVIDENCE_EMAIL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}(?![A-Za-z0-9-])"
+)
+_EVIDENCE_PERSONAL_FIELDS = frozenset(
+    {
+        "email",
+        "emailaddress",
+        "phonenumber",
+        "phone",
+        "telephone",
+        "fullname",
+        "firstname",
+        "lastname",
+        "customername",
+        "personname",
+        "dateofbirth",
+        "birthdate",
+        "dob",
+        "streetaddress",
+        "postaladdress",
+        "homeaddress",
+        "ssn",
+        "socialsecuritynumber",
+        "passportnumber",
+        "driverslicensenumber",
+        "driverlicensenumber",
+        "nationalid",
+    }
+)
+
+
+def redact_evidence_text(
+    text: str | None, *, max_chars: int = _EVIDENCE_MAX_TEXT_CHARS
+) -> str:
+    """Transform bounded evidence text, without claiming general anonymization."""
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        raise ValueError("Evidence text has an unsupported type")  # noqa: TRY004 - stable transformation error contract
+    if len(text) > max_chars:
+        raise ValueError("Evidence text exceeds the transformation bound")
+    return _EVIDENCE_EMAIL_PATTERN.sub("[REDACTED_EMAIL]", redact_sensitive_text(text))
+
+
+def redact_evidence_payload(
+    payload: Any,
+    *,
+    max_depth: int = 32,
+    max_items: int = 10000,
+    max_text_chars: int = _EVIDENCE_MAX_TEXT_CHARS,
+) -> Any:
+    """Copy bounded JSON-like evidence using the existing credential owner.
+
+    Explicit personal-data fields are withheld; generic identifiers such as
+    name, path, target and address are not guessed to be personal information.
+    Bounds include keys and original text, before any redaction reduces size.
+    """
+    items = 0
+    text_chars = 0
+
+    def text(value):
+        nonlocal text_chars
+        text_chars += len(value)
+        if text_chars > max_text_chars:
+            raise ValueError("Evidence text exceeds the transformation bound")
+        return redact_evidence_text(value, max_chars=max_text_chars)
+
+    def visit(value, depth=0, key=None):
+        nonlocal items
+        items += 1
+        if depth > max_depth or items > max_items:
+            raise ValueError("Evidence structure exceeds the transformation bound")
+        personal = (
+            key is not None
+            and re.sub(r"[^a-z0-9]", "", key.lower()) in _EVIDENCE_PERSONAL_FIELDS
+        )
+        if isinstance(value, Mapping):
+            result = {}
+            for raw_key, item in value.items():
+                if not isinstance(raw_key, str):
+                    raise ValueError("Evidence object has an unsupported key")  # noqa: TRY004 - stable transformation error contract
+                safe_key = text(raw_key)
+                if safe_key in result:
+                    raise ValueError("Evidence keys collide after transformation")
+                result[safe_key] = visit(item, depth + 1, raw_key)
+        elif isinstance(value, (list, tuple)):
+            result = [visit(item, depth + 1, key) for item in value]
+        elif isinstance(value, str):
+            # Check the original before the credential owner replaces it.
+            text(value)
+            result = redact_evidence_text(
+                redact_sensitive_payload(value, key=key), max_chars=max_text_chars
+            )
+        elif value is None or isinstance(value, (bool, int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("Evidence value is not a finite number")
+            result = value
+        else:
+            raise ValueError("Evidence value has an unsupported type")
+        # The credential owner knows value fields versus references. Apply
+        # the same decision to non-string values after traversing their bounds.
+        if (
+            value is not None
+            and not isinstance(value, str)
+            and key is not None
+            and redact_sensitive_payload("evidence-value", key=key) == "[REDACTED]"
+        ):
+            return "[REDACTED]"
+        return "[REDACTED_PERSONAL_DATA]" if personal and value is not None else result
+
+    return visit(payload)
+
 
 def redact_profile_file_templates(value: list[Any]) -> list[Any]:
     """Redact provider-profile file templates without exposing template bodies."""

@@ -141,6 +141,22 @@ async def omnigent_prepare_child_execution_plan_activity(
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
     parent_plan = await _load_verified_execution_plan(parent_binding, access=access)
+    from api_service.services.omnigent_execution_plan_service import (
+        json_artifact_digest,
+    )
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
+
+    parent_task = await _read_json_artifact(parent_binding.task_input_snapshot_ref, access=access)
+    if json_artifact_digest(parent_task) != parent_binding.task_input_snapshot_digest:
+        raise ValueError("parent task-input snapshot digest mismatch")
+    parent_assessment = original_task_snapshot_parameters(parent_task).get("assessmentProject")
+    if parent_assessment is not None:
+        if "assessmentProject" in initial_parameters and initial_parameters["assessmentProject"] != parent_assessment:
+            raise ValueError("child assessment conflicts with parent admitted snapshot")
+        initial_parameters["assessmentProject"] = parent_assessment
+
     # Issue #4009: the compiler re-admits repository roles against the parent
     # selections. The real child producer supplies intent, not fabricated
     # snapshot digests, and model admission remains owned by the child plan.
@@ -330,6 +346,9 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
         )
+        # Recorded-plan reuse may not otherwise mutate this caller-owned
+        # transaction. Preserve its verified saved-revision input grants.
+        await db_session.commit()
     # Temporal starts occurrences outside API admission. Commit their exact
     # input grants before planning under the Activity's actual execution.
     await _link_execution_plan_inputs(

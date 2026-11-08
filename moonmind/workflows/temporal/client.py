@@ -777,24 +777,73 @@ class TemporalClientAdapter:
         )
         return str(response.run_id)
 
+    async def _read_workflow_start_attributes(self, workflow_id: str, *, run_id: str):
+        """Read the immutable first event of the exact server-selected run."""
+        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
+        async for event in handle.fetch_history_events(page_size=1):
+            if event.event_id == 1 and event.HasField(
+                "workflow_execution_started_event_attributes"
+            ):
+                return event.workflow_execution_started_event_attributes
+            break
+        raise ValueError("The source run has no readable workflow start input")
+
+    async def _decode_workflow_start_input(self, attributes) -> Mapping[str, Any]:
+        client = await self.get_client()
+        values = await client.data_converter.decode(attributes.input.payloads)
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            return values[0]
+        raise ValueError("The source run has no readable workflow start input")
+
     async def read_workflow_start_input(
         self, workflow_id: str, *, run_id: str
     ) -> Mapping[str, Any]:
         """Read admitted inputs from the exact run, never from mutable Visibility."""
-        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
-        client = await self.get_client()
-        async for event in handle.fetch_history_events(page_size=1):
-            if event.event_id != 1 or not event.HasField(
-                "workflow_execution_started_event_attributes"
-            ):
-                break
-            values = await client.data_converter.decode(
-                event.workflow_execution_started_event_attributes.input.payloads
+        attributes = await self._read_workflow_start_attributes(workflow_id, run_id=run_id)
+        return await self._decode_workflow_start_input(attributes)
+
+    async def read_scheduled_workflow_start_input(
+        self, workflow_id: str, *, run_id: str
+    ) -> Mapping[str, Any]:
+        """Qualify original scheduled intent at the product API trust boundary.
+
+        Product callers cannot choose scheduled occurrence IDs or top-level
+        start fields. Privileged direct Temporal clients are deployment owners,
+        not an additional untrusted authoring surface. Continue-As-New/retries
+        use the server-recorded first run, never mutated continuation arguments.
+        """
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        definition_id = scheduled_definition_id(workflow_id)
+        if definition_id is None or not run_id:
+            raise ValueError("The execution is not a native scheduled occurrence")
+        attributes = await self._read_workflow_start_attributes(workflow_id, run_id=run_id)
+        first_run = attributes.first_execution_run_id or run_id
+        if first_run != run_id:
+            attributes = await self._read_workflow_start_attributes(
+                workflow_id, run_id=first_run
             )
-            if len(values) == 1 and isinstance(values[0], Mapping):
-                return values[0]
-            break
-        raise ValueError("The source run has no readable workflow start input")
+        if (
+            attributes.workflow_type.name != "MoonMind.UserWorkflow"
+            or attributes.parent_workflow_execution.workflow_id
+            or (attributes.workflow_id and attributes.workflow_id != workflow_id)
+            or (
+                attributes.first_execution_run_id
+                and attributes.first_execution_run_id != first_run
+            )
+        ):
+            raise ValueError("Scheduled input authority does not match the original start")
+        admitted = await self._decode_workflow_start_input(attributes)
+        parameters = admitted.get("initial_parameters")
+        system = parameters.get("system") if isinstance(parameters, Mapping) else None
+        recurrence = system.get("recurrence") if isinstance(system, Mapping) else None
+        if (
+            admitted.get("workflow_type") != "MoonMind.UserWorkflow"
+            or not isinstance(recurrence, Mapping)
+            or recurrence.get("definitionId") != str(definition_id)
+        ):
+            raise ValueError("Scheduled input authority does not match the original start")
+        return admitted
 
     # --- Worker Pause: Temporal Visibility drain metrics (DOC-REQ-002) ---
 

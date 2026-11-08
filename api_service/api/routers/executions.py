@@ -10723,6 +10723,61 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     return ref.strip() or None
 
 
+async def _inherit_assessment_processing_for_child(
+    payload: dict[str, Any],
+    *,
+    principal: ExecutionPrincipal,
+    service: TemporalExecutionService,
+    session: AsyncSession,
+) -> None:
+    """Workflow delegation carries constraints independently of runtime defaults."""
+    if not principal.is_workflow_principal:
+        return
+    from api_service.services.assessment_model_delivery import processing_from_source
+
+    try:
+        if session is None:
+            raise ValueError("source storage unavailable")
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, principal.workflow_id
+        )
+        if source is None:
+            projection = await service.describe_execution(principal.workflow_id)
+            source = await service.read_scheduled_execution_source(projection)
+        if (
+            source.workflow_id != principal.workflow_id
+            or not source.run_id
+            or (principal.run_id is not None and source.run_id != principal.run_id)
+        ):
+            raise ValueError("source identity changed")
+        policy, snapshot = processing_from_source(source)
+    except Exception:  # noqa: BLE001 - A missing authority cannot become unrestricted delivery.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "assessment_processing_source_unavailable",
+                "message": "The caller's admitted assessment processing context is unavailable. Retry after its source can be verified; retained evidence is unchanged.",
+            },
+        ) from None
+    if policy is None:
+        return
+    if "assessmentProject" in payload:
+        from moonmind.security.assessment_projects import AssessmentProjectSnapshot
+
+        try:
+            authored = AssessmentProjectSnapshot.model_validate(
+                payload["assessmentProject"]
+            )
+            same_context = authored.model_dump(mode="json", by_alias=True) == snapshot
+        except (TypeError, ValueError):
+            same_context = False
+        if not same_context:
+            raise _invalid_workflow_request(
+                "A delegated workflow cannot remove or replace its caller's admitted assessment processing context."
+            )
+    payload["assessmentProject"] = copy.deepcopy(snapshot)
+
+
 async def _validate_model_selection_submission(
     payload: Mapping[str, Any],
     *,
@@ -11966,6 +12021,9 @@ async def _create_execution_from_workflow_request(
         assessment_scope = await admit_assessment_parameters(
             payload, session=session, user=user, access=access, principal=principal
         )
+    await _inherit_assessment_processing_for_child(
+        payload, principal=principal, service=service, session=session,
+    )
     assessment_project = await _validate_assessment_project_parameter(
         payload, session=session, user=user, access=access
     )
@@ -12901,7 +12959,7 @@ async def _create_execution_from_workflow_request(
         except Exception as exc:
             from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
-            if not isinstance(exc, (HarnessPlatformError, ValueError)):
+            if not isinstance(exc, (HarnessPlatformError, ValueError, TemporalArtifactAuthorizationError)):
                 raise
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -12911,7 +12969,7 @@ async def _create_execution_from_workflow_request(
                     ),
                     "message": str(exc),
                 },
-            ) from exc
+            ) from None
         initial_parameters.update(persisted_omnigent_plan.execution_parameters)
         # MoonLadderStudios/MoonMind#3833: record the frozen runtime-provider
         # rollout decision beside the plan binding so Workflow Detail and audit
@@ -15405,8 +15463,17 @@ async def create_optional_quality_review(
     )
     artifacts = get_temporal_artifact_service(session)
     try:
+        from api_service.services.assessment_model_delivery import (
+            resolve_review_delivery,
+        )
+
+        canonical = await _recovery_source_record(source=source, service=service, session=session)
+        delivery = await resolve_review_delivery(
+            source=canonical, runtime=payload.runtime, session=session,
+            artifacts=artifacts, access=access,
+        )
         binding = await bind_review_selection(
-            payload, source=source, artifacts=artifacts, access=access
+            payload, source=source, artifacts=artifacts, access=access, delivery=delivery,
         )
         existing = await service.find_create_execution(
             idempotency_key=optional_review_identity(binding),
@@ -15422,7 +15489,7 @@ async def create_optional_quality_review(
     except Exception as exc:
         _raise_temporal_artifact_http(exc)
         raise
-    return await create_execution(
+    admitted = await create_execution(
         payload={"type": "workflow", "payload": workflow_payload},
         service=service,
         session=session,
@@ -15433,6 +15500,20 @@ async def create_optional_quality_review(
         execution_fanout=None,
         access=access,
     )
+
+    from api_service.services.assessment_model_delivery import (
+        persist_review_delivery_receipt,
+    )
+
+    receipt_ref = await persist_review_delivery_receipt(
+        execution=admitted,
+        receipt=workflow_payload["workflow"]["reportOutput"]["subject"]["evidenceDelivery"],
+        session=session, artifacts=artifacts, access=access,
+        principal=_execution_principal(user),
+    )
+    if receipt_ref and receipt_ref not in admitted.artifact_refs:
+        admitted.artifact_refs.append(receipt_ref)
+    return admitted
 
 
 def _fresh_serialized_workflow_request(

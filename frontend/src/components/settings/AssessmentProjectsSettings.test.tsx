@@ -50,6 +50,20 @@ describe('AssessmentProjectsSettings', () => {
     await waitFor(() => expect(fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(2));
     expect(JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')[1]![1]!.body)).expected_versions[key]).toBe(7);
   });
+  it('saves explicit evidence processing limits without changing data classification', async () => {
+    const fetch = mockCatalog();
+    renderWithClient(<AssessmentProjectsSettings />);
+    const delivery = await screen.findByLabelText('Evidence model delivery');
+    fireEvent.change(delivery, { target: { value: 'local_only' } });
+    fireEvent.change(screen.getByLabelText('Permitted Provider Profile references (optional)'), { target: { value: 'review-private' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment context' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const request = fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!;
+    const saved = JSON.parse(String(request.body)).changes[key].projects[0].environments[0];
+    expect(saved.dataClassification).toBe('internal');
+    expect(saved.evidenceProcessing).toEqual({ modelDelivery: 'local_only', allowedProfileRefs: ['review-private'] });
+    expect(screen.getByText(/Local-only model delivery is currently unavailable/)).toBeTruthy();
+  });
   it('copies systems and environments with distinct identities and shows audit', async () => {
     mockCatalog(); renderWithClient(<AssessmentProjectsSettings />);
     await screen.findByLabelText('System name');
