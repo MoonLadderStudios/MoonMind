@@ -187,6 +187,8 @@ async def test_concurrency_and_sliding_start_rate(tmp_path, limit, category):
         try:
             assert await second.read() == b""
         except ConnectionResetError:
+            # Rejected connections may surface as reset instead of EOF;
+            # the counter assertions below still verify that no dial escaped.
             pass
         assert gateway.snapshot()["attempts"] == 1
         assert gateway.snapshot()["denials"][category] == 1
@@ -201,6 +203,8 @@ async def test_pinned_client_and_oversized_header(tmp_path):
         try:
             assert await reader.read() == b""
         except ConnectionResetError:
+            # Rejected connections may surface as reset instead of EOF;
+            # the counter assertions below still verify that no dial escaped.
             pass
         assert gateway.snapshot()["attempts"] == 0
         assert gateway.snapshot()["denials"]["client"] == 1
@@ -361,6 +365,7 @@ async def test_process_crash_cannot_reconstruct_budget(tmp_path):
                 ):
                     break
             except FileNotFoundError:
+                # The child has not atomically published its startup snapshot yet.
                 pass
             await asyncio.sleep(0.01)
         else:
@@ -482,7 +487,8 @@ async def test_readiness_waits_for_listener_start(tmp_path, monkeypatch):
         assert check(gateway.config, tmp_path)["status"] == "running"
     finally:
         release.set()
-        await starting
+        # Join startup even if an assertion failed before releasing the listener.
+        await asyncio.gather(starting)
         await gateway.close()
 
 
@@ -763,6 +769,7 @@ async def test_absolute_deadline_survives_clock_changes(
             while data := await reader.read(4096):
                 target_received.extend(data)
         except OSError:
+            # Deadline enforcement deliberately aborts the fixture connection.
             pass
         finally:
             writer.transport.abort()

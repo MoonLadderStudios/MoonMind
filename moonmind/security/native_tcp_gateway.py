@@ -243,6 +243,7 @@ class NativeTCPGateway:
                 try:
                     os.unlink("snapshot.tmp", dir_fd=directory)
                 except FileNotFoundError:
+                    # Atomic replacement already consumed the temporary file.
                     pass
         finally:
             os.close(directory)
@@ -387,6 +388,8 @@ class NativeTCPGateway:
                     try:
                         self._record()
                     except OSError:
+                        # _record already stopped all transport on this failure;
+                        # the completion callback must finish releasing the task.
                         pass
 
             task.add_done_callback(finished)
@@ -617,6 +620,7 @@ async def _run(config_path, state_directory):
             try:
                 await asyncio.wait_for(stop.wait(), 0.2)
             except TimeoutError:
+                # Periodic wakeup checks expiry even without a stop signal.
                 pass
     finally:
         await gateway.close()

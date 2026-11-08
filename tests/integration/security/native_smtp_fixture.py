@@ -110,6 +110,8 @@ class SMTPFixture:
                 else:
                     await reply(b"550 fixture only permits TLS observation\r\n")
         except (OSError, ValueError, asyncio.IncompleteReadError):
+            # Denial probes intentionally abort or send invalid protocol input;
+            # retain target counters and let finally close this fixture session.
             pass
         finally:
             self.persist()
@@ -118,6 +120,7 @@ class SMTPFixture:
             try:
                 await writer.wait_closed()
             except OSError:
+                # The gateway may already have reset this socket during teardown.
                 pass
 
     async def close(self):
