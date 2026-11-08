@@ -346,7 +346,13 @@ async def attest_service_connection(
         raise RuntimeError("service network must be isolated internal IPv4-only state")
     gateway = await _json(
         runner,
-        ("inspect", "--format", GATEWAY_INSPECT_FORMAT, connection.gateway_ref),
+        (
+            "container",
+            "inspect",
+            "--format",
+            GATEWAY_INSPECT_FORMAT,
+            connection.gateway_ref,
+        ),
         "service relay is unavailable",
     )
     validate_relay_launch(connection, gateway)
@@ -392,7 +398,7 @@ async def attest_service_connection(
         try:
             peer = await _json(
                 runner,
-                ("inspect", "--format", fmt, peer_id),
+                ("container", "inspect", "--format", fmt, peer_id),
                 "service network peer is unavailable",
             )
         except RuntimeError:
@@ -447,7 +453,7 @@ async def attest_service_workload(
     fmt = '{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}},"image":{{json .Image}},"imageRef":{{json .Config.Image}},"host":{{json .HostConfig}}}'
     job = await _json(
         runner,
-        ("inspect", "--format", fmt, name),
+        ("container", "inspect", "--format", fmt, name),
         "service workload attachment is unavailable",
     )
     labels, host = job.get("labels") or {}, job.get("host") or {}

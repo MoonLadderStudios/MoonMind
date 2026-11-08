@@ -25,8 +25,9 @@ writes an activation record. It does not start jobs or change the running stack.
 Apply the normal [deployment controller update](../Steps/DockerComposeUpdateSystem.md)
 to activate the installed package. Compose reads the activation identity into
 the API and runtime worker configurations, so its changed-service recreation
-selects the same package for both processes. No workflow inputs or provider
-profile changes are required.
+selects the same package for both processes. Subsequent host and Settings
+Operations updates retain that selection; routine updates need no reinstall,
+workflow inputs, or provider profile changes.
 
 The standard Compose deployment mounts this directory read-only into the API
 and runtime worker. `MOONMIND_RUNTIME_RESOURCES_DIRECTORY` selects a different
@@ -74,13 +75,14 @@ The envelope has `schemaVersion: 1` and optional `imageSources`, `cacheSources`,
 }
 ```
 
-Use an existing registry declaration (`sourceRef`, `image`, optional
-`pullPolicy` and `registryCredentialRef`) when an image is already published.
-Private-image authorization uses the existing managed credential mechanism.
-Source-only installations can instead declare `build` and let the backend build
-the image on first use. A build context is relative to the resource file and
-must remain within the installed package. The package should contain only its
-build inputs. Linked and special files are refused by installation.
+Published images use `sourceRef`, `image`, optional `pullPolicy`, and
+`registryCredentialRef`. A maintained image channel with `pullPolicy: always`
+receives tool releases on acquisition while retaining installed connection and
+cache bindings. Private images use the existing managed credential mechanism.
+Source-only installations can declare `build` for first-use builds. These
+contexts are retained snapshots: changing the recipe requires installing a new
+package. Contexts are package-relative and contain only ordinary build inputs;
+linked and special files are refused.
 
 A local build supports optional `target`, string-valued `args`, and
 `maxAgeSeconds`; `validationCommand` is required. Registry pull settings cannot
