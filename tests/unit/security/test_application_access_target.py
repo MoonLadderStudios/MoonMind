@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 import pytest
-from test_application_access import spec
+from tests.unit.security.test_application_access import spec
 
 from moonmind.security.application_access import (
     ApplicationAccessSpec,

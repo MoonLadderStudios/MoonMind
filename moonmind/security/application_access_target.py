@@ -1,4 +1,4 @@
-"""Bounded HTTP observations with durable, non-replayable mutation attempts.
+"""Bounded application observations with durable, non-replayable mutation attempts.
 
 Only assertion projections and state digests cross the response boundary. A
 checkpoint reserves each request before transport, including verification probes.
@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_serializer, model_validator
 
 from moonmind.security.application_access import (
     ApplicationAccessBundle,
@@ -34,6 +34,7 @@ from moonmind.security.application_access import (
 )
 from moonmind.security.assessments import Contract, content_key
 from moonmind.security.authorization_matrix import IdentityRef
+from moonmind.security.realtime_scope import TransportBudget
 from moonmind.security.target_assessments import (
     ScopedTargetClient,
     TargetScope,
@@ -66,6 +67,7 @@ class ApplicationAccessCapture(Contract):
     started_at: float = Field(gt=0, allow_inf_nan=False)
     next_request_at: float = Field(gt=0, allow_inf_nan=False)
     requests_spent: int = Field(0, ge=0, le=8192)
+    transport_budget: TransportBudget | None = None
     bundle: ApplicationAccessBundle
     progress: list[CaseProgress] = Field(min_length=1, max_length=512)
     status: Literal["partial", "complete"] = "partial"
@@ -78,12 +80,29 @@ class ApplicationAccessCapture(Contract):
             "malformed_output",
             "effect_uncertain",
             "verification_unavailable",
+            "unsupported",
         ]
         | None
     ) = None
 
+    @model_serializer(mode="wrap")
+    def _legacy_shape(self, handler):
+        result = handler(self)
+        if self.transport_budget is None:
+            result.pop("transportBudget", None)
+            result.pop("transport_budget", None)
+        return result
+
     @model_validator(mode="after")
     def _consistent(self):
+        if (self.scope.realtime is None) != (self.transport_budget is None):
+            raise ValueError("real-time captures require durable transport counters")
+        if self.transport_budget is not None and any(
+            getattr(self.transport_budget, name)
+            > getattr(self.scope.realtime, "max_" + name)
+            for name in ("connections", "messages", "bytes")
+        ):
+            raise ValueError("capture transport budget exceeds scope")
         if self.scope_digest != content_key(self.scope.model_dump(mode="json")):
             raise ValueError("capture scope digest differs")
         progress = [p.case_ref for p in self.progress]
@@ -119,7 +138,17 @@ def validate_capture_spec(
     ):
         raise ValueError("capture differs from declared cases")
     client = ScopedTargetClient(scope=retained.scope, proxy="admission-only")
-    for case in canonical.cases:
+    for case, observation in zip(canonical.cases, retained.bundle.observations):
+        if observation.transcript is not None and (
+            case.request.realtime_case_ref is None
+            or any(
+                event.request_id != case.request.id
+                or event.correlation_id != case.request.id
+                or event.case_ref != case.request.realtime_case_ref
+                for event in observation.transcript
+            )
+        ):
+            raise ValueError("transcript differs from the declared operation")
         for request in (case.request, case.identity_check, case.state_check):
             if request is not None:
                 client.admit(request)
@@ -191,9 +220,15 @@ async def _observe(spec, client, path, on_progress):
         }:
             return capture
         client.requests_sent = capture.requests_spent
+        if capture.transport_budget is not None:
+            client.restore_transport(capture.transport_budget)
         client.started = time.monotonic() - max(0, time.time() - capture.started_at)
+        # A delayed exchange may have sent after its upfront reservation. The
+        # prior attempt is stopped; wait one full interval from this successor
+        # before any probe, without renewing the original wall-clock deadline.
         client.next_request = time.monotonic() + max(
-            0, capture.next_request_at - time.time()
+            1 / client.scope.web.max_requests_per_second,
+            capture.next_request_at - time.time(),
         )
     else:
         capture = ApplicationAccessCapture(
@@ -202,6 +237,7 @@ async def _observe(spec, client, path, on_progress):
             max_seconds=client.max_seconds,
             started_at=time.time() - (time.monotonic() - client.started),
             next_request_at=time.time(),
+            transport_budget=client.transport_budget if client.scope.realtime else None,
             bundle=ApplicationAccessBundle(
                 spec_digest=spec_digest(spec),
                 observations=[
@@ -224,13 +260,29 @@ async def _observe(spec, client, path, on_progress):
     async def exchange(request, observation):
         cost = client.preflight(request)
         capture.requests_spent = client.requests_sent + cost
+        reservation = client.reserve_transport(request)
+        if capture.transport_budget is not None:
+            capture.transport_budget = reservation
         # Reserve the rate slot as well: a successor cannot burst after a crash.
         capture.next_request_at = (
             max(time.time(), capture.next_request_at)
-            + 1 / client.scope.web.max_requests_per_second
+            + cost / client.scope.web.max_requests_per_second
         )
         save()
-        result = await client.exchange(request)
+        try:
+            result = await client.exchange(request)
+        except BaseException:
+            # A crash cannot prove which frames were sent. Preserve the durable
+            # worst-case reservation even during later reconciliation probes.
+            if capture.transport_budget is not None:
+                client.restore_transport(reservation)
+            raise
+        else:
+            if capture.transport_budget is not None:
+                capture.transport_budget = client.transport_budget
+        finally:
+            if request.realtime_case_ref is not None:
+                observation.transcript = client.transport_transcript
         if result.evidence_ref not in observation.evidence_refs:
             observation.evidence_refs = [
                 *observation.evidence_refs[-62:],
@@ -346,7 +398,18 @@ async def _observe(spec, client, path, on_progress):
                 "request_budget": "budget_exhausted",
                 "invalid_target_response": "malformed_output",
                 "unsafe_target_response": "malformed_output",
-            }.get(str(exc), "request_failed")
+            }.get(
+                str(exc),
+                (
+                    "unsupported"
+                    if str(exc).startswith("unsupported_")
+                    else (
+                        "budget_exhausted"
+                        if str(exc).startswith("transport_") and "budget" in str(exc)
+                        else "request_failed"
+                    )
+                ),
+            )
         )
         capture.stop_reason = reason
         if active is not None:

@@ -16,6 +16,7 @@ docker run --rm --user root \
   --env "MOONMIND_SCOPED_TEST_IMAGE=$image" \
   --env "MOONMIND_TEST_CANDIDATE=$(git -C "$root" rev-parse HEAD)" \
   --entrypoint python "$image" -m pytest \
+  tests/integration/security/test_realtime_scoped_egress.py \
   tests/integration/security/test_scoped_egress_docker.py \
   -q --tb=short --timeout=180 \
   --junitxml=artifacts/integration-ci/pytest-scoped-egress.xml
