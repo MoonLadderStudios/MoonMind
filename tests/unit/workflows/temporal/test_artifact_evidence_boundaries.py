@@ -80,7 +80,7 @@ async def test_assessment_writer_retains_real_producer_raw_grant_and_retry(
         ref = await execution.write(
             b'{"safe":"retained"}', kind="security.scan", key="fixture"
         )
-        await execution.seal(ref, lambda: _empty_dependencies())
+        await execution.seal(ref, _empty_dependencies)
         assert await execution.saved(kind="security.scan", key="fixture") == (
             ref,
             {"safe": "retained"},

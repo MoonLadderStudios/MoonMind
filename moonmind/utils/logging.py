@@ -427,7 +427,11 @@ class SecretRedactor:
         return [self.scrub(value) for value in values]
 
 __all__ = [
+    "EVIDENCE_TRANSFORMATION_LIMITATIONS",
+    "EVIDENCE_TRANSFORMATION_VERSION",
     "SecretRedactor",
+    "redact_evidence_payload",
+    "redact_evidence_text",
     "redact_profile_file_templates",
     "redact_sensitive_payload",
     "redact_sensitive_text",
