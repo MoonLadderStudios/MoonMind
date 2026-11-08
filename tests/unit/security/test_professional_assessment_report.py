@@ -344,3 +344,79 @@ async def test_structured_personal_risk_inputs_are_redacted_before_rendering(
         body = archive.read(entry["memberName"])
         assert b"555-0100" not in body
         assert b"fixture-private-id" not in body
+
+
+@pytest.mark.asyncio
+async def test_maximum_findings_publish_bounded_primary_and_selected_export(
+    environment,
+):
+    import copy
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    first = await recurring.invoke(service, request)
+    observed = (await recurring.read(service, first["comparisonRef"]))["observation"]
+    template = observed["findings"][0]
+    observed["findings"] = []
+    for index in range(4096):
+        finding = copy.deepcopy(template)
+        finding["nativeId"] = f"{index:04d}-" + "x" * 400 + "🧪"
+        finding["evidenceRefs"] = ["fixture:controlled-evidence"]
+        observed["findings"].append(finding)
+    request.update(
+        tools=["retained-report"],
+        inventoryRef=None,
+        feedRef=None,
+        reportRefs=[await recurring.put(service, observed)],
+    )
+    result = await recurring.invoke(service, request, key="maximum")
+    assert result["publicationOutcome"] == "published", result["diagnostics"]
+    comparison = await recurring.read(service, result["comparisonRef"])
+    assert len(comparison["findings"]) == 4096
+    assert len(comparison["observation"]["findings"]) == 4096
+    _, primary = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    text = primary.decode("utf-8")
+    shown = text.count("### Finding ")
+    assert 0 < shown < 4096
+    assert f"{4096 - shown} findings omitted from this presentation" in text
+    assert result["comparisonRef"] in text
+    assert len(primary) <= 1024 * 1024
+    request["evidenceExport"] = {"artifactRefs": [recurring.report_ref(result)]}
+    exported = await recurring.invoke(service, request, key="maximum")
+    archive, manifest = await unpack(service, exported)
+    assert archive.read(manifest["entries"][0]["memberName"]) == primary
+    assert result["comparisonRef"] in manifest["offlineReview"]["missingArtifactRefs"]
+
+
+def test_report_byte_budget_keeps_whole_unicode_lines_and_explicit_omissions():
+    from moonmind.security.assessment_reports import bound_report_presentation
+
+    source = ("🧪" * 200 + "\n") * 2000
+    body = bound_report_presentation(source.encode(), structured_refs=["art_full"])
+    text = body.decode("utf-8")
+    assert len(body) <= 1024 * 1024
+    assert "presentation lines omitted" in text
+    assert "art_full" in text
+    assert "\ufffd" not in text
+
+
+@pytest.mark.parametrize("line", ["A" * 99 + "\n", "a@b.co " * 14 + "\n"])
+def test_final_report_pipeline_preserves_cumulative_omission_count(line):
+    import re
+
+    from moonmind.security.assessment_reports import bound_report_presentation
+    from moonmind.security.evidence_exports import presentation_provenance
+    from moonmind.utils.logging import redact_evidence_text
+
+    source = (line * 20000).encode()
+    body = bound_report_presentation(source, structured_refs=["art_full"])
+    text = body.decode()
+    displayed = text.count(redact_evidence_text(line))
+    omitted = int(re.search(r"(\d+) presentation lines omitted", text).group(1))
+    assert displayed + omitted == 20000
+    assert text.count("## Presentation limit") == 1
+    assert text.count(presentation_provenance()) == 1
+    assert len(body) <= 1024 * 1024
