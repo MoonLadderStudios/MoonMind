@@ -19,7 +19,12 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.security.evidence_exports import prepare_evidence_payload
 from moonmind.security.frameworks import FrameworkContract, FrameworkPack, Text
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_LIMITATIONS,
+    EVIDENCE_TRANSFORMATION_VERSION,
+)
 
 if TYPE_CHECKING:
     from moonmind.security.assessments import Comparison
@@ -237,8 +242,12 @@ class OscalAdapter:
             "last-modified": self.comparison.observation.observed_at.isoformat(),
             "version": self.pack.edition,
             "oscal-version": OSCAL_VERSION,
-            "remarks": "\n".join(LIMITATIONS),
-            "props": _props(native_pack=self.pack.id, native_edition=self.pack.edition),
+            "remarks": "\n".join((*LIMITATIONS, *EVIDENCE_TRANSFORMATION_LIMITATIONS)),
+            "props": _props(
+                native_pack=self.pack.id,
+                native_edition=self.pack.edition,
+                presentation_transformation=EVIDENCE_TRANSFORMATION_VERSION,
+            ),
         }
         if self.context.parties:
             metadata.update(
@@ -733,4 +742,8 @@ class OscalAdapter:
             ]
         else:
             raise UnsupportedExport("Unsupported OSCAL model.", "unsupported_model")
-        return {"plan-of-action-and-milestones" if model == "poam" else model: document}
+        # Mapping and stable semantic identifiers use immutable native data;
+        # only the emitted exchange projection is transformed.
+        return prepare_evidence_payload(
+            {"plan-of-action-and-milestones" if model == "poam" else model: document}
+        )

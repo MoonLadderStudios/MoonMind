@@ -293,7 +293,7 @@ def cloud_facts(summary):
         if "execution_canceled" in limits
         else (
             "malformed-output"
-            if "report_malformed" in limits
+            if {"report_malformed", "report_sanitization_failed"}.intersection(limits)
             else (
                 "partial"
                 if summary["status"] != "complete"
@@ -336,8 +336,43 @@ async def test_cloud_quality(environment, tmp_path, monkeypatch, provider, outco
     job_ids = [accepted.job_id]
     names = cloud.artifact_names(harness, accepted)
     summary["qualitySummaryRef"] = names["summary"]["artifactRef"]
-    # Follow the production workflow order and read artifacts after job removal.
-    await admitted.finish(seen["backend"], seen["request"], tmp_path)
+    retained_outputs = None
+    if outcome in {"malformed-output", "canceled"}:
+        # Safe summary/complete-prefix publication does not retain the entire
+        # original report. Cleanup must preserve its only copy for recovery.
+        native = names["report"]
+        assert summary["status"] == "partial"
+        if outcome == "malformed-output":
+            assert native["collectionStatus"] == "rejected" and not native.get(
+                "artifactRef"
+            )
+            assert summary["nativeRef"] is None
+            assert "report_sanitization_failed" in summary["limitations"]
+        else:
+            assert native["collectionStatus"] == "truncated" and native["artifactRef"]
+            assert summary["findings"] and summary["nativeRef"] == native["artifactRef"]
+            assert {"report_truncated", "incomplete_native_tail_withheld"} <= set(
+                summary["limitations"]
+            )
+        storage = admitted.storage_for(tmp_path, seen["request"].job_id)
+        relative_path = native["relativePath"]
+        retained_outputs = {
+            relative_path: (storage.outputs / relative_path).read_bytes()
+        }
+    # Read safe retained artifacts after removal even when one local output
+    # remains unpublished; that gap must not block reusable summary/report work.
+    cleaned = await admitted.finish(
+        seen["backend"], seen["request"], tmp_path, retained_outputs=retained_outputs
+    )
+    if retained_outputs:
+        _, lifecycle = await environment.service.read(
+            artifact_id=cleaned.diagnostics_ref,
+            access=recurring.access_for_test("workflow:assessment"),
+        )
+        lifecycle = json.loads(lifecycle)
+        assert lifecycle["cleanupResult"] == "failed"
+        assert lifecycle["failureCode"] == "attachment_storage_retained"
+        assert lifecycle["reconciliationResult"] == "succeeded"
     harness.assert_no_seed()
     refs = [row["artifactRef"] for row in names.values() if row.get("artifactRef")]
     observed, reports = await report(

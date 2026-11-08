@@ -74,14 +74,25 @@ from moonmind.schemas import saved_work_retention as _saved_work_retention
 from moonmind.schemas.saved_work_models import (
     assert_complete_payload_matches as _assert_saved_work_complete_matches,
 )
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_LIMITATIONS,
+    EVIDENCE_TRANSFORMATION_VERSION,
+    redact_evidence_payload,
+    redact_evidence_text,
+)
 
 logger = logging.getLogger(__name__)
 
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
+_PREVIEW_INPUT_MAX_BYTES = 4 * 1024 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _DELEGATED_INPUT_LINK_TYPE = "input.artifact.admitted"
 _DELEGATED_RAW_LINK_TYPE = "input.artifact.raw"
+_OPERATOR_OUTPUT_LINK_TYPE = "output.artifact.operator"
+_RESERVED_READ_LINK_TYPES = frozenset(
+    {_DELEGATED_INPUT_LINK_TYPE, _DELEGATED_RAW_LINK_TYPE, _OPERATOR_OUTPUT_LINK_TYPE}
+)
 _SCHEDULE_ARTIFACT_REF_PATHS = (
     ("inputArtifactRef",),
     ("planArtifactRef",),
@@ -1470,6 +1481,22 @@ def schedule_input_artifact_ids(target: Mapping[str, Any]) -> set[str]:
         for key in path:
             value = value.get(key) if isinstance(value, Mapping) else None
         refs.append(value)
+    from moonmind.workflows.executions.prepared_context import (
+        build_prepared_input_manifest,
+    )
+
+    parameters = (
+        target.get("initialParameters") or target.get("initial_parameters") or {}
+    )
+    for key in ("workflow", "task"):
+        task = parameters.get(key) if isinstance(parameters, Mapping) else None
+        if isinstance(task, Mapping):
+            # Use the planning owner's exact objective/step selection, rather
+            # than a second attachment parser with a narrower input set.
+            refs.extend(
+                entry.artifact_id
+                for entry in build_prepared_input_manifest(task).entries
+            )
     ids = set()
     for ref in refs:
         if not isinstance(ref, str):
@@ -2093,26 +2120,72 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
-    @staticmethod
-    def _active_journal_reference_exists(artifact_id: Any) -> Any:
+    def _active_journal_reference_exists(self, artifact_id: Any) -> Any:
         from moonmind.omnigent.bridge_store import (
-            _TERMINAL_STATUSES,
             SEALED_JOURNAL_CHUNKS_KEY,
+            _TERMINAL_STATUSES,
         )
 
         bridge = db_models.OmnigentBridgeSession
+        array = bridge.metadata_[SEALED_JOURNAL_CHUNKS_KEY]
+        if self._session.get_bind().dialect.name == "postgresql":
+            array = cast(array, JSONB)
+            safe_array = case(
+                (func.jsonb_typeof(array) == "array", array), else_=cast([], JSONB)
+            )
+            chunks = (
+                func.jsonb_array_elements(safe_array)
+                .table_valued("value")
+                .render_derived()
+            )
+            chunk = cast(chunks.c.value, JSONB)
+            raw, normalized = chunk["raw"].astext, chunk["normalized"].astext
+        else:
+            safe_array = case(
+                (func.json_type(array) == "array", array), else_=func.json("[]")
+            )
+            chunks = func.json_each(safe_array).table_valued("value", "type")
+            # json_each returns scalar strings without JSON quoting. Only
+            # object entries may be passed to json_extract as chunk pairs.
+            chunk = case(
+                (chunks.c.type == "object", chunks.c.value), else_=func.json("{}")
+            )
+            raw = func.json_extract(chunk, "$.raw")
+            normalized = func.json_extract(chunk, "$.normalized")
+
+        def reference(value):
+            return or_(
+                value.startswith("art_", autoescape=True),
+                value.startswith("artifact:art_", autoescape=True),
+            )
+
+        def matches(value):
+            return value.in_((artifact_id, "artifact:" + artifact_id))
+
+        paired = and_(reference(raw), reference(normalized))
+        pending = exists(select(1).select_from(chunks).where(paired)).correlate_except(
+            chunks
+        )
+        sealed_reference = exists(
+            select(1)
+            .select_from(chunks)
+            .where(paired, or_(matches(raw), matches(normalized)))
+        ).correlate_except(chunks)
+        # A failed terminal capture can leave only chunked recovery history.
+        # The existing compactor owns it until a complete ref swap removes the
+        # pending pairs. Exact fields, never arbitrary metadata strings, retain
+        # bytes; this predicate grants no metadata or raw read authority.
         return exists().where(
-            bridge.status.not_in(_TERMINAL_STATUSES),
             or_(
-                bridge.raw_events_ref == artifact_id,
-                bridge.raw_events_ref == "artifact:" + artifact_id,
-                bridge.normalized_events_ref == artifact_id,
-                bridge.normalized_events_ref == "artifact:" + artifact_id,
-                # Completed chunks precede the current pair in the same journal.
-                bridge.metadata_[SEALED_JOURNAL_CHUNKS_KEY]
-                .as_string()
-                .contains(artifact_id + '"'),
-            ),
+                and_(
+                    or_(bridge.status.not_in(_TERMINAL_STATUSES), pending),
+                    or_(
+                        matches(bridge.raw_events_ref),
+                        matches(bridge.normalized_events_ref),
+                    ),
+                ),
+                sealed_reference,
+            )
         )
 
     @_artifact_authority_boundary
@@ -2480,7 +2553,7 @@ class TemporalArtifactRepository:
 
     @_artifact_authority_boundary
     async def has_active_journal_reference(self, artifact_id: str) -> bool:
-        """The current journal remains recovery data until its bridge is terminal."""
+        """Live or still-uncompacted journals remain existing recovery data."""
         return bool(
             await self._session.scalar(
                 select(self._active_journal_reference_exists(artifact_id))
@@ -3275,6 +3348,15 @@ class TemporalArtifactService:
     ) -> None:
         access = ArtifactAccessContext.require(access)
         principal = access.principal
+        if (artifact.metadata_json or {}).get("preview_of"):
+            source = await self._preview_source(artifact)
+            # A generated safe representation inherits current metadata
+            # authority, never raw rights or historical creator ownership.
+            # Raw quarantine intentionally leaves authorized safe diagnostics
+            # readable, matching compute_preview; revocation and expiry do not.
+            await self._assert_artifact_read_access(source, access=access)
+            await self._validate_retained_availability(source)
+            return
         if (
             artifact.artifact_id in access.admitted_inputs
             or self._reads_all_instance_artifacts(access)
@@ -3309,6 +3391,33 @@ class TemporalArtifactService:
         raise TemporalArtifactAuthorizationError(
             f"principal '{principal}' cannot read artifact {artifact.artifact_id}"
         )
+
+    async def _preview_source(
+        self,
+        preview: db_models.TemporalArtifact,
+    ) -> db_models.TemporalArtifact:
+        metadata = preview.metadata_json or {}
+        if (
+            preview.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.PREVIEW_ONLY
+            or metadata.get("transformation") != EVIDENCE_TRANSFORMATION_VERSION
+        ):
+            raise TemporalArtifactStateError(
+                "Safe artifact preview requires regeneration"
+            )
+        source = await self._repository.get_artifact(
+            str(metadata.get("preview_of") or "")
+        )
+        source_metadata = source.metadata_json or {}
+        if (
+            source.artifact_id == preview.artifact_id
+            or source_metadata.get("preview_of")
+            or source.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            or source_metadata.get("preview_artifact_id") != preview.artifact_id
+        ):
+            raise TemporalArtifactStateError("Artifact preview relationship is invalid")
+        return source
 
     def _assert_mutation_access(
         self,
@@ -3436,6 +3545,25 @@ class TemporalArtifactService:
             for link in await self._repository.list_links(artifact.artifact_id)
         ):
             return True
+        if (
+            access.is_operator
+            and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+        ):
+            links = await self._repository.list_links(artifact.artifact_id)
+            producer_runs = {
+                (link.namespace, link.workflow_id, link.run_id)
+                for link in links
+                if link.link_type == _DELEGATED_RAW_LINK_TYPE
+                and link.namespace
+                and link.workflow_id
+                and link.run_id
+            }
+            if any(
+                link.link_type == _OPERATOR_OUTPUT_LINK_TYPE
+                and (link.namespace, link.workflow_id, link.run_id) in producer_runs
+                for link in links
+            ):
+                return True
         candidates = access.candidates
         for candidate in candidates:
             if self._is_service_principal(candidate):
@@ -3991,12 +4119,129 @@ class TemporalArtifactService:
                 "size_bytes mismatch during upload completion"
             )
 
+    def _preview_transaction_service(self) -> TemporalArtifactService:
+        """Borrow this transaction so preview publication keeps its source fence."""
+        return TemporalArtifactService(
+            self._repository,
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            store=self._store,
+            default_namespace=self._default_namespace,
+            presign_ttl_seconds=self._presign_ttl_seconds,
+            direct_upload_max_bytes=self._direct_upload_max_bytes,
+            lifecycle_hard_delete_after_seconds=int(
+                self._lifecycle.hard_delete_after.total_seconds()
+            ),
+            lifecycle_purge_after_seconds=int(
+                self._lifecycle.purge_after.total_seconds()
+            ),
+        )
+
+    async def _current_preview(
+        self, artifact: db_models.TemporalArtifact
+    ) -> db_models.TemporalArtifact | None:
+        preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
+        if not preview_id:
+            return None
+        try:
+            preview = await self._repository.get_artifact(str(preview_id))
+            source = await self._preview_source(preview)
+            if source.artifact_id != artifact.artifact_id:
+                raise TemporalArtifactStateError(
+                    "Artifact preview relationship is invalid"
+                )
+            await self._validate_retained_availability(artifact)
+            await self._validate_retained_availability(preview)
+            return preview
+        except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
+            return None
+
+    async def _read_preview_input(
+        self, artifact: db_models.TemporalArtifact
+    ) -> bytes | None:
+        """Bound upgrade reads and verify native identity before transforming."""
+        if artifact.size_bytes is None or not artifact.sha256:
+            raise TemporalArtifactStateError("Preview source integrity is unavailable")
+        if artifact.size_bytes > _PREVIEW_INPUT_MAX_BYTES:
+            # Only a generic withheld diagnostic is derived for large sources.
+            return None
+
+        def read_bounded() -> bytes:
+            payload = bytearray()
+            with _closing_artifact_stream(
+                self._store.read_chunks(artifact.storage_key)
+            ) as chunks:
+                for chunk in chunks:
+                    if len(payload) + len(chunk) > _PREVIEW_INPUT_MAX_BYTES:
+                        raise TemporalArtifactStateError("Preview source size mismatch")
+                    payload.extend(chunk)
+            return bytes(payload)
+
+        try:
+            payload = await _settled_storage_call(read_bounded)
+        except TemporalArtifactStateError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - preserve storage failure categories
+            _raise_storage_error(
+                exc,
+                artifact_id=artifact.artifact_id,
+                operation="compute_preview",
+                read=True,
+            )
+        if (
+            len(payload) != artifact.size_bytes
+            or hashlib.sha256(payload).hexdigest() != artifact.sha256
+        ):
+            raise TemporalArtifactStateError("Preview source integrity mismatch")
+        return payload
+
+    async def _regenerate_preview_for_reader(
+        self, *, artifact: db_models.TemporalArtifact, access: ArtifactAccessContext
+    ) -> db_models.TemporalArtifact:
+        """Repair safe diagnostics, never grant the reader access to raw bytes."""
+        # Reuse lifecycle's storage fence and fresh row lock. Concurrent HTTP
+        # requests converge on one current preview, including after a restart.
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend, storage_key=artifact.storage_key
+        )
+        artifact = await self._repository.get_artifact_for_update(artifact.artifact_id)
+        await self._assert_artifact_read_access(artifact, access=access)
+        await self._validate_retained_availability(artifact)
+        if (
+            artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            or (artifact.metadata_json or {}).get("preview_of")
+        ):
+            raise TemporalArtifactStateError(
+                "Preview source is not restricted evidence"
+            )
+        preview = await self._current_preview(artifact)
+        if preview is None:
+            writer = self._preview_transaction_service()
+            async with writer._bounded_consumer_use(
+                artifact_id=artifact.artifact_id,
+                principal=access.principal,
+                admitted_principal=access.execution_principal,
+                ttl_seconds=300,
+            ):
+                payload = await self._read_preview_input(artifact)
+            await writer._create_preview_if_required(
+                artifact=artifact,
+                principal=access.principal,
+                payload=payload,
+                policy="read-repair",
+            )
+            preview = await self._current_preview(artifact)
+            if preview is None:
+                raise TemporalArtifactStateError("Safe artifact preview is unavailable")
+        await self._finish_mutation()
+        return preview
+
     async def _create_preview_if_required(
         self,
         *,
         artifact: db_models.TemporalArtifact,
         principal: str,
-        payload: bytes,
+        payload: bytes | None,
         policy: str,
     ) -> None:
         if (
@@ -4004,31 +4249,64 @@ class TemporalArtifactService:
             is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
         ):
             return
-        metadata = dict(artifact.metadata_json or {})
-        if metadata.get("preview_artifact_id"):
-            return
-
-        text = payload.decode("utf-8", errors="ignore")
-        text = re.sub(
-            r"(?i)(token|password|secret)\s*[:=]\s*[^\s]+", r"\1=[REDACTED]", text
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend, storage_key=artifact.storage_key
         )
-        text = text[:_PREVIEW_MAX_BYTES]
+        artifact = await self._repository.get_artifact_for_update(artifact.artifact_id)
+        if await self._current_preview(artifact) is not None:
+            await self._finish_mutation()
+            return
+        # Leave old bytes immutable. Publish only the complete new preview and
+        # its pointer in one transaction, without releasing the source fence.
+        metadata = dict(artifact.metadata_json or {})
+        # A preview failure never removes completed native evidence or falls
+        # back to its raw bytes. Parse structured content before transforming
+        # quoted keys/values, and withhold opaque or malformed representations.
+        try:
+            if payload is None or len(payload) > _PREVIEW_INPUT_MAX_BYTES:
+                raise ValueError("Preview input exceeds the transformation bound")
+            source = payload.decode("utf-8")
+            media_type = (artifact.content_type or "").split(";", 1)[0].strip().lower()
+            if media_type == "application/json" or media_type.endswith("+json"):
+                text = json.dumps(
+                    redact_evidence_payload(json.loads(source)), ensure_ascii=False
+                )
+            elif media_type.startswith("text/"):
+                text = redact_evidence_text(source)
+            else:
+                raise ValueError("Preview content type is unsupported")
+            preview_payload = (
+                text.encode("utf-8")[:_PREVIEW_MAX_BYTES]
+                .decode("utf-8", errors="ignore")
+                .encode("utf-8")
+            )
+        except (ValueError, TypeError, RecursionError):
+            preview_payload = (
+                b"Preview withheld: this evidence could not be safely transformed."
+            )
 
-        preview_artifact, _upload = await self.create(
+        writer = self._preview_transaction_service()
+        preview_artifact, _upload = await writer.create(
             principal=principal,
             content_type="text/plain",
             retention_class=db_models.TemporalArtifactRetentionClass.EPHEMERAL,
             metadata_json={
-                "preview_of": artifact.artifact_id,
                 "policy": policy,
+                "transformation": EVIDENCE_TRANSFORMATION_VERSION,
+                "limitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
             },
             redaction_level=db_models.TemporalArtifactRedactionLevel.PREVIEW_ONLY,
             encryption=db_models.TemporalArtifactEncryption.NONE,
         )
-        await self.write_complete(
+        # Relationship keys are server-owned and cannot be authored at create.
+        preview_artifact.metadata_json = {
+            **preview_artifact.metadata_json,
+            "preview_of": artifact.artifact_id,
+        }
+        await writer.write_complete(
             artifact_id=preview_artifact.artifact_id,
             principal=principal,
-            payload=text.encode("utf-8"),
+            payload=preview_payload,
             content_type="text/plain",
         )
 
@@ -4046,8 +4324,7 @@ class TemporalArtifactService:
             link = self._coerce_execution_ref(normalized_kwargs.get("link"))
             if link is not None and (
                 link.workflow_id != info.workflow_id
-                or link.link_type
-                in {_DELEGATED_RAW_LINK_TYPE, _DELEGATED_INPUT_LINK_TYPE}
+                or link.link_type in _RESERVED_READ_LINK_TYPES
             ):
                 raise TemporalArtifactAuthorizationError(
                     "artifact creation target is outside the active execution"
@@ -4081,6 +4358,61 @@ class TemporalArtifactService:
             )
             await self._finish_mutation()
         return artifact, upload
+
+    async def grant_operator_output_read(self, *, artifact_id: str) -> None:
+        """Mark a new assessment deliverable before its bytes become complete.
+
+        Only the actual producing Activity can publish this intent. Paired links
+        preserve its creator/quota provenance and allow either grant to be revoked.
+        Pending-first ordering prevents retries from finding a completed output
+        whose operator grant failed to persist. Historical rows are not upgraded.
+        """
+        from temporalio import activity
+
+        if not activity.in_activity():
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producing Activity"
+            )
+        info = activity.info()
+        identity = (info.workflow_namespace, info.workflow_id, info.workflow_run_id)
+        if not all(identity):
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producing Activity"
+            )
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
+        self._assert_not_quarantined(artifact)
+        if (
+            artifact.status is not db_models.TemporalArtifactStatus.PENDING_UPLOAD
+            or artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
+            raise TemporalArtifactStateError(
+                "operator output grant requires a new restricted upload"
+            )
+        links = await self._repository.list_links(artifact_id)
+        if not any(
+            link.link_type == _DELEGATED_RAW_LINK_TYPE
+            and (link.namespace, link.workflow_id, link.run_id) == identity
+            for link in links
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "output publication requires its producer raw grant"
+            )
+        if not any(
+            link.link_type == _OPERATOR_OUTPUT_LINK_TYPE
+            and (link.namespace, link.workflow_id, link.run_id) == identity
+            for link in links
+        ):
+            await self._repository.add_link(
+                artifact_id=artifact_id,
+                execution=ExecutionRef(
+                    namespace=identity[0],
+                    workflow_id=identity[1],
+                    run_id=identity[2],
+                    link_type=_OPERATOR_OUTPUT_LINK_TYPE,
+                ),
+            )
+        await self._finish_mutation()
 
     async def _recover_activity_creation(self, artifact_id: str) -> None:
         """Drain retained creates that predate producer links, from run history.
@@ -4232,6 +4564,8 @@ class TemporalArtifactService:
         except ValueError as exc:
             raise TemporalArtifactValidationError(str(exc)) from exc
         _assert_not_reserved_input_attachment_metadata(metadata_json)
+        if metadata_json and {"preview_of", "preview_artifact_id"} & metadata_json.keys():
+            raise TemporalArtifactValidationError("Artifact preview relationship metadata is reserved")
         declared_size: int | None = None
         if size_bytes is not None:
             declared_size = int(size_bytes)
@@ -4239,6 +4573,13 @@ class TemporalArtifactService:
                 raise TemporalArtifactValidationError("size_bytes must be non-negative")
 
         execution_ref = self._coerce_execution_ref(link)
+        if (
+            execution_ref is not None
+            and execution_ref.link_type in _RESERVED_READ_LINK_TYPES
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "read grants require trusted publication or admission"
+            )
         if execution_ref is not None:
             from moonmind.workflows.temporal.report_artifacts import (
                 validate_report_artifact_contract,
@@ -4353,6 +4694,8 @@ class TemporalArtifactService:
         retention_class: db_models.TemporalArtifactRetentionClass | None = None,
         link: dict[str, Any] | ExecutionRef | None = None,
         metadata_json: dict[str, Any] | None = None,
+        redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
+        operator_output: bool = False,
     ) -> tuple[db_models.TemporalArtifact, bool]:
         """Create a logical artifact backed by one digest-addressed blob.
 
@@ -4363,7 +4706,12 @@ class TemporalArtifactService:
         """
 
         digest, size_bytes = self._compute_digest_and_size(payload)
-        artifact, _upload = await self.create(
+        create = (
+            self.create_for_activity
+            if redaction_level == db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            else self.create
+        )
+        artifact, _upload = await create(
             principal=principal,
             content_type=content_type,
             size_bytes=size_bytes,
@@ -4372,7 +4720,10 @@ class TemporalArtifactService:
             link=link,
             metadata_json=metadata_json,
             content_addressed_scope=scope,
+            redaction_level=redaction_level,
         )
+        if operator_output:
+            await self.grant_operator_output_read(artifact_id=artifact.artifact_id)
         # The logical row is committed before this lock. Concurrent publishers
         # therefore converge on one visible storage-key group, and only the
         # lock owner that still observes a cold blob performs the upload.
@@ -4862,6 +5213,13 @@ class TemporalArtifactService:
         """
         await self._assert_artifact_read_access(artifact, access=access)
         self._assert_not_quarantined(artifact)
+        await self._validate_retained_availability(artifact)
+
+    async def _validate_retained_availability(
+        self,
+        artifact: db_models.TemporalArtifact,
+    ) -> None:
+        """Use lifecycle authority before bytes or a new consumer claim."""
         if (
             artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
             or artifact.deleted_at is not None
@@ -5167,6 +5525,7 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
+        await self._validate_retained_availability(artifact)
         await self._assert_artifact_raw_access(
             artifact,
             access=access,
@@ -5200,6 +5559,7 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
+        await self._validate_retained_availability(artifact)
         await self._assert_artifact_raw_access(
             artifact,
             access=access,
@@ -5248,6 +5608,7 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
+        await self._validate_retained_availability(artifact)
         await self._assert_artifact_raw_access(
             artifact,
             access=access,
@@ -5276,20 +5637,25 @@ class TemporalArtifactService:
         access: ArtifactAccessContext,
     ) -> ArtifactReadPolicy:
         access = ArtifactAccessContext.require(access)
-        metadata = dict(artifact.metadata_json or {})
-        preview_ref: ArtifactRef | None = None
-        preview_artifact_id = metadata.get("preview_artifact_id")
-        if preview_artifact_id:
-            try:
-                preview_artifact = await self._repository.get_artifact(
-                    str(preview_artifact_id)
-                )
-            except TemporalArtifactNotFoundError:
-                preview_artifact = None
-            if preview_artifact is not None:
-                preview_ref = build_artifact_ref(preview_artifact)
-
-        raw_access_allowed = await self._artifact_raw_access_allowed(
+        await self._assert_artifact_read_access(artifact, access=access)
+        preview = await self._current_preview(artifact)
+        retained = True
+        try:
+            await self._validate_retained_availability(artifact)
+        except TemporalArtifactStateError:
+            retained = False
+        if (
+            preview is None
+            and retained
+            and artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+            and not (artifact.metadata_json or {}).get("preview_of")
+        ):
+            preview = await self._regenerate_preview_for_reader(
+                artifact=artifact, access=access
+            )
+        preview_ref = build_artifact_ref(preview) if preview is not None else None
+        raw_access_allowed = retained and await self._artifact_raw_access_allowed(
             artifact,
             access=access,
         )
@@ -5573,6 +5939,7 @@ class TemporalArtifactService:
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
+        await self._validate_retained_availability(artifact)
         await self._assert_artifact_raw_access(
             artifact,
             access=access,
@@ -5618,6 +5985,142 @@ class TemporalArtifactService:
         )
         return artifact, expires_at, url
 
+    async def readmit_scheduled_inputs(
+        self,
+        *,
+        artifact_ids: Iterable[str] | None,
+        execution: ExecutionRef,
+    ) -> None:
+        """Delegate exact saved-revision inputs to the actual scheduled Activity.
+
+        A dependency seal is integrity/retention, never raw-read permission.
+        The scheduler's immutable start selects a revision whose existing grant
+        links record the original operator's explicit direct input selection.
+        """
+        from temporalio import activity
+        from temporalio.service import RPCError, RPCStatusCode
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.schedule_mapping import (
+            scheduled_definition_id,
+            scheduled_input_scope,
+        )
+
+        info = activity.info()
+        if (execution.namespace, execution.workflow_id, execution.run_id) != (
+            info.namespace,
+            info.workflow_id,
+            info.workflow_run_id,
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "scheduled input target conflicts with Activity authority"
+            )
+        definition_id = scheduled_definition_id(execution.workflow_id)
+        if definition_id is None:
+            raise TemporalArtifactAuthorizationError(
+                "execution is not a native scheduled occurrence"
+            )
+        adapter = TemporalClientAdapter()
+        try:
+            client = await adapter.get_client()
+            if client.namespace != execution.namespace:
+                raise ValueError("namespace mismatch")
+            admitted = await asyncio.wait_for(
+                adapter.read_scheduled_workflow_start_input(
+                    execution.workflow_id, run_id=execution.run_id
+                ),
+                timeout=10,
+            )
+        except Exception as exc:  # noqa: BLE001 - Preserve bounded retries without retaining transport payloads.
+            if isinstance(exc, (ValueError, TypeError)) or (
+                isinstance(exc, RPCError)
+                and exc.status
+                in {
+                    RPCStatusCode.INVALID_ARGUMENT,
+                    RPCStatusCode.NOT_FOUND,
+                    RPCStatusCode.PERMISSION_DENIED,
+                    RPCStatusCode.UNAUTHENTICATED,
+                    RPCStatusCode.FAILED_PRECONDITION,
+                }
+            ):
+                raise TemporalArtifactAuthorizationError(
+                    "scheduled original-start authority is invalid or denied"
+                ) from None
+            # Existing Activity budgets own transient authority-read retries.
+            # Never serialize transport details or start arguments in history.
+            raise TemporalArtifactUnavailableError(
+                "", dependency="scheduled_authority", operation="read_original_start"
+            ) from None
+        root_id = admitted.get("scheduled_input_artifact_ref")
+        if root_id is None:
+            # Retained starts predating revision grants gain no new rights.
+            # Existing admitted execution rights remain usable as before.
+            return
+        if not isinstance(root_id, str) or not ARTIFACT_ID_PATTERN.fullmatch(root_id):
+            raise TemporalArtifactAuthorizationError(
+                "scheduled input revision authority is unavailable"
+            )
+        source_access = ArtifactAccessContext.for_execution(
+            scheduled_input_scope(definition_id, root_id)
+        )
+        root, _body = await self.read(artifact_id=root_id, access=source_access)
+        if (root.metadata_json or {}).get("artifact_class") not in {
+            "schedule.input_manifest",
+            "omnigent.execution_plan",
+        }:
+            raise TemporalArtifactAuthorizationError(
+                "scheduled input revision authority is invalid"
+            )
+        selected = schedule_input_artifact_ids(
+            {
+                "initialParameters": admitted.get("initial_parameters"),
+                "inputArtifactRef": admitted.get("input_artifact_ref"),
+                "planArtifactRef": admitted.get("plan_artifact_ref"),
+            }
+        )
+        requested = selected if artifact_ids is None else set(artifact_ids)
+        if not requested <= selected:
+            raise TemporalArtifactAuthorizationError(
+                "artifact is not a selected scheduled input"
+            )
+        proof = await self.dependency_proof(root_artifact_id=root_id, access=source_access)
+        if proof is None:
+            raise TemporalArtifactAuthorizationError(
+                "scheduled input revision lacks its integrity seal"
+            )
+        # The verified retention closure authorizes only internal integrity
+        # checks. Raw grants below still use the exact direct-input scope.
+        closure = await self.verified_dependencies(
+            root_artifact_id=root_id,
+            access=source_access._with_verified_inputs(
+                entry.artifact_id for entry in proof
+            ),
+        )
+        if closure is None:
+            raise TemporalArtifactAuthorizationError(
+                "scheduled input revision lacks its integrity seal"
+            )
+        dependencies = {entry.artifact_id: entry for entry in closure.dependencies}
+        for artifact_id in sorted(requested):
+            if artifact_id == root_id:
+                continue
+            if artifact_id not in dependencies or not dependencies[artifact_id].required:
+                raise TemporalArtifactAuthorizationError(
+                    "scheduled input is outside the saved revision"
+                )
+            artifact, body = await self.read(artifact_id=artifact_id, access=source_access)
+            if (
+                artifact.sha256 != dependencies[artifact_id].sha256
+                or hashlib.sha256(body).hexdigest() != artifact.sha256
+            ):
+                raise TemporalArtifactStateError("scheduled input integrity mismatch")
+        await self.delegate_read_access(
+            artifact_ids=requested | {root_id},
+            workflow_id=execution.workflow_id,
+            namespace=execution.namespace,
+            access=source_access,
+        )
+
     async def delegate_read_access(
         self,
         *,
@@ -5642,8 +6145,7 @@ class TemporalArtifactService:
             artifact = await self._repository.get_artifact_for_update(artifact_id)
             await self._assert_artifact_read_access(artifact, access=access)
             await self._assert_artifact_raw_access(artifact, access=access)
-            if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
-                raise TemporalArtifactStateError("artifact is not readable")
+            await self._validate_retained_availability(artifact)
             admitted.append(artifact)
         namespace = namespace or self._default_namespace
         for artifact in admitted:
@@ -5683,10 +6185,7 @@ class TemporalArtifactService:
         # between this read and the link's foreign-key check.
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
-        if coerced_execution_ref.link_type in {
-            _DELEGATED_RAW_LINK_TYPE,
-            _DELEGATED_INPUT_LINK_TYPE,
-        }:
+        if coerced_execution_ref.link_type in _RESERVED_READ_LINK_TYPES:
             raise TemporalArtifactAuthorizationError(
                 "read grants require trusted input admission"
             )
@@ -6675,6 +7174,7 @@ class TemporalArtifactService:
             await self._assert_artifact_raw_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
+        await self._validate_retained_availability(artifact)
         async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
@@ -8091,6 +8591,11 @@ class TemporalArtifactActivities:
             raise TemporalArtifactAuthorizationError(
                 "artifact link target is outside the active execution"
             )
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        if execution.link_type == "input.attachment" and scheduled_definition_id(execution.workflow_id):
+            await self._service.readmit_scheduled_inputs(artifact_ids=[artifact_id], execution=execution)
+            principal = access.execution_principal
         try:
             await self._service.get_metadata(artifact_id=artifact_id, access=access)
         except TemporalArtifactAuthorizationError:

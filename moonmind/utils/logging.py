@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import re
 from base64 import b64encode
+from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote_plus
 
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth)(?:$|[^a-z0-9])"
+    r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth|authorization)(?:$|[^a-z0-9])"
 )
 _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
@@ -20,16 +23,49 @@ _CLOUD_TOKEN_PATTERN = re.compile(
 )
 _SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b", re.IGNORECASE)
 _COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b((?:set-)?cookie\s*:)\s*[^\r\n]+")
+_SECRET_ASSIGNMENT_KEY = (
+    r"(?i)(?<![A-Z0-9_.-])(?P<quote>\\*[\"'])?"
+    r"(?P<key>[A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|(?:api|access|private|secret)[_-]?key|credential)"
+    r"[A-Z0-9_.-]{0,80})(?(quote)(?P=quote))"
+)
+_SECRET_ASSIGNMENT_HEAD = _SECRET_ASSIGNMENT_KEY + r"(?P<separator>\s*[:=]\s*)"
+_SECRET_ASSIGNMENT_PREFIX_PATTERN = re.compile(_SECRET_ASSIGNMENT_KEY + r"\s*\Z")
+_SECRET_ASSIGNMENT_HEAD_PATTERN = re.compile(_SECRET_ASSIGNMENT_HEAD)
+_QUOTED_SECRET_VALUE = r"\\*\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?"
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b([A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|api[_-]?key|credential)"
-    r"[A-Z0-9_.-]{0,80})(\s*[:=]\s*)"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
+    _SECRET_ASSIGNMENT_HEAD
+    + r"(?P<value>"
+    + _QUOTED_SECRET_VALUE
+    + r"|(?(quote)[^\s,;}]+|\S+))"
 )
-_AUTHORIZATION_PATTERN = re.compile(
-    r"(?i)\b(authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
+_URL_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    _SECRET_ASSIGNMENT_HEAD
+    + r"(?P<value>[^\s&#]+)"
 )
-_PRIVATE_KEY_BEGIN = "-----BEGIN "
+_SECRET_URL_CONTEXT_PATTERN = re.compile(
+    r"(?i)(?:\b[a-z][a-z0-9+.-]{0,31}://|(?<![a-z0-9_.-])/)(?=\S)"
+)
+# The portable retry record carries a public audit marker, not a credential.
+# Accept only its exact JSON string grammar; poster/account/history checks
+# remain owned by retry reconstruction. Known credential scans run first.
+_RETRY_RESET_MARKER_PATTERN = re.compile(
+    r'"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])? at '
+    r'(?P<instant>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+    r'(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?)"'
+)
+
+_AUTHORIZATION_HEAD = (
+    r"(?i)\b(?:(?:proxy-)?authorization\s*[:=]\s*(?:basic|token|bearer)\s+|bearer\s+)"
+)
+_AUTHORIZATION_PATTERN = re.compile(_AUTHORIZATION_HEAD + r"[A-Za-z0-9._~+/=-]+")
+_AUTHORIZATION_PREFIX_PATTERN = re.compile(_AUTHORIZATION_HEAD + r"\Z")
+_URL_USERINFO_PATTERN = re.compile(
+    r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/?#\"'<>`]+@"
+)
 _PRIVATE_KEY_END = "-----END "
+_PRIVATE_KEY_BEGIN_PATTERN = re.compile(
+    r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)\b(?:-----)?", re.IGNORECASE
+)
 _AUTH_PATH_MARKERS = (
     ".codex",
     ".claude",
@@ -50,6 +86,12 @@ _NON_SECRET_SENTINEL_VALUES = frozenset(
 _MIN_REDACTABLE_SECRET_LENGTH = 4
 _NON_SECRET_REF_KEYS = frozenset(
     {
+        "public_key",
+        "publickey",
+        "public_key_fingerprint",
+        "publickeyfingerprint",
+        "key_fingerprint",
+        "keyfingerprint",
         "auth_actions",
         "authactions",
         "auth_readiness",
@@ -70,7 +112,8 @@ _NON_SECRET_REF_KEYS = frozenset(
 def _is_sensitive_key(key: str) -> bool:
     return bool(
         _SENSITIVE_KEY_PATTERN.search(key)
-        or re.search(r"(?:Token|Secret|Password|Credential|Auth)(?:$|[A-Z])", key)
+        or re.search(r"(?:Token|Secret|Password|Credential|Auth|Authorization)(?:$|[A-Z])", key)
+        or re.search(r"(?i)(?:api|access|private|secret)[_-]?key$", key)
     )
 
 def _is_non_secret_sentinel(value: str) -> bool:
@@ -99,20 +142,15 @@ def scrub_github_tokens(text: str) -> str:
 def _redact_private_key_blocks(text: str) -> str:
     redacted = text
     while True:
-        upper = redacted.upper()
-        begin = upper.find(_PRIVATE_KEY_BEGIN)
-        if begin == -1:
+        match = _PRIVATE_KEY_BEGIN_PATTERN.search(redacted)
+        if match is None:
             return redacted
-        key_suffix = upper.find("PRIVATE KEY-----", begin)
-        if key_suffix == -1:
-            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end_marker = upper.find(_PRIVATE_KEY_END, key_suffix)
+        begin = match.start()
+        footer = _PRIVATE_KEY_END + match.group("label").upper() + "-----"
+        end_marker = redacted.upper().find(footer, match.end())
         if end_marker == -1:
             return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end_suffix = upper.find("PRIVATE KEY-----", end_marker)
-        if end_suffix == -1:
-            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
-        end = end_suffix + len("PRIVATE KEY-----")
+        end = end_marker + len(footer)
         redacted = (
             redacted[:begin]
             + "[REDACTED_PRIVATE_KEY]"
@@ -150,6 +188,209 @@ def _redact_auth_paths(text: str) -> str:
         index = end
     return "".join(output)
 
+
+def _is_retry_reset_marker(match: re.Match[str]) -> bool:
+    value = match.group("value")
+    if (
+        match.group("key") != "resetAuthorization"
+        or match.group("quote") != '"'
+        or match.group("separator").strip() != ":"
+        or len(value) > 128
+    ):
+        return False
+    if value == '""':
+        return True
+    marker = _RETRY_RESET_MARKER_PATTERN.fullmatch(value)
+    if marker is None:
+        return False
+    try:
+        # Match the audit owner's ISO parser, including naive historical
+        # instants and offsets. This also rejects impossible calendar dates.
+        datetime.fromisoformat(marker.group("instant"))
+    except ValueError:
+        return False
+    return True
+
+
+def _redact_secret_assignment(match: re.Match[str]) -> str:
+    if _is_retry_reset_marker(match):
+        return match.group(0)
+    key = match.group("key")
+    normalized = key.lower().replace("_", "")
+    value = match.group("value")
+    quote = match.group("quote") or ""
+    compact = re.fullmatch(r"[A-Za-z0-9_./:-]+", value.strip("\"'"))
+    if compact and (
+        normalized in _NON_SECRET_REF_KEYS
+        or normalized.endswith("ref")
+        or value.strip("\"'").startswith(("env://", "secret://", "vault://", "ref://"))
+        # A compact reference URI is not a credential assignment. Quoted
+        # JSON keys and colon-space fields still denote credential values.
+        or (normalized == "credential" and not quote and match.group("separator") == ":")
+    ):
+        return match.group(0)
+    replacement = '"[REDACTED]"' if quote and value.startswith('"') else "[REDACTED]"
+    return f"{quote}{key}{quote}{match.group('separator')}{replacement}"
+
+
+
+def _advance_quoted_context(
+    text: str, start: int, end: int, state: tuple[str, str, bool]
+) -> tuple[str, str, bool]:
+    quote, previous, escaped = state
+    for char in text[start:end]:
+        if char in "\r\n":
+            quote, previous, escaped = "", "", False
+        elif escaped:
+            escaped = False
+        elif quote:
+            if char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in {"\"", "'"} and (
+            previous in {"{", "[", ":", ",", "=", "("}
+            or (not previous and char == "\"")
+        ):
+            quote = char
+        if not char.isspace():
+            previous = char
+    return quote, previous, escaped
+
+
+def _redact_secret_assignments(text: str) -> str:
+    # Plaintext punctuation belongs to the credential. Only actual URL
+    # contexts use query delimiters, and a URL used as a secret stays secret.
+    output = []
+    cursor = scan = quote_scan = 0
+    quote = ""
+    previous = ""
+    escaped = False
+    cursor_state = (quote, previous, escaped)
+    while (context := _SECRET_URL_CONTEXT_PATTERN.search(text, scan)) is not None:
+        # A URI can occur after prose inside a JSON/markup string. Carry its
+        # enclosing quote across the original text once, including escapes.
+        quote, previous, escaped = _advance_quoted_context(
+            text, quote_scan, context.start(), (quote, previous, escaped)
+        )
+        end = context.end()
+        adjacent = text[context.start() - 1] if context.start() else ""
+        enclosing = quote or (adjacent if adjacent in {"\"", "'", "`"} else "")
+        slashes = 0
+        while end < len(text) and not text[end].isspace():
+            # Quotes inside query values are credential data. Only a closing
+            # enclosing string/markup delimiter bounds this URL context.
+            if (
+                enclosing in {"\"", "'", "`"}
+                and text[end] == enclosing
+                and slashes % 2 == 0
+            ):
+                following = text[end + 1:end + 2]
+                if not following or following.isspace() or following in ">,;}]":
+                    break
+            slashes = slashes + 1 if text[end] == "\\" else 0
+            end += 1
+        scan = end
+        value = text[context.start():end]
+        if value.startswith("/") and "?" not in value:
+            quote_scan, escaped = end, False
+            previous = value[-1]
+            continue
+        enclosing_assignment = next(
+            (
+                match
+                for match in _SECRET_ASSIGNMENT_PATTERN.finditer(
+                    text, cursor, context.end()
+                )
+                if match.start() < context.start() < match.end()
+            ),
+            None,
+        )
+        if enclosing_assignment is not None:
+            # Resolve the full value only after identifying its owner. This
+            # avoids rescanning later URL fields as part of an earlier value.
+            complete = _SECRET_ASSIGNMENT_PATTERN.match(
+                text, enclosing_assignment.start()
+            )
+            end = complete.end()
+            output.append(
+                _SECRET_ASSIGNMENT_PATTERN.sub(
+                    _redact_secret_assignment, text[cursor:end]
+                )
+            )
+            # A consumed secret's own quotes cannot open later containers.
+            # Recover the enclosing state just before its complete assignment;
+            # each prefix is visited at most twice before `cursor` advances.
+            quote, previous, escaped = _advance_quoted_context(
+                text, cursor, complete.start(), cursor_state
+            )
+            previous, escaped = "]", False
+            cursor_state = (quote, previous, escaped)
+            cursor = scan = quote_scan = end
+            continue
+        # Query quotes belong to this URI's data, not to the containing
+        # record. The actual closing delimiter is still at `end` if present.
+        quote_scan, escaped = end, False
+        previous = value[-1]
+        output.append(
+            _SECRET_ASSIGNMENT_PATTERN.sub(
+                _redact_secret_assignment, text[cursor:context.start()]
+            )
+        )
+        output.append(
+            _URL_SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, value)
+        )
+        cursor = end
+        cursor_state = (quote, previous, escaped)
+    output.append(
+        _SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, text[cursor:])
+    )
+    return "".join(output)
+
+
+def command_secret_continuation(text: str) -> str | None:
+    """Return the delimiter needed to finish a streamed credential, if any.
+
+    Streaming must retain these prefixes with their values. The existing
+    credential patterns remain the policy owner; this only detects unfinished
+    matches that cannot safely be published independently. A newline denotes
+    an unfinished prefix; quoted values and private keys return their closer.
+    """
+    for match in _PRIVATE_KEY_BEGIN_PATTERN.finditer(text):
+        footer = _PRIVATE_KEY_END + match.group("label").upper() + "-----"
+        if text.upper().find(footer, match.end()) == -1:
+            return footer
+    if _AUTHORIZATION_PREFIX_PATTERN.search(text):
+        return "\n"
+    completed = 0
+    for match in _SECRET_ASSIGNMENT_PATTERN.finditer(text):
+        completed = match.end()
+        value = match.group("value")
+        if value != "[REDACTED]" and value.startswith(("{", "[")):
+            try:
+                json.JSONDecoder().raw_decode(text, match.start("value"))
+            except (ValueError, RecursionError):
+                return "}" if value.startswith("{") else "]"
+        value = value.lstrip("\\")
+        if not value or value[0] not in {"\"", "'"}:
+            continue
+        if len(value) == 1 or value[-1] != value[0]:
+            return value[0]
+        before_close = value[:-1]
+        if (len(before_close) - len(before_close.rstrip("\\"))) % 2:
+            return value[0]
+    # A completed value can itself be named "secret" or "password". It is
+    # credential data, not a new unfinished key after the assignment.
+    if _SECRET_ASSIGNMENT_PREFIX_PATTERN.search(text, completed):
+        return "\n"
+    if any(
+        match.end() == len(text)
+        for match in _SECRET_ASSIGNMENT_HEAD_PATTERN.finditer(text, completed)
+    ):
+        return "\n"
+    return None
+
+
 def redact_sensitive_text(text: str | None) -> str:
     """Scrub common credential-shaped values from browser/artifact text."""
 
@@ -160,7 +401,8 @@ def redact_sensitive_text(text: str | None) -> str:
     redacted = _redact_private_key_blocks(redacted)
     redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
     redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
-    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", redacted)
+    redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED_USERINFO]@", redacted)
+    redacted = _redact_secret_assignments(redacted)
     redacted = _redact_auth_paths(redacted)
     return redacted
 
@@ -180,6 +422,16 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
             return payload
         if normalized_key.endswith("_ref") or normalized_key.endswith("ref"):
             return payload
+        if key == "resetAuthorization":
+            marker = _SECRET_ASSIGNMENT_PATTERN.fullmatch(
+                '"resetAuthorization": ' + json.dumps(payload)
+            )
+            if (
+                marker is not None
+                and _is_retry_reset_marker(marker)
+                and redact_sensitive_text(payload) == payload
+            ):
+                return payload
         if _is_sensitive_key(raw_key):
             if payload.startswith(("env://", "secret://", "vault://", "ref://")):
                 return payload
@@ -198,6 +450,324 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     if isinstance(payload, tuple):
         return tuple(redact_sensitive_payload(item, key=key) for item in payload)
     return payload
+
+
+EVIDENCE_TRANSFORMATION_VERSION = "evidence-redaction/v1"
+EVIDENCE_TRANSFORMATION_LIMITATIONS = (
+    "Credential patterns, email addresses and explicitly named personal-data fields are redacted.",
+    "This is not full anonymization: arbitrary names, private business details and unrecognized personal data may remain.",
+    "Only selected authorized evidence should be delivered; redaction grants no access or publication authority.",
+)
+_EVIDENCE_MAX_TEXT_CHARS = 4 * 1024 * 1024
+_EVIDENCE_EMAIL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])"
+    # A valid email local part is at most 64 characters. Bound the scan even
+    # when untrusted evidence contains long punctuation runs without an @.
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}(?![A-Za-z0-9-])"
+)
+_EVIDENCE_PERSONAL_FIELDS = frozenset(
+    {
+        "email",
+        "emailaddress",
+        "phonenumber",
+        "phone",
+        "telephone",
+        "fullname",
+        "firstname",
+        "lastname",
+        "customername",
+        "personname",
+        "dateofbirth",
+        "birthdate",
+        "dob",
+        "streetaddress",
+        "postaladdress",
+        "homeaddress",
+        "ssn",
+        "socialsecuritynumber",
+        "passportnumber",
+        "driverslicensenumber",
+        "driverlicensenumber",
+        "nationalid",
+    }
+)
+
+
+def redact_evidence_text(
+    text: str | None, *, max_chars: int = _EVIDENCE_MAX_TEXT_CHARS
+) -> str:
+    """Transform bounded evidence text, without claiming general anonymization."""
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        raise ValueError("Evidence text has an unsupported type")  # noqa: TRY004 - stable transformation error contract
+    if len(text) > max_chars:
+        raise ValueError("Evidence text exceeds the transformation bound")
+    return _EVIDENCE_EMAIL_PATTERN.sub("[REDACTED_EMAIL]", redact_sensitive_text(text))
+
+
+def _redact_structured_payload(
+    payload: Any,
+    *,
+    include_personal_data: bool,
+    max_depth: int = 32,
+    max_items: int = 10000,
+    max_text_chars: int = _EVIDENCE_MAX_TEXT_CHARS,
+) -> Any:
+    """Copy bounded structured values through the existing credential owner.
+
+    Evidence additionally masks explicitly named personal fields. Bounds cover
+    keys and original text before any redaction reduces their size.
+    """
+    items = 0
+    text_chars = 0
+
+    def text(value):
+        nonlocal text_chars
+        text_chars += len(value)
+        if text_chars > max_text_chars:
+            raise ValueError("Evidence text exceeds the transformation bound")
+        return (
+            redact_evidence_text(value, max_chars=max_text_chars)
+            if include_personal_data else redact_sensitive_text(value)
+        )
+
+    def visit(value, depth=0, key=None):
+        nonlocal items
+        items += 1
+        if depth > max_depth or items > max_items:
+            raise ValueError("Evidence structure exceeds the transformation bound")
+        personal = (
+            include_personal_data
+            and key is not None
+            and re.sub(r"[^a-z0-9]", "", key.lower()) in _EVIDENCE_PERSONAL_FIELDS
+        )
+        assignment_field = None
+        if key is not None:
+            candidate = json.dumps(key) + ": "
+            if _SECRET_ASSIGNMENT_HEAD_PATTERN.fullmatch(candidate):
+                assignment_field = candidate
+        # Command output uses the plaintext assignment grammar, not the API
+        # field classifier: public metadata such as capabilities.auth must
+        # remain exact. Ambiguous assignment aliases and credential-bearing
+        # keys still withhold their associated values.
+        ambiguous_field = (
+            not include_personal_data
+            and key is not None
+            and (
+                redact_sensitive_text(key) != key
+                or (
+                    key != key.strip()
+                    and _SECRET_ASSIGNMENT_HEAD_PATTERN.fullmatch(
+                        json.dumps(key.strip()) + ": "
+                    ) is not None
+                )
+            )
+        )
+        if isinstance(value, Mapping):
+            result = {}
+            for raw_key, item in value.items():
+                if not isinstance(raw_key, str):
+                    raise ValueError("Evidence object has an unsupported key")  # noqa: TRY004 - stable transformation error contract
+                safe_key = text(raw_key)
+                if safe_key in result:
+                    raise ValueError("Evidence keys collide after transformation")
+                result[safe_key] = visit(item, depth + 1, raw_key)
+        elif isinstance(value, (list, tuple)):
+            result = [visit(item, depth + 1, key) for item in value]
+        elif isinstance(value, str):
+            # Check the original before the credential owner replaces it.
+            text(value)
+            if assignment_field is not None:
+                # Keep disclosed fields under the existing assignment grammar.
+                # An isolated field preserves compact references and public
+                # markers only after provider/auth/path scans also accept it.
+                field = assignment_field + json.dumps(value)
+                masked_assignment = redact_sensitive_text(field) != field
+            else:
+                masked_assignment = False
+            if masked_assignment:
+                result = "[REDACTED]"
+            elif not include_personal_data:
+                result = (
+                    value
+                    if assignment_field is not None
+                    else redact_sensitive_text(value)
+                )
+            else:
+                # A command credential exception cannot loosen the evidence
+                # projection's typed-field and personal-data transformations.
+                protected = redact_sensitive_payload(value, key=key)
+                result = redact_evidence_text(protected, max_chars=max_text_chars)
+        elif value is None or isinstance(value, (bool, int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("Evidence value is not a finite number")
+            result = value
+        else:
+            raise ValueError("Evidence value has an unsupported type")
+        # Apply each mode's field policy to non-string values only after
+        # traversing their bounds. Evidence retains its stronger API policy.
+        if value is not None and (
+            ambiguous_field
+            or (
+                not isinstance(value, str)
+                and key is not None
+                and (
+                    assignment_field is not None
+                    or (
+                        include_personal_data
+                        and redact_sensitive_payload("evidence-value", key=key)
+                        == "[REDACTED]"
+                    )
+                )
+            )
+        ):
+            return "[REDACTED]"
+        return "[REDACTED_PERSONAL_DATA]" if personal and value is not None else result
+
+    return visit(payload)
+
+
+def redact_evidence_payload(
+    payload: Any,
+    *,
+    max_depth: int = 32,
+    max_items: int = 10000,
+    max_text_chars: int = _EVIDENCE_MAX_TEXT_CHARS,
+) -> Any:
+    """Copy bounded evidence with credential and explicit personal-field masking."""
+    return _redact_structured_payload(
+        payload, include_personal_data=True, max_depth=max_depth,
+        max_items=max_items, max_text_chars=max_text_chars,
+    )
+
+
+def redact_command_output(text: str) -> str:
+    """Mask command credentials before serializing complete JSON records.
+
+    The existing bounded visitor owns JSON/NDJSON without adding personal-data
+    masking to command identities. Plaintext blocks retain multiline masking.
+    """
+    withheld = "[structured output withheld: unsafe or excessive record]"
+    suffix = "\n" if text.endswith("\n") else ""
+    if len(text) > _EVIDENCE_MAX_TEXT_CHARS:
+        return withheld + suffix
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Command output has duplicate keys")
+            result[key] = value
+        return result
+
+    def decode(raw):
+        return json.loads(raw, object_pairs_hook=unique_object)
+
+    def record(raw, value):
+        safe = _redact_structured_payload(value, include_personal_data=False)
+        if safe == value:
+            return raw
+        # Default JSON escaping also retains lone surrogate values without
+        # introducing invalid UTF-8 into successful command results.
+        return json.dumps(safe, separators=(",", ":")) + raw[len(raw.rstrip()):]
+
+    try:
+        try:
+            return record(text, decode(text))
+        except json.JSONDecodeError:
+            # A plaintext assignment can own a complete pretty-printed JSON
+            # value. Mask that value as a unit, not only its opening brace.
+            parts, cursor = [], 0
+            decoder = json.JSONDecoder()
+            for match in _SECRET_ASSIGNMENT_HEAD_PATTERN.finditer(text):
+                if match.start() < cursor or text[match.end():match.end() + 1] not in {"{", "["}:
+                    continue
+                marker_end = match.end() + len("[REDACTED]")
+                if text.startswith("[REDACTED]", match.end()) and (
+                    marker_end == len(text) or text[marker_end].isspace()
+                ):
+                    continue
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                before = text[line_start:match.start()].strip()
+                if any(char in before for char in "{}[]\"'"):
+                    continue
+                incomplete = False
+                try:
+                    _value, end = decoder.raw_decode(text, match.end())
+                except (json.JSONDecodeError, RecursionError):
+                    end = len(text)
+                    incomplete = True
+                replacement = (
+                    '"[REDACTED]"'
+                    if match.group("quote") and match.group("separator").strip() == ":"
+                    else "[REDACTED]"
+                )
+                if incomplete and text.endswith("\n"):
+                    replacement += "\n"
+                parts.append(text[cursor:match.end()] + replacement)
+                cursor = end
+            if parts:
+                text = "".join(parts) + text[cursor:]
+            lines = text.splitlines(keepends=True)
+            if len(lines) < 2:
+                return redact_sensitive_text(text)
+        try:
+            records = [(line, decode(line)) for line in lines if line.strip()]
+        except json.JSONDecodeError:
+            # Do not split private-key bodies at a JSON-looking line.
+            if _PRIVATE_KEY_BEGIN_PATTERN.search(text):
+                return redact_sensitive_text(text)
+            # Decode complete object/array records at line boundaries, even
+            # when pretty-printed among progress messages. Plain runs remain
+            # whole so credential values can span physical lines.
+            result, cursor, scan = [], 0, 0
+            decoder = json.JSONDecoder(object_pairs_hook=unique_object)
+            while scan < len(text):
+                newline = text.find("\n", scan)
+                line_end = len(text) if newline < 0 else newline + 1
+                line = text[scan:line_end]
+                start = scan + len(line) - len(line.lstrip())
+                if text[start:start + 1] not in {"{", "["}:
+                    scan = line_end
+                    continue
+                try:
+                    value, end = decoder.raw_decode(text, start)
+                except json.JSONDecodeError as error:
+                    # A malformed multiline candidate is not rescanned from
+                    # each nested opening line, which would be quadratic.
+                    if error.pos >= line_end:
+                        break
+                    scan = line_end
+                    continue
+                trailing = text.find("\n", end)
+                record_end = len(text) if trailing < 0 else trailing + 1
+                if text[end:record_end].strip():
+                    scan = line_end
+                    continue
+                prefix = text[cursor:scan]
+                if any(
+                    match.end() == len(prefix)
+                    for match in _SECRET_ASSIGNMENT_HEAD_PATTERN.finditer(prefix)
+                ):
+                    result.append(redact_sensitive_text(prefix + "[REDACTED]\n"))
+                else:
+                    result.append(redact_sensitive_text(prefix))
+                    result.append(record(text[scan:record_end], value))
+                cursor = scan = record_end
+            result.append(redact_sensitive_text(text[cursor:]))
+            return "".join(result)
+        records = iter(records)
+        return "".join(
+            record(*next(records)) if line.strip() else line for line in lines
+        )
+    except (ValueError, RecursionError):
+        # Ambiguous keys, excessive structure or nonfinite values cannot be
+        # sanitized faithfully. Do not publish a partial or overwritten record.
+        return withheld + suffix
+
 
 def redact_profile_file_templates(value: list[Any]) -> list[Any]:
     """Redact provider-profile file templates without exposing template bodies."""
@@ -271,7 +841,13 @@ class SecretRedactor:
         return [self.scrub(value) for value in values]
 
 __all__ = [
+    "EVIDENCE_TRANSFORMATION_LIMITATIONS",
+    "EVIDENCE_TRANSFORMATION_VERSION",
     "SecretRedactor",
+    "command_secret_continuation",
+    "redact_command_output",
+    "redact_evidence_payload",
+    "redact_evidence_text",
     "redact_profile_file_templates",
     "redact_sensitive_payload",
     "redact_sensitive_text",

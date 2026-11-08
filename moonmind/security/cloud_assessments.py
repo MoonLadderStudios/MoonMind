@@ -276,6 +276,11 @@ _GAPS = frozenset(
 )
 
 
+# Credential masking changes representation, not which checks ran. Unknown
+# limitation codes still prevent complete coverage.
+_INFORMATIONAL_LIMITATIONS = frozenset({"credential_shaped_text_redacted"})
+
+
 class CloudFinding(Contract):
     finding_uid: Text
     check_id: Text
@@ -410,7 +415,10 @@ class CloudAssessmentSummary(Contract):
         complete = (
             self.execution.completed
             and not gaps
-            and not self.limitations
+            and not (
+                (set(self.limitations) | set(self.result.limitations))
+                - _INFORMATIONAL_LIMITATIONS
+            )
             and not self.coverage.manual
             and self.result.coverage == "complete"
         )
@@ -974,7 +982,7 @@ def summarize_cloud_assessment(
     credentials_rejected = any(d.kind == "credentials_rejected" for d in diagnostics)
     failed_regions = {d.region for d in diagnostics if d.region and d.kind in _GAPS}
     gaps = sorted(set(gaps))
-    complete = execution.completed and not gaps
+    complete = execution.completed and not (set(gaps) - _INFORMATIONAL_LIMITATIONS)
     execution = execution.model_copy(
         update={
             "version": version,

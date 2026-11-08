@@ -73,6 +73,9 @@ async def test_long_owner_publishes_and_reads_job_evidence(
     request.resolved_workspace_ref = str(workspace)
     engine = create_async_engine(control_plane_postgres_url)
     maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context", maker
+    )
     try:
         async with engine.begin() as connection:
             await connection.run_sync(

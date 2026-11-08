@@ -200,7 +200,7 @@ async def test_artifact_operator_read_bypasses_legacy_owner():
     """R2: legacy human-owner strings do not hide artifacts from the operator."""
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     artifact = SimpleNamespace(
-        artifact_id="a2", created_by_principal=str(uuid4())
+        artifact_id="a2", created_by_principal=str(uuid4()), metadata_json={}
     )
     await service._assert_artifact_read_access(
         artifact, access=access_for_test("operator")
@@ -491,7 +491,7 @@ async def test_machine_binding_success_and_cross_execution_deny():
     service = TemporalArtifactService.__new__(TemporalArtifactService)
 
     owned = SimpleNamespace(
-        artifact_id="a-own", created_by_principal="workflow:mm:my-run"
+        artifact_id="a-own", created_by_principal="workflow:mm:my-run", metadata_json={}
     )
     # Owning-execution binding succeeds.
     service._assert_mutation_access(owned, principal="workflow:mm:my-run")
@@ -499,7 +499,7 @@ async def test_machine_binding_success_and_cross_execution_deny():
     with pytest.raises(TemporalArtifactAuthorizationError):
         service._assert_mutation_access(
             SimpleNamespace(
-                artifact_id="a-own", created_by_principal="workflow:mm:other-run"
+                artifact_id="a-own", created_by_principal="workflow:mm:other-run", metadata_json={}
             ),
             principal="workflow:mm:my-run",
         )
@@ -517,7 +517,7 @@ async def test_machine_binding_success_and_cross_execution_deny():
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service._assert_saved_work_read_access(
             SimpleNamespace(
-                artifact_id="a-own", created_by_principal="workflow:mm:other-run"
+                artifact_id="a-own", created_by_principal="workflow:mm:other-run", metadata_json={}
             ),
             access=access_for_test("workflow:mm:my-run"),
         )
@@ -758,7 +758,7 @@ async def test_r5_artifact_control_and_raw_boundary():
     )
 
     owned = SimpleNamespace(
-        artifact_id="a-ctrl-own", created_by_principal="workflow:mm:my-run"
+        artifact_id="a-ctrl-own", created_by_principal="workflow:mm:my-run", metadata_json={}
     )
     # A verified execution reads its linked artifact; creator text is not a grant.
     service._repository.list_links.return_value = [
@@ -774,6 +774,7 @@ async def test_r5_artifact_control_and_raw_boundary():
             SimpleNamespace(
                 artifact_id="a-ctrl-own",
                 created_by_principal="workflow:mm:other-run",
+                metadata_json={},
             ),
             access=access_for_test("workflow:mm:my-run"),
         )

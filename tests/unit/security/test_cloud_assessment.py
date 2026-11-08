@@ -960,3 +960,50 @@ def test_large_check_evidence_summary_stays_within_retained_reader_limit():
     assert result.native_ref == "art_native"
     assert "summary_projection_truncated" in result.limitations
     assert result.status == "partial"
+
+
+@pytest.mark.parametrize(
+    "extra_limit,terminal",
+    [
+        (None, "succeeded"),
+        ("unrecognized_evidence_gap", "succeeded"),
+        ("report_truncated", "succeeded"),
+        ("incomplete_native_tail_withheld", "succeeded"),
+        ("report_sanitization_failed", "succeeded"),
+        (None, "failed"),
+    ],
+)
+def test_redaction_receipt_preserves_coverage_without_hiding_gaps(extra_limit, terminal):
+    limits = ["credential_shaped_text_redacted"]
+    if extra_limit:
+        limits.append(extra_limit)
+    result = summary(
+        report=records("basic.ocsf.json", "PASS"),
+        terminal_state=terminal,
+        exit_code=0,
+        limitations=limits,
+    )
+    complete = extra_limit is None and terminal == "succeeded"
+    assert result.status == ("complete" if complete else "partial")
+    assert result.result.coverage == result.status
+    assert (result.outcome == "clean") is complete
+    assert set(limits) <= set(result.limitations)
+    assert set(limits) <= set(result.result.limitations)
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert CloudAssessmentSummary.model_validate(payload) == result
+    if complete:
+        for real_gap in ("unrecognized_evidence_gap", "report_truncated"):
+            with pytest.raises(ValidationError):
+                CloudAssessmentSummary.model_validate(
+                    {**payload, "limitations": [*limits, real_gap]}
+                )
+            with pytest.raises(ValidationError):
+                CloudAssessmentSummary.model_validate(
+                    {
+                        **payload,
+                        "result": {
+                            **payload["result"],
+                            "limitations": [*limits, real_gap],
+                        },
+                    }
+                )

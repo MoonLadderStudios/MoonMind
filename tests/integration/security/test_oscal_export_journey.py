@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 
 from moonmind.security.assessments import Finding
 from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
@@ -30,7 +31,32 @@ from tests.unit.security.test_oscal_export import (
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
-environment = recurring.environment
+artifact_environment = recurring.environment
+
+
+@pytest_asyncio.fixture
+async def environment(artifact_environment):
+    # The operator reads raw exports as this finished execution's recorded
+    # owner, not through a blanket instance-operator restricted-byte bypass.
+    from api_service.db.models import (
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+
+    artifact_environment.session.add(
+        TemporalExecutionCanonicalRecord(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="run",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=access_for_test("operator").principal,
+            state=MoonMindWorkflowState.COMPLETED,
+            entry="run",
+        )
+    )
+    await artifact_environment.session.commit()
+    yield artifact_environment
 
 
 async def export_request(service):
@@ -79,9 +105,9 @@ async def test_restricted_export_download_retry_and_retention(
     service = environment.service
     request, context = await export_request(service)
     if multiline_objective:
-        context["procedures"][0][
-            "objective"
-        ] = "Assess the recorded access review.\nConfirm the recorded revocations."
+        context["procedures"][0]["objective"] = (
+            "Assess the recorded access review.\nConfirm the recorded revocations."
+        )
         request["oscalExport"]["contextRef"] = await put(service, context)
     result = await invoke(service, request)
     assert result["oscalExport"]["status"] == "exported", result.get("oscalExport")

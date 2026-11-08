@@ -62,7 +62,11 @@ from moonmind.security.tls_assessments import (
     summarize_tls_assessment,
 )
 from moonmind.security.web_assessments import WebAssessmentSummary
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_VERSION,
+    redact_evidence_text,
+    redact_sensitive_text,
+)
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
     ARTIFACT_ID_PATTERN,
@@ -1140,6 +1144,8 @@ class AssessmentExecution:
             payload=payload,
             content_type=content_type,
             scope="security-assessments",
+            redaction_level="restricted",
+            operator_output=True,
             link={**self.execution, "link_type": kind},
             metadata_json={
                 "artifact_type": "security_assessment",
@@ -1361,7 +1367,9 @@ class AssessmentExecution:
         selection = request.framework_pack
         if selection is None:
             return request, None
+        from moonmind.security.evidence_exports import validation_summary
         from moonmind.security.framework_packs import (
+            VersionedFrameworkPack,
             compare_pack_metadata,
             compile_framework_plan,
             load_declared_pack,
@@ -1393,17 +1401,20 @@ class AssessmentExecution:
                 now=now,
             )
         except ValidationError as exc:
-            # Pydantic's full representation includes input values, which may be
-            # licensed source text. Report fields and reasons, not source bytes.
-            details = "; ".join(
-                ".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
-                for error in exc.errors(include_input=False)[:8]
-            )
+            # Both Pydantic values and authored extra-field locations can carry
+            # private source text. Preserve only declared fields and error types.
             raise ToolFailure(
-                "INVALID_INPUT", "Invalid framework pack: " + details, False
-            ) from exc
-        except ValueError as exc:
-            raise ToolFailure("INVALID_INPUT", str(exc), False) from exc
+                "INVALID_INPUT",
+                "Invalid framework pack: "
+                + validation_summary(exc, VersionedFrameworkPack),
+                False,
+            ) from None
+        except ValueError:
+            raise ToolFailure(
+                "INVALID_INPUT",
+                "Invalid framework pack: value_error. Check declared identity, digest, distribution and assessment period.",
+                False,
+            ) from None
         previous, previous_ref = None, None
         if selection.previous_assessment_ref:
             try:
@@ -2644,6 +2655,7 @@ class AssessmentExecution:
                     ],
                     externalVerification=framework_report["externalVerification"],
                 )
+        summary_ref = None
         try:
             project_summary = ""
             project_digest = None
@@ -2702,8 +2714,22 @@ class AssessmentExecution:
                 summary += render_control_assessment(control_report).encode()
             elif request.control_assessment is not None:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
+            from moonmind.security.evidence_exports import presentation_provenance
+
+            summary = (
+                redact_evidence_text(summary.decode("utf-8"))
+                + "\n"
+                + presentation_provenance()
+                + "\n"
+            ).encode("utf-8")
             summary_key = content_key(
-                [report_key, "summary", request.review_ref, review_status]
+                [
+                    report_key,
+                    "summary",
+                    EVIDENCE_TRANSFORMATION_VERSION,
+                    request.review_ref,
+                    review_status,
+                ]
                 + ([project_digest] if project_digest else [])
                 + ([framework_ref] if framework else [])
                 + (
@@ -2720,6 +2746,7 @@ class AssessmentExecution:
                     item.artifact_id
                     for item in saved_summary
                     if (item.metadata_json or {}).get("subject") == summary_key
+                    and getattr(item.status, "value", item.status) == "complete"
                 ),
                 None,
             )
@@ -2730,6 +2757,10 @@ class AssessmentExecution:
                     key=summary_key,
                     content_type="text/markdown",
                 )
+            else:
+                # As with native saved work, incomplete upload intents are not
+                # reusable; completed reports still require current read access.
+                await self.read(summary_ref)
 
             async def summary_dependencies():
                 # Interpretation is optional: it never holds native retention.
@@ -2817,6 +2848,24 @@ class AssessmentExecution:
                 comparison=comparison,
                 comparison_ref=comparison_ref,
                 framework=framework,
+            )
+        if request.evidence_export is not None:
+            from moonmind.workflows.skills.security_evidence_export import (
+                associated_evidence,
+                export_selected_evidence,
+            )
+
+            outputs["evidenceExport"] = await export_selected_evidence(
+                self,
+                selection=request.evidence_export,
+                associated=associated_evidence(
+                    request=request,
+                    work=work,
+                    outputs=outputs,
+                    evidence=evidence,
+                    summary_ref=summary_ref,
+                    review=review,
+                ),
             )
         return ToolResult(status="COMPLETED", outputs=outputs)
 
@@ -3265,9 +3314,14 @@ async def security_assessment_handler(
     try:
         request = AssessmentRequest.model_validate(inputs)
     except ValidationError as exc:
+        from moonmind.security.evidence_exports import validation_summary
+
         raise ToolFailure(
-            "INVALID_INPUT", "Invalid security assessment admission.", False
-        ) from exc
+            "INVALID_INPUT",
+            "Invalid security assessment admission. "
+            + validation_summary(exc, AssessmentRequest),
+            False,
+        ) from None
     required = ("namespace", "workflow_id", "run_id", "node_id")
     if any(not context.get(key) for key in required) or not context.get(
         "temporal_artifact_service"

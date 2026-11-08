@@ -24,6 +24,7 @@ from api_service.api.routers.executions import (
     router,
 )
 from api_service.db.base import get_async_session
+from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalWorkflowType
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
@@ -51,14 +52,28 @@ def batch_client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
 
     app.dependency_overrides[_get_service] = _override_batch_service
     app.dependency_overrides[get_temporal_client] = _override_batch_temporal_client
-    # Each child is a fresh request: its idempotency key names no admitted
-    # execution yet. The parent has no account pin, and no saved settings or
-    # deployment skill metadata override this fixture's inherited runtime.
+    user = _override_user_dependencies(app, is_superuser=False)
+    parent = _parent_record(user)
+    admitted_parent = TemporalExecutionCanonicalRecord(
+        workflow_id=parent.workflow_id,
+        run_id=parent.run_id,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        entry="run",
+        owner_id=str(user.id),
+        parameters=parent.parameters,
+    )
+
+    async def get_row(model, key):
+        if model is TemporalExecutionCanonicalRecord and key == parent.workflow_id:
+            return admitted_parent
+        return None
+
+    # Each child is fresh. The admitted parent has no assessment/account pin;
+    # its canonical source is separate from the mutable display projection.
     app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(return_value=None),
+        get=AsyncMock(side_effect=get_row),
         execute=AsyncMock(return_value=_ExecuteResult([])),
     )
-    user = _override_user_dependencies(app, is_superuser=False)
     # Fan-out tests authenticate via the execution-scoped bearer; the
     # session fallback must not deny the request before that boundary.
     for dependency in tuple(app.dependency_overrides):
@@ -96,6 +111,7 @@ def _fanout_headers() -> dict[str, str]:
 def _parent_record(user: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(
         workflow_id="mm:batch-parent",
+        run_id="batch-parent-run",
         owner_id=user.id,
         owner_type="user",
         parameters={
@@ -156,6 +172,7 @@ def test_batch_child_with_explicit_authority_is_accepted(
     )
     assert response.status_code == 201, response.json()
     assert service.create_execution.await_count == 1
+    service.read_scheduled_execution_source.assert_not_awaited()
     _, kwargs = service.create_execution.call_args
     initial = kwargs.get("initial_parameters") or {}
     assert initial.get("batchDigest") == "sha256:approved"

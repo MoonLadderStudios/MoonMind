@@ -367,6 +367,9 @@ attestation or reduced coverage is explicit. Matching complete reachability
 may compare open and refused observations; timeout, denial, unknown or missing
 results do not prove absence. Changed probes, pinned target identity or a
 narrower scope preserve prior observations rather than silently clearing them.
+Selected exports support validated summary copies; native execution and lease
+attestation schemas are explicitly withheld. Exporting changes neither retained
+bytes nor access grants.
 
 ### Bounded HTTPS TLS inspection
 

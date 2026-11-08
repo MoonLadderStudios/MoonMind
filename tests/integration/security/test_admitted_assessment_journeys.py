@@ -210,8 +210,8 @@ def spy_publication(monkeypatch):
     return seen
 
 
-async def finish(backend, request, tmp_path):
-    """The workflow's order after publication: remove, then clean up."""
+async def finish(backend, request, tmp_path, *, retained_outputs=None):
+    """Remove, then clean up; explicitly verify any sole unpublished copies."""
     request.publication = AuxiliaryOutcome(state="succeeded")
     daemon = backend._runner
 
@@ -225,8 +225,23 @@ async def finish(backend, request, tmp_path):
     backend._runner = removed
     await backend.remove_container(request)
     cleaned = await backend.cleanup(request)
-    assert cleaned.cleanup_succeeded is not False
-    assert not storage_for(tmp_path, request.job_id).root.exists()
+    storage = storage_for(tmp_path, request.job_id)
+    if retained_outputs:
+        assert cleaned.cleanup_succeeded is False
+        for relative_path, original in retained_outputs.items():
+            assert (storage.outputs / relative_path).read_bytes() == original
+        for directory in (
+            storage.inputs,
+            storage.scratch,
+            storage.staging,
+            storage.credentials,
+            storage.workload_credentials,
+        ):
+            assert not directory.exists()
+    else:
+        assert cleaned.cleanup_succeeded is not False
+        assert not storage.root.exists()
+    return cleaned
 
 
 async def assert_retained(environment, refs, published):

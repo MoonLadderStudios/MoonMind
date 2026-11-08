@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import runpy
 import shutil
@@ -18,7 +19,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers import executions as executions_module
 from api_service.api.routers.executions import _get_service, router
 from api_service.db.base import get_async_session
-from api_service.db.models import Base, ManagedAgentProviderProfile, PresetRecent
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    PresetRecent,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
+)
 from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
@@ -67,6 +75,7 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
     parent_id = "mm:a282ca74-abd3-43aa-83a0-5d0aa386e457"
     parent = SimpleNamespace(
         workflow_id=parent_id,
+        run_id="parent-run",
         owner_id="system",
         owner_type="system",
         parameters={
@@ -125,6 +134,17 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         )
         shutil.copy2(source, seed_dir / source.name)
         async with sessions() as session:
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id=parent_id,
+                    run_id=parent.run_id,
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    entry="run",
+                    owner_id="system",
+                    owner_type=TemporalExecutionOwnerType.SYSTEM,
+                    parameters=copy.deepcopy(parent.parameters),
+                )
+            )
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="codex_openai_oauth",
@@ -234,6 +254,7 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         assert response.status_code == 201, response.text
         assert response.json()["workflowId"] == "mm:wf-1"
         service.create_execution.assert_awaited_once()
+        service.read_scheduled_execution_source.assert_not_awaited()
         creation = service.create_execution.await_args.kwargs
         assert creation["owner_id"] == "system"
         assert creation["owner_type"] == "system"

@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
+from moonmind.security.evidence_exports import EvidenceExportSelection
 from moonmind.security.frameworks import (
     AssessmentText,
     EvidencePeriod,
@@ -788,6 +789,7 @@ class AssessmentRequest(Contract):
     control_assessment: ControlAssessmentPlan | None = None
     framework_pack: FrameworkPackSelection | None = None
     oscal_export: OscalExportRequest | None = None
+    evidence_export: EvidenceExportSelection | None = None
     product_baseline_ref: Text | None = None
 
     @model_validator(mode="after")

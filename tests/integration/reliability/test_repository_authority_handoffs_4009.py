@@ -119,18 +119,45 @@ async def _compile(
     context,
     *,
     workflow_id=_WORKFLOW,
-    task_input_snapshot_ref="art_request_1",
-    task_input_snapshot_digest="sha256:" + "1" * 64,
+    task_input_snapshot_ref=None,
+    task_input_snapshot_digest=None,
     **parameters,
 ):
     sessions, artifacts, _gateway = context
+    initial_parameters = {
+        "model": "example/model",
+        "targetRuntime": "omnigent",
+        "publishMode": "none",
+        "maxAttempts": 2,
+        "workflow": {"instructions": "Use durable refs only."},
+        **parameters,
+    }
+    if task_input_snapshot_ref is None:
+        assert task_input_snapshot_digest is None
+        from api_service.api.routers.executions import (
+            _build_original_workflow_input_snapshot_payload,
+            _snapshot_source_payload_from_parameters,
+        )
+
+        source, task = _snapshot_source_payload_from_parameters(initial_parameters)
+        task_input_snapshot_ref, task_input_snapshot_digest = (
+            await writer.persist_json_artifact(
+                artifact_service=artifacts,
+                principal="user-1",
+                artifact_class="original_task_input_snapshot",
+                payload=_build_original_workflow_input_snapshot_payload(
+                    source_kind="create", payload=source, task_payload=task,
+                ),
+            )
+        )
+    assert task_input_snapshot_digest is not None
     return await _compile_opencode_plan(
         monkeypatch,
         artifacts=artifacts,
         launch_policy_ref="omnigent-on-demand@1",
         plan_store=DbExecutionPlanStore(sessions),
         session_factory=sessions,
-        extra_parameters=parameters,
+        extra_parameters=initial_parameters,
         workflow_id=workflow_id,
         task_input_snapshot_ref=task_input_snapshot_ref,
         task_input_snapshot_digest=task_input_snapshot_digest,
@@ -328,6 +355,13 @@ async def test_merge_resolver_child_activity_readmits_mixed_parent_without_calle
     )
     assert "source" in parent.envelope.payload.credentialBindings
     sessions, artifacts, _gateway = authority_context
+    parent_task_body = artifacts.payloads[parent.binding.task_input_snapshot_ref]
+    assert parent.binding.task_input_snapshot_digest == (
+        "sha256:" + hashlib.sha256(parent_task_body).hexdigest()
+    )
+    assert json.loads(parent_task_body)["draft"]["workflow"] == {
+        "instructions": "Use durable refs only."
+    }
     async with sessions() as session:
         session.add(
             ManagedAgentProviderProfile(

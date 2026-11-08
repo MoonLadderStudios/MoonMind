@@ -4,8 +4,6 @@
 
 ## Purpose and ownership
 
-Assessments explain coverage, findings and fix evidence across source, dependencies, images, cloud resources and applications.
-
 Omnigent owns reasoning. Security tools run separately on demand, never installed in the agent host.
 
 | Responsibility | Owner |
@@ -107,7 +105,7 @@ These tools are deferred until a measured coverage gap justifies adoption; unass
 
 The scope must admit the `cloud-posture` profile ref and action class, a `cloudAccount` target whose `cloudProvider` and `cloudRegions` cover the job, an egress policy of HTTPS `provider-api` hosts under `amazonaws.com`, and a `cloud_inventory` grant for the account and `cloud-posture`. Prowler reads credentials once, so one [workload credential](#credentials-and-networking) session, bounded by the grant's `maxSessionSeconds`, must cover the job timeout.
 
-Collection publishes the redacted native report, log tail, and `cloud-posture/v1` summary. Alongside findings, `checkEvidence` retains up to 4,096 PASS, FAIL, and MANUAL records with provider/account/region/resources, check and tool identity, supplied timestamps, suppression state, and JSON pointers into the native report. The admission and image record the effective selection and execution configuration. Missing metadata stays unknown. Older v1 summaries without `checkEvidence` remain readable but supply no positive control-check evidence.
+Collection publishes redacted native reports, log tails and `cloud-posture/v1` summaries; credential masking alone preserves coverage. Truncated OCSF retains sanitized complete records, notes withheld tails and stays partial after exit 0. Unparseable reports without complete records are withheld. Cleanup removes credentials and retains unpublished originals for recovery; summaries remain readable. `checkEvidence` keeps up to 4,096 PASS/FAIL/MANUAL records with provider/account/region/resources, check/tool identity, supplied timestamps, suppression state and native JSON pointers. Admission/image record configuration; missing metadata stays unknown. Older summaries without `checkEvidence` remain readable without positive check evidence.
 
 Each check retains candidate mappings from OCSF `compliance` and Prowler `unmapped.compliance`. Supplied framework and mapping versions stay explicit; editions are never guessed from names. Extensions remain inert metadata. Each mapping is limited to 8 KiB, 64 requirements and four nesting levels; each check allows 32 mappings within a 1 MiB aggregate allowance. Unsupported content produces `mappingLimitations`. The whole summary obeys the reader's 8 MiB limit; omitted projections make coverage partial while the sanitized native report remains retained. Reports link check records instead of copying them into workflow results. At most 256 mapping reviews are returned, with additional candidates still in the source. Reviews are recomputed against the current control plan even when reusing a scan. Unknown editions, mismatches, partial and obsolete crosswalks stay review-required; they cannot add objectives, satisfy requirements, fetch URLs, or authorize remediation.
 
@@ -153,26 +151,22 @@ Scanner jobs are bounded CLI executions, not persistent browser or proxy endpoin
 
 ## Evidence, findings, and remediation
 
-Each assessment retains sanitized native evidence (SARIF, JSON-OCSF, CycloneDX, SPDX, or the tool's own JSON, as each tool supports) through existing artifacts and report links. A small versioned summary references those records instead of creating a universal vulnerability database.
+New assessment outputs retain sanitized native SARIF, JSON-OCSF, CycloneDX, SPDX or tool JSON through existing restricted artifacts and report links. Their producing Activity records explicit operator download authority before completion, independent of a SYSTEM-owned or missing parent execution. Current paired producer/publication grants, quarantine and retention govern raw reads; metadata links alone grant none. Existing retained rows keep their recorded classification and grants. Versioned summaries reference evidence, not a universal vulnerability database. Reports distinguish:
 
-The summary separates four questions:
+- **Execution:** requested operations, termination and usable outputs; findings exit codes differ from crashes.
+- **Coverage:** examined, skipped, unavailable and incomplete inputs, languages, resources, routes, rules and snapshots.
+- **Findings:** observations with native identifiers, locations, evidence, confidence and contextual priority.
+- **Verification:** hypotheses or fixes checked, target revision/state and results.
 
-- **Execution:** did each requested operation run, terminate, and publish usable evidence? Tool-specific finding exit codes are different from crashes or failed invocation.
-- **Coverage:** which inputs, languages, dependencies, cloud resources, routes, rules, and data snapshots were examined, skipped, unavailable, or incomplete?
-- **Findings:** what did the tool or agent observe, with native identifiers, locations, evidence, confidence, and contextual priority?
-- **Verification:** which hypotheses or fixes were checked, against what revision or resource state, and with what result?
+Missing, truncated or malformed reports, unknown schemas, denied reads, stale feeds, unsupported inputs and timeouts never become clean findings. Readable reports work without an LLM; unperformed checks remain Unverified with a reason and feasible next check.
 
-A successful process can report findings and incomplete coverage together. Missing or truncated reports, unknown schemas, denied reads, stale feeds, unsupported inputs, and timeouts never become empty findings or a secure verdict. The human-readable report remains useful without an LLM and identifies unperformed checks as Unverified with the reason and a feasible next verification step.
+Credential masking protects logs and scanner evidence while preserving structured records and public capabilities; incomplete fragments are withheld. Presentations, previews and model context mask sensitive and personal fields with limits. Names and unrecognized sensitive text may remain. Authorized metadata reads regenerate stale previews from retained evidence without expanding raw access. Native identifiers and digests preserve reproduction and identity. Unsupported content is withheld; redaction grants no publication permission.
 
-Sanitization occurs before output reaches ordinary persisted logs, model-visible evidence, or published reports. Gitleaks uses explicit full redaction. Native tool masking misses surrounding source, headers, cookies, environment data, and error text, so tests exercise every retained output path with synthetic secret markers. If sanitization or bounded parsing fails, retain safe diagnostics and report incomplete evidence instead of publishing the unsafe content. Native evidence means the native format with required sanitization, not unrestricted raw secret capture.
+`security.assess` optionally accepts `evidenceExport: {artifactRefs: [...], maxTotalBytes: 8388608, maxMemberBytes: 4194304}`. At most 32 explicitly selected refs may come from this assessment's direct evidence/native associations; readable foreign engagement evidence and dependency closure are not automatically included. The bounded ZIP and manifest use existing `report.export` artifacts. Each manifest entry distinguishes source identity/digest, the currently authorized raw or preview read, and transformed member/digest. Supported structured evidence preserves sanitized reproduction details; opaque or malformed inputs are withheld. Current authorization, expiry and integrity are checked again on retry. Export failure preserves completed assessment evidence. Downloading the package does not send it to an assessor.
 
-Agent-created findings cite their source or runtime evidence and distinguish a hypothesis from a reproduced defect. An agent's cross-file conclusion rests on cited code, configuration, tests, or observed behavior, never on a scanner that did not perform that analysis.
+[Processing settings](SettingsSystem.md#reusable-assessment-projects) constrain model recipients separately from data classification. Optional review records selected evidence, transformation and admitted provider/model/output destination; admission is not proof of provider delivery. Unsupported local-only delivery blocks without external fallback or evidence deletion.
 
-Prioritization uses exposure, asset importance, affected execution paths, exploit prerequisites, compensating controls, and available fixes. Record exclusions, accepted risk, and their reason and review/expiry conditions without erasing the underlying finding.
-
-Remediation and publication follow the operator's admitted request: a task authorized to fix, test, and publish needs no per-step approval. An assessment-only task (`publishMode: none`) gets no publication operations and its Skills make no source edits; its workspace is read-only only when the selected profile's `workspace.mutation` is. Cloud posture jobs are read-only.
-
-Retesting links before/after inputs, findings, configuration, coverage, and regression checks. A disappearing finding is no evidence of a fix if a file, route, rule, account, or feed disappeared too; verified remediation needs comparable absence plus a passing `fix_retest` decision, or the source's own fixed state.
+Agent hypotheses need cited source/runtime evidence and cannot claim analysis the scanner omitted. Prioritization considers exposure, asset importance, exploit prerequisites and compensating controls; exclusions and accepted risk retain reasons and review conditions. Remediation follows admitted authority; assessment-only `publishMode: none` grants no edits or publication, and read-only mounts still depend on profile policy. Cloud posture jobs are read-only. Retests link inputs/configuration/coverage: disappearance proves no fix when scope changed. Verified remediation needs comparable absence plus a passing `fix_retest`, or the source's own fixed state.
 
 ## Composable workflows
 

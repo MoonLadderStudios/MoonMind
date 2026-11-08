@@ -29,14 +29,20 @@ consumers resolve these through the authorized artifact owner, not public URLs.
 
 | Model | Mapping and limits |
 | --- | --- |
-| Catalog | Native framework requirements, statements, source links, applicability, and recorded coverage/exclusions. Control IDs start with `control.` because OSCAL names cannot begin with a digit. Original requirement and assessment rows remain in namespaced properties. |
+| Catalog | Native framework requirements, statements, source links, applicability, and recorded coverage/exclusions. Control IDs start with `control.` because OSCAL names cannot begin with a digit. Redacted requirement and assessment projections remain in namespaced properties. |
 | Profile | Explicit control selection over the exported catalog. Native non-applicable or excluded controls remain visible in the catalog rather than becoming satisfied controls. |
 | Assessment plan | An explicitly identified system/SSP, component subjects, responsible parties, control objectives, methods, procedure steps and activities/tasks. The plan covers the supplied procedures, not an invented procedure for every selected control. |
 | Assessment results | Native technical coverage and retained evidence as observations; explicit `findingTargets` supply objective judgments. Scanner signals alone do not become control findings. Native states, partial coverage and attributed triage decisions, including accepted risks, remain visible. |
 | POA&M | Supplied risks, remediation status, actual action records and their planned/completed lifecycle, responsible parties, and available milestone dates. Entries link to their native finding and evidence. Comparison history alone cannot supply a remediation plan. |
 
-Properties in `https://moonmind.dev/ns/assessment` preserve native fields as
-strings or compact JSON. Consumers that ignore those extensions lose native
+Properties in `https://moonmind.dev/ns/assessment` preserve supported native
+semantics as strings or compact JSON. The emitted documents are separate
+`evidence-redaction/v1` presentation copies: known credential patterns, email
+addresses and explicit personal-data fields are redacted after mapping. Native
+artifacts, digests, finding identities and comparison keys remain unchanged.
+Metadata records the transformation and its limits; arbitrary names and
+unrecognized personal data may remain, so this is not full anonymization.
+Consumers that ignore those extensions lose native
 applicability, partial-coverage and triage detail; the document metadata and
 output limitations disclose this. Framework evidence methods map enquiry to
 `INTERVIEW` and document evidence/recorded observation to `EXAMINE`. Technical

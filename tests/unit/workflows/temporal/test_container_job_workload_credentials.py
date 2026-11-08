@@ -458,6 +458,12 @@ async def test_evidence_redacts_delivered_values_and_cleanup_removes_them(
     )
     request.terminal_state = terminal
     request.exit_code = 0 if terminal == "succeeded" else 1
+    request.message = json.dumps(
+        {"Authorization": "Basic c3ludGhldGljOnNlY3JldA==", "status": "observed"}
+    )
+    sessions = json.loads((fixture.credential_root() / "lease.json").read_text())[
+        "sessions"
+    ]
     result = await fixture.backend.publish_evidence(request)
     assert result.logs_ref and result.artifacts_ref
     for name, payload in fixture.published.items():
@@ -467,7 +473,15 @@ async def test_evidence_redacts_delivered_values_and_cleanup_removes_them(
     diagnostics = next(
         json.loads(p) for n, p in fixture.published.items() if "diagnostics" in n
     )
+    assert diagnostics["workloadCredentials"] == sessions
     assert diagnostics["workloadCredentials"]["cloud"]["state"] == "issued"
+    assert diagnostics["workloadCredentials"]["cloud"]["renewals"] == 0
+    assert diagnostics["workloadCredentials"]["cloud"]["uncertainIssuances"] == 0
+    assert json.loads(diagnostics["message"]) == {
+        "Authorization": "[REDACTED]",
+        "status": "observed"
+    }
+    assert "c3ludGhldGljOnNlY3JldA==" not in str(fixture.published)
     # The container has exited: delivered values are gone before publication.
     assert not (fixture.credential_root() / "files").exists()
     assert not (fixture.credential_root() / "env").exists()

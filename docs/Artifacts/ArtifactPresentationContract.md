@@ -417,13 +417,11 @@ Older producers may lack `session_context`, report metadata, previews, report li
 
 ## 14. Security and access
 
-Access is governed by the artifact system and execution authorization. Clients request metadata before raw access, honor `raw_access_allowed`, use `default_read_ref` for default rendering, avoid retry loops on forbidden access, and keep artifact IDs, labels, and metadata out of unrelated surfaces.
+The artifact owner checks current execution access and lifecycle before content reads, including previews. Expired/deleted evidence is unavailable unless the existing pin/live-dependency rules retain it. Metadata/tombstones remain historical context. Creator labels and artifact IDs grant no access.
 
-Potentially sensitive classes include `output.provider_snapshot`, `runtime.diagnostics`, `runtime.merged_logs`, `session.recovery_bundle`, `report.structured`, `report.evidence`, `report.export`, `debug.trace`, and `debug.skill_resolution_trace`. The list is not exhaustive; clients follow metadata and access-policy fields rather than assuming any class is safe.
+New scoped scanner/assessment/report/control outputs are restricted at creation. Retained pre-change artifacts keep their recorded access level; metadata sensitivity alone does not reclassify historical bytes. Reused legacy outputs gain no retrospective raw grants or blanket migration. Previews apply bounded credential/email/named-personal-field redaction, record its version and preserve source identity. Unknown personal text may remain: previews are not anonymization. Unsupported or malformed content and stale transformations are withheld rather than falling back to raw. Direct preview refs remain bound to source authorization/lifecycle; a cached preview cannot revive revoked or expired source evidence.
 
-Presigned URLs are access grants, not identity. They are not stored in workflow history, metadata, or durable report bodies, are requested only when the user intentionally opens or downloads raw content, and are not copied into logs or diagnostics.
-
-Metadata stays bounded and display-safe (see invariant 7): beyond credentials and URLs, it also excludes raw payload or report bodies, container auth volume paths, and large nested structures.
+Clients honor `raw_access_allowed` and `default_read_ref`, avoid forbidden retries and keep labels/metadata off unrelated surfaces. Provider snapshots, diagnostics, logs, recovery bundles, reports, exports and traces may be sensitive; artifact class alone establishes no safety. Presigned URLs are temporary access grants, never durable identity, history or logs. Metadata contains bounded safe hints, not payload bodies, credentials or local auth paths. Selected export artifacts have their own retention/access; they are not public links.
 
 ---
 

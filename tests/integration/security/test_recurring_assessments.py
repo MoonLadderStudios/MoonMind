@@ -33,6 +33,7 @@ from moonmind.workflows.skills.tool_registry import (
 from moonmind.workflows.temporal.activity_runtime import TemporalSkillActivities
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
+    TemporalArtifactActivities,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -368,6 +369,7 @@ async def test_product_baseline_retry_export_retains_scope_identity_and_evidence
 
     service = environment.service
     request, baseline, observed = await product_inputs(service)
+    await record_finished(environment, "assessment")
     observed["deployment"]["components"][2]["identity"] = "external-paytable-changed"
     observed["deployment"]["components"].pop()
     observed["deployment"]["omissions"] = ["External database inaccessible"]
@@ -1053,6 +1055,7 @@ async def test_saved_schedule_input_root_consumes_the_comparison_seal(environmen
     service = environment.service
     request, _, _ = await inputs(service)
     result = await invoke(service, request)
+    await record_finished(environment, "assessment")
     comparison = result["comparisonRef"]
     target = {"inputArtifactRef": comparison}
     definition_id = uuid4()
@@ -1188,7 +1191,11 @@ async def test_retained_unsealed_assessment_roots_get_bounded_disposition(
 
 
 async def attach(service, ref, workflow_id):
-    """Link an input the way an occurrence's inputAttachments admit it."""
+    """Delegate an exact input from its producer, as trusted save admission does."""
+    await service.delegate_read_access(
+        artifact_ids=[ref], workflow_id=workflow_id,
+        access=access_for_test("workflow:assessment"),
+    )
     await service.link_artifact(
         artifact_id=ref,
         principal="operator",
@@ -1216,7 +1223,7 @@ async def record_finished(environment, *workflow_ids):
                 workflow_id=workflow_id,
                 run_id="run",
                 workflow_type=TemporalWorkflowType.USER_WORKFLOW,
-                owner_id="operator",
+                owner_id=access_for_test("operator").principal,
                 state=MoonMindWorkflowState.COMPLETED,
                 entry="run",
             )
@@ -1338,6 +1345,10 @@ async def test_duplicate_feed_in_later_occurrence_reuses_admitted_baseline(
     first = await invoke(service, request)
     request["baselineRef"] = first["comparisonRef"]
     for ref in (request["inventoryRef"], request["feedRef"], first["comparisonRef"]):
+        await service.delegate_read_access(
+            artifact_ids=[ref], workflow_id="next-occurrence",
+            access=access_for_test("workflow:assessment"),
+        )
         await service.link_artifact(
             artifact_id=ref,
             principal="operator",
@@ -1631,9 +1642,11 @@ async def test_occurrence_revalidates_current_authority_before_reusing_scan(
     await service.soft_delete(artifact_id=request["inventoryRef"], principal="operator")
     with pytest.raises(Exception):
         await invoke(service, request)
-    assert (await read(service, first["comparisonRef"]))["findings"][0][
-        "state"
-    ] == "new"
+    # Completed records remain intact, but expired unretained bytes do not
+    # become readable merely because a retry failed.
+    assert await status(environment, first["comparisonRef"]) == "complete"
+    with pytest.raises(TemporalArtifactStateError, match="expired"):
+        await read(service, first["comparisonRef"])
 
 
 async def test_cancellation_starts_no_successor_and_retains_completed_work(
@@ -1697,6 +1710,10 @@ async def test_product_api_security_schedule_lifecycle(
         key="baseline",
     )
     request["baselineRef"] = baseline["comparisonRef"]
+    await record_finished(environment, "assessment")
+    async def artifact_client(_self):
+        return client
+    monkeypatch.setattr(TemporalClientAdapter, "get_client", artifact_client)
     app = FastAPI()
     app.include_router(routes.router)
 
@@ -1743,6 +1760,11 @@ async def test_product_api_security_schedule_lifecycle(
             },
         },
     }
+    if authored_runtime is None:
+        # The default runtime also exercises the actual step-only attachment
+        # producer, not merely top-level workflow attachments.
+        workflow_target = target["initialParameters"]["workflow"]
+        workflow_target["steps"][0]["inputAttachments"] = workflow_target.pop("inputAttachments")
     if authored_runtime is not None:
         target["initialParameters"]["targetRuntime"] = authored_runtime
     schedule = None
@@ -1803,7 +1825,15 @@ async def test_product_api_security_schedule_lifecycle(
             # including real execution-scoped attachment links.
             async def execute(name, payload, **_kwargs):
                 assert name == "artifact.link"
-                return await service.link_artifact(**payload)
+                activity_environment = ActivityEnvironment()
+                activity_environment.info = replace(
+                    activity_environment.info, namespace="default",
+                    workflow_id=action.workflow_id,
+                    workflow_run_id=action.first_execution_run_id,
+                )
+                return await activity_environment.run(
+                    TemporalArtifactActivities(service).artifact_link, **payload
+                )
 
             with patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -1854,7 +1884,7 @@ async def test_product_api_security_schedule_lifecycle(
             assert {request["baselineRef"], request["inventoryRef"]} <= await required(
                 service, result["comparisonRef"]
             )
-            assert (await read(service, result["comparisonRef"], principal="operator"))[
+            assert (await read(service, result["comparisonRef"], principal=f"workflow:{action.workflow_id}"))[
                 "counts"
             ]["new"] == 1
             await handle.cancel()

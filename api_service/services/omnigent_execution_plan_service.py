@@ -1474,6 +1474,13 @@ async def compile_and_persist_execution_plan(
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
+    from api_service.services.assessment_model_delivery import (
+        require_execution_model_delivery,
+    )
+
+    require_execution_model_delivery(
+        initial_parameters, profile_ref=getattr(provider_profile, "profile_id", None)
+    )
     target_runtime = str(initial_parameters.get("targetRuntime") or "").strip().lower()
     if target_runtime != OMNIGENT_RUNTIME_ID:
         raise ValueError(

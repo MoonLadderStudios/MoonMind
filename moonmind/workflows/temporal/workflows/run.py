@@ -464,6 +464,7 @@ class RunWorkflowInput(TypedDict, total=False):
     scheduled_for: Optional[str]
     remediation_loop_continuation: dict[str, Any]
     linked_recovery_retired: bool
+    scheduled_input_artifact_ref: str | None
 
 
 class _RunWorkflowOutputBase(TypedDict):

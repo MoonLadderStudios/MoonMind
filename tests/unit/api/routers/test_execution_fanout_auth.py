@@ -76,6 +76,8 @@ def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
 
     async def get_record(model, _key):
         assert model in {TemporalExecutionCanonicalRecord, TemporalExecutionRecord}
+        if model is TemporalExecutionCanonicalRecord and _key == _PARENT_ID:
+            return parent
 
     session = SimpleNamespace(
         get=AsyncMock(side_effect=get_record),
@@ -87,6 +89,7 @@ def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
     )
     parent = SimpleNamespace(
         workflow_id=_PARENT_ID,
+        run_id="parent-run",
         owner_id="system",
         owner_type="system",
         parameters={"targetRuntime": "codex_cli"},
@@ -164,6 +167,20 @@ def test_scoped_fanout_creates_child_without_account_lookup(fanout_client):
     assert creation["owner_type"] == "system"
     assert creation["initial_parameters"]["parentWorkflowId"] == _PARENT_ID
     assert creation["initial_parameters"]["targetRuntime"] == "codex_cli"
+    _assert_no_user_lookup(fanout_client.session)
+
+
+def test_scoped_fanout_without_verified_parent_context_preserves_work(fanout_client):
+    fanout_client.session.get.side_effect = None
+    fanout_client.session.get.return_value = None
+    fanout_client.service.read_scheduled_execution_source.return_value = None
+    response = fanout_client.client.post(
+        "/api/executions", headers=_capability_headers(), json=_child_request()
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "assessment_processing_source_unavailable"
+    _assert_no_writes(fanout_client)
     _assert_no_user_lookup(fanout_client.session)
 
 

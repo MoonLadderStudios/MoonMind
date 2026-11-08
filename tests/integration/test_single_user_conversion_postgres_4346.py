@@ -46,6 +46,10 @@ from api_service.db.models import (
 )
 from api_service.migrations.account_source import source_user_ids
 from api_service.services.single_user_conversion import SingleUserConversionRun
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_LIMITATIONS,
+    EVIDENCE_TRANSFORMATION_VERSION,
+)
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.artifact_access import access_for_test
 from tests.helpers.account_source import (
@@ -857,7 +861,12 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         assert {row.artifact_id for row in retained} == {artifact_id, preview_id}
         preview = await session.get(TemporalArtifact, preview_id)
         assert preview.redaction_level is TemporalArtifactRedactionLevel.PREVIEW_ONLY
-        assert preview.metadata_json == {"preview_of": artifact_id, "policy": "auto-generated"}
+        assert preview.metadata_json == {
+            "preview_of": artifact_id,
+            "policy": "auto-generated",
+            "transformation": EVIDENCE_TRANSFORMATION_VERSION,
+            "limitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
+        }
         assert all(row.created_by_principal == owner and not row.operator_recovery_granted
                    for row in retained)
         session.add(TemporalArtifactPin(artifact_id=artifact_id, pinned_by_principal=owner))
@@ -913,7 +922,11 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         assert (await restarted.get(TemporalArtifact, artifact_id)).metadata_json[
             "preview_artifact_id"] == preview_id
         assert (await restarted.get(TemporalArtifact, preview_id)).metadata_json == {
-            "preview_of": artifact_id, "policy": "auto-generated"}
+            "preview_of": artifact_id,
+            "policy": "auto-generated",
+            "transformation": EVIDENCE_TRANSFORMATION_VERSION,
+            "limitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
+        }
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
         row, payload = await artifacts.read(
             artifact_id=artifact_id,
