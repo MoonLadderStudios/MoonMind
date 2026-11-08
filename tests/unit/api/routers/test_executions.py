@@ -23850,29 +23850,62 @@ def test_assessment_project_preset_cannot_introduce_unbound_metadata(client, mon
     service.create_execution.assert_not_awaited()
 
 
+@pytest.mark.parametrize("retained", [False, True])
 @pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
 def test_assessment_project_edit_rejects_new_input_artifact_context_mismatch(
-    client, monkeypatch, update_name,
+    client,
+    monkeypatch,
+    update_name,
+    retained,
 ):
     test_client, service, _user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     record = _build_execution_record(has_workflow_input_snapshot=False)
-    record.parameters = {"assessmentProject": _assessment_project_snapshot(),
-        "workflow": {"instructions": "Original"}}
+    record.parameters = {
+        "assessmentProject": _assessment_project_snapshot(),
+        "workflow": {"instructions": "Original"},
+    }
     service.describe_execution.return_value = record
-    service.update_execution.return_value = {"workflow_id": record.workflow_id,
-        "accepted": True, "applied": "immediate", "message": "ok"}
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    patch = {"workflow": {"instructions": "Edited"}}
+    if retained:
+        record.input_ref = "art_edited"
+        patch["assessmentProject"] = _assessment_project_snapshot(assets=["changed"])
     mismatch = _build_original_workflow_input_snapshot_payload(
-        source_kind="edit", payload={"assessmentProject": _assessment_project_snapshot(assets=["other"])},
+        source_kind="edit",
+        payload={
+            "assessmentProject": record.parameters["assessmentProject"]
+            if retained
+            else _assessment_project_snapshot(assets=["other"])
+        },
         task_payload={"instructions": "Edited"},
     )
-    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, json.dumps(mismatch).encode())))
-    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
-    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", AsyncMock(return_value=""))
-    response = test_client.post(f"/api/executions/{record.workflow_id}/update", json={
-        "updateName": update_name, "inputArtifactRef": "art_edited",
-        "parametersPatch": {"workflow": {"instructions": "Edited"}},
-    })
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(return_value=(None, json.dumps(mismatch).encode()))
+    )
+    monkeypatch.setattr(
+        executions_module,
+        "get_temporal_artifact_service",
+        _caller_owned_artifact_factory(artifact_service),
+    )
+    monkeypatch.setattr(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    response = test_client.post(
+        f"/api/executions/{record.workflow_id}/update",
+        json={
+            "updateName": update_name,
+            "inputArtifactRef": "art_edited",
+            "parametersPatch": patch,
+        },
+    )
     assert response.status_code == 422, response.text
     assert "Rebuild the input artifact from the reviewed draft" in response.text
     service.update_execution.assert_not_awaited()
@@ -23988,3 +24021,134 @@ def test_assessment_project_artifact_selector_metadata_aliases(
         assert response.status_code == 201, response.text
     assert json.dumps(retained).encode() == body
     artifact_service.read.assert_awaited_once()
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("clear", [False, True])
+def test_assessment_project_recurring_create_freezes_effective_tool_inputs(
+    client, serialized, clear
+):
+    from moonmind.security.assessments import AssessmentRequest
+
+    test_client, execution_service, _user = client
+    snapshot = _assessment_project_snapshot()
+    inputs = {"reviewRef": "art_review"}
+    if clear:
+        inputs.update(
+            scope={"assets": ["explicit"], "exclusions": []},
+            tools=[],
+            budget={"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 30},
+            credentialRefs=[],
+            networkRefs=[],
+            assessment_project=snapshot,
+        )
+    parameters = {
+        "assessmentProject": None if clear else snapshot,
+        "workflow": {
+            "instructions": "Compare retained evidence",
+            "runtime": {"mode": "codex"},
+            "steps": [
+                {"type": "tool", "tool": {"id": "security.assess", "inputs": inputs}}
+            ],
+        },
+    }
+    schedule = {"mode": "recurring", "cron": "0 * * * *"}
+    submitted = (
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": parameters,
+            "schedule": schedule,
+        }
+        if serialized
+        else {"type": "workflow", "payload": {**parameters, "schedule": schedule}}
+    )
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        recurring = service_cls.return_value
+        recurring.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Assessment",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=datetime.now(UTC),
+            )
+        )
+        response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 201, response.text
+    stored = recurring.create_definition.await_args.kwargs["target"][
+        "initialParameters"
+    ]
+    assert stored["assessmentProject"] == (None if clear else snapshot)
+    stored_inputs = stored["workflow"]["steps"][0]["tool"]["inputs"]
+    if clear:
+        assert "assessmentProject" not in stored_inputs
+        assert "assessment_project" not in stored_inputs
+    else:
+        assert stored_inputs["assessmentProject"] == snapshot
+        assert stored_inputs["scope"]["assets"] == ["checkout"]
+        assert stored_inputs["credentialRefs"] == stored_inputs["networkRefs"] == []
+    parsed = AssessmentRequest.model_validate(stored_inputs)
+    assert (
+        parsed.assessment_project.model_dump(mode="json", by_alias=True)
+        if parsed.assessment_project is not None
+        else None
+    ) == (None if clear else snapshot)
+    execution_service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["serialized", "UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize("clear", [False, True])
+def test_assessment_project_canonicalizes_both_retained_workflow_containers(
+    client, monkeypatch, operation, clear
+):
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    stale = _assessment_project_snapshot(assets=["old"])
+    selected = None if clear else _assessment_project_snapshot(assets=["new"])
+    task = _assessment_selector_workflow(
+        "tool_step", {"id": "security.assess"}, stale, metadata_key="assessment_project"
+    )
+    parameters = {"assessmentProject": stale, "workflow": {}, "task": task}
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = parameters
+    service.describe_execution.return_value = record
+    service.create_execution.return_value = record
+    service.update_execution.return_value = {
+        "workflow_id": record.workflow_id,
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    monkeypatch.setattr(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=""),
+    )
+    if operation == "serialized":
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {**parameters, "assessmentProject": selected},
+            },
+        )
+        assert response.status_code == 201, response.text
+        admitted = service.create_execution.await_args.kwargs["initial_parameters"]
+    else:
+        response = test_client.post(
+            f"/api/executions/{record.workflow_id}/update",
+            json={
+                "updateName": operation,
+                "parametersPatch": {"assessmentProject": selected},
+            },
+        )
+        assert response.status_code == 200, response.text
+        admitted = service.update_execution.await_args.kwargs["parameters_patch"]
+    inputs = admitted["task"]["steps"][0]["tool"]["inputs"]
+    assert "assessment_project" not in inputs
+    if clear:
+        assert "assessmentProject" not in inputs
+    else:
+        assert inputs["assessmentProject"] == selected

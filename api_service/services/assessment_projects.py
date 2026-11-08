@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
@@ -17,6 +18,9 @@ from moonmind.security.assessment_projects import (
     resolve_assessment_project,
 )
 from moonmind.security.frameworks import FrameworkContract
+from moonmind.workflows.executions.execution_contract import (
+    snapshot_workflow_from_artifact_payload,
+)
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -233,3 +237,142 @@ async def resolve_saved_assessment_project(
         snapshot, session=session, access=access, principal=principal
     )
     return {"snapshot": snapshot.model_dump(mode="json", by_alias=True), "gaps": gaps}
+
+
+def assessment_project_input_metadata(workflow: Mapping[str, Any]) -> list[Any]:
+    from moonmind.security.assessment_projects import (
+        ASSESSMENT_PROJECT_INPUT_KEYS,
+        assessment_input_selectors,
+    )
+
+    values = []
+    try:
+        for step, tool in assessment_input_selectors(workflow):
+            for inputs in (step.get("inputs"), tool.get("inputs"), tool.get("args")):
+                if isinstance(inputs, Mapping):
+                    for key in ASSESSMENT_PROJECT_INPUT_KEYS:
+                        if inputs.get(key) is not None:
+                            values.append(inputs[key])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_assessment_project", "message": str(exc)},
+        ) from exc
+    return values
+
+
+def _authored_workflow_metadata(parameters: Mapping[str, Any]) -> list[Any]:
+    # Inspect both aliases, even an empty preferred workflow. Consumers may
+    # fall back to the retained task spelling, so it cannot hide context.
+    metadata = []
+    for key in ("workflow", "task"):
+        workflow = parameters.get(key)
+        if not isinstance(workflow, Mapping):
+            continue
+        if workflow.get("steps") is not None and not isinstance(
+            workflow["steps"], list
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_execution_request",
+                    "message": f"payload.{key}.steps must be a JSON array.",
+                },
+            )
+        metadata.extend(assessment_project_input_metadata(workflow))
+    return metadata
+
+
+def validate_assessment_project_input_artifact(
+    artifact_payload: Any,
+    snapshot: dict[str, Any] | None,
+) -> None:
+    if not isinstance(artifact_payload, Mapping):
+        return
+    payload, _workflow = snapshot_workflow_from_artifact_payload(artifact_payload)
+    draft = artifact_payload.get("draft")
+    source = draft if isinstance(draft, Mapping) else artifact_payload
+    if payload.get("assessmentProject") != snapshot or any(
+        value != snapshot for value in _authored_workflow_metadata(source)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_assessment_project",
+                "message": (
+                    "Input artifact assessment context differs from the admitted "
+                    "payload.assessmentProject (or initialParameters.assessmentProject). "
+                    "Rebuild the input artifact from the reviewed draft."
+                ),
+            },
+        )
+
+
+async def validate_assessment_project_parameter(
+    parameters: Mapping[str, Any],
+    *,
+    session,
+    principal: str,
+    access: ArtifactAccessContext,
+) -> dict[str, Any] | None:
+    """Check frozen context and current references, never resolve saved defaults."""
+    metadata = _authored_workflow_metadata(parameters)
+    if "assessmentProject" not in parameters and metadata:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_assessment_project",
+                "message": (
+                    "Assessment context must be admitted at the execution boundary. "
+                    "Supply payload.assessmentProject (or initialParameters.assessmentProject "
+                    "for serialized requests), not Skill input metadata."
+                ),
+            },
+        )
+    value = parameters.get("assessmentProject")
+    if value is None:
+        return None
+    return await validate_assessment_project_snapshot(
+        value, session=session, access=access, principal=principal
+    )
+
+
+def apply_assessment_project_defaults(
+    workflow: dict[str, Any], snapshot: dict[str, Any] | None
+) -> None:
+    from moonmind.security.assessment_projects import (
+        AssessmentProjectSnapshot,
+        apply_assessment_defaults,
+    )
+
+    steps = workflow.get("steps")
+    if steps is not None and not isinstance(steps, list):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_execution_request",
+                "message": "payload.workflow.steps must be a JSON array.",
+            },
+        )
+    resolved = (
+        AssessmentProjectSnapshot.model_validate(snapshot)
+        if snapshot is not None
+        else None
+    )
+    try:
+        apply_assessment_defaults(workflow, resolved)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_assessment_project", "message": str(exc)},
+        ) from exc
+
+
+def apply_assessment_project_parameter_defaults(
+    parameters: dict[str, Any], snapshot: dict[str, Any] | None
+) -> None:
+    """Canonicalize every retained workflow alias before any consumer selects it."""
+    for key in ("workflow", "task"):
+        workflow = parameters.get(key)
+        if isinstance(workflow, dict):
+            apply_assessment_project_defaults(workflow, snapshot)

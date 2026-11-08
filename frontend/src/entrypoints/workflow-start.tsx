@@ -1,5 +1,5 @@
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
-import { applyAssessmentInputDefaults, supportsAssessmentDefaults, resolveSchemaProperty, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
+import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, resolveSchemaProperty, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
 import { RepositoryScannerReadiness } from '../components/RepositoryScannerReadiness';
 import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
@@ -4315,13 +4315,16 @@ function schemaToolInputs(
   if (!detail || !schemaContractHasFields(detail)) {
     return { values: {}, errors: {} };
   }
-  const rawValues = resolveSchemaCapabilityValues(detail, explicitValues);
+  const aliases = assessmentInputAliases(detail.inputSchema, explicitValues);
+  const rawValues = resolveSchemaCapabilityValues(detail, aliases.values);
   const required = schemaRequired(detail.inputSchema);
   const values: Record<string, unknown> = {};
   for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
     const value = rawValues[name];
-    if (value === undefined || value === null) {
+    // Assessment nulls are authored values too. Keep them for admission to
+    // reject rather than silently treating them as a missing saved default.
+    if (value === undefined || (value === null && !supportsAssessmentDefaults(detail.inputSchema))) {
       continue;
     }
     if (typeof value === "string" && !required.has(name) && !value.trim()) {
@@ -4349,7 +4352,7 @@ function schemaToolInputs(
   delete sanitized.approved_scope;
   return {
     values: sanitized,
-    errors: validateSchemaCapabilityValues(detail, sanitized),
+    errors: { ...validateSchemaCapabilityValues(detail, sanitized), ...aliases.errors },
   };
 }
 
@@ -4385,7 +4388,8 @@ function initializeToolInputValues(
   const merged = parsed.ok
     ? { ...parsed.value, ...currentValues }
     : { ...currentValues };
-  return resolveSchemaCapabilityValues(detail, merged);
+  const aliases = assessmentInputAliases(detail.inputSchema, merged);
+  return Object.keys(aliases.errors).length ? merged : resolveSchemaCapabilityValues(detail, aliases.values);
 }
 
 function serializeToolInputValues(values: Record<string, unknown>): string {
@@ -8598,7 +8602,8 @@ function WorkflowStartPageContent({
       // An unfinished advanced JSON edit is still the operator's draft.
       // Do not replace it with the last valid structured input on selection.
       if (!parseToolInputsText(step.toolInputs).ok) return step;
-      const values = { ...step.toolInputValues };
+      const values = assessmentInputAliases(tool?.inputSchema, step.toolInputValues).values;
+      delete values.assessment_project;
       if (snapshot) values.assessmentProject = snapshot;
       else delete values.assessmentProject;
       return { ...step, toolInputValues: values, toolInputs: serializeToolInputValues(values) };
@@ -8608,7 +8613,9 @@ function WorkflowStartPageContent({
   function updateToolInputValue(localId: string, name: string, value: unknown) {
     markDraftEdited();
     const step = stepsRef.current.find((item) => item.localId === localId);
-    const nextValues = { ...(step?.toolInputValues || {}), [name]: value };
+    const tool = (trustedToolsQuery.data || []).find(candidate => toolDefinitionId(candidate) === step?.toolId.trim());
+    const authored = assessmentInputAliases(tool?.inputSchema, step?.toolInputValues || {});
+    const nextValues = { ...authored.values, [name]: value };
     updateStep(localId, { toolInputValues: nextValues });
   }
 
@@ -12414,6 +12421,10 @@ function WorkflowStartPageContent({
                   (tool) => toolDefinitionId(tool) === step.toolId.trim(),
                 ) || null;
               const selectedToolDetail = detailFromTrustedTool(selectedTrustedTool);
+              const selectedToolAuthoredInputs = assessmentInputAliases(selectedToolDetail?.inputSchema, step.toolInputValues);
+              const assessmentDefaultsProblem = !parseToolInputsText(step.toolInputs).ok
+                ? "Fix the unfinished Tool input JSON before applying defaults."
+                : Object.values(selectedToolAuthoredInputs.errors)[0];
               const selectedToolRequired = schemaRequired(
                 selectedToolDetail?.inputSchema,
               );
@@ -12775,8 +12786,8 @@ function WorkflowStartPageContent({
                         <div className="stack">
                           {assessmentProject && supportsAssessmentDefaults(selectedToolDetail.inputSchema) ? <div>
                             <Button type="button" variant="secondary"
-                              disabled={!parseToolInputsText(step.toolInputs).ok}
-                              disabledReason="Fix the unfinished Tool input JSON before applying defaults."
+                              disabled={Boolean(assessmentDefaultsProblem)}
+                              disabledReason={assessmentDefaultsProblem}
                               onClick={() => updateStep(step.localId, {
                               toolInputValues: applyAssessmentInputDefaults(selectedToolDetail.inputSchema, step.toolInputValues, assessmentProject),
                             })}>Apply assessment defaults</Button>
@@ -12785,7 +12796,7 @@ function WorkflowStartPageContent({
                           <SchemaCapabilityFields
                             fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}
-                            values={step.toolInputValues}
+                            values={selectedToolAuthoredInputs.values}
                             errors={step.toolInputErrors}
                             disabled={false}
                             repositoryOptions={repositoryOptions}
@@ -12803,7 +12814,7 @@ function WorkflowStartPageContent({
                               <SchemaCapabilityFields
                                 fields={optionalToolSchemaFields}
                                 detail={selectedToolDetail}
-                                values={step.toolInputValues}
+                                values={selectedToolAuthoredInputs.values}
                                 errors={step.toolInputErrors}
                                 disabled={false}
                                 repositoryOptions={repositoryOptions}
@@ -12843,7 +12854,7 @@ function WorkflowStartPageContent({
                                       toolInputs: text,
                                       ...(parsed.ok
                                         ? {
-                                            toolInputValues: parsed.value,
+                                            toolInputValues: assessmentInputAliases(selectedToolDetail.inputSchema, parsed.value).values,
                                             toolInputErrors: {},
                                           }
                                         : {}),

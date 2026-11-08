@@ -224,3 +224,83 @@ def test_assessment_defaults_reject_conflicting_security_selector_aliases(shape)
     workflow = node if shape == "root" else {"steps": [{"type": "tool", **node}]}
     with pytest.raises(ValueError, match="matching id and name"):
         apply_assessment_defaults(workflow, snapshot)
+
+
+@pytest.mark.parametrize("alias_style", ["camel", "snake"])
+@pytest.mark.parametrize("report_refs", [[], ["art_explicit"]])
+def test_assessment_defaults_preserve_supported_reference_input_aliases(
+    alias_style, report_refs
+):
+    from moonmind.security.assessments import AssessmentRequest
+
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    keys = (
+        ("reportRefs", "credentialRefs", "networkRefs")
+        if alias_style == "camel"
+        else ("report_refs", "credential_refs", "network_refs")
+    )
+    workflow = {
+        "tool": {
+            "name": "security.assess",
+            "inputs": {
+                keys[0]: report_refs,
+                keys[1]: [],
+                keys[2]: [],
+                "reviewRef": "art_review",
+            },
+        }
+    }
+    apply_assessment_defaults(workflow, snapshot)
+    parsed = AssessmentRequest.model_validate(workflow["tool"]["inputs"])
+    assert parsed.report_refs == report_refs
+    assert parsed.credential_refs == parsed.network_refs == []
+    assert parsed.tools == (["retained-report"] if report_refs else [])
+
+
+@pytest.mark.parametrize(
+    "camel,snake",
+    [
+        ("reportRefs", "report_refs"),
+        ("credentialRefs", "credential_refs"),
+        ("networkRefs", "network_refs"),
+    ],
+)
+@pytest.mark.parametrize("same", [False, True])
+def test_assessment_defaults_reject_duplicate_reference_aliases(camel, snake, same):
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    workflow = {
+        "tool": {
+            "name": "security.assess",
+            "inputs": {
+                camel: [],
+                snake: [] if same else ["unreviewed"],
+                "reviewRef": "art_review",
+            },
+        }
+    }
+    with pytest.raises(ValueError, match="only one"):
+        apply_assessment_defaults(workflow, snapshot)
+
+
+def test_assessment_defaults_preserve_explicit_alias_override_layer():
+    from moonmind.security.assessments import AssessmentRequest
+
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    workflow = {
+        "tool": {
+            "name": "security.assess",
+            "inputs": {"reportRefs": ["art_selector"], "reviewRef": "art_review"},
+        },
+        "inputs": {"report_refs": [], "credential_refs": [], "network_refs": []},
+    }
+    apply_assessment_defaults(workflow, snapshot)
+    parsed = AssessmentRequest.model_validate(workflow["tool"]["inputs"])
+    assert parsed.report_refs == []
+    assert parsed.tools == []
+    assert workflow["inputs"] == workflow["tool"]["inputs"]

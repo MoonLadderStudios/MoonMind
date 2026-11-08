@@ -19517,6 +19517,64 @@ describe("Task Create governed Tool authoring", () => {
     expect((within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement).value).toBe('{"scope": {"assets": [');
   });
 
+  describe('assessment reference aliases in Advanced JSON', () => {
+    async function prepareAssessmentTool() {
+      const configuration = { ...createAssessmentEnvironment(), id: 'prod', name: 'Production', assets: ['api'], artifactRefs: ['art_saved'] };
+      const snapshot = { schemaVersion: 'assessment-project/v1', projectId: 'payments', projectName: 'Payments', environmentId: 'prod', environmentName: 'Production', sourceVersion: 2, purpose: 'Review', boundaries: 'API', digest: 'a'.repeat(64), configuration };
+      toolDiscoveryResponse = { ok: true, json: async () => ({ tools: [{ name: 'security.assess', inputSchema: {
+        'x-assessment-project-defaults': true, type: 'object', properties: {
+          scope: { type: 'object' }, budget: { type: 'object' }, reportRefs: { type: 'array' },
+          credentialRefs: { type: 'array' }, networkRefs: { type: 'array' }, tools: { type: 'array' },
+          reviewRef: { type: 'string' }, assessmentProject: { type: 'object', readOnly: true },
+        }, required: ['scope', 'budget', 'tools', 'credentialRefs', 'networkRefs'],
+      } }] }) } as Response;
+      const original = fetchSpy.getMockImplementation()!;
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/settings/catalog')) return Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 2, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: 'Review', boundaries: 'API', environments: [configuration] }] } }] } }) } as Response);
+        if (String(input).endsWith('/assessment-projects/resolve')) return Promise.resolve({ ok: true, json: async () => ({ snapshot, gaps: [] }) } as Response);
+        return original(input, init);
+      });
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      await screen.findByRole('option', { name: 'Payments' });
+      fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
+      fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Load assessment context' }));
+      await screen.findByLabelText('Frozen assessment context');
+      const step = (await screen.findByText('Step 1')).closest('section') as HTMLElement;
+      fireEvent.change(within(step).getByLabelText('Instructions'), { target: { value: 'Review existing assessment evidence.' } });
+      selectStepType(step, 'Tool');
+      fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+      fireEvent.click(within(step).getByText('Edit JSON'));
+      return step;
+    }
+    it.each([{ reports: [] as string[] }, { reports: ['art_authored'] }])('keeps report_refs $reports and explicit empty grant aliases through defaults and submission', async ({ reports }) => {
+      const step = await prepareAssessmentTool();
+      const editor = within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement;
+      fireEvent.change(editor, { target: { value: JSON.stringify({ report_refs: reports, credential_refs: [], network_refs: [], reviewRef: 'art_review' }) } });
+      fireEvent.click(within(step).getByRole('button', { name: 'Apply assessment defaults' }));
+      const authored = JSON.parse(editor.value);
+      expect(authored).toMatchObject({ reportRefs: reports, credentialRefs: [], networkRefs: [], tools: reports.length ? ['retained-report'] : [] });
+      for (const alias of ['report_refs', 'credential_refs', 'network_refs']) expect(authored).not.toHaveProperty(alias);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) => String(url) === '/api/executions' && init?.method === 'POST')).toBe(true));
+      expect(latestCreateRequest()).toMatchObject({ payload: { task: { steps: [{ tool: { inputs: { reportRefs: reports, credentialRefs: [], networkRefs: [], tools: reports.length ? ['retained-report'] : [] } } }] } } });
+    });
+    it.each([{ reports: [] as string[] }, { reports: ['art_conflict'] }])('blocks duplicate report aliases with $reports without choosing a winner', async ({ reports }) => {
+      const step = await prepareAssessmentTool();
+      const editor = within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement;
+      const inputs = { scope: { assets: ['api'] }, budget: { baseSeconds: 60, maxSeconds: 120, progressStallSeconds: 60 }, tools: [], reviewRef: 'art_review', reportRefs: [], report_refs: reports, credentialRefs: [], networkRefs: [] };
+      fireEvent.change(editor, { target: { value: JSON.stringify(inputs) } });
+      expect((within(step).getByRole('button', { name: 'Apply assessment defaults' }) as HTMLButtonElement).disabled).toBe(true);
+      // Reselecting the same Tool must not filter away the conflicting alias.
+      fireEvent.click(within(step).getByRole('button', { name: 'security.assess' }));
+      fireEvent.click(within(step).getByText('Edit JSON'));
+      fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+      await waitFor(() => expect(screen.getAllByText(/Specify only one of reportRefs and report_refs/).length).toBeGreaterThan(0));
+      expect(JSON.parse((within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement).value)).toEqual(inputs);
+      expect(fetchSpy.mock.calls.some(([url, init]) => String(url) === '/api/executions' && init?.method === 'POST')).toBe(false);
+    });
+  });
+
   it("groups and filters trusted Tool choices", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

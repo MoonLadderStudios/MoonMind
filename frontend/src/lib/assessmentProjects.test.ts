@@ -39,6 +39,26 @@ describe('assessment input defaults', () => {
     expect(second).toMatchObject(overrides);
     expect(second.assessmentProject).toMatchObject({ sourceVersion: 4 });
   });
+  it.each([[], ['art_authored'], null])('preserves authored snake-case reference aliases, including %j, before applying defaults', (reportRefs) => {
+    const inputs = applyAssessmentInputDefaults(schema, { report_refs: reportRefs, credential_refs: [], network_refs: [] }, snapshot);
+    expect(inputs.reportRefs).toEqual(reportRefs);
+    expect(inputs.credentialRefs).toEqual([]);
+    expect(inputs.networkRefs).toEqual([]);
+    expect(inputs).not.toHaveProperty('report_refs');
+    expect(inputs).not.toHaveProperty('credential_refs');
+    expect(inputs).not.toHaveProperty('network_refs');
+    expect(inputs.tools).toEqual(reportRefs?.length ? ['retained-report'] : []);
+  });
+  it('does not default explicit snake-case credential or network values to empty lists', () => {
+    const inputs = applyAssessmentInputDefaults(schema, { credential_refs: ['db://authored'], network_refs: null }, snapshot);
+    expect(inputs.credentialRefs).toEqual(['db://authored']);
+    expect(inputs.networkRefs).toBeNull();
+  });
+  it.each(['reportRefs', 'credentialRefs', 'networkRefs'])('does not apply defaults over duplicate %s aliases, even with equal values', (camel) => {
+    const snake = camel.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    const ambiguous = { [camel]: [], [snake]: [] };
+    expect(applyAssessmentInputDefaults(schema, ambiguous, snapshot)).toEqual(ambiguous);
+  });
   it('requires an opted-in schema and fills only declared properties', () => {
     expect(applyAssessmentInputDefaults({ properties: schema.properties }, {}, snapshot)).toEqual({});
     expect(applyAssessmentInputDefaults({ 'x-assessment-project-defaults': true, properties: { scope: {} } }, {}, snapshot)).toEqual({ scope: { assets: ['api'], exclusions: ['sandbox'] } });

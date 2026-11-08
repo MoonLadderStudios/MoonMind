@@ -91,14 +91,41 @@ function asRecord(value: unknown): Record<string, unknown> {
 export function supportsAssessmentDefaults(schema: Record<string, unknown> | undefined): boolean {
   return schema?.['x-assessment-project-defaults'] === true;
 }
+const ASSESSMENT_REFERENCE_ALIASES = {
+  reportRefs: 'report_refs', credentialRefs: 'credential_refs', networkRefs: 'network_refs',
+} as const;
+
+/** Canonicalize one authored layer, never choose between duplicate aliases. */
+export function assessmentInputAliases(
+  schema: Record<string, unknown> | undefined,
+  values: Record<string, unknown>,
+): { values: Record<string, unknown>; errors: Record<string, string> } {
+  if (!supportsAssessmentDefaults(schema)) return { values, errors: {} };
+  const normalized = { ...values };
+  const errors: Record<string, string> = {};
+  const properties = asRecord(schema?.properties);
+  for (const [camel, snake] of Object.entries(ASSESSMENT_REFERENCE_ALIASES)) {
+    if (!(camel in properties) || !Object.hasOwn(values, snake)) continue;
+    if (Object.hasOwn(values, camel)) {
+      errors[camel] = `Specify only one of ${camel} and ${snake} in Tool input JSON.`;
+    } else {
+      normalized[camel] = values[snake];
+      delete normalized[snake];
+    }
+  }
+  return { values: normalized, errors };
+}
+
 export function applyAssessmentInputDefaults(
   schema: Record<string, unknown> | undefined,
   values: Record<string, unknown>,
   snapshot: AssessmentProjectSnapshot,
 ): Record<string, unknown> {
   if (!supportsAssessmentDefaults(schema)) return values;
+  const aliases = assessmentInputAliases(schema, values);
+  if (Object.keys(aliases.errors).length) return values;
   const config = snapshot.configuration;
-  const result = { ...values };
+  const result = aliases.values;
   const defaults: Record<string, unknown> = {
     scope: { assets: config.assets, exclusions: config.exclusions }, budget: config.budget,
     reportRefs: config.artifactRefs, credentialRefs: [], networkRefs: [],
@@ -110,7 +137,10 @@ export function applyAssessmentInputDefaults(
   if ('tools' in properties && !Object.hasOwn(result, 'tools')) {
     result.tools = Array.isArray(result.reportRefs) && result.reportRefs.length ? ['retained-report'] : [];
   }
-  if ('assessmentProject' in properties) result.assessmentProject = copyAssessmentSnapshot(snapshot);
+  if ('assessmentProject' in properties) {
+    delete result.assessment_project;
+    result.assessmentProject = copyAssessmentSnapshot(snapshot);
+  }
   return result;
 }
 

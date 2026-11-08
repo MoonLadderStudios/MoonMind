@@ -304,6 +304,21 @@ def assessment_input_selectors(
             yield node, selected
 
 
+def _canonical_reference_inputs(values: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one authored layer without hiding duplicate declarations."""
+    result = dict(values)
+    for camel, snake in (
+        ("reportRefs", "report_refs"),
+        ("credentialRefs", "credential_refs"),
+        ("networkRefs", "network_refs"),
+    ):
+        if camel in result and snake in result:
+            raise ValueError(f"Specify only one of {camel} and {snake}.")
+        if snake in result:
+            result[camel] = result.pop(snake)
+    return result
+
+
 def apply_assessment_defaults(
     workflow: dict[str, Any], snapshot: AssessmentProjectSnapshot | None
 ) -> None:
@@ -334,7 +349,10 @@ def apply_assessment_defaults(
         if not isinstance(authored, dict):
             continue
         # Match the ordinary normalizer: step inputs override selector inputs.
-        inputs = {**authored, **overrides}
+        inputs = {
+            **_canonical_reference_inputs(authored),
+            **_canonical_reference_inputs(overrides),
+        }
         tool["inputs"] = inputs
         if isinstance(step.get("inputs"), dict):
             step["inputs"] = inputs

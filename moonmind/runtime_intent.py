@@ -275,6 +275,7 @@ async def validate_model_selection_submission(
     read_input_artifact: Callable[[str], Awaitable[Any]],
     saved_payload: Any = None,
     field_name: str = "payload",
+    validate_input_artifact: Callable[[Any], None] | None = None,
 ) -> None:
     """Validate inline and artifact-backed intent before a public mutation.
 
@@ -344,6 +345,14 @@ async def validate_model_selection_submission(
                 if isinstance(saved, Mapping)
                 else None
             )
+            if (
+                isinstance(ref, str)
+                and ref.strip()
+                and validate_input_artifact is not None
+            ):
+                # Other admission owners inspect the same decoded, caller-read
+                # input without a second parser or mutable artifact rewrite.
+                validate_input_artifact(await read(ref))
             if isinstance(ref, str) and ref.strip() and ref != saved_ref:
                 artifact = await read(ref)
                 if isinstance(artifact, Mapping):
