@@ -29,8 +29,10 @@ PHASES = (
     "post_restart_workload",
     "warm_idle",
 )
-# Restart can finish between samples or temporarily have no running worker.
-RESOURCE_PHASES = ("cold_idle", "workload", "post_restart_workload", "warm_idle")
+# Pre-restart work and restart can finish between samples; actual generated
+# work and production activity probes run in post_restart_workload.
+RESOURCE_PHASES = ("cold_idle", "post_restart_workload", "warm_idle")
+RESOURCE_METRICS = ("workerMemoryMiB", "totalMemoryMiB", "runningContainers")
 MAX_CALLBACK_EVENTS = 100
 INSPECT_FORMAT = (
     '{{$debug := false}}{{range .Config.Env}}{{$parts := split . "="}}'
@@ -127,6 +129,7 @@ def parse_worker_log(text, *, phase_started_at=None):
                     timestamp[1].replace("Z", "+00:00")
                 ).timestamp()
             except ValueError:
+                # Malformed Docker timestamps remain explicitly unavailable.
                 pass
         events.append(
             {
@@ -247,10 +250,7 @@ def compare_reports(baseline, candidate):
         conditions.append({tuple(worker[key] for key in limits) for worker in workers})
         for phase in RESOURCE_PHASES:
             summary = report.get("summary", {}).get(phase, {})
-            if not all(
-                key in summary
-                for key in ("workerMemoryMiB", "totalMemoryMiB", "runningContainers")
-            ):
+            if not all(key in summary for key in RESOURCE_METRICS):
                 raise ValueError(f"worker comparison has no observed {phase} resources")
     if len(conditions[0]) != 1 or conditions[0] != conditions[1]:
         raise ValueError(
@@ -284,6 +284,17 @@ def compare_reports(baseline, candidate):
         "baseline": baseline["summary"],
         "candidate": candidate["summary"],
         "diagnosticsComplete": diagnostics,
+        "unobservedResourcePhases": {
+            name: [
+                phase
+                for phase in PHASES
+                if not all(
+                    key in report.get("summary", {}).get(phase, {})
+                    for key in RESOURCE_METRICS
+                )
+            ]
+            for name, report in (("baseline", baseline), ("candidate", candidate))
+        },
         "normalUseObservation": "Unverified: matched disposable journeys cannot establish one-to-two-day normal-use safety",
         "diagnosticEvidence": "Separate phase-specific slow callbacks, loop lag, and workflow activation deadlocks are recorded in each input report",
     }

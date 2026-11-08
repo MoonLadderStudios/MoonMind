@@ -109,10 +109,14 @@ finished. Each phase retains at most 100 numeric callback emission timestamps
 and durations, with an omitted-event count. A boundary-crossing flag estimates
 whether emission time minus duration precedes the phase start; log emission is
 not an exact callback-end timestamp. Missing or truncated diagnostics remain
-visible. A comparison refuses unmatched conditions or absent workload/idle
-measurements; restart may have no running-worker samples. These short controlled
-journeys do not establish one-to-two-day normal-use safety; record that gap
-separately from measured memory savings or passing functional checks.
+visible. A comparison requires matched conditions and observed cold-idle,
+post-restart workload and warmed-idle resources. Post-restart work includes the
+generated workflow and production activity probes. Pre-restart work and restart
+are diagnostic windows that may finish between samples; the comparison explicitly
+lists every phase without observed resources and preserves unavailable counts.
+Samples crossing phase boundaries or missing container inventory remain excluded.
+These short controlled journeys do not establish one-to-two-day normal-use safety;
+record that gap separately from measured memory savings or passing functional checks.
 
 ## Setup
 

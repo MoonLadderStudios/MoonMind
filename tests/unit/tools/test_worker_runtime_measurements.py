@@ -430,3 +430,31 @@ def test_comparison_allows_restart_without_resource_samples():
     candidate["summary"].pop("post_restart_workload")
     with pytest.raises(ValueError, match="post_restart_workload"):
         measurement.compare_reports(baseline, candidate)
+
+
+@pytest.mark.parametrize("pre_restart", [None, {"samples": 1, "unavailableSamples": 1}])
+def test_short_diagnostic_windows_report_missing_resources_without_inventing_samples(
+    pre_restart,
+):
+    baseline, candidate = report("separate"), report("combined")
+    baseline["summary"].pop("workload")
+    if pre_restart is not None:
+        baseline["summary"]["workload"] = pre_restart
+    candidate["summary"].pop("restart")
+    before = copy.deepcopy((baseline, candidate))
+    result = measurement.compare_reports(baseline, candidate)
+    assert result["unobservedResourcePhases"] == {
+        "baseline": ["startup", "workload"],
+        "candidate": ["startup", "restart"],
+    }
+    assert result["baseline"] == baseline["summary"]
+    assert result["candidate"] == candidate["summary"]
+    assert (baseline, candidate) == before
+
+
+@pytest.mark.parametrize("phase", ["cold_idle", "post_restart_workload", "warm_idle"])
+def test_comparison_requires_observed_idle_and_post_restart_workload_resources(phase):
+    baseline, candidate = report("separate"), report("combined")
+    candidate["summary"][phase] = {"samples": 1, "unavailableSamples": 1}
+    with pytest.raises(ValueError, match=phase):
+        measurement.compare_reports(baseline, candidate)
