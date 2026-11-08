@@ -28,7 +28,6 @@ from moonmind.security.egress import (
     bounded_denial_diagnostics,
     denied_connection_count,
 )
-from moonmind.security.egress_conformance_evidence import verify_evidence_digest
 from moonmind.security.egress_policy import ScopedEgressPolicy, _canonical, _digest
 from moonmind.security.native_network import (
     NativeNetworkSelection,
@@ -655,6 +654,11 @@ class ScopedEgressLease:
             raise RuntimeError(
                 "native final receipt does not match this admitted attempt"
             )
+        # Receipt validation needs the evidence owner, whose outbound scanner
+        # loads application settings. Pure policy rendering and fixture startup
+        # must not initialize that application-only dependency.
+        from moonmind.security.egress_conformance_evidence import verify_evidence_digest
+
         verify_evidence_digest(evidence)
 
     async def stop_native(self):
