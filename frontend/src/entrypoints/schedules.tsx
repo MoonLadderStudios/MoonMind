@@ -1,3 +1,5 @@
+import { AssessmentEngagementReview } from '../components/workflows/AssessmentEngagementReview';
+import { copyAssessmentReview, reviewAssessmentProposal, type AssessmentEngagementReview as EngagementReview } from '../lib/assessmentEngagement';
 import { Button } from '../components/Button';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -968,6 +970,9 @@ function ScheduleDetailPage({
 }) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
+  const [assessmentProposal, setAssessmentProposal] = useState<{ targetJson: string; review: EngagementReview } | null>(null);
+  const [reviewingAssessment, setReviewingAssessment] = useState(false);
+  const assessmentReviewRequest = useRef(0);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
   const [submitErrors, setSubmitErrors] = useState<ScheduleEditErrors>({});
@@ -975,6 +980,11 @@ function ScheduleDetailPage({
 
   useEffect(() => {
     isEditingRef.current = isEditing;
+    if (!isEditing) {
+      assessmentReviewRequest.current += 1;
+      setAssessmentProposal(null);
+      setReviewingAssessment(false);
+    }
   }, [isEditing]);
   const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
@@ -1341,6 +1351,11 @@ function ScheduleDetailPage({
         <a href="#schedule-configuration">Configuration</a>
       </nav>
 
+      {(() => {
+        const parameters = schedule.target?.initialParameters ?? schedule.target;
+        const review = parameters && typeof parameters === 'object' ? copyAssessmentReview((parameters as Record<string, unknown>).assessmentReview) : null;
+        return review ? <AssessmentEngagementReview review={review} historical /> : null;
+      })()}
       <div className="schedules-detail-grid">
         <section id="schedule-configuration" className="panel--data schedules-detail-panel" aria-label="Schedule configuration">
           <div className="section-heading-row">
@@ -1451,6 +1466,37 @@ function ScheduleDetailPage({
                 />
                 {visibleFormErrors.jitterSeconds && <span className="schedules-field-error">{visibleFormErrors.jitterSeconds}</span>}
               </label>
+              {(() => {
+                const target = parseTargetJson(currentForm.targetJson).value;
+                const parameters = target?.initialParameters ?? target;
+                const ref = parameters && typeof parameters === 'object' ? (parameters as Record<string, unknown>).assessmentAuthorizationRef : null;
+                if (typeof ref !== 'string' || !target) return null;
+                return <section className="stack" aria-label="Review recurring assessment changes">
+                  <p>Renewed or changed authority needs a current proposal review. Equivalent authorized runs do not need repeated confirmation.</p>
+                  <Button type="button" disabled={reviewingAssessment} onClick={async () => {
+                    const request = ++assessmentReviewRequest.current;
+                    const targetJson = currentForm.targetJson;
+                    setReviewingAssessment(true); setAssessmentProposal(null);
+                    try {
+                      const review = await reviewAssessmentProposal(target, ref);
+                      if (assessmentReviewRequest.current === request) setAssessmentProposal({ targetJson, review });
+                    } catch (error) {
+                      if (assessmentReviewRequest.current === request) setSubmitErrors(previous => ({ ...previous, targetJson: error instanceof Error ? error.message : 'Could not review authority.' }));
+                    } finally { if (assessmentReviewRequest.current === request) setReviewingAssessment(false); }
+                  }}>Review current assessment authority</Button>
+                  {assessmentProposal?.targetJson === currentForm.targetJson ? <>
+                    <AssessmentEngagementReview review={assessmentProposal.review} />
+                    <Button type="button" onClick={() => {
+                      const reviewed = structuredClone(target);
+                      const values = (reviewed.initialParameters ?? reviewed) as Record<string, unknown>;
+                      values.assessmentReview = assessmentProposal.review;
+                      delete values.assessmentScope;
+                      setEditForm(previous => previous?.targetJson === assessmentProposal.targetJson ? { ...previous, targetJson: JSON.stringify(reviewed, null, 2) } : previous);
+                      setAssessmentProposal(null);
+                    }}>Use reviewed authority</Button>
+                  </> : null}
+                </section>;
+              })()}
               <label>
                 <span>Target Workflow Parameters</span>
                 <textarea
