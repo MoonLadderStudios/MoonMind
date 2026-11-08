@@ -14,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
         AuxiliaryOutcome,
         ContainerJobActivityRequest,
         ContainerJobActivityResult,
+        ContainerJobBackendError,
         ContainerJobFailureClass,
         ContainerJobState,
         ContainerJobWorkflowInput,
@@ -175,6 +176,11 @@ class MoonMindContainerJobWorkflow:
                     "container_job.reconcile_container", request
                 )
                 request.container_ref = reconciled.container_ref
+                if reconciled.assessment_authority_denial:
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                        reconciled.assessment_authority_denial,
+                    )
                 # A reattached container reports its own resolved GPU evidence;
                 # create/start below supersede it for a fresh launch.
                 request.gpu_observation = reconciled.gpu_observation
@@ -326,12 +332,23 @@ class MoonMindContainerJobWorkflow:
         ):
             await self._project(request, ContainerJobState.WORKSPACE_NOT_VISIBLE)
 
-        if request.container_ref and terminal_state in {
-            ContainerJobState.CANCELED,
-            ContainerJobState.TIMED_OUT,
-        }:
+        preserve_unstopped_assessment = False
+        if request.container_ref and (
+            terminal_state in {ContainerJobState.CANCELED, ContainerJobState.TIMED_OUT}
+            or failure_class == ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED
+        ):
             await self._project(request, ContainerJobState.CANCELING)
-            await self._best_effort("container_job.stop_container", request)
+            stopped = await self._best_effort("container_job.stop_container", request)
+            preserve_unstopped_assessment = (
+                stopped is None
+                and failure_class == ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED
+            )
+            if preserve_unstopped_assessment:
+                message = (
+                    f"{message or 'Assessment authority ended'}. Workload shutdown "
+                    "is unconfirmed; owned work is retained for recovery."
+                )[:2048]
+                request.message = message
 
         logs_ref: str | None = None
         artifacts_ref: str | None = None
@@ -356,8 +373,13 @@ class MoonMindContainerJobWorkflow:
         request.publication = publication
 
         await self._project(request, ContainerJobState.CLEANING_UP)
-        removed = await self._best_effort("container_job.remove_container", request)
-        cleaned = await self._best_effort("container_job.cleanup", request)
+        # If authority ended but shutdown is uncertain, retain the owned
+        # workload and its input/output storage for recovery. Never erase the
+        # only recoverable copy while claiming a successful cancellation.
+        removed = cleaned = None
+        if not preserve_unstopped_assessment:
+            removed = await self._best_effort("container_job.remove_container", request)
+            cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(
             state=(
                 "succeeded"

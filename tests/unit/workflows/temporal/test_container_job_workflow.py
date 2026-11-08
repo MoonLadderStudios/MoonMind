@@ -1188,3 +1188,215 @@ async def test_legacy_successor_executes_through_real_backend_activities(
     assert observed["terminalState"] == "succeeded"
     create = next(c for c in commands if c[0] == "create")
     assert create[create.index("--cpus") + 1] == "2.0"
+
+
+@pytest.mark.asyncio
+async def test_assessment_authority_denial_stops_before_evidence(monkeypatch):
+    job = MoonMindContainerJobWorkflow()
+    calls = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.observe_container":
+            raise ApplicationError(
+                "assessment was revoked",
+                type="assessment_authority_denied",
+                non_retryable=True,
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["terminal"]["failureClass"] == "assessment_authority_denied"
+    assert calls.index("container_job.stop_container") < calls.index(
+        "container_job.publish_evidence"
+    )
+    assert calls.index("container_job.publish_evidence") < calls.index(
+        "container_job.remove_container"
+    )
+
+
+@pytest.mark.asyncio
+async def test_actual_start_is_inside_authority_guard_and_finished_is_not_repeated(
+    tmp_path, monkeypatch
+):
+    from contextlib import asynccontextmanager
+    from datetime import UTC, datetime, timedelta
+
+    guard_held = False
+    calls = []
+    denied = False
+
+    @asynccontextmanager
+    async def authority(request, live):
+        nonlocal guard_held
+        if denied and live:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED, "revoked"
+            )
+        guard_held = True
+        try:
+            yield datetime.now(UTC) + timedelta(seconds=30)
+        finally:
+            guard_held = False
+
+    async def daemon(argv):
+        calls.append(argv)
+        if argv[0] == "start":
+            assert guard_held
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=daemon, assessment_authority=authority
+    )
+    request = ContainerJobActivityRequest(
+        jobId=JOB_ID,
+        ownershipToken="owned",
+        request=_input().request,
+        containerRef="fixture",
+    )
+    monkeypatch.setattr(
+        backend, "_container_states", AsyncMock(return_value={"fixture": "created"})
+    )
+    monkeypatch.setattr(
+        backend, "_acquire_capacity_lock", AsyncMock(return_value="lease")
+    )
+    monkeypatch.setattr(backend._capacity_lock, "release", AsyncMock())
+    monkeypatch.setattr(backend, "_admit_job_slot", AsyncMock())
+    await backend.start_container(request)
+    assert [c for c in calls if c[0] == "start"] == [("start", "fixture")]
+    calls.clear()
+    denied = True
+    with pytest.raises(ContainerJobBackendError, match="revoked"):
+        await backend.start_container(request)
+    assert not any(c[0] == "start" for c in calls)
+    monkeypatch.setattr(
+        backend, "_container_states", AsyncMock(return_value={"fixture": "exited"})
+    )
+    await backend.start_container(request)
+    assert not any(c[0] == "start" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_assessment_stop_preserves_owned_work(monkeypatch):
+    job = MoonMindContainerJobWorkflow()
+    calls = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.observe_container":
+            raise ApplicationError(
+                "assessment was revoked",
+                type="assessment_authority_denied",
+                non_retryable=True,
+            )
+        if name == "container_job.stop_container":
+            raise RuntimeError("daemon unavailable")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert "container_job.publish_evidence" in calls
+    assert "container_job.remove_container" not in calls
+    assert "container_job.cleanup" not in calls
+    assert result["cleanup"]["state"] == "failed"
+    assert "shutdown is unconfirmed" in result["terminal"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reconciled_assessment_denial_keeps_container_for_evidence(monkeypatch):
+    job = MoonMindContainerJobWorkflow()
+    calls = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.reconcile_container":
+            return {
+                "containerRef": "saved-owned-container",
+                "assessmentAuthorityDenial": "revoked",
+            }
+        if name == "container_job.publish_evidence":
+            assert request.container_ref == "saved-owned-container"
+        return _result_for(name)
+
+    async def typed_activity(name, request):
+        from moonmind.schemas.container_job_models import ContainerJobActivityResult
+
+        return ContainerJobActivityResult.model_validate(await activity(name, request))
+
+    monkeypatch.setattr(job, "_activity", typed_activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["terminal"]["failureClass"] == "assessment_authority_denied"
+    assert "container_job.start_container" not in calls
+    assert calls.index("container_job.stop_container") < calls.index(
+        "container_job.publish_evidence"
+    )
+
+
+@pytest.mark.asyncio
+async def test_backend_reconcile_returns_owned_ref_when_revoked(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from moonmind.schemas.container_job_models import ContainerJobActivityResult
+
+    @asynccontextmanager
+    async def authority(request, live):
+        if live:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED, "revoked"
+            )
+        yield None
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=AsyncMock(return_value=(0, b"true", b"")),
+        assessment_authority=authority,
+    )
+    request = ContainerJobActivityRequest(
+        jobId=JOB_ID, ownershipToken="owned", request=_input().request
+    )
+    monkeypatch.setattr(
+        backend, "_reject_ownership_collision", AsyncMock(return_value="owned")
+    )
+    monkeypatch.setattr(
+        backend,
+        "stop_container",
+        AsyncMock(return_value=ContainerJobActivityResult(running=False)),
+    )
+    result = await backend.reconcile_container(request)
+    assert result.container_ref == backend._name(request)
+    assert result.assessment_authority_denial == "revoked"
+    backend.stop_container.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_expiry_during_authority_lock_acquisition_cannot_start(
+    tmp_path, monkeypatch
+):
+    from contextlib import asynccontextmanager
+    from datetime import UTC, datetime, timedelta
+
+    @asynccontextmanager
+    async def authority(request, live):
+        yield datetime.now(UTC) - timedelta(seconds=1)
+
+    daemon = AsyncMock(return_value=(0, b"", b""))
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=daemon, assessment_authority=authority
+    )
+    request = ContainerJobActivityRequest(
+        jobId=JOB_ID,
+        ownershipToken="owned",
+        request=_input().request,
+        containerRef="fixture",
+    )
+    monkeypatch.setattr(
+        backend, "_container_states", AsyncMock(return_value={"fixture": "created"})
+    )
+    monkeypatch.setattr(
+        backend, "_acquire_capacity_lock", AsyncMock(return_value="lease")
+    )
+    monkeypatch.setattr(backend._capacity_lock, "release", AsyncMock())
+    monkeypatch.setattr(backend, "_admit_job_slot", AsyncMock())
+    with pytest.raises(ContainerJobBackendError, match="deadline"):
+        await backend.start_container(request)
+    assert not any(call.args[0][0] == "start" for call in daemon.await_args_list)

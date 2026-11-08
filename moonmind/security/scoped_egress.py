@@ -305,7 +305,8 @@ class ScopedEgressLease:
         return addresses, identities
 
     async def prepare(
-        self, *, timeout_seconds: int, previously_admitted: bool = False
+        self, *, timeout_seconds: int, previously_admitted: bool = False,
+        deadline: datetime | None = None,
     ) -> dict:
         existing = await self._optional(self.gateway_ref)
         if existing is not None:
@@ -340,6 +341,10 @@ class ScopedEgressLease:
             if not d.target_network_ref and d.host not in addresses:
                 addresses[d.host] = await _public_answers(d.host, d.port)
         expires = math.floor(datetime.now(UTC).timestamp()) + timeout_seconds
+        if deadline is not None:
+            expires = min(expires, math.floor(deadline.timestamp()))
+        if expires <= datetime.now(UTC).timestamp():
+            raise RuntimeError("scoped egress assessment deadline has expired")
         for name, internal in ((self.network_ref, True), (self.outbound_ref, False)):
             network = await self._optional(name, network=True)
             if network is None:

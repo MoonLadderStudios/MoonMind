@@ -637,3 +637,52 @@ async def test_publish_evidence_persists_live_events_journal(tmp_path) -> None:
     journal = publisher.artifacts[f"{JOB_ID}-observability.events.jsonl"]
     assert b'"sequence":1' in journal.replace(b" ", b"")
     assert _spool_events(spool_root) == []
+
+
+@pytest.mark.asyncio
+async def test_publish_retained_assessment_engagement_in_output_manifest(tmp_path):
+    from unittest.mock import AsyncMock
+
+    publisher = _Publisher()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=AsyncMock(return_value=(0, b"completed", b"")),
+        evidence_publisher=publisher,
+    )
+    snapshot = {
+        "contractVersion": "v1",
+        "jobId": JOB_ID,
+        "assessmentScope": {
+            "assessmentRef": "retained",
+            "grants": [{"ref": "db://test-account"}],
+        },
+        "originalDeadline": "2026-11-01T00:00:00Z",
+        "assessmentReview": {
+            "state": "retained",
+            "review": {
+                "sections": [{"label": "Exclusions", "items": ["No live changes."]}],
+                "limitations": ["Assessment only; not production certification."],
+            },
+            "limitations": [],
+        },
+    }
+    backend._read_assessment_evidence = AsyncMock(return_value=snapshot)
+    backend._assessment_authority = AsyncMock(
+        side_effect=AssertionError("live authority must not gate evidence")
+    )
+    await backend.publish_evidence(_request(tmp_path))
+    evidence = json.loads(publisher.artifacts[f"{JOB_ID}-assessment-engagement.json"])
+    assert evidence == snapshot
+    manifest = ContainerJobArtifactPage.model_validate_json(
+        publisher.artifacts[f"{JOB_ID}-artifacts.json"]
+    )
+    item = next(
+        item for item in manifest.artifacts if item.name == "assessment-engagement"
+    )
+    assert item.artifact_ref == f"artifact:{JOB_ID}-assessment-engagement.json"
+    assert (
+        item.sha256
+        == hashlib.sha256(
+            publisher.artifacts[f"{JOB_ID}-assessment-engagement.json"]
+        ).hexdigest()
+    )

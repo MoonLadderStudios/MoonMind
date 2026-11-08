@@ -1716,12 +1716,15 @@ class RecurringWorkflowsService:
         *,
         actor: OperatorAdmission | None,
         saved_target: Mapping[str, Any] | None = None,
+        assessment_already_admitted: bool = False,
     ) -> dict[str, Any]:
         """Freeze authored assessment defaults before storage or compilation.
 
         Target replacement is admission; schedule-only edits and dispatch use
         the already frozen target and never resolve current Settings defaults.
         """
+        from fastapi import HTTPException
+
         from api_service.auth_providers import instance_operator_principal
         from moonmind.workflows.executions.execution_contract import (
             merge_workflow_input,
@@ -1731,6 +1734,51 @@ class RecurringWorkflowsService:
 
         normalized = _normalize_target(_json_object(target, field_name="target"))
         parameters = normalized["initialParameters"]
+        from api_service.services.assessment_engagements import (
+            admit_assessment_parameters,
+            validate_retained_assessment,
+        )
+
+        has_assessment = any(
+            parameters.get(key) is not None
+            for key in (
+                "assessmentScope",
+                "assessmentAuthorizationRef",
+                "assessmentReview",
+            )
+        )
+        if has_assessment:
+            retained = bool(
+                saved_target is not None
+                and normalized == _normalize_target(dict(saved_target))
+            )
+            try:
+                if assessment_already_admitted or retained:
+                    await validate_retained_assessment(
+                        parameters, session=self._session
+                    )
+                else:
+                    await admit_assessment_parameters(
+                        parameters,
+                        session=self._session,
+                        user=actor,
+                        access=(
+                            ArtifactAccessContext.for_operator(actor)
+                            if actor is not None
+                            else ArtifactAccessContext.for_service("system")
+                        ),
+                        # Use the same complete direct-request parser as
+                        # preview. Title, failure policy and retained inputs
+                        # must not disappear at the schedule boundary.
+                        plan_overrides=normalized,
+                    )
+            except HTTPException as exc:
+                message = (
+                    exc.detail.get("message", "Assessment admission denied")
+                    if isinstance(exc.detail, dict)
+                    else str(exc.detail)
+                )
+                raise RecurringWorkflowValidationError(message) from exc
         access = (
             ArtifactAccessContext.for_operator(actor)
             if actor is not None
@@ -2027,13 +2075,16 @@ class RecurringWorkflowsService:
         policy: Mapping[str, Any] | None,
         agent_profile_selection: Mapping[str, Any] | None = None,
         actor: OperatorAdmission | None = None,
+        assessment_already_admitted: bool = False,
     ) -> RecurringWorkflowDefinition:
         schedule_kind = _normalize_schedule_type(schedule_type)
         cron_normalized = str(cron or "").strip()
         parse_cron_expression(cron_normalized)
         timezone_name = validate_timezone_name(timezone)
         name_text = _clean_text(name, field_name="name", required=True) or ""
-        target_payload = await self._admit_target_inputs(target, actor=actor)
+        target_payload = await self._admit_target_inputs(
+            target, actor=actor, assessment_already_admitted=assessment_already_admitted
+        )
         # The stored target's initialParameters are what a later schedule action
         # launches, so the runtime/Provider Profile pair is validated here,
         # before anything is persisted.

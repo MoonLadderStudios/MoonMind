@@ -8718,6 +8718,7 @@ class TemporalAgentRuntimeActivities:
                 ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
                 ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
                 ContainerJobFailureClass.LAUNCH,
+                ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
             }
             raise temporal_exceptions.ApplicationError(
                 str(exc),

@@ -4686,6 +4686,19 @@ class ContainerJobRecord(Base):
     request_json: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False
     )
+    # Trusted admission and original deadline, independent of session ownership.
+    # NULL retained jobs require canonical-source recovery before new actions.
+    assessment_scope_json: Mapped[dict[str, Any] | None] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    # Readable review captured once with the reservation, never reconstructed
+    # from a later edited canonical execution. Scope above remains authority.
+    assessment_review_json: Mapped[dict[str, Any] | None] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    assessment_deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     backend_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     backend_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

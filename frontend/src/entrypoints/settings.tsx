@@ -1,3 +1,4 @@
+import { AssessmentAuthorizationsSettings } from "../components/settings/AssessmentAuthorizationsSettings";
 import { AssessmentProjectsSettings } from '../components/settings/AssessmentProjectsSettings';
 import { Button } from '../components/Button';
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
@@ -272,6 +273,7 @@ function InstanceSettingsContent() {
     >
       <NoticeBanner notice={notice} />
       <AssessmentProjectsSettings />
+      <AssessmentAuthorizationsSettings />
       <GeneratedSettingsSection />
       <p className="text-xs text-slate-500 dark:text-slate-400">
         This page edits instance-wide settings. The guarded upgrade reconciles

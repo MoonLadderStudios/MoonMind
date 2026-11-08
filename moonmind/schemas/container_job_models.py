@@ -150,6 +150,7 @@ class ContainerJobFailureClass(StrEnum):
     # refused or could not renew.
     CREDENTIAL_EXPIRED = "credential_expired"
     CREDENTIAL_ISSUANCE_FAILED = "credential_issuance_failed"
+    ASSESSMENT_AUTHORITY_DENIED = "assessment_authority_denied"
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
     # Generic accelerator/GPU resource outcomes (#3779). Every value describes a
     # resource-request decision the service made; none names a vendor product,
@@ -1384,6 +1385,11 @@ class ContainerJobActivityResult(TemporalContractModel):
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     capacity_wait: str | None = Field(None, alias="capacityWait", max_length=2048)
+    # A reconciled owned container must reach evidence publication even when
+    # current authority forbids further execution.
+    assessment_authority_denial: str | None = Field(
+        None, alias="assessmentAuthorityDenial", max_length=2048
+    )
     resolved_resources: ResourceLimits | None = Field(None, alias="resolvedResources")
     resolved_workspace_ref: str | None = Field(
         None, alias="resolvedWorkspaceRef", max_length=1024

@@ -652,3 +652,21 @@ describe('assessment project historical context', () => {
     expect(buildTemporalSubmissionDraftFromExecution({ ...execution, inputParameters: { ...execution.inputParameters, assessmentProject: null } }, { assessmentProject: snapshot }).assessmentProject).toBeNull();
   });
 });
+
+describe('assessment authorization historical reconstruction', () => {
+  const review = { schemaVersion: 'assessment-engagement/v1', authorizationRef: 'payments', authorizationGeneration: 'generation-2', scopeDigest: 'scope-digest', proposalDigest: 'proposal-digest', scope: { maxJobs: 2 }, sections: [{ label: 'Validity', items: ['Original fixed window'] }], limitations: [] };
+  it('copies recorded authority without reading current settings or refreshing its window', () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({ workflowId: 'historic', inputParameters: { assessmentAuthorizationRef: 'payments', assessmentReview: review, assessmentScope: review.scope, workflow: { instructions: 'Inspect retained evidence' } } });
+    expect(draft.assessmentAuthorizationRef).toBe('payments');
+    expect(draft.assessmentReview).toEqual(review);
+    expect(draft.assessmentReview).not.toBe(review);
+    expect(draft.assessmentScope).toEqual(review.scope);
+    expect(draft.assessmentScope).not.toBe(review.scope);
+  });
+  it('does not resurrect explicitly cleared authority from an old input artifact', () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({ workflowId: 'historic', inputParameters: { assessmentAuthorizationRef: null, assessmentReview: null, assessmentScope: null, workflow: { instructions: 'Keep this task' } } }, { assessmentAuthorizationRef: 'payments', assessmentReview: review, assessmentScope: review.scope });
+    expect(draft.assessmentAuthorizationRef).toBe('');
+    expect(draft.assessmentReview).toBeNull();
+    expect(draft.assessmentScope).toBeNull();
+  });
+});

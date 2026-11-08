@@ -31,12 +31,14 @@ import stat
 import tarfile
 import time
 import uuid
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from io import BytesIO
 from logging import getLogger
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
@@ -67,6 +69,7 @@ from moonmind.schemas.container_job_models import (
     ImageObservation,
     RegistryAuthorization,
     ResourceLimits,
+    failure_message_from_exception,
     gpu_observation,
     is_historical_shared_or_adaptive,
     legacy_fixed_successor_resources,
@@ -99,7 +102,6 @@ from moonmind.security.egress import (
     restricted_proxy_env,
 )
 from moonmind.security.egress_conformance_evidence import serialize_conformance_evidence
-from moonmind.security.scoped_egress import ScopedEgressLease
 from moonmind.security.image_assessments import (
     TARGET_AUTH_TARGET,
     ImageAssessmentSummary,
@@ -119,6 +121,21 @@ from moonmind.security.repository_scanners import (
     sanitize_native,
     validate_scanner_job,
 )
+from moonmind.security.scoped_egress import ScopedEgressLease
+from moonmind.security.web_assessments import (
+    API_FILES,
+    API_INPUT,
+    WEB_OUTPUT_FILES,
+    WebEvidenceError,
+    check_api_definition,
+    render_web_assessment_plan,
+    sanitize_messages,
+    sanitize_report,
+    summarize_web_assessment,
+)
+from moonmind.security.web_assessments import (
+    CREDENTIAL_TARGET as WEB_CREDENTIAL_TARGET,
+)
 from moonmind.security.workload_credentials import (
     READ_ONLY_POLICY_ARNS,
     AwsStsSessionIssuer,
@@ -128,18 +145,6 @@ from moonmind.security.workload_credentials import (
     parse_aws_source,
     session_seconds,
     web_identity_authorization,
-)
-from moonmind.security.web_assessments import (
-    API_FILES,
-    API_INPUT,
-    CREDENTIAL_TARGET as WEB_CREDENTIAL_TARGET,
-    WEB_OUTPUT_FILES,
-    WebEvidenceError,
-    check_api_definition,
-    render_web_assessment_plan,
-    sanitize_messages,
-    sanitize_report,
-    summarize_web_assessment,
 )
 from moonmind.security.workload_profiles import (
     WORKLOAD_CREDENTIALS_TARGET,
@@ -179,6 +184,8 @@ from moonmind.workloads.gpu import (
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
+AssessmentAuthority = Callable[[ContainerJobActivityRequest, bool], AbstractAsyncContextManager[datetime | None]]
+AssessmentEvidenceReader = Callable[[ContainerJobActivityRequest], Awaitable[dict | None]]
 # Reads one artifact's bytes under the job owner's artifact authority.
 ArtifactReader = Callable[[ContainerJobActivityRequest, str], Awaitable[bytes]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
@@ -616,6 +623,8 @@ class DockerContainerJobBackend:
         evidence_publisher: EvidencePublisher | None = None,
         artifact_reader: ArtifactReader | None = None,
         projection_writer: ProjectionWriter | None = None,
+        assessment_authority: AssessmentAuthority | None = None,
+        assessment_evidence_reader: AssessmentEvidenceReader | None = None,
         registry_auth_resolver: RegistryAuthResolver | None = None,
         auth_root: str | Path | None = None,
         image_lock: ImageAcquisitionLock | None = None,
@@ -644,6 +653,8 @@ class DockerContainerJobBackend:
         self._publish = evidence_publisher
         self._read_artifact = artifact_reader
         self._write_projection = projection_writer
+        self._assessment_authority = assessment_authority
+        self._read_assessment_evidence = assessment_evidence_reader
         self._resolve_registry_auth = (
             registry_auth_resolver or resolve_registry_pull_credentials
         )
@@ -2254,6 +2265,8 @@ class DockerContainerJobBackend:
             )
 
     async def reconcile_container(self, request: ContainerJobActivityRequest):
+        async with self._assessment_guard(request, live=False):
+            pass
         name = self._name(request)
         ownership = await self._reject_ownership_collision(request, name)
         if ownership is None:
@@ -2273,6 +2286,19 @@ class DockerContainerJobBackend:
         # state and republish the attestation evidence so the recovery path can
         # correlate the running workload with its enforced launch policy.
         running = stdout.strip() == b"true"
+        if running:
+            try:
+                await self._check_running_assessment(request)
+            except ContainerJobBackendError as exc:
+                if exc.failure_class != ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED:
+                    raise
+                # Return the confirmed owned identity with the denial. Raising
+                # here would lose the ref at the Activity boundary and skip its
+                # retained logs during terminal publication.
+                return ContainerJobActivityResult(
+                    containerRef=name,
+                    assessmentAuthorityDenial=(failure_message_from_exception(exc) or str(exc))[:2048],
+                )
         diagnostics_ref = await self._recover_launch_attestation(
             request,
             name,
@@ -2767,7 +2793,69 @@ class DockerContainerJobBackend:
         except OSError:
             return []
 
+    @asynccontextmanager
+    async def _assessment_guard(self, request, *, live=True):
+        if self._assessment_authority is None:
+            # Standalone adapters have no API storage. The production worker
+            # always injects the durable authority owner.
+            yield None
+        else:
+            async with self._assessment_authority(request, live) as deadline:
+                if (
+                    live
+                    and deadline is not None
+                    and deadline <= datetime.now(UTC)
+                ):
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                        "assessment job exhausted its original deadline",
+                    )
+                yield deadline
+
+    async def _assessment_launch_command(self, request, args):
+        async with self._assessment_guard(request) as deadline:
+            if deadline is None:
+                return await self._runner(args)
+            # Do not hold revocation/cancellation locks behind an unbounded
+            # daemon request. A timed-out start is uncertain, never replayed as
+            # new work; the existing workflow stop/evidence path reconciles it.
+            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                    "assessment job exhausted its original deadline",
+                )
+            try:
+                return await asyncio.wait_for(
+                    self._runner(args), timeout=min(30, remaining)
+                )
+            except TimeoutError as exc:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                    "assessment launch outcome is uncertain after its bounded deadline",
+                ) from exc
+
+    async def _check_running_assessment(self, request):
+        try:
+            async with self._assessment_guard(request):
+                pass
+        except ContainerJobBackendError as exc:
+            if (
+                exc.failure_class
+                == ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED
+            ):
+                try:
+                    await self.stop_container(request)
+                except Exception as stop_exc:
+                    raise ContainerJobBackendError(
+                        ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
+                        "assessment authority ended and owned workload shutdown is unconfirmed",
+                    ) from stop_exc
+            raise
+
     async def create_container(self, request: ContainerJobActivityRequest):
+        async with self._assessment_guard(request) as assessment_deadline:
+            pass
         spec = request.request.spec
         if not request.resolved_image_ref or (
             not request.resolved_workspace_ref and spec.workspace_ref is not None
@@ -2833,6 +2921,7 @@ class DockerContainerJobBackend:
                 raise RuntimeError("scoped egress evidence publisher is unavailable")
             scoped_evidence = await scoped.prepare(
                 timeout_seconds=spec.timeout_seconds,
+                deadline=assessment_deadline,
                 previously_admitted=bool(request.egress_attestation_ref),
             )
             network_mode = scoped.network_ref
@@ -3045,7 +3134,7 @@ class DockerContainerJobBackend:
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
-        code, _, create_stderr = await self._runner(args)
+        code, _, create_stderr = await self._assessment_launch_command(request, args)
         if code:
             # A refused device request is reported with its stable generic class
             # before the ordinary launch failure, so a caller can tell an
@@ -3371,6 +3460,8 @@ class DockerContainerJobBackend:
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
+        async with self._assessment_guard(request, live=False):
+            pass
         container_name = request.container_ref or self._name(request)
         requested_gpu = request.request.spec.resources.gpu
         started_at = datetime.now(timezone.utc)
@@ -3394,6 +3485,8 @@ class DockerContainerJobBackend:
             # Reconcile an uncertain start without repeating a completed command.
             # Its retained network/image authority can still be published below.
             if not finished:
+                async with self._assessment_guard(request):
+                    pass
                 # Fixed count-only admission under the cross-worker lock. Waiting
                 # work returns to the durable capacity-wait state; the workflow
                 # retries under the existing overall job timeout and cancellation.
@@ -3403,7 +3496,9 @@ class DockerContainerJobBackend:
                     )
                 except _CapacityWait as exc:
                     return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
-                code, _, start_stderr = await self._runner(("start", container_name))
+                code, _, start_stderr = await self._assessment_launch_command(
+                    request, ("start", container_name)
+                )
                 if code:
                     # The daemon resolves a device request when the container
                     # starts, so this is where an unavailable GPU runtime or device
@@ -3497,6 +3592,15 @@ class DockerContainerJobBackend:
         )
 
     async def observe_container(self, request: ContainerJobActivityRequest):
+        # Observe terminal effects before checking live authority: expiry never
+        # turns a completed command into a new action or deletes its evidence.
+        ref = request.container_ref or self._name(request)
+        observed_state = json.loads(await self._checked("inspect", "--format", "{{json .State}}", ref))
+        if observed_state.get("Running"):
+            await self._check_running_assessment(request)
+        else:
+            async with self._assessment_guard(request, live=False):
+                pass
         scoped = self._scoped_lease(request)
         denial_observation = request.egress_denial_observation
         if scoped is not None:
@@ -3517,8 +3621,7 @@ class DockerContainerJobBackend:
                 await self.stop_container(request)
                 raise
         ref = request.container_ref or self._name(request)
-        raw = await self._checked("inspect", "--format", "{{json .State}}", ref)
-        state = json.loads(raw)
+        state = observed_state
         # Publish any incremental log delta produced since the last poll to the
         # shared Live Logs spool. This is bounded and best-effort; a failure
         # here never fails the observation of container liveness/terminality.
@@ -3837,6 +3940,9 @@ class DockerContainerJobBackend:
         )
 
         manifest = await self._collect_declared_outputs(request, delivered)
+        engagement = await self._collect_assessment_engagement(request)
+        if engagement is not None:
+            manifest.append(engagement)
         if storage is not None and any(
             item.collection_status
             in {ArtifactCollectionStatus.REJECTED, ArtifactCollectionStatus.TRUNCATED}
@@ -3864,6 +3970,43 @@ class DockerContainerJobBackend:
             diagnosticsRef=diagnostics_ref,
             eventsRef=events_ref,
         )
+
+    async def _collect_assessment_engagement(self, request):
+        if self._read_assessment_evidence is None:
+            return None
+        try:
+            snapshot = await self._read_assessment_evidence(request)
+            if snapshot is None:
+                return None
+            payload = json.dumps(
+                snapshot, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if len(payload) > 262144:
+                return ContainerJobArtifact(
+                    name="assessment-engagement",
+                    collectionStatus="rejected",
+                    detail="Assessment engagement evidence exceeds its 256 KiB bound.",
+                )
+            ref = await self._publish_artifact(
+                request,
+                f"{request.job_id}-assessment-engagement.json",
+                payload,
+            )
+            return ContainerJobArtifact(
+                name="assessment-engagement",
+                artifactRef=ref,
+                sizeBytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                mediaType="application/json",
+            )
+        except Exception:  # noqa: BLE001 - retain logs and expose partial evidence
+            # A missing authority artifact cannot erase already-published logs
+            # or other completed outputs. The manifest exposes the exact gap.
+            return ContainerJobArtifact(
+                name="assessment-engagement",
+                collectionStatus="missing",
+                detail="Retained assessment engagement evidence is unavailable.",
+            )
 
     # ----------------------------------------------- declared-output collection
 
