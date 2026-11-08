@@ -786,6 +786,7 @@ def _game_math_observation(
             tool="game-math",
             assets=[summary.game_ref],
             rule_ids=sorted(rules),
+            evidence_method="deterministic_check",
             config_ref=content_key(["game-math", summary.spec_digest]),
             status="complete" if summary.covered else "partial",
         )
@@ -2685,8 +2686,38 @@ class AssessmentExecution:
                     f"Exact configuration: {project_ref}. These are reusable inputs, not execution authority. "
                     "Candidate targets and retention intent do not establish tested coverage, grants, or retention policy.\n"
                 )
+            from moonmind.security.assessment_reports import render_assessment_details
+
+            details = render_assessment_details(
+                comparison,
+                request=request,
+                comparison_ref=comparison_ref,
+                review_status=review_status,
+                work=work,
+            )
+            if request.report_context:
+                context_body = _json(
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                )
+                context_key = content_key([context_body.decode("utf-8")])
+                saved_context = await self.saved(
+                    kind="security.report-context", key=context_key
+                )
+                context_ref = (
+                    saved_context[0]
+                    if saved_context
+                    else await self.write(
+                        context_body,
+                        kind="security.report-context",
+                        key=context_key,
+                    )
+                )
+                evidence.append(context_ref)
+                outputs["reportContextRef"] = context_ref
+                details += f"\nAttributed report context: {context_ref}.\n"
             summary = (
                 _summary(comparison)
+                + details
                 + project_summary
                 + _scanner_summary(work.get("scannerSummaries", []))
                 + _github_summary(github)
@@ -2726,6 +2757,10 @@ class AssessmentExecution:
                 [
                     report_key,
                     "summary",
+                    "professional-report/v1",
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                    if request.report_context
+                    else None,
                     EVIDENCE_TRANSFORMATION_VERSION,
                     request.review_ref,
                     review_status,

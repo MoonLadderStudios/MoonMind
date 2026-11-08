@@ -1,0 +1,160 @@
+"""Readable rendering for the existing security.assess report owner.
+
+Native comparison and control results remain authoritative; supplied commentary
+is attributed separately and cannot promote a finding or coverage conclusion.
+"""
+
+from __future__ import annotations
+
+import html
+import re
+
+from moonmind.utils.logging import redact_evidence_text
+
+
+def _text(value):
+    if re.fullmatch(r"art_[A-Za-z0-9_-]+", str(value)):
+        return str(value)
+    value = (
+        html.escape(redact_evidence_text(str(value)))
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+    return re.sub(r"([\\`*[\]{}()#!|>])", r"\\\1", value)
+
+
+def render_assessment_details(
+    comparison, *, request, comparison_ref, review_status, work
+):
+    observation = comparison["observation"]
+    context = request.report_context
+    native_ids = {row["findingId"] for row in comparison["findings"]}
+    if context and any(row.finding_id not in native_ids for row in context.annotations):
+        raise ValueError("report annotation references unknown finding")
+    lines = [
+        "",
+        "## Executive assessment",
+        "",
+        f"Collection outcome: {_text(work['scanOutcome'])}. Coverage: {comparison['coverageStatus']}.",
+        "Results describe only the admitted scope and recorded observation windows. No independent attestation, certification, or regulator approval is established.",
+        "Zero findings means no findings in the recorded checks, not an assurance that the assets are secure. Accepted risks remain explicit decisions, not remediated findings.",
+        f"Structured comparison: {comparison_ref}. Scan: {_text(comparison.get('scanRef') or 'unavailable')}. Baseline: {_text(comparison.get('baselineRef') or 'not supplied')}.",
+        f"Author: {_text(context.author if context else 'MoonMind automated assessment')}. Reviewer: {_text(context.reviewer if context and context.reviewer else 'unspecified')}.",
+        f"Review status: {context.review_status if context else 'not_requested'}. Agent interpretation availability: {review_status}.",
+        "Review identities and status are attributed metadata, not independent verification or application roles.",
+        "",
+        "## Scope and admitted execution boundaries",
+        "",
+        f"Assets: {_text(', '.join(observation['scope']['assets']))}.",
+        f"Exclusions: {_text(', '.join(observation['scope'].get('exclusions', [])) or 'none declared')}.",
+        f"Repository exceptions: {_text(', '.join(observation['scope'].get('repositoryExceptions', [])) or 'none declared')}.",
+        f"Selected assessment tools: {_text(', '.join(request.tools))}. Budget: {request.budget.base_seconds}/{request.budget.max_seconds} seconds (base/maximum).",
+        "Retained inputs convey their original admission and scope; this report grants no execution, network, credential, or disclosure authority.",
+        "",
+        "## Methodology and test coverage",
+        "",
+        f"Observation: {observation['observedAt']}; expires: {observation['expiresAt']}.",
+        "Method versions below are declared selections; only the executed checks below establish coverage. Unspecified methods or versions remain undefined.",
+    ]
+    if context:
+        lines += [
+            f"- Selected method: {_text(name)} / {_text(version)}."
+            for name, version in context.methodology_versions.items()
+        ]
+    windows = observation.get("coverageWindows", [])
+    for index, row in enumerate(observation["coverage"]):
+        window = windows[index] if windows else None
+        lines += [
+            f"- {_text(row['source'])} / {_text(row['tool'])}: {row['status']}; method {row.get('evidenceMethod', 'unclassified')}.",
+            f"  Assets: {_text(', '.join(row['assets'])) or 'none'}. Rules: {_text(', '.join(row['ruleIds'])) or 'none named'}. All configured rules: {row['allRules']}.",
+            f"  Configuration: {_text(row['configRef'])}. Intelligence: {_text(row.get('intelligence', {}))}.",
+            f"  Source observation window: {_text(window if window else 'not separately recorded; aggregate window above')}.",
+        ]
+    covered = {asset for row in observation["coverage"] for asset in row["assets"]}
+    lines.append(
+        "Unassessed assets: "
+        + _text(
+            ", ".join(sorted(set(observation["scope"]["assets"]) - covered))
+            or "none outside listed coverage; incomplete checks remain qualified above"
+        )
+        + "."
+    )
+    lines += [
+        f"- Provenance {_text(key)}: {_text(value)}"
+        for key, value in observation["provenance"].items()
+    ]
+    if any(row["source"] == "game-math" for row in observation["coverage"]):
+        lines.append(
+            "Game mathematics concerns the supplied specification and sample only. Statistical sample evidence does not certify a deployed game, RNG, or regulatory compliance."
+        )
+    lines += ["", "## Technical findings and remediation", ""]
+    annotations = (
+        {row.finding_id: row for row in context.annotations} if context else {}
+    )
+    for row in comparison["findings"]:
+        finding = row["finding"]
+        lines += [
+            f"### Finding {row['findingId']}",
+            f"State: {row['state']}. Asset: {_text(finding['asset'])}. Evidence expires: {row['evidenceExpiresAt']}.",
+            f"Native source/tool: {_text(finding['source'])} / {_text(finding['tool'])}. Rule: {_text(finding['ruleId'])}. Native identity: {_text(finding['nativeId'])}.",
+            "Reproduction evidence: "
+            + ", ".join(_text(ref) for ref in finding["evidenceRefs"])
+            + ".",
+            f"Verification: {_text(row.get('verification') or 'not verified')}. Coverage identity: {_text(row.get('observedCoverageKey') or 'unavailable')}.",
+        ]
+        annotation = annotations.get(row["findingId"])
+        if annotation:
+            lines.append(
+                f"Attributed commentary by {_text(annotation.author)}: {_text(annotation.annotation)}"
+            )
+            for field in (
+                "reproduction",
+                "remediation",
+                "management_response",
+                "priority",
+                "business_risk",
+                "severity",
+                "cvss_vector",
+                "risk_rationale",
+                "environment_inputs",
+            ):
+                value = getattr(annotation, field)
+                if value:
+                    lines.append(
+                        f"{field.replace('_', ' ').capitalize()}: {_text(value)}."
+                    )
+            lines.append(
+                "CVSS vectors are supplied assessment inputs, not recalculated or independently validated scores. Omitted metrics remain undefined; severity is distinct from business risk."
+            )
+        else:
+            lines.append(
+                "Severity, CVSS metrics and business risk: undefined. Reproduce using the retained native evidence, assess environment-specific impact, remediate the affected rule, and run a scope-matched retest. No authored remediation or management response was supplied."
+            )
+    if not comparison["findings"]:
+        lines.append(
+            "No findings recorded for these checks. Review incomplete or stale coverage before drawing conclusions."
+        )
+    lines += ["", "## Decisions and retest summary", ""]
+    for row in comparison["decisions"]:
+        decision = row["decision"]
+        lines += [
+            f"- Finding {decision['findingId']}: {decision['disposition']} ({row['status']}); author {_text(decision['author'])}; source {_text(decision['source'])}.",
+            f"  Reason: {_text(decision['reason'])}. Review due: {decision['reviewAt']}. Retest: {_text(decision.get('retestOutcome') or 'not supplied')}.",
+            "  Decision/retest evidence: "
+            + ", ".join(_text(ref) for ref in decision["evidenceRefs"])
+            + ".",
+            f"  Review reasons: {_text(', '.join(row['reviewReasons']) or 'none')}. Conditions: {_text(', '.join(decision['reviewConditions']))}.",
+        ]
+    lines += [
+        "Before evidence is linked through the baseline and finding references; after evidence is linked through the current scan and retest decisions. An absent finding alone is not a verified fix.",
+        "",
+        "## Limitations and unavailable material",
+        "",
+        "Partial, failed, authentication-failed, skipped/unsupported and stale checks do not establish clean coverage. Native artifacts remain restricted; offline packages include only selected authorized representations.",
+        *[
+            f"- Collection diagnostic: {_text(item)}"
+            for item in work.get("diagnostics", [])
+        ],
+        "",
+    ]
+    return "\n".join(lines)
