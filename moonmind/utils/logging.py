@@ -6,11 +6,12 @@ import math
 import os
 import re
 from base64 import b64encode
+from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote_plus
 
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth)(?:$|[^a-z0-9])"
+    r"(?i)(?:^|[^a-z0-9])(?:token|secret|password|key|credential|auth|authorization)(?:$|[^a-z0-9])"
 )
 _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
@@ -27,6 +28,15 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"[A-Z0-9_.-]{0,80})(?(quote)(?P=quote))(?P<separator>\s*[:=]\s*)"
     r"(?P<value>\\*\"(?:\\.|[^\"\\])*\"?|'(?:\\.|[^'\\])*'?|[^\s,;&\"'<>`]+)"
 )
+# The portable retry record carries a public audit marker, not a credential.
+# Accept only its exact JSON string grammar; poster/account/history checks
+# remain owned by retry reconstruction. Known credential scans run first.
+_RETRY_RESET_MARKER_PATTERN = re.compile(
+    r'"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])? at '
+    r'(?P<instant>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+    r'(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?)"'
+)
+
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(?:(?:proxy-)?authorization\s*[:=]\s*(?:basic|token|bearer)\s+|bearer\s+)"
     r"[A-Za-z0-9._~+/=-]+"
@@ -84,7 +94,7 @@ _NON_SECRET_REF_KEYS = frozenset(
 def _is_sensitive_key(key: str) -> bool:
     return bool(
         _SENSITIVE_KEY_PATTERN.search(key)
-        or re.search(r"(?:Token|Secret|Password|Credential|Auth)(?:$|[A-Z])", key)
+        or re.search(r"(?:Token|Secret|Password|Credential|Auth|Authorization)(?:$|[A-Z])", key)
         or re.search(r"(?i)(?:api|access|private|secret)[_-]?key$", key)
     )
 
@@ -160,7 +170,33 @@ def _redact_auth_paths(text: str) -> str:
         index = end
     return "".join(output)
 
+
+def _is_retry_reset_marker(match: re.Match[str]) -> bool:
+    value = match.group("value")
+    if (
+        match.group("key") != "resetAuthorization"
+        or match.group("quote") != '"'
+        or match.group("separator").strip() != ":"
+        or len(value) > 128
+    ):
+        return False
+    if value == '""':
+        return True
+    marker = _RETRY_RESET_MARKER_PATTERN.fullmatch(value)
+    if marker is None:
+        return False
+    try:
+        # Match the audit owner's ISO parser, including naive historical
+        # instants and offsets. This also rejects impossible calendar dates.
+        datetime.fromisoformat(marker.group("instant"))
+    except ValueError:
+        return False
+    return True
+
+
 def _redact_secret_assignment(match: re.Match[str]) -> str:
+    if _is_retry_reset_marker(match):
+        return match.group(0)
     key = match.group("key")
     normalized = key.lower().replace("_", "")
     value = match.group("value")

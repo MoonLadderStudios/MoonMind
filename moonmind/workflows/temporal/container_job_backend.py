@@ -5432,8 +5432,12 @@ class DockerContainerJobBackend:
             limitations = network.setdefault("limitations", [])
             if "required_network_scope_denied" not in limitations:
                 limitations.append("required_network_scope_denied")
-        data = redact_sensitive_text(
-            json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        # Preserve the typed, value-free issuance receipt and JSON structure;
+        # text assignment redaction of serialized objects corrupts this record.
+        data = json.dumps(
+            redact_sensitive_payload(diagnostics),
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         return await self._publish_artifact(
             request, f"{request.job_id}-diagnostics.json", data

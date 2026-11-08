@@ -194,3 +194,23 @@ def test_authorization_assignment_removes_scheme_and_value(assignment, secret):
         assert secret not in safe
         assert "https://example.test/reproduce?" in safe
         assert "&findingId=abc123 src/check.py:42" in safe
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("Authorization", "Basic c3ludGhldGljOnNlY3JldA=="),
+        ("proxy-authorization", "Token synthetic-credential-canary"),
+        ("authorization", "synthetic-credential-canary"),
+        ("proxyAuthorization", "Basic c3ludGhldGljOnNlY3JldA=="),
+        ("proxy_authorization", "synthetic-credential-canary"),
+    ],
+    ids=["basic", "proxy-token", "opaque", "camel-proxy", "snake-proxy"],
+)
+def test_structured_authorization_fields_are_redacted(key, value):
+    payload = {"headers": {key: value}, "status": "observed"}
+    assert logging.redact_evidence_payload(payload) == {
+        "headers": {key: "[REDACTED]"},
+        "status": "observed",
+    }
+    assert logging.redact_sensitive_payload(payload)["headers"][key] == "[REDACTED]"
