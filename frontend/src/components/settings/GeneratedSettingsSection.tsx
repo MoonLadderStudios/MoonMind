@@ -498,7 +498,7 @@ export function GeneratedSettingsSection({
   });
 
   const descriptors = useMemo(() => {
-    const all = flattenedDescriptors(catalogQuery.data);
+    const all = flattenedDescriptors(catalogQuery.data).filter(descriptor => descriptor.key !== 'security.assessment_projects');
     return keys ? keys.flatMap((key) => all.filter((descriptor) => descriptor.key === key)) : all;
   }, [catalogQuery.data, keys]);
   const selectedAuditDescriptor = descriptors.find(

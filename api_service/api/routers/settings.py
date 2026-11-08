@@ -12,8 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from api_service.api.instance_access import access_principal
 from api_service.api.schemas import GitHubTokenProbeRequest
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import get_artifact_access, get_instance_access
 from api_service.db import base as db_base
+from api_service.services.assessment_projects import (
+    AssessmentProjectResolveRequest,
+    resolve_saved_assessment_project,
+)
 from api_service.services.repository_scanner_readiness import (
     repository_scanner_readiness,
 )
@@ -32,6 +36,7 @@ from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
 )
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 SETTINGS_CURRENT_USER_DEP = get_instance_access
@@ -250,6 +255,24 @@ def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None
             ),
         )
     return section  # type: ignore[return-value]
+
+
+@router.post("/assessment-projects/resolve")
+async def resolve_assessment_project_selection(
+    payload: AssessmentProjectResolveRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+):
+    try:
+        async with db_base.async_session_maker() as session:
+            return await resolve_saved_assessment_project(
+                payload,
+                session=session,
+                access=access,
+                principal=access_principal(user),
+            )
+    except SQLAlchemyError:
+        return _settings_db_error_response(key="security.assessment_projects")
 
 
 @router.get("/repository-scanners/readiness")

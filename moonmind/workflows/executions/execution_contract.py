@@ -3159,6 +3159,10 @@ def original_task_snapshot_parameters(snapshot: Mapping[str, Any]) -> dict[str, 
             "targetRuntime": str(draft.get("targetRuntime") or "omnigent"),
             "requiredCapabilities": list(draft.get("requiredCapabilities") or []),
             "workflow": dict(workflow) if isinstance(workflow, Mapping) else {},
+            **(
+                {"assessmentProject": _snapshot_safe(draft["assessmentProject"])}
+                if "assessmentProject" in draft else {}
+            ),
         }
     target = snapshot.get("target")
     if isinstance(target, Mapping):

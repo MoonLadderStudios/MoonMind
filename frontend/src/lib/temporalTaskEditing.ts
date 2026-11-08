@@ -1,4 +1,5 @@
 import { readModelSelection, type ModelSelection } from "./modelSelection";
+import { copyAssessmentSnapshot, type AssessmentProjectSnapshot } from "./assessmentProjects";
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
 const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = 'pr_with_merge_automation';
 
@@ -106,6 +107,7 @@ export type TemporalSubmissionDraftPresetPayload = {
 };
 
 export type TemporalSubmissionDraft = {
+  assessmentProject: AssessmentProjectSnapshot | null;
   runtime: string | null;
   providerProfile: string | null;
   agentProfile: {
@@ -1048,6 +1050,11 @@ export function buildTemporalSubmissionDraftFromExecution(
   });
 
   const draft: TemporalSubmissionDraft = {
+    assessmentProject: copyAssessmentSnapshot(
+      Object.hasOwn(snapshotDraft, "assessmentProject") ? snapshotDraft.assessmentProject
+        : Object.hasOwn(params, "assessmentProject") ? params.assessmentProject
+        : artifactParams.assessmentProject,
+    ),
     runtime: nullableStringValue(
       snapshotDraft.runtime,
       execution.targetRuntime,

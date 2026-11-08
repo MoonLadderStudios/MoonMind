@@ -23,7 +23,8 @@ from api_service.db.models import (
     SettingsAuditEvent,
     SettingsOverride,
 )
-from moonmind.config.settings import AppSettings, settings as app_settings
+from moonmind.config.settings import AppSettings
+from moonmind.config.settings import settings as app_settings
 from moonmind.runtime_identity import normalize_runtime_id
 
 if TYPE_CHECKING:
@@ -437,6 +438,7 @@ _CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
         "workflow.default_publish_mode",
         "workflow.default_provider_profile_ref",
         "workflow.operation_mode",
+        "security.assessment_projects",
         "skills.policy_mode",
         "skills.canary_percent",
         "integrations.github.token_ref",
@@ -483,10 +485,34 @@ def _canonical_setting_value(key: str, value: Any) -> Any:
 
     if key == _DEFAULT_RUNTIME_KEY and isinstance(value, str) and value.strip():
         return normalize_runtime_id(value)
+    if key == "security.assessment_projects":
+        from moonmind.security.assessment_projects import AssessmentProjects
+
+        try:
+            return AssessmentProjects.model_validate(value).model_dump(
+                mode="json", by_alias=True
+            )
+        except (TypeError, ValueError):
+            # The ordinary validator returns a redacted field error below.
+            return value
     return value
 
 
 _REGISTRY: tuple[SettingRegistryEntry, ...] = (
+    SettingRegistryEntry(
+        key="security.assessment_projects",
+        title="Assessment projects",
+        description="Reusable assessment context and opaque references. Selection never grants execution authority.",
+        category="Security assessments",
+        section="user-workspace",
+        value_type="object",
+        ui="assessment_projects",
+        default_value={"projects": []},
+        apply_mode="next_workflow",
+        applies_to=("workflow_creation", "security_assessment"),
+        audit=SettingAuditPolicy(store_old_value=False, store_new_value=False),
+        order=75,
+    ),
     SettingRegistryEntry(
         key=_DEFAULT_RUNTIME_KEY,
         title="Default Harness",
@@ -1461,12 +1487,23 @@ class SettingsCatalogService:
                     self._validation_issue(
                         entry,
                         code=code,
-                        message=self._read_only_reason(entry) or "Setting is read-only.",
+                        message=self._read_only_reason(entry)
+                        or "Setting is read-only.",
                         boundary="write_request",
                         rule="write_lock",
                     )
                 )
                 continue
+            if key == "security.assessment_projects" and key not in expected_versions:
+                validation_issues.append(
+                    self._validation_issue(
+                        entry,
+                        code="expected_version_required",
+                        message="Reload assessment projects and include their current value version before saving.",
+                        boundary="write_request",
+                        rule="optimistic_version",
+                    )
+                )
             entries[key] = entry
             validated[key] = value
         if validation_issues:
@@ -1517,7 +1554,12 @@ class SettingsCatalogService:
             row = current_rows.get(key)
             old_value = row.value_json if row is not None else None
             if row is None:
-                row = SettingsOverride(key=key, value_json=value, value_version=1)
+                # The shared collection's first write must invalidate another
+                # editor that loaded the inherited empty document at version 1.
+                first_version = 2 if key == "security.assessment_projects" else 1
+                row = SettingsOverride(
+                    key=key, value_json=value, value_version=first_version
+                )
                 self._session.add(row)
                 current_rows[key] = row
             else:
@@ -2783,11 +2825,40 @@ class SettingsCatalogService:
                     rule="max_size",
                 )
             ]
-        if self._contains_unsafe_payload(
-            value,
-            allow_profile_ref_string_tokens=entry.key
-            == "workflow.default_provider_profile_ref",
-        ):
+        # This typed document deliberately contains opaque reference fields.
+        # Validate every key first, then retain the ordinary secret-value guard;
+        # no other Settings key gains an exception for credential/artifact data.
+        if entry.key == "security.assessment_projects":
+            from moonmind.security.assessment_projects import AssessmentProjects
+
+            try:
+                AssessmentProjects.model_validate(value)
+            except (TypeError, ValueError):
+                return [
+                    self._validation_issue(
+                        entry,
+                        code="invalid_assessment_projects",
+                        message="Assessment projects contain an invalid field, reference, or duplicate identity.",
+                        boundary=boundary,
+                        rule="assessment_projects_schema",
+                    )
+                ]
+
+            def values_only(item):
+                if isinstance(item, dict):
+                    return [values_only(nested) for nested in item.values()]
+                if isinstance(item, list):
+                    return [values_only(nested) for nested in item]
+                return item
+
+            unsafe = self._contains_unsafe_payload(values_only(value))
+        else:
+            unsafe = self._contains_unsafe_payload(
+                value,
+                allow_profile_ref_string_tokens=entry.key
+                == "workflow.default_provider_profile_ref",
+            )
+        if unsafe:
             return [
                 self._validation_issue(
                     entry,

@@ -83,6 +83,12 @@ Repository and publishing controls may remain near the bottom of the current lay
 
 A no-repository source does not render a dummy repository or branch. Genuinely separate source and later-publication destination roles follow [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), use explicit role labels, and appear only for supported operations. They are not ambiguous generic override fields.
 
+### Saved assessment context
+
+The Context area can load a system/environment from Instance Settings. Resolve the selected saved version and any run-only overrides before submitting; reference gaps keep the draft intact and identify the setting to repair. A subsequent Settings refresh does not silently replace the resolved configuration. Clear removes the context from this draft without deleting the saved system.
+
+Capabilities declaring assessment defaults use the shared input renderer's Apply action. It fills missing scope, budget and retained-report fields, preserving explicit values, including empty lists. The exact context appears read-only with the inputs and is frozen in execution history. Edit and rerun restore that snapshot rather than today's saved definition, and the backend rechecks current reference access. Candidate origins/accounts and credential references remain context, never execution authority. See [supported fields and limits](../Security/SettingsSystem.md#reusable-assessment-projects).
+
 ## Step Authoring Model
 
 A draft contains ordered typed steps. The canonical types remain those defined in [Step Types](../Steps/StepTypes.md):

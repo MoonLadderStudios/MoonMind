@@ -12906,6 +12906,7 @@ def test_create_execution_enforces_idempotency(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
+    service.find_create_execution.return_value = None
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -23509,3 +23510,369 @@ def test_provider_profile_facets_deduplicate_across_visibility_pages_4640() -> N
         else:
             pytest.fail("Provider Profile facet pagination did not finish")
     assert received == ["shared", "first", "overflow", "last"]
+
+
+def _assessment_project_snapshot(**configuration: Any) -> dict[str, Any]:
+    from moonmind.security.assessment_projects import resolve_assessment_project
+
+    document = {"projects": [{
+        "id": "shop", "name": "Shop", "purpose": "Checkout comparison",
+        "boundaries": "Payment provider excluded", "environments": [{
+            "id": "staging", "name": "Staging", "assets": ["checkout"],
+            "originCandidates": ["https://staging.example.com"],
+            **configuration,
+        }],
+    }]}
+    return resolve_assessment_project(
+        document, project_id="shop", environment_id="staging", version=7,
+    ).model_dump(mode="json", by_alias=True)
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("input_shape", ["tool", "args", "skill", "workflow_inputs"])
+def test_assessment_project_create_freezes_context_before_tool_validation(
+    client, monkeypatch, serialized, input_shape,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    snapshot = _assessment_project_snapshot()
+    workflow = {"instructions": "Compare the checkout evidence.",
+        "runtime": {"mode": "codex"}, "tool": {"name": "security.assess", "inputs": {
+            "scope": {"assets": ["explicit"], "exclusions": []}, "tools": [],
+            "reviewRef": "art_review",
+        }}}
+    if input_shape == "skill":
+        workflow["skill"] = workflow.pop("tool")
+    elif input_shape == "args":
+        workflow["tool"]["args"] = workflow["tool"].pop("inputs")
+    elif input_shape == "workflow_inputs":
+        workflow["inputs"] = workflow["tool"].pop("inputs")
+    parameters = {"assessmentProject": snapshot, "workflow": workflow}
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters}
+        if serialized else {"type": "workflow", "payload": parameters})
+    validated = []
+
+    async def validate_inputs(*, initial_parameters, **_kwargs):
+        from moonmind.security.assessments import AssessmentRequest
+
+        validated.append(copy.deepcopy(initial_parameters))
+        task = initial_parameters["workflow"]
+        AssessmentRequest.model_validate((task.get("tool") or task["skill"])["inputs"])
+        return SimpleNamespace(valid=True, parameters=initial_parameters)
+
+    monkeypatch.setattr(executions_module, "validate_skill_step_inputs", validate_inputs)
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 201, response.text
+    admitted = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert admitted["assessmentProject"] == snapshot
+    assert "assessmentScope" not in admitted
+    assert validated
+    for value in validated:
+        task = value["workflow"]
+        inputs = (task.get("tool") or task["skill"])["inputs"]
+        assert inputs["assessmentProject"] == snapshot
+        assert inputs["scope"] == {"assets": ["explicit"], "exclusions": []}
+        assert inputs["tools"] == []
+        assert inputs["credentialRefs"] == inputs["networkRefs"] == []
+        assert inputs["budget"]["maxSeconds"] == 120
+
+
+def test_assessment_project_original_snapshot_round_trip_and_clear():
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
+
+    snapshot = _assessment_project_snapshot()
+    for selected in (snapshot, None):
+        parameters = {"assessmentProject": selected,
+            "workflow": {"instructions": "Compare checkout."}}
+        source, workflow = executions_module._snapshot_source_payload_from_parameters(parameters)
+        retained = _build_original_workflow_input_snapshot_payload(
+            source_kind="edit", payload=source, task_payload=workflow,
+        )
+        assert "assessmentProject" in retained["draft"]
+        assert retained["draft"]["assessmentProject"] == selected
+        restored, _workflow = executions_module._snapshot_workflow_from_artifact_payload(retained)
+        assert restored["assessmentProject"] == selected
+        assert original_task_snapshot_parameters(retained)["assessmentProject"] == selected
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_assessment_project_create_rejects_malformed_snapshot(client, serialized):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    parameters = {"assessmentProject": {"projectId": "shop"},
+        "workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}}}
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters}
+        if serialized else {"type": "workflow", "payload": parameters})
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_assessment_project"
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_assessment_project_idempotent_create_returns_before_reference_checks(
+    client, monkeypatch, serialized,
+):
+    test_client, service, _user = client
+    admission = OperatorAdmission(via="loopback")
+    test_client.app.dependency_overrides[get_instance_access_optional] = lambda: admission
+    accepted = _build_execution_record()
+    service.find_create_execution.return_value = accepted
+    service.ensure_create_started.return_value = accepted
+    validate = AsyncMock(side_effect=AssertionError("Accepted Create must not recheck references"))
+    monkeypatch.setattr(executions_module, "_validate_assessment_project_parameter", validate)
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service",
+        Mock(side_effect=AssertionError("Accepted Create must not reread input artifacts")))
+    parameters = {"assessmentProject": _assessment_project_snapshot(artifactRefs=["art_deleted"]),
+        "workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}}}
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "idempotencyKey": "project-retry",
+        "inputArtifactRef": "art_removed_input", "initialParameters": parameters}
+        if serialized else {"type": "workflow", "payload": {**parameters,
+            "inputArtifactRef": "art_removed_input", "idempotencyKey": "project-retry"}})
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 201, response.text
+    assert response.json()["workflowId"] == accepted.workflow_id
+    validate.assert_not_awaited()
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["create", "serialized", "UpdateInputs", "RequestRerun", "rerun"])
+def test_assessment_project_rechecks_missing_references_at_execution_boundary(
+    client, monkeypatch, operation,
+):
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"assessmentProject": _assessment_project_snapshot(credentialRefs=["db://missing"]),
+        "workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}}}
+    service.describe_execution.return_value = record
+    service.create_execution.return_value = record
+    service._full_rerun_parameters = Mock(side_effect=TemporalExecutionService._full_rerun_parameters)
+    session = SimpleNamespace(get=AsyncMock(return_value=record))
+    test_client.app.dependency_overrides[get_async_session] = lambda: session
+    from api_service.services.secrets import SecretsService
+    current_reference = AsyncMock(return_value={"valid": False})
+    monkeypatch.setattr(SecretsService, "validate_secret_ref", current_reference)
+    if operation == "create":
+        path, body = "/api/executions", {"type": "workflow", "payload": record.parameters}
+    elif operation == "serialized":
+        path, body = "/api/executions", {"workflowType": "MoonMind.UserWorkflow", "initialParameters": record.parameters}
+    elif operation == "rerun":
+        path, body = f"/api/executions/{record.workflow_id}/rerun", None
+    else:
+        path, body = f"/api/executions/{record.workflow_id}/update", {"updateName": operation}
+        if operation == "UpdateInputs":
+            body["parametersPatch"] = {"workflow": {"instructions": "New wording"}}
+    response = test_client.post(path, json=body)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "assessment_project_setup_gaps"
+    assert response.json()["detail"]["gaps"][0]["field"] == "credentialRefs[0]"
+    assert "db://missing" not in response.text
+    current_reference.assert_awaited_once_with(session, "missing")
+    service.create_execution.assert_not_awaited()
+    service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize("clear", [False, True])
+def test_assessment_project_edit_retains_snapshot_or_explicitly_clears(
+    client, monkeypatch, update_name, clear,
+):
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    snapshot = _assessment_project_snapshot()
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"assessmentProject": snapshot,
+        "workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}}}
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {"workflow_id": record.workflow_id,
+        "accepted": True, "applied": "immediate", "message": "ok"}
+    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", AsyncMock(return_value=""))
+    workflow = {"instructions": "Edited wording", "tool": {"name": "security.assess",
+        "inputs": {"assessmentProject": snapshot, "scope": {"assets": ["explicit"], "exclusions": []}}}}
+    parameters_patch = {"workflow": workflow}
+    if clear:
+        parameters_patch["assessmentProject"] = None
+    response = test_client.post(f"/api/executions/{record.workflow_id}/update",
+        json={"updateName": update_name, "parametersPatch": parameters_patch})
+    assert response.status_code == 200, response.text
+    admitted = service.update_execution.await_args.kwargs["parameters_patch"]
+    assert admitted["assessmentProject"] == (None if clear else snapshot)
+    inputs = admitted["workflow"]["tool"]["inputs"]
+    assert inputs["scope"]["assets"] == ["explicit"]
+    if clear:
+        assert "assessmentProject" not in inputs
+    else:
+        assert inputs["assessmentProject"] == snapshot
+        assert inputs["budget"]["maxSeconds"] == 120
+    assert record.parameters["assessmentProject"] == snapshot
+
+
+def test_assessment_project_exact_rerun_restores_original_snapshot(client, monkeypatch):
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    snapshot = _assessment_project_snapshot()
+    original = _build_original_workflow_input_snapshot_payload(source_kind="create",
+        payload={"assessmentProject": snapshot}, task_payload={"instructions": "Original comparison"})
+    record = _build_execution_record()
+    record.parameters = {"assessmentProject": _assessment_project_snapshot(assets=["later"]),
+        "workflow": {"instructions": "Later projection"}}
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {"workflow_id": record.workflow_id,
+        "accepted": True, "applied": "immediate", "message": "ok"}
+    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, json.dumps(original).encode())))
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
+    monkeypatch.setattr(executions_module, "_reuse_original_task_input_snapshot_from_source", AsyncMock(return_value=""))
+    response = test_client.post(f"/api/executions/{record.workflow_id}/update", json={"updateName": "RequestRerun"})
+    assert response.status_code == 200, response.text
+    restored = service.update_execution.await_args.kwargs["parameters_patch"]
+    assert restored["assessmentProject"] == snapshot
+    assert restored["assessmentProject"]["sourceVersion"] == 7
+    assert restored["workflow"]["instructions"] == "Original comparison"
+    assert "assessmentScope" not in restored
+
+
+@pytest.mark.asyncio
+async def test_assessment_project_clear_survives_input_artifact_hydration(monkeypatch):
+    snapshot = _assessment_project_snapshot()
+    artifact_payload = _build_original_workflow_input_snapshot_payload(
+        source_kind="create", payload={"assessmentProject": snapshot},
+        task_payload={"instructions": "Original", "tool": {"name": "security.assess",
+            "inputs": {"assessmentProject": snapshot, "reviewRef": "art_review"}}},
+    )
+    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, json.dumps(artifact_payload).encode())))
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
+    source, workflow = await executions_module._snapshot_source_payload_from_parameters_and_artifact(
+        session=None, user=OperatorAdmission(via="loopback"),
+        record=SimpleNamespace(input_ref="art_input"),
+        parameters={"assessmentProject": None, "workflow": {"instructions": "Edited"}},
+        access=access_for_test("operator"),
+    )
+    assert source["assessmentProject"] is None
+    assert "assessmentProject" not in workflow["tool"]["inputs"]
+    assert workflow["tool"]["inputs"]["reviewRef"] == "art_review"
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_assessment_project_create_rejects_unbound_nested_metadata(client, serialized):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    workflow = {"instructions": "Compare", "runtime": {"mode": "codex"},
+        "tool": {"name": "security.assess", "inputs": {
+            "assessmentProject": _assessment_project_snapshot(credentialRefs=["db://missing"]),
+            "scope": {"assets": ["checkout"], "exclusions": []},
+            "tools": [], "reviewRef": "art_review",
+            "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 30},
+            "credentialRefs": [], "networkRefs": [],
+        }}}
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "initialParameters": {"workflow": workflow}}
+        if serialized else {"type": "workflow", "payload": {"workflow": workflow}})
+    response = test_client.post("/api/executions", json=submitted)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_assessment_project"
+    assert "payload.assessmentProject" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("selection", ["absent", "clear", "selected"])
+def test_assessment_project_invalid_steps_still_returns_validation_error(client, selection):
+    test_client, service, _user = client
+    parameters = {"workflow": {"instructions": "Compare", "steps": 5}}
+    if selection != "absent":
+        parameters["assessmentProject"] = None if selection == "clear" else _assessment_project_snapshot()
+    response = test_client.post("/api/executions", json={"type": "workflow", "payload": parameters})
+    assert response.status_code == 422, response.text
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("context", ["matched", "mismatched", "nested_only", "clear", "mismatched_nested"])
+def test_assessment_project_artifact_context_matches_reviewed_request(
+    client, monkeypatch, serialized, context,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    snapshot = _assessment_project_snapshot()
+    artifact_snapshot = _assessment_project_snapshot(assets=["different"]) if context == "mismatched" else snapshot
+    selected = None if context in {"clear", "nested_only"} else snapshot
+    artifact_source = {} if context == "nested_only" else {"assessmentProject": None if context == "clear" else artifact_snapshot}
+    artifact_inputs = {"reviewRef": "art_review"}
+    if context != "clear":
+        artifact_inputs["assessmentProject"] = (
+            _assessment_project_snapshot(assets=["nested-other"])
+            if context == "mismatched_nested" else artifact_snapshot
+        )
+    retained = _build_original_workflow_input_snapshot_payload(
+        source_kind="create", payload=artifact_source,
+        task_payload={"instructions": "Original evidence comparison", "tool": {
+            "name": "security.assess", "inputs": artifact_inputs}},
+    )
+    before = copy.deepcopy(retained)
+    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, json.dumps(retained).encode())))
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
+    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", AsyncMock(return_value=""))
+    parameters = {"workflow": {"instructions": "Original evidence comparison", "runtime": {"mode": "codex"}}}
+    if context != "nested_only":
+        parameters["assessmentProject"] = selected
+    submitted = ({"workflowType": "MoonMind.UserWorkflow", "inputArtifactRef": "art_input", "initialParameters": parameters}
+        if serialized else {"type": "workflow", "payload": {**parameters, "inputArtifactRef": "art_input"}})
+    response = test_client.post("/api/executions", json=submitted)
+    assert retained == before
+    if context in {"matched", "clear"}:
+        assert response.status_code == 201, response.text
+        admitted = service.create_execution.await_args.kwargs["initial_parameters"]
+        assert admitted.get("assessmentProject") == selected
+    else:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "invalid_assessment_project"
+        assert "Rebuild the input artifact from the reviewed draft" in response.text
+        service.create_execution.assert_not_awaited()
+    artifact_service.read.assert_awaited_once()
+
+
+def test_assessment_project_preset_cannot_introduce_unbound_metadata(client, monkeypatch):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    async def expand_preset(*, task_payload, **_kwargs):
+        task_payload["tool"] = {"name": "security.assess", "inputs": {
+            "assessmentProject": _assessment_project_snapshot(),
+        }}
+
+    monkeypatch.setattr(executions_module, "_expand_goal_preset_for_workflow_submission", expand_preset)
+    response = test_client.post("/api/executions", json={"type": "workflow", "payload": {
+        "workflow": {"instructions": "Compare", "runtime": {"mode": "codex"}},
+    }})
+    assert response.status_code == 422, response.text
+    assert "payload.assessmentProject" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+def test_assessment_project_edit_rejects_new_input_artifact_context_mismatch(
+    client, monkeypatch, update_name,
+):
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(has_workflow_input_snapshot=False)
+    record.parameters = {"assessmentProject": _assessment_project_snapshot(),
+        "workflow": {"instructions": "Original"}}
+    service.describe_execution.return_value = record
+    service.update_execution.return_value = {"workflow_id": record.workflow_id,
+        "accepted": True, "applied": "immediate", "message": "ok"}
+    mismatch = _build_original_workflow_input_snapshot_payload(
+        source_kind="edit", payload={"assessmentProject": _assessment_project_snapshot(assets=["other"])},
+        task_payload={"instructions": "Edited"},
+    )
+    artifact_service = SimpleNamespace(read=AsyncMock(return_value=(None, json.dumps(mismatch).encode())))
+    monkeypatch.setattr(executions_module, "get_temporal_artifact_service", _caller_owned_artifact_factory(artifact_service))
+    monkeypatch.setattr(executions_module, "_persist_original_workflow_input_snapshot_from_parameters", AsyncMock(return_value=""))
+    response = test_client.post(f"/api/executions/{record.workflow_id}/update", json={
+        "updateName": update_name, "inputArtifactRef": "art_edited",
+        "parametersPatch": {"workflow": {"instructions": "Edited"}},
+    })
+    assert response.status_code == 422, response.text
+    assert "Rebuild the input artifact from the reviewed draft" in response.text
+    service.update_execution.assert_not_awaited()

@@ -17,6 +17,7 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
 )
+from moonmind.security.assessment_projects import resolve_assessment_project
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -38,6 +39,13 @@ async def _db(tmp_path: Path):
 async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_original_inputs(
     tmp_path: Path,
 ) -> None:
+    assessment_project = resolve_assessment_project(
+        {"projects": [{"id": "checkout", "name": "Checkout", "purpose": "Evidence comparison",
+            "boundaries": "Payment provider excluded", "environments": [{
+                "id": "staging", "name": "Staging", "assets": ["checkout-service"],
+            }]}]},
+        project_id="checkout", environment_id="staging", version=4,
+    ).model_dump(mode="json", by_alias=True)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -62,6 +70,7 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                 failure_policy=None,
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
+                    "assessmentProject": assessment_project,
                     "agentRunId": "old-agent-run",
                     "workflow": {
                         "title": "Original task",
@@ -114,6 +123,10 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
     assert rerun.input_ref == "artifact://input/source"
     assert rerun.plan_ref == "artifact://plan/source"
     assert rerun.parameters["repository"] == "MoonLadderStudios/MoonMind"
+    # No saved definition is present in this database. Historical context is
+    # execution input, not a request to reload today's Settings defaults.
+    assert rerun.parameters["assessmentProject"] == assessment_project
+    assert "assessmentScope" not in rerun.parameters
     assert rerun.parameters["rerunSource"] == {
         "workflowId": source_after_rerun.workflow_id,
         "runId": source_after_rerun.run_id,

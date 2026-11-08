@@ -628,3 +628,27 @@ describe("MoonLadderStudios/MoonMind#2619 source intent round-trip", () => {
     expect(fromParameters.workspace).toEqual(workspace);
   });
 });
+
+describe('assessment project historical context', () => {
+  const snapshot = {
+    schemaVersion: 'assessment-project/v1', projectId: 'payments', projectName: 'Payments',
+    environmentId: 'production', environmentName: 'Production', sourceVersion: 3,
+    purpose: 'Assess controls', boundaries: 'Payments service only',
+    configuration: { id: 'production', name: 'Production', assets: ['payments-api'] },
+    digest: 'a'.repeat(64),
+  };
+  it.each(['edit', 'rerun'])('restores the recorded snapshot for %s, without resolving current Settings', () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: 'assessment-history', inputParameters: { assessmentProject: snapshot, workflow: { instructions: 'Assess retained evidence' } },
+    });
+    expect(draft.assessmentProject).toEqual(snapshot);
+    expect(draft.assessmentProject).not.toBe(snapshot);
+  });
+  it('prefers an authoritative artifact draft and respects explicit context removal', () => {
+    const execution = { workflowId: 'assessment-history', inputParameters: { assessmentProject: snapshot, workflow: { instructions: 'Assess retained evidence' } } };
+    const archived = { ...snapshot, sourceVersion: 1 };
+    expect(buildTemporalSubmissionDraftFromExecution(execution, { draft: { assessmentProject: archived } }).assessmentProject).toEqual(archived);
+    expect(buildTemporalSubmissionDraftFromExecution(execution, { draft: { assessmentProject: null } }).assessmentProject).toBeNull();
+    expect(buildTemporalSubmissionDraftFromExecution({ ...execution, inputParameters: { ...execution.inputParameters, assessmentProject: null } }, { assessmentProject: snapshot }).assessmentProject).toBeNull();
+  });
+});

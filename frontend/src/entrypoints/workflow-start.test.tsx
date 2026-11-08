@@ -1,3 +1,4 @@
+import { createAssessmentEnvironment, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
 import {
   afterEach,
   beforeAll,
@@ -19390,6 +19391,130 @@ describe("Task Create governed Tool authoring", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("loads assessment context into ordinary schema fields and preserves explicit overrides across a failed Create retry", async () => {
+    const snapshot: AssessmentProjectSnapshot = {
+      schemaVersion: 'assessment-project/v1', projectId: 'payments', projectName: 'Payments',
+      environmentId: 'prod', environmentName: 'Production', sourceVersion: 2,
+      purpose: 'Review payments', boundaries: 'Payment API only', digest: 'a'.repeat(64),
+      configuration: { ...createAssessmentEnvironment(), id: 'prod', name: 'Production', assets: ['saved-api'], artifactRefs: ['art_report'] },
+    };
+    const schema = {
+      type: 'object', 'x-assessment-project-defaults': true,
+      $defs: { Scope: { type: 'object', title: 'Scope' }, Budget: { type: 'object', title: 'Budget' } },
+      properties: {
+        scope: { $ref: '#/$defs/Scope' }, budget: { $ref: '#/$defs/Budget' },
+        reportRefs: { type: 'array', title: 'Report references' }, tools: { type: 'array', title: 'Tools' },
+        credentialRefs: { type: 'array' }, networkRefs: { type: 'array' },
+        assessmentProject: { type: 'object', title: 'Assessment project', readOnly: true },
+      }, required: ['scope', 'budget', 'tools', 'credentialRefs', 'networkRefs'],
+    };
+    toolDiscoveryResponse = { ok: true, json: async () => ({ tools: [{ name: 'security.assess', inputSchema: schema }] }) } as Response;
+    const original = fetchSpy.getMockImplementation()!;
+    let attempts = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/settings/catalog')) return Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 2, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: snapshot.purpose, boundaries: snapshot.boundaries, environments: [snapshot.configuration] }] } }] } }) } as Response);
+      if (url.endsWith('/assessment-projects/resolve')) return Promise.resolve({ ok: true, json: async () => ({ snapshot, gaps: [] }) } as Response);
+      if (url === '/api/executions' && init?.method === 'POST' && ++attempts === 1) return Promise.resolve(new Response(JSON.stringify({ detail: 'Temporary admission rejection' }), { status: 422 }));
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByRole('option', { name: 'Payments' });
+    fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
+    fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load assessment context' }));
+    await screen.findByLabelText('Frozen assessment context');
+    const step = (await screen.findByText('Step 1')).closest('section') as HTMLElement;
+    fireEvent.change(within(step).getByLabelText('Instructions'), { target: { value: 'Assess retained reports.' } });
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+    fireEvent.click(within(step).getByRole('button', { name: 'Apply assessment defaults' }));
+    expect(JSON.parse((within(step).getByLabelText('Scope') as HTMLTextAreaElement).value)).toEqual({ assets: ['saved-api'], exclusions: [] });
+    expect((within(step).getByLabelText('Assessment project') as HTMLTextAreaElement).readOnly).toBe(true);
+    fireEvent.change(within(step).getByLabelText('Scope'), { target: { value: JSON.stringify({ assets: ['explicit-api'], exclusions: [] }) } });
+    fireEvent.click(within(step).getByRole('button', { name: 'Apply assessment defaults' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await waitFor(() => expect(attempts).toBe(1));
+    await screen.findByText(/Temporary admission rejection/);
+    expect(screen.getByLabelText('Frozen assessment context').textContent).toContain('Payments');
+    fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await waitFor(() => expect(attempts).toBe(2));
+    expect(latestCreateRequest()).toMatchObject({ payload: { assessmentProject: snapshot, task: { steps: [{ tool: { inputs: { scope: { assets: ['explicit-api'] }, budget: snapshot.configuration.budget, reportRefs: ['art_report'], credentialRefs: [], networkRefs: [], assessmentProject: snapshot } } }] } } });
+  });
+
+  it.each([
+    ['editExecutionId', 'UpdateInputs'],
+    ['rerunExecutionId', 'RequestRerun'],
+  ])('preserves historical assessment context through %s and supports explicit removal', async (parameter, updateName) => {
+    const snapshot: AssessmentProjectSnapshot = {
+      schemaVersion: 'assessment-project/v1', projectId: 'historical', projectName: 'Historical system',
+      environmentId: 'prod', environmentName: 'Production', sourceVersion: 1,
+      purpose: 'Review history', boundaries: 'Historical boundary', digest: 'b'.repeat(64),
+      configuration: { ...createAssessmentEnvironment(), id: 'prod', name: 'Production', assets: ['historical-api'] },
+    };
+    window.history.pushState({}, 'Historical context', `/workflows/new?${parameter}=mm%3Aassessment-history`);
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions/mm%3Aassessment-history?')) return Promise.resolve({ ok: true, json: async () => ({
+        workflowId: 'mm:assessment-history', runId: 'recorded-run', workflowType: 'MoonMind.UserWorkflow', state: parameter === 'editExecutionId' ? 'executing' : 'completed',
+        actions: { canUpdateInputs: true, canRerun: true, canEditForRerun: true },
+        inputParameters: { assessmentProject: snapshot, workflow: { instructions: 'Review the recorded assessment.', runtime: { mode: 'codex_cli', profileId: 'profile:codex-default' }, publish: { mode: 'none' } } },
+      }) } as Response);
+      if (url === '/api/executions/mm%3Aassessment-history/update') return Promise.resolve({ ok: true, json: async () => ({ applied: 'immediately' }) } as Response);
+      if (url.includes('/settings/catalog')) return Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 9, effective_value: { projects: [] } }] } }) } as Response);
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    expect((await screen.findByLabelText('Frozen assessment context')).textContent).toContain('historical-api');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/assessment-projects/resolve'))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove assessment context' }));
+    fireEvent.submit(document.querySelector('#queue-submit-form')!);
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/executions/mm%3Aassessment-history/update')).toBe(true));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/executions/mm%3Aassessment-history/update');
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ updateName, parametersPatch: { assessmentProject: null } });
+  });
+
+  it('blocks workflow submission while an assessment environment selection is unresolved', async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => String(input).includes('/settings/catalog')
+      ? Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 1, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: 'Review', boundaries: 'API', environments: [{ ...createAssessmentEnvironment(), id: 'prod', name: 'Production' }] }] } }] } }) } as Response)
+      : original(input, init));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByRole('option', { name: 'Payments' });
+    fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
+    fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Review assessment.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await screen.findByText('Load the selected assessment context before starting the workflow.');
+    expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === '/api/executions' && options?.method === 'POST')).toBe(false);
+  });
+
+  it('does not overwrite incomplete advanced Tool JSON when assessment context changes', async () => {
+    const configuration = { ...createAssessmentEnvironment(), id: 'prod', name: 'Production', assets: ['api'] };
+    const snapshot = { schemaVersion: 'assessment-project/v1', projectId: 'payments', projectName: 'Payments', environmentId: 'prod', environmentName: 'Production', sourceVersion: 2, purpose: 'Review', boundaries: 'API', digest: 'a'.repeat(64), configuration };
+    toolDiscoveryResponse = { ok: true, json: async () => ({ tools: [{ name: 'security.assess', inputSchema: { 'x-assessment-project-defaults': true, type: 'object', properties: { scope: { type: 'object' }, assessmentProject: { type: 'object', readOnly: true } } } }] }) } as Response;
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/settings/catalog')) return Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 2, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: 'Review', boundaries: 'API', environments: [configuration] }] } }] } }) } as Response);
+      if (String(input).endsWith('/assessment-projects/resolve')) return Promise.resolve({ ok: true, json: async () => ({ snapshot, gaps: [] }) } as Response);
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByRole('option', { name: 'Payments' });
+    fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
+    fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Load assessment context' }));
+    await screen.findByLabelText('Frozen assessment context');
+    const step = (await screen.findByText('Step 1')).closest('section') as HTMLElement;
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+    fireEvent.click(within(step).getByText('Edit JSON'));
+    fireEvent.change(within(step).getByLabelText('Tool Inputs (JSON object)'), { target: { value: '{"scope": {"assets": [' } });
+    expect((within(step).getByRole('button', { name: 'Apply assessment defaults' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove assessment context' }));
+    expect((within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement).value).toBe('{"scope": {"assets": [');
   });
 
   it("groups and filters trusted Tool choices", async () => {

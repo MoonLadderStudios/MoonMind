@@ -1,3 +1,4 @@
+import { AssessmentProjectsSettings } from '../components/settings/AssessmentProjectsSettings';
 import { Button } from '../components/Button';
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -270,6 +271,7 @@ function InstanceSettingsContent() {
       description="Review instance configuration and defaults, including validation and application diagnostics."
     >
       <NoticeBanner notice={notice} />
+      <AssessmentProjectsSettings />
       <GeneratedSettingsSection />
       <p className="text-xs text-slate-500 dark:text-slate-400">
         This page edits instance-wide settings. The guarded upgrade reconciles

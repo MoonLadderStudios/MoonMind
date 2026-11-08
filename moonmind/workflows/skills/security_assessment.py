@@ -2222,8 +2222,37 @@ class AssessmentExecution:
                     externalVerification=framework_report["externalVerification"],
                 )
         try:
+            project_summary = ""
+            project_digest = None
+            if request.assessment_project is not None:
+                project = request.assessment_project
+                project_digest = project.digest
+                saved_project = await self.saved(
+                    kind="security.assessment-project", key=project_digest
+                )
+                project_ref = (
+                    saved_project[0]
+                    if saved_project
+                    else await self.write(
+                        _json(project.model_dump(mode="json", by_alias=True)),
+                        kind="security.assessment-project",
+                        key=project_digest,
+                    )
+                )
+                evidence.append(project_ref)
+                outputs["assessmentProjectRef"] = project_ref
+                # Retained configuration is context, not a claim that every
+                # candidate asset was examined or retention intent enforced.
+                project_summary = (
+                    f"\n## Assessment context\n\n{project.project_name} / {project.environment_name} "
+                    f"(saved version {project.source_version}).\n\n"
+                    f"Purpose: {project.purpose}\n\nBoundaries: {project.boundaries}\n\n"
+                    f"Exact configuration: {project_ref}. These are reusable inputs, not execution authority. "
+                    "Candidate targets and retention intent do not establish tested coverage, grants, or retention policy.\n"
+                )
             summary = (
                 _summary(comparison)
+                + project_summary
                 + _scanner_summary(work.get("scannerSummaries", []))
                 + _github_summary(github)
                 + _review_summary(review, review_status)
@@ -2252,6 +2281,7 @@ class AssessmentExecution:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
+                + ([project_digest] if project_digest else [])
                 + ([framework_ref] if framework else [])
                 + (
                     [control_ref]
