@@ -229,29 +229,68 @@ def _redact_secret_assignment(match: re.Match[str]) -> str:
 
 
 
+def _advance_quoted_context(
+    text: str, start: int, end: int, state: tuple[str, str, bool]
+) -> tuple[str, str, bool]:
+    quote, previous, escaped = state
+    for char in text[start:end]:
+        if char in "\r\n":
+            quote, previous, escaped = "", "", False
+        elif escaped:
+            escaped = False
+        elif quote:
+            if char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in {"\"", "'"} and (
+            previous in {"{", "[", ":", ",", "=", "("}
+            or (not previous and char == "\"")
+        ):
+            quote = char
+        if not char.isspace():
+            previous = char
+    return quote, previous, escaped
+
+
 def _redact_secret_assignments(text: str) -> str:
     # Plaintext punctuation belongs to the credential. Only actual URL
     # contexts use query delimiters, and a URL used as a secret stays secret.
     output = []
-    cursor = scan = 0
+    cursor = scan = quote_scan = 0
+    quote = ""
+    previous = ""
+    escaped = False
+    cursor_state = (quote, previous, escaped)
     while (context := _SECRET_URL_CONTEXT_PATTERN.search(text, scan)) is not None:
+        # A URI can occur after prose inside a JSON/markup string. Carry its
+        # enclosing quote across the original text once, including escapes.
+        quote, previous, escaped = _advance_quoted_context(
+            text, quote_scan, context.start(), (quote, previous, escaped)
+        )
+        quote_scan = context.start()
         end = context.end()
-        enclosing = text[context.start() - 1] if context.start() else ""
+        adjacent = text[context.start() - 1] if context.start() else ""
+        enclosing = quote or (adjacent if adjacent in {"\"", "'", "`"} else "")
+        slashes = 0
         while end < len(text) and not text[end].isspace():
             # Quotes inside query values are credential data. Only a closing
             # enclosing string/markup delimiter bounds this URL context.
             if (
                 enclosing in {"\"", "'", "`"}
                 and text[end] == enclosing
-                and text[end - 1] != "\\"
+                and slashes % 2 == 0
             ):
                 following = text[end + 1:end + 2]
                 if not following or following.isspace() or following in ">,;}]":
                     break
+            slashes = slashes + 1 if text[end] == "\\" else 0
             end += 1
         scan = end
         value = text[context.start():end]
         if value.startswith("/") and "?" not in value:
+            quote_scan, escaped = end, False
+            previous = value[-1]
             continue
         enclosing_assignment = next(
             (
@@ -275,8 +314,20 @@ def _redact_secret_assignments(text: str) -> str:
                     _redact_secret_assignment, text[cursor:end]
                 )
             )
-            cursor = scan = end
+            # A consumed secret's own quotes cannot open later containers.
+            # Recover the enclosing state just before its complete assignment;
+            # each prefix is visited at most twice before `cursor` advances.
+            quote, previous, escaped = _advance_quoted_context(
+                text, cursor, complete.start(), cursor_state
+            )
+            previous, escaped = "]", False
+            cursor_state = (quote, previous, escaped)
+            cursor = scan = quote_scan = end
             continue
+        # Query quotes belong to this URI's data, not to the containing
+        # record. The actual closing delimiter is still at `end` if present.
+        quote_scan, escaped = end, False
+        previous = value[-1]
         output.append(
             _SECRET_ASSIGNMENT_PATTERN.sub(
                 _redact_secret_assignment, text[cursor:context.start()]
@@ -286,6 +337,7 @@ def _redact_secret_assignments(text: str) -> str:
             _URL_SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, value)
         )
         cursor = end
+        cursor_state = (quote, previous, escaped)
     output.append(
         _SECRET_ASSIGNMENT_PATTERN.sub(_redact_secret_assignment, text[cursor:])
     )
