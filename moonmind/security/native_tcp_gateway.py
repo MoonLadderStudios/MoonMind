@@ -190,6 +190,7 @@ class NativeTCPGateway:
         self._attempts = 0
         self._bytes = 0
         self._denials = Counter()
+        self._transport_errors = Counter()
         self._starts = deque()
         self._status = "created"
         self._pid = os.getpid()
@@ -213,6 +214,7 @@ class NativeTCPGateway:
             "activeConnections": len(self._tasks),
             "bytesReserved": self._bytes,
             "denials": dict(self._denials),
+            "transportErrors": dict(self._transport_errors),
             "endpoints": self.config.to_mapping()["endpoints"],
         }
 
@@ -271,6 +273,14 @@ class NativeTCPGateway:
 
     def _deny(self, reason):
         self._denials[reason] = min(self._denials[reason] + 1, 2**63 - 1)
+        self._record()
+
+    def _transport_error(self, reason):
+        # Refusal/reset is a target observation, not an authority violation.
+        # Keep bounded evidence without converting successful tools to denials.
+        self._transport_errors[reason] = min(
+            self._transport_errors[reason] + 1, 2**63 - 1
+        )
         self._record()
 
     async def start(self):
@@ -535,7 +545,7 @@ class NativeTCPGateway:
             self._deny("timeout")
         except OSError:
             if not self._closed:
-                self._deny("io")
+                self._transport_error("io")
         finally:
             for task in pumps:
                 task.cancel()

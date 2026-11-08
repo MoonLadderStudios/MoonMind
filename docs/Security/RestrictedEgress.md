@@ -304,7 +304,9 @@ gateway can be removed only after its unchanged identity and an empty state
 directory prove no traffic was possible; it does not receive invented counters.
 Retained evidence records effective policy, resolution/target identities,
 allocations, counters and denials; unavailable enforcement evidence is an
-explicit coverage gap.
+explicit coverage gap. Connection IO errors remain separate transport
+diagnostics with partial coverage, rather than evidence of a scope violation.
+Actual policy or budget denials and nonzero tool exits still fail the job.
 
 ### Bounded HTTPS TLS inspection
 

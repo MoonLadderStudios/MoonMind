@@ -926,3 +926,109 @@ async def test_expanded_dns_snapshot_rejected_before_owned_allocation(
         call[0] == "create" or call[:2] == ("network", "create")
         for call in docker.calls
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_native_transport_errors_are_partial_evidence_not_scope_denials(
+    native_setup, legacy
+):
+    value, docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(docker.files["snapshot.json"])
+    if legacy:
+        counters["denials"] = {"io": 1}
+    else:
+        counters["transportErrors"] = {"io": 1}
+    docker.files["snapshot.json"] = json.dumps(counters).encode()
+    for evidence in (await value.attest(), await value.terminal_evidence()):
+        assert evidence["nativeNetwork"] == counters
+        assert evidence["deniedConnectionCount"] == 0
+        assert evidence["transportErrorCount"] == 1
+        assert evidence["coverage"] == "partial"
+        assert "native_transport_errors" in evidence["limitations"]
+        assert "required_network_scope_denied" not in evidence["limitations"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "header",
+        "client",
+        "destination",
+        "attempts",
+        "rate",
+        "concurrency",
+        "bytes",
+        "idle",
+        "timeout",
+        "deadline",
+        "persistence",
+    ],
+)
+async def test_native_transport_errors_do_not_hide_enforcement_denials(
+    native_setup, reason
+):
+    value, docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(docker.files["snapshot.json"])
+    counters["transportErrors"] = {"io": 1}
+    counters["denials"] = {reason: 1}
+    docker.files["snapshot.json"] = json.dumps(counters).encode()
+    for evidence in (await value.attest(), await value.terminal_evidence()):
+        assert evidence["deniedConnectionCount"] == 1
+        assert evidence["transportErrorCount"] == 1
+        assert "required_network_scope_denied" in evidence["limitations"]
+        assert "native_transport_errors" in evidence["limitations"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "errors", [None, [], {"io": -1}, {"io": True}, {"io": 2**63}, {"destination": 1}]
+)
+async def test_native_transport_error_counters_are_strict_and_bounded(
+    native_setup, errors
+):
+    value, docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(docker.files["snapshot.json"])
+    counters["transportErrors"] = errors
+    docker.files["snapshot.json"] = json.dumps(counters).encode()
+    with pytest.raises(RuntimeError):
+        await value.attest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exit_code,denied", [(0, False), (7, False), (0, True), (7, True)]
+)
+async def test_backend_transport_observation_preserves_tool_exit_and_scope_failure(
+    lease_setup, native_setup, monkeypatch, exit_code, denied
+):
+    _, docker, request, backend, _ = lease_setup
+    value, native_docker = native_setup
+    await value.prepare(timeout_seconds=120)
+    counters = json.loads(native_docker.files["snapshot.json"])
+    counters["transportErrors"] = {"io": 1}
+    counters["denials"] = {"header": 1} if denied else {}
+    native_docker.files["snapshot.json"] = json.dumps(counters).encode()
+    evidence = await value.attest()
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    await backend.start_container(request)
+    docker.container(created.container_ref)["State"].update(
+        Status="exited", Running=False, ExitCode=exit_code
+    )
+    # Exercise real terminal-result handling with independently attested native observations.
+    monkeypatch.setattr(
+        backend,
+        "_scoped_lease",
+        lambda request: SimpleNamespace(attest=AsyncMock(return_value=evidence)),
+    )
+    observed = await backend.observe_container(request)
+    assert observed.terminal_state == (
+        "succeeded" if exit_code == 0 and not denied else "failed"
+    )
+    assert observed.exit_code == exit_code
+    assert (observed.egress_denial_observation is not None) == denied

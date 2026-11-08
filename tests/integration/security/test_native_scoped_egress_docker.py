@@ -991,11 +991,16 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
             await asyncio.sleep(0.1)
         request.terminal_state = observed.terminal_state
         request.exit_code = observed.exit_code
-        assert observed.terminal_state == "succeeded" and observed.exit_code == 0
+        assert observed.terminal_state == "succeeded" and observed.exit_code == 0, (
+            observed.model_dump(mode="json", by_alias=True)
+        )
         counts = await lab.counts(target)
         assert counts["connections"] == counts["starttls"] == counts["noop"] == 1
         assert not {"AUTH", "MAIL", "RCPT", "DATA"}.intersection(counts["commands"])
-        await lab.evidence(lease, "captured-ca-profile")
+        evidence = await lab.evidence(lease, "captured-ca-profile")
+        assert evidence["deniedConnectionCount"] == 0
+        assert evidence["nativeNetwork"]["denials"] == {}
+        assert set(evidence["nativeNetwork"]["transportErrors"]) <= {"io"}
         inspect = json.loads(
             await lab.run("inspect", "--format", "{{json .}}", request.container_ref)
         )
@@ -1008,12 +1013,17 @@ async def test_native_docker_captured_ca_observation_profile(docker_lab):
             # Exercise the actual terminal lifecycle, including failed tools.
             # Unpublished output retention is intentional, not a cleanup defect.
             published = await backend.publish_evidence(request)
-            for reference in (
-                published.logs_ref,
-                published.artifacts_ref,
-                published.diagnostics_ref,
-            ):
-                assert reference and (lab.root / reference).is_file()
+            (lab.artifacts / "profile-publication.json").write_text(
+                json.dumps(published.model_dump(mode="json", by_alias=True), indent=2)
+            )
+            # This profile declares no output files, so there is no manifest.
+            # Logs and runtime diagnostics still must be durably published.
+            assert not request.request.spec.outputs
+            assert published.artifacts_ref is None
+            for reference in (published.logs_ref, published.diagnostics_ref):
+                assert reference and (lab.root / reference).is_file(), (
+                    published.model_dump(mode="json", by_alias=True)
+                )
             request.publication = AuxiliaryOutcome(
                 state="succeeded",
                 diagnosticsRef=published.diagnostics_ref,

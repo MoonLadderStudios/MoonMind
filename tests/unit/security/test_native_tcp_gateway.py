@@ -869,3 +869,54 @@ async def test_bookworm_curl_empty_agent_is_exactly_bounded(tmp_path, agent_valu
         finally:
             writer.close()
             await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_observed_response_then_peer_reset_is_not_scope_denial(tmp_path):
+    """A target can reset after a successful observation without violating scope."""
+    import struct
+
+    reset = asyncio.Event()
+
+    async def target(reader, writer):
+        try:
+            assert await reader.readline() == b"NOOP\r\n"
+            writer.write(b"250 observed\r\n")
+            await writer.drain()
+            await reset.wait()
+            writer.get_extra_info("socket").setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+        finally:
+            writer.transport.abort()
+
+    server = await asyncio.start_server(target, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    gateway = NativeTCPGateway(config(port), state_directory=tmp_path)
+    await gateway.start()
+    reader, writer = await connect(gateway, port)
+    try:
+        assert (
+            await reader.readuntil(b"\r\n\r\n")
+            == b"HTTP/1.1 200 Connection Established\r\n\r\n"
+        )
+        writer.write(b"NOOP\r\n")
+        await writer.drain()
+        assert await reader.readline() == b"250 observed\r\n"
+        reset.set()
+        for _ in range(100):
+            if not gateway._tasks:
+                break
+            await asyncio.sleep(0.005)
+        snapshot = gateway.snapshot()
+        assert snapshot["attempts"] == 1
+        assert snapshot["bytesReserved"] == len(b"NOOP\r\n250 observed\r\n")
+        assert snapshot["denials"] == {}
+        assert snapshot["transportErrors"] == {"io": 1}
+        assert not gateway._tasks
+    finally:
+        reset.set()
+        writer.transport.abort()
+        await gateway.close()
+        server.close()
+        await server.wait_closed()

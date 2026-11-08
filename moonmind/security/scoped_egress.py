@@ -549,7 +549,7 @@ class ScopedEgressLease:
             or set(startup)
             != {"leaseId", "configDigest", "deadlineUnix", "pid", "processStart"}
             or not isinstance(counters, dict)
-            or set(counters)
+            or set(counters) - {"transportErrors"}
             != {
                 "schemaVersion",
                 "leaseId",
@@ -595,20 +595,37 @@ class ScopedEgressLease:
             value = counters.get(field)
             if type(value) is not int or not 0 <= value <= maximum:
                 raise RuntimeError("native counter evidence exceeds admitted bounds")
-        denials = counters.get("denials")
-        if (
-            not isinstance(denials, dict)
-            or len(denials) > 32
-            or any(
-                not isinstance(k, str)
-                or len(k) > 64
-                or type(v) is not int
-                or not 0 <= v <= 2**63 - 1
-                for k, v in denials.items()
+        for field in ("denials", "transportErrors"):
+            counts = (
+                counters.get(field, {})
+                if field == "transportErrors"
+                else counters.get(field)
             )
-        ):
-            raise RuntimeError("native denial evidence is invalid")
+            if (
+                not isinstance(counts, dict)
+                or len(counts) > 32
+                or (field == "transportErrors" and set(counts) - {"io"})
+                or any(
+                    not isinstance(k, str)
+                    or len(k) > 64
+                    or type(v) is not int
+                    or not 0 <= v <= 2**63 - 1
+                    for k, v in counts.items()
+                )
+            ):
+                raise RuntimeError(f"native {field} evidence is invalid")
         return counters
+
+    @staticmethod
+    def _native_observation_counts(counters):
+        # Retain original snapshot bytes/fields in evidence. A live gateway from
+        # before the split records ordinary I/O failures under denials.io; only
+        # that known transport category is excluded from enforcement counts.
+        denials = counters["denials"]
+        return (
+            sum(count for reason, count in denials.items() if reason != "io"),
+            denials.get("io", 0) + sum(counters.get("transportErrors", {}).values()),
+        )
 
     def _native_attribution(self, snapshot):
         return {
@@ -755,18 +772,22 @@ class ScopedEgressLease:
             else:
                 counters = await self._native_counters(gateway, snapshot)
                 evidence["nativeNetwork"] = counters
+            denied, transport_errors = (
+                self._native_observation_counts(counters) if counters else (0, 0)
+            )
             evidence.update(
                 **self._native_attribution(snapshot),
                 profileRef=snapshot["policyRef"],
                 profileDigest=snapshot["policyDigest"],
                 snapshotDigest=_digest(snapshot),
                 expiresAt=snapshot["expiresAt"],
-                deniedConnectionCount=sum(counters["denials"].values())
-                if counters
-                else 0,
+                deniedConnectionCount=denied,
+                transportErrorCount=transport_errors,
             )
             if evidence["deniedConnectionCount"]:
                 evidence["limitations"].append("required_network_scope_denied")
+            if transport_errors:
+                evidence["limitations"].append("native_transport_errors")
         except Exception as exc:  # noqa: BLE001 - preserve bounded diagnostics without certifying health
             evidence["evidenceError"] = redact_sensitive_text(str(exc))[:512]
             evidence["coverage"] = "unverified"
@@ -1275,10 +1296,11 @@ class ScopedEgressLease:
             }
         if self.native_selection is not None:
             counters = await self._native_counters(gateway, snapshot)
-            denied = sum(counters["denials"].values())
+            denied, transport_errors = self._native_observation_counts(counters)
             log = b""
         else:
             counters = None
+            transport_errors = 0
             log = await self._checked("exec", gateway["Id"], "cat", _LOG)
         denied = (
             denied
@@ -1292,7 +1314,11 @@ class ScopedEgressLease:
         )
         return {
             **(
-                {"nativeNetwork": counters, **self._native_attribution(snapshot)}
+                {
+                    "nativeNetwork": counters,
+                    "transportErrorCount": transport_errors,
+                    **self._native_attribution(snapshot),
+                }
                 if counters is not None
                 else {}
             ),
@@ -1318,8 +1344,13 @@ class ScopedEgressLease:
                     finished_at=finished_at,
                 )
             ),
-            "coverage": "partial" if denied else "complete" if target else "unverified",
-            "limitations": ["required_network_scope_denied"] if denied else [],
+            "coverage": "partial"
+            if denied or transport_errors
+            else "complete"
+            if target
+            else "unverified",
+            "limitations": (["required_network_scope_denied"] if denied else [])
+            + (["native_transport_errors"] if transport_errors else []),
         }
 
     async def cleanup(self) -> None:
