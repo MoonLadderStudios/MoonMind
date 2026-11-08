@@ -716,7 +716,10 @@ async def test_large_target_responses_stop_with_a_recoverable_capture(tmp_path):
         target.db.close()
 
 
-async def test_http_and_websocket_share_real_rate_and_total_budgets(tmp_path):
+@pytest.mark.parametrize("response_delay", [0, 0.05])
+async def test_http_and_websocket_share_real_rate_and_total_budgets(
+    tmp_path, response_delay
+):
     from moonmind.security.target_assessments import (
         ScopedTargetClient,
         TargetRequest,
@@ -744,20 +747,36 @@ async def test_http_and_websocket_share_real_rate_and_total_budgets(tmp_path):
                 TargetRequest.model_validate(plan["operations"][2]["request"])
             )
         assert len(target.requests) == 2
+        if response_delay:
+            # A loaded runner can deliver the target response after the tiny
+            # remaining window, even though the request reached the target.
+            target.hold_response = asyncio.Event()
+            asyncio.get_running_loop().call_later(
+                response_delay, target.hold_response.set
+            )
         limited = ScopedTargetClient(
             TargetScope.model_validate(scope),
             credential_root=credentials,
             proxy=proxy,
             max_seconds=0.03,
         )
-        await limited.exchange(
-            TargetRequest.model_validate(plan["operations"][0]["request"])
-        )
+        try:
+            await limited.exchange(
+                TargetRequest.model_validate(plan["operations"][0]["request"])
+            )
+        except TargetStopped as exc:
+            # A real exchange is not guaranteed to finish within 30 ms. Its
+            # deadline may interrupt the response; that attempt still counts.
+            # Other transport failures must not masquerade as this budget stop.
+            assert str(exc) == "transport_interrupted"
+            assert isinstance(exc.__cause__, TimeoutError)
+        received = list(target.requests)
         with pytest.raises(TargetStopped, match="time_budget"):
             await limited.exchange(
                 TargetRequest.model_validate(plan["operations"][2]["request"])
             )
         assert limited.requests_sent == 1
+        assert target.requests == received
     finally:
         await runner.cleanup()
         target.db.close()
