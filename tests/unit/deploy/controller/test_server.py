@@ -3542,3 +3542,76 @@ def test_projected_journal_label_preserves_legacy_fallback_and_explicit_exclusio
         )
         is expected
     )
+
+
+@pytest.mark.parametrize("one_off", [False, True])
+def test_recovery_resumes_surviving_service_that_relinquished_journals(
+    controller_path, tmp_path, monkeypatch, one_off
+):
+    record, server = load("record"), load("server")
+    store = record.OperationStore(tmp_path / "state")
+    writer, former = "temporal-worker-agent-runtime", "temporal-worker-artifacts"
+    target = {
+        "project": "moonmind-test",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["compose.json"],
+        "services": [writer, former],
+    }
+    operation = _begin_op(record, store, target)
+    definitions = {
+        writer: {"labels": {"moonmind.journal-consumer": "true"}},
+        former: {
+            "labels": {"moonmind.journal-consumer": "false"},
+            "environment": {"TEMPORAL_WORKER_FLEET": "integrations"},
+        },
+    }
+    commands = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(args)
+            if "config" in args:
+                return {"exit": 0, "output": json.dumps({"services": definitions})}
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": "writer\nformer"}
+            if args[:2] == ("docker", "inspect"):
+                return {
+                    "exit": 0,
+                    "output": "\n".join(
+                        json.dumps(
+                            {
+                                "Image": "sha256:old",
+                                "Config": {
+                                    "Env": [],
+                                    "Labels": {
+                                        "com.docker.compose.project": "moonmind-test",
+                                        "com.docker.compose.service": name,
+                                        "com.docker.compose.oneoff": (
+                                            "True"
+                                            if name == former and one_off
+                                            else "False"
+                                        ),
+                                    },
+                                },
+                            }
+                        )
+                        for name in (writer, former)
+                    ),
+                }
+            assert "up" in args
+            return {"exit": 0, "output": ""}
+
+    monkeypatch.setattr(
+        server, "run_omnigent_step", lambda *args, **kwargs: {"status": "prepared"}
+    )
+    server.prepare_controller_journals(
+        store, operation, runner=Runner(), overlay="overlay"
+    )
+    state = store.load(operation["operationId"])["journalTransition"]
+    assert state["installedConsumerServices"] == sorted((writer, former))
+    assert state["targetConsumerServices"] == [writer]
+    server.resume_journal_consumers(
+        store, operation, runner=Runner(), overlay="overlay"
+    )
+    assert (former in commands[-1]) is not one_off
+    assert writer in commands[-1]

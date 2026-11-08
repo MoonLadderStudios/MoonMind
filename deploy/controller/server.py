@@ -82,6 +82,7 @@ JOURNAL_CONSUMER_INSPECT_FORMAT = (
     '{"Image":{{json .Image}},"Config":{"Labels":{'
     '"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},'
     '"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+    '"com.docker.compose.oneoff":{{json (index .Config.Labels "com.docker.compose.oneoff")}},'
     '"moonmind.journal-consumer":{{$journal}}},'
     '"Env":[{{json $fleet}}]}}'
 )
@@ -1778,6 +1779,7 @@ def observe_journal_transition(store, operation, *, runner, overlay):
         ):
             raise ValueError("Journal consumer inventory is incomplete")
     images, installed = list(state.get("sourceImages") or ()), set()
+    persistent = set()
     labeled = any(
         JOURNAL_CONSUMER_LABEL in (item.get("labels") or {})
         for item in definitions.values()
@@ -1802,6 +1804,8 @@ def observe_journal_transition(store, operation, *, runner, overlay):
             raise ValueError("Installed journal consumer image is unavailable")
         images.append(row["Image"])
         installed.add(service)
+        if str(labels.get("com.docker.compose.oneoff", "")).lower() != "true":
+            persistent.add(service)
     selected = set(target.get("services") or ())
     if not selected.intersection(target_consumers | installed) and not (
         installed - definitions.keys()
@@ -1815,13 +1819,18 @@ def observe_journal_transition(store, operation, *, runner, overlay):
         raise ValueError(
             "Selected release has no target journal consumers for recovery"
         )
+    # A service may remain selected while relinquishing journal ownership.
+    # Its installed container was fenced, so recover its other responsibilities
+    # too. Removed services and source one-offs are never restarted this way.
+    recovery_services = target_consumers | (persistent & definitions.keys())
     state = {
         **state,
         "sourceImages": list(dict.fromkeys(images)),
         "installedConsumerServices": sorted(installed),
         "targetConsumerServices": sorted(target_consumers),
+        "recoveryServices": sorted(recovery_services),
         # Older controllers understand this field during post-install handoff.
-        "consumerServices": sorted(target_consumers),
+        "consumerServices": sorted(recovery_services),
         "requiresTopologySupport": labeled or installed != target_consumers,
     }
     store.record_journal_transition(operation_id, state)
@@ -1891,8 +1900,11 @@ def resume_journal_consumers(store, operation, *, runner, overlay) -> None:
     services = sorted(
         set(
             state.get(
-                "targetConsumerServices",
-                state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES,
+                "recoveryServices",
+                state.get(
+                    "targetConsumerServices",
+                    state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES,
+                ),
             )
         )
         & selected
@@ -2196,7 +2208,17 @@ def production_apply(
         os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1"
         and operation.get("installed") is None
     ):
-        observe_journal_transition(store, operation, runner=runner, overlay=overlay)
+        try:
+            observe_journal_transition(store, operation, runner=runner, overlay=overlay)
+        except Exception as exc:
+            # This read-only preflight precedes engine.apply's error handler.
+            # Record it here so the bounded retry owner can return a failed,
+            # retryable operation rather than leaving an unrecorded staged one.
+            detail = redact_text(f"{exc} {getattr(exc, 'output', '')}").strip()
+            store.record_attempt_error(
+                operation["operationId"], error=f"journal observation failed: {detail}"
+            )
+            raise engine.ApplyError("journal-consumer-observation", 1, detail) from exc
     if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and (
         not storage_selected or operation.get("installed") is not None
     ):

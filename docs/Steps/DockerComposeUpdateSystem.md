@@ -196,13 +196,13 @@ not repeated.
 Renames require all target consumers and surviving installed consumers selected
 together. Label-aware helpers prepare them. Before installation, handoff requires
 a topology-capable controller; rollback to an older controller waits until
-installation is confirmed. Legacy controllers cannot perform renames. Keep the artifacts fleet marker on a combined
+installation is confirmed. Keep the artifacts fleet marker on a combined
 worker while rollback to them is supported. Helpers refuse label-only consumers
 when their controller lacks topology support.
 
 Partial apply fences consumers again; retry recompacts new chunks. Exhausted
-retries recreate target services, not obsolete names or stopped one-offs.
-Recovery failures accompany the original error.
+retries restore target consumers and surviving former consumers; removed names
+and stopped one-offs stay stopped. Recovery failures accompany the original error.
 
 Once detached apply confirms installation, readiness has a fifteen-minute
 budget measured from that checkpoint, including controller restarts. An early
