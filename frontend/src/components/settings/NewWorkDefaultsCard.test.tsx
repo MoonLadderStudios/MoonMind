@@ -7,6 +7,10 @@ import type { SettingDescriptor } from './GeneratedSettingsSection';
 
 const runtimeKey = 'workflow.default_runtime';
 const profileKey = 'workflow.default_provider_profile_ref';
+const offCardSettings = [
+  { key: 'workflow.default_publish_mode', title: 'Publish mode', inCatalog: true },
+  { key: 'integrations.github.token_ref', title: 'Other setting', inCatalog: false },
+];
 function catalog(): { section: string; categories: { Workflow: SettingDescriptor[] } } {
   const common = {
     category: 'Workflow', section: 'user-workspace', source: 'instance_override', source_explanation: 'Instance override',
@@ -189,28 +193,35 @@ describe('NewWorkDefaultsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(patches()).toHaveLength(0);
   });
-  it('identifies off-card validation blockers and does not silently PATCH', async () => {
-    issues = { 'integrations.github.token_ref': [{ message: 'Managed secret is missing' }] };
+  it.each(offCardSettings)('labels off-card validation for $key without exposing the key or silently PATCHing', async ({ key, title, inCatalog }) => {
+    if (inCatalog) current.categories.Workflow.push({ ...current.categories.Workflow[0]!, key, title });
+    issues = { [key]: [{ message: `${key} is unavailable` }] };
     renderCard(); await screen.findByLabelText('Harness'); changeHarness();
-    const error = await screen.findByText(/integrations.github.token_ref.*Managed secret is missing/);
+    const error = await screen.findByText(`${title}: ${title} is unavailable`);
     expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
     expect(error.closest('[data-setting-row]')).toBeNull();
+    expect(within(error).getByRole('link', { name: 'View Instance settings' }).getAttribute('href')).toBe('/settings/instance');
+    expect(screen.getByRole('region', { name: 'Defaults for new work' }).textContent).not.toContain(key);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(patches()).toHaveLength(0);
     expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude_code');
   });
-  it.each([400, 423])('identifies off-card PATCH errors for HTTP %i', async (status) => {
+  it.each(offCardSettings.flatMap((setting) => [400, 423].map((status) => ({ ...setting, status }))))('labels off-card PATCH errors for $key and HTTP $status', async ({ key, title, inCatalog, status }) => {
+    if (inCatalog) current.categories.Workflow.push({ ...current.categories.Workflow[0]!, key, title });
     renderCard(); await screen.findByLabelText('Harness'); changeHarness();
     patchResponse = respond(status === 400 ? {
       error: 'validation_failed', message: 'Invalid settings', details: { issues: [
-        { key: 'integrations.github.token_ref', message: 'Managed secret is missing' },
+        { key, message: 'Managed secret is missing' },
         { key: runtimeKey, message: 'Harness is unavailable' },
       ] },
-    } : { key: 'integrations.github.token_ref', message: 'Locked by deployment' }, status);
+    } : { key, message: `${key} is locked by deployment` }, status);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    const error = await screen.findByText(/integrations.github.token_ref.*(Managed secret is missing|Locked by deployment)/);
+    const error = await screen.findByText(`${title}: ${status === 400 ? 'Managed secret is missing' : `${title} is locked by deployment`}`);
     expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
     expect(error.closest('[data-setting-row]')).toBeNull();
+    expect(within(error).getByRole('link', { name: 'View Instance settings' }).getAttribute('href')).toBe('/settings/instance');
+    expect(screen.getByRole('region', { name: 'Defaults for new work' }).textContent).not.toContain(key);
+    expect(patches()).toHaveLength(1);
     if (status === 400) {
       expect(screen.getByText('Harness is unavailable').closest('[data-setting-row]')).toBeTruthy();
     }
@@ -218,11 +229,12 @@ describe('NewWorkDefaultsCard', () => {
   });
   it.each([400, 423])('keeps the server row error inline for HTTP %i', async (status) => {
     renderCard(); await screen.findByLabelText('Harness'); changeHarness();
-    patchResponse = respond({ error: 'operator_locked', key: runtimeKey, message: 'Locked by deployment' }, status);
+    patchResponse = respond({ error: 'operator_locked', key: runtimeKey, message: `${runtimeKey} is locked by deployment` }, status);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    const error = await screen.findByText('Locked by deployment');
+    const error = await screen.findByText('Harness is locked by deployment');
     expect(within(error.closest('[data-setting-row]') as HTMLElement).getByLabelText('Harness')).toBeTruthy();
     expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('claude_code');
+    expect(error.textContent).not.toContain(runtimeKey);
   });
   it('toasts an unavailable validation probe and still lets the backend validate Save', async () => {
     validationFailure = true;

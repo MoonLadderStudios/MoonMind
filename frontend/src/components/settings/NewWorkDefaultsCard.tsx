@@ -37,13 +37,13 @@ export function NewWorkDefaultsCard() {
   const auditQuery = useQuery({
     queryKey: ['settings-audit', auditKey], queryFn: () => fetchSettingAudit(auditKey ?? ''), enabled: auditKey !== null,
   });
+  const catalogDescriptors = useMemo(() => Object.values(catalogQuery.data?.categories ?? {}).flat(), [catalogQuery.data]);
   const descriptors = useMemo(() => {
-    const all = Object.values(catalogQuery.data?.categories ?? {}).flat();
     return ROWS.flatMap((row) => {
-      const descriptor = all.find((item) => item.key === row.key);
+      const descriptor = catalogDescriptors.find((item) => item.key === row.key);
       return descriptor ? [{ ...descriptor, title: row.title }] : [];
     });
-  }, [catalogQuery.data]);
+  }, [catalogDescriptors]);
   const changed = useMemo(() => descriptors.filter((d) =>
     Object.hasOwn(draft, d.key) && !valuesEqual(draft[d.key]!.value, draft[d.key]!.originalValue)), [descriptors, draft]);
   const proposal = useMemo(() => ({
@@ -169,6 +169,9 @@ export function NewWorkDefaultsCard() {
   };
   const cardIssues = Object.entries(validation?.signature === signature ? validation.issues : {}).concat(Object.entries(errors))
     .flatMap(([key, messages]) => ROWS.some((row) => row.key === key) ? [] : messages.map((message) => ({ key, message })));
+  const settingLabel = (key: string) => ROWS.find((row) => row.key === key)?.title
+    ?? catalogDescriptors.find((descriptor) => descriptor.key === key)?.title ?? 'Other setting';
+  const issueMessage = (key: string, message: string) => message.replaceAll(key, settingLabel(key));
 
   return (
     <section id="new-work-defaults" tabIndex={-1} aria-label="Defaults for new work"
@@ -176,7 +179,7 @@ export function NewWorkDefaultsCard() {
       <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Defaults for new work</h3>
       <p className="text-sm text-slate-600 dark:text-slate-400">Used when a launch doesn&apos;t choose a harness or profile.</p>
       {cardIssues.map(({ key, message }, index) => <p role="alert" key={`${key}-${index}`} className="text-sm text-rose-700 dark:text-rose-400">
-        {key}: {message} <a href="/settings/instance" className="underline">View Instance settings</a>
+        {settingLabel(key)}: {issueMessage(key, message)} <a href="/settings/instance" className="underline">View Instance settings</a>
       </p>)}
       {catalogQuery.isLoading ? <p role="status">Loading defaults…</p> : catalogQuery.isError ? <p role="alert">{catalogQuery.error.message}</p> :
         descriptors.map((descriptor) => {
@@ -206,7 +209,7 @@ export function NewWorkDefaultsCard() {
               ]} />
             </div>
             {conflicts[descriptor.key] ? <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">{conflicts[descriptor.key]}</p> : null}
-            {issues.map((message, index) => <p role="alert" key={`${index}-${message}`} className="text-sm text-rose-700 dark:text-rose-400">{message}</p>)}
+            {issues.map((message, index) => <p role="alert" key={`${index}-${message}`} className="text-sm text-rose-700 dark:text-rose-400">{issueMessage(descriptor.key, message)}</p>)}
             {auditKey === descriptor.key ? <SettingAuditHistory descriptor={descriptor} query={auditQuery} /> : null}
           </div>;
         })}
