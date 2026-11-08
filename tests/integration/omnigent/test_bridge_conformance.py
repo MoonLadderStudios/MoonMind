@@ -600,11 +600,18 @@ async def test_scenario_13_error_diagnostics_redact_credentials(
     )
     with pytest.raises(OmnigentClientError) as excinfo:
         await client.get_session("session-unknown")
-    rendered = repr(excinfo.value.diagnostics())
+    diagnostics = excinfo.value.diagnostics()
+    rendered = repr(diagnostics)
     assert "fake-upstream-secret" not in rendered
     assert "user-cookie" not in rendered
     assert "user-jwt" not in rendered
-    assert "[REDACTED_AUTHORIZATION]" in rendered
+    assert diagnostics["responseBody"] == {
+        "error": "injected",
+        "authorization": "[REDACTED]",
+    }
+    assert diagnostics["statusCode"] == 500
+    assert diagnostics["failureClass"] == "integration_error"
+    assert diagnostics["message"] == "Omnigent HTTP 500"
 
 
 async def test_first_message_crash_matrix_reconciles_response_before_persist_once(
