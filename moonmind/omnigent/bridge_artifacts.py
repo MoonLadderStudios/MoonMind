@@ -267,6 +267,25 @@ async def link_verified_execution_plan_inputs_in_session(
                 )
             )
 
+    # Frozen input admission and retention closure are different boundaries.
+    # Delegate raw bytes only for the exact selected direct inputs, using the
+    # existing caller's current rights. Ordinary closure links remain metadata.
+    from api_service.db.models import TemporalArtifactRedactionLevel
+
+    restricted_ids = set()
+    for artifact_id in sorted(_artifact_ids(refs | frozen_refs)):
+        artifact = await repository.get_artifact(artifact_id)
+        if (
+            artifact.redaction_level is TemporalArtifactRedactionLevel.RESTRICTED
+            and await service._artifact_raw_access_allowed(artifact, access=input_access)
+        ):
+            restricted_ids.add(artifact_id)
+    if restricted_ids:
+        await service.delegate_read_access(
+            artifact_ids=restricted_ids, workflow_id=workflow_id,
+            namespace=namespace, access=input_access,
+        )
+
     async def link(artifact_id: str) -> None:
         await _link_execution_input(
             repository,

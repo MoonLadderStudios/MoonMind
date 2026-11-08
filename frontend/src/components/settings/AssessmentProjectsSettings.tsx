@@ -31,6 +31,15 @@ export function AssessmentEnvironmentFields({ environment: env, onChange, disabl
       <ListField label="Jurisdictions" values={env.jurisdictions} onChange={jurisdictions => update({ jurisdictions })} />
       <label className="block text-sm">Data classification<select className={fieldClass} value={env.dataClassification} onChange={event => update({ dataClassification: event.target.value as AssessmentEnvironment['dataClassification'] })}>{['public', 'internal', 'confidential', 'restricted'].map(value => <option key={value}>{value}</option>)}</select></label>
     </div>
+    <fieldset className="space-y-2"><legend className="font-medium">Evidence processing</legend>
+      <label className="block text-sm">Evidence model delivery<select className={fieldClass} value={env.evidenceProcessing?.modelDelivery ?? 'allowed'} onChange={event => update({ evidenceProcessing: { modelDelivery: event.target.value as 'allowed' | 'disabled' | 'local_only', allowedProfileRefs: env.evidenceProcessing?.allowedProfileRefs ?? [] } })}>
+        <option value="allowed">Allow an admitted model recipient</option>
+        <option value="disabled">Do not send evidence to models</option>
+        <option value="local_only">Local models only</option>
+      </select></label>
+      <ListField label="Permitted Provider Profile references (optional)" values={env.evidenceProcessing?.allowedProfileRefs ?? []} onChange={allowedProfileRefs => update({ evidenceProcessing: { modelDelivery: env.evidenceProcessing?.modelDelivery ?? 'allowed', allowedProfileRefs } })} />
+      <p className="text-xs text-slate-500">A blank recipient list adds no profile restriction. Delivery still requires normal admission and authorized evidence. Local-only model delivery is currently unavailable and is blocked rather than sent to an external model. These limits do not authorize publication.</p>
+    </fieldset>
     <fieldset className="space-y-2"><legend className="font-medium">Repositories</legend>
       {env.repositories.map((repo, i) => <div key={i} className="grid gap-2 sm:grid-cols-3">
         <Field label="Repository" value={repo.repository} onChange={repository => update({ repositories: env.repositories.map((item, index) => index === i ? { ...item, repository } : item) })} />

@@ -1,5 +1,6 @@
 """Unit/Integration tests for ManagedAgentProviderProfile CRUD API."""
 
+from base64 import b64encode
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -1381,8 +1382,24 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
     )
     assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 
-def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -> None:
+@pytest.mark.parametrize(
+    "authorization_key,scheme",
+    [
+        ("authorization", "Bearer"),
+        ("Authorization", "Basic"),
+        ("proxy-authorization", "Token"),
+    ],
+    ids=["bearer", "basic", "proxy-token"],
+)
+def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields(
+    authorization_key: str,
+    scheme: str,
+) -> None:
     raw_secret = "sk-test-manager-payload-secret"
+    credential = (
+        b64encode(raw_secret.encode()).decode() if scheme == "Basic" else raw_secret
+    )
+    authorization_value = f"{scheme} {credential}"
     row = ManagedAgentProviderProfile(
         profile_id="manager_payload_redaction",
         runtime_id="codex_cli",
@@ -1400,7 +1417,7 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
                 "content_template": {"api_key": raw_secret},
             },
         ],
-        command_behavior={"authorization": f"Bearer {raw_secret}"},
+        command_behavior={authorization_key: authorization_value},
         secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
         model_tiers=[
             {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
@@ -1416,6 +1433,8 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     payload = _manager_profile_payload(row)
 
     assert raw_secret not in repr(payload)
+    assert credential not in repr(payload)
+    assert authorization_value not in repr(payload)
     assert payload["volume_ref"] == "codex_auth_volume"
     assert payload["volume_mount_path"] == "/home/app/.codex"
     assert payload["max_parallel_runs"] == 2
@@ -1442,7 +1461,8 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["file_templates"][0]["content"] == "[REDACTED]"
     assert payload["file_templates"][1]["contentTemplate"] == "[REDACTED]"
     assert payload["file_templates"][2]["content_template"]["api_key"] == "[REDACTED]"
-    assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
+    assert payload["command_behavior"][authorization_key] == "[REDACTED]"
+    assert row.command_behavior[authorization_key] == authorization_value
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 
 

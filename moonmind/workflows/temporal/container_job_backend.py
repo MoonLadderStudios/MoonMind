@@ -85,7 +85,13 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
 )
-from moonmind.security.cloud_assessments import CloudImage, summarize_cloud_assessment
+from moonmind.security.cloud_assessments import (
+    CloudImage,
+    summarize_cloud_assessment,
+)
+from moonmind.security.cloud_assessments import (
+    parse_report as parse_cloud_report,
+)
 from moonmind.security.container_services import (
     SERVICE_DIGEST_LABEL,
     SERVICE_LABEL,
@@ -150,7 +156,7 @@ from moonmind.security.workload_profiles import (
     WORKLOAD_CREDENTIALS_TARGET,
     validate_profile_launch,
 )
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal import container_job_attachments as attachments
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
@@ -5194,6 +5200,42 @@ class DockerContainerJobBackend:
                 )
                 continue
             else:
+                try:
+                    try:
+                        native = json.loads(payload)
+                    except (ValueError, RecursionError):
+                        native, problem = parse_cloud_report(payload)
+                        if problem:
+                            limitations.append(problem)
+                        if not native or problem != "report_truncated":
+                            raise ValueError(
+                                "native report has no complete records"
+                            ) from None
+                        # Reuse the OCSF owner's complete-prefix recovery. Never
+                        # publish the incomplete tail, but keep its sole local
+                        # copy through the existing truncated-output lifecycle.
+                        status = ArtifactCollectionStatus.TRUNCATED
+                        limitations.append("incomplete_native_tail_withheld")
+                    sanitized = _redact_strings(redact_sensitive_payload(native))
+                    if sanitized != native:
+                        limitations.append("credential_shaped_text_redacted")
+                    if (
+                        sanitized != native
+                        or status == ArtifactCollectionStatus.TRUNCATED
+                    ):
+                        payload = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
+                    if len(payload) > cloud.max_report_bytes:
+                        raise ValueError("sanitized report exceeds admission")
+                except (ValueError, TypeError, RecursionError):
+                    limitations.append("report_sanitization_failed")
+                    manifest.append(
+                        ContainerJobArtifact(
+                            name=name, relativePath=relative,
+                            collectionStatus=ArtifactCollectionStatus.REJECTED,
+                            detail="Native report could not be safely retained.",
+                        )
+                    )
+                    continue
                 bodies[name] = payload
                 media_type = "application/json"
             suffix = os.path.splitext(relative)[1]
@@ -5415,8 +5457,12 @@ class DockerContainerJobBackend:
             limitations = network.setdefault("limitations", [])
             if "required_network_scope_denied" not in limitations:
                 limitations.append("required_network_scope_denied")
-        data = redact_sensitive_text(
-            json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        # Preserve the typed, value-free issuance receipt and JSON structure;
+        # text assignment redaction of serialized objects corrupts this record.
+        data = json.dumps(
+            redact_sensitive_payload(diagnostics),
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         return await self._publish_artifact(
             request, f"{request.job_id}-diagnostics.json", data

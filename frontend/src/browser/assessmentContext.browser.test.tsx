@@ -50,9 +50,13 @@ describe('reusable assessment context browser journeys', () => {
     await screen.findByLabelText('System name');
     const purpose = screen.getByLabelText('Purpose');
     await userEvent.clear(purpose); await userEvent.type(purpose, 'Browser-verified evidence review');
+    await userEvent.selectOptions(screen.getAllByLabelText('Evidence model delivery')[0]!, 'local_only');
+    await userEvent.type(screen.getAllByLabelText('Permitted Provider Profile references (optional)')[0]!, 'review-private');
     await page.getByRole('button', { name: 'Save assessment context' }).click();
     await screen.findByText('Assessment context saved.');
     expect(saved.projects[0]!.purpose).toBe('Browser-verified evidence review');
+    expect(saved.projects[0]!.environments[0]!.evidenceProcessing).toEqual({ modelDelivery: 'local_only', allowedProfileRefs: ['review-private'] });
+    expect(screen.getAllByText(/Local-only model delivery is currently unavailable/).length).toBeGreaterThan(0);
     await page.getByRole('button', { name: 'Copy system' }).click();
     expect(screen.getAllByLabelText('System ID')).toHaveLength(2);
     await page.getByRole('link', { name: 'Go to Create' }).click();
@@ -61,6 +65,8 @@ describe('reusable assessment context browser journeys', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(window.location.pathname).toBe('/settings/instance');
     expect(screen.getAllByLabelText('System name')).toHaveLength(2);
+    expect((screen.getAllByLabelText('Evidence model delivery')[0] as HTMLSelectElement).value).toBe('local_only');
+    expect((screen.getAllByLabelText('Permitted Provider Profile references (optional)')[0] as HTMLTextAreaElement).value).toBe('review-private');
     await page.screenshot({ path: '../../../artifacts/assessment-settings-browser.png' });
   });
   it('uses normal Create to select, clear, retry rejected context, and keep run-only overrides', async () => {
@@ -79,16 +85,20 @@ describe('reusable assessment context browser journeys', () => {
     await userEvent.selectOptions(screen.getByLabelText('Assessment environment'), 'staging');
     await page.getByText('Override context for this run', { exact: true }).click();
     await userEvent.clear(screen.getByLabelText('Assets')); await userEvent.type(screen.getByLabelText('Assets'), 'run-only-api');
+    await userEvent.selectOptions(screen.getByLabelText('Evidence model delivery'), 'disabled');
     resolveRejects = true;
     await page.getByRole('button', { name: 'Load assessment context', exact: true }).click();
     await screen.findByText(/Your draft changes are retained/);
     expect((screen.getByLabelText('Assets') as HTMLTextAreaElement).value).toBe('run-only-api');
+    expect((screen.getByLabelText('Evidence model delivery') as HTMLSelectElement).value).toBe('disabled');
     expect(window.location.pathname).toBe('/workflows/new');
     resolveRejects = false;
     await page.getByRole('button', { name: 'Load assessment context', exact: true }).click();
     await waitFor(() => expect(screen.getByLabelText('Frozen assessment context').textContent).toContain('run-only-api'));
+    expect(screen.getByLabelText('Frozen assessment context').textContent).toContain('disabled');
+    expect(saved.projects[0]!.environments[1]!.evidenceProcessing).toBeUndefined();
     expect(saved.projects[0]!.environments[1]!.assets).toEqual(['payments-api']);
-    expect(requests.at(-1)).toMatchObject({ expectedVersion: 2, environmentId: 'staging', overrides: { assets: ['run-only-api'] } });
+    expect(requests.at(-1)).toMatchObject({ expectedVersion: 2, environmentId: 'staging', overrides: { assets: ['run-only-api'], evidenceProcessing: { modelDelivery: 'disabled', allowedProfileRefs: [] } } });
     await page.screenshot({ path: '../../../artifacts/assessment-create-browser.png' });
   });
 });

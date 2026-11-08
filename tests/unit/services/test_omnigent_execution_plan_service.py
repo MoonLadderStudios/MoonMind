@@ -152,6 +152,18 @@ class _ArtifactService:
         self._db_session = db_session
         self.payloads: dict[str, bytes] = {}
         self._index = 0
+        self.read_delegations: dict[str, frozenset[str]] = {}
+
+    async def delegate_read_access(
+        self, *, artifact_ids, workflow_id, access, namespace=None
+    ):
+        from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+        ArtifactAccessContext.require(access)
+        assert workflow_id
+        selected = frozenset(artifact_ids)
+        assert selected and all(ref.startswith("art_") for ref in selected)
+        self.read_delegations[workflow_id] = selected
 
     async def record_verified_dependencies(
         self, *, root_artifact_id, dependencies, access
@@ -192,6 +204,25 @@ class _ArtifactService:
                 )
             )
         return SimpleNamespace(artifact_id=artifact_id)
+
+
+def _assert_exact_schedule_delegation(artifacts, definition):
+    from moonmind.workflows.temporal.schedule_mapping import scheduled_input_scope
+
+    parameters = definition.target["initialParameters"]
+    binding = parameters["omnigentExecutionPlan"]
+    expected = {binding["planArtifactRef"], binding["taskInputSnapshotRef"]}
+    if parameters.get("resolvedSkillsetRef"):
+        expected.add(parameters["resolvedSkillsetRef"])
+    expected = {
+        ref.removeprefix("artifact://").removeprefix("artifact:") for ref in expected
+    }
+    assert (
+        artifacts.read_delegations[
+            scheduled_input_scope(definition.id, definition.input_artifact_root_id)
+        ]
+        == expected
+    )
 
 
 def _resolver_request(plan, *, workflow_id: str) -> AgentExecutionRequest:
@@ -1097,6 +1128,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         envelope = await SessionExecutionPlanStore(db_session).load(
             definition.target["initialParameters"]["omnigentExecutionPlan"]["planRef"]
         )
+        _assert_exact_schedule_delegation(artifacts, definition)
 
     assert transaction.is_active
     assert db_session.get_transaction() is transaction
@@ -1945,6 +1977,7 @@ async def test_schedule_refresh_retains_original_repository_principal(
             assert selection["principalRef"] == "user-1"
             assert selection["connectionId"] == "schedule-repository"
             assert refreshed_binding["taskInputSnapshotRef"] == "art_request_1"
+            _assert_exact_schedule_delegation(artifacts, definition)
     finally:
         await engine.dispose()
 
@@ -4097,3 +4130,58 @@ async def test_native_review_reader_rejects_wrong_scope_without_agent_fallback(
             await reader.acquire_repository_use(**arguments)
     finally:
         await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "processing",
+    [
+        {"modelDelivery": "disabled"},
+        {"modelDelivery": "local_only"},
+        {"modelDelivery": "allowed", "allowedProfileRefs": ["another-profile"]},
+    ],
+    ids=["disabled", "local", "profile-bound"],
+)
+async def test_assessment_processing_blocks_real_plan_compiler_before_side_effects(
+    monkeypatch, processing
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+    from tests.unit.services.test_assessment_model_delivery import source
+
+    artifacts = _ArtifactService()
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref=default_launch_policy_ref(
+                _OPENCODE_ALLOWED_LAUNCH_POLICIES
+            ),
+            plan_store=_PlanStore(None),
+            extra_parameters={
+                "assessmentProject": source(processing).parameters["assessmentProject"]
+            },
+        )
+    assert artifacts.payloads == {}
+
+
+@pytest.mark.asyncio
+async def test_disabled_assessment_does_not_block_tool_only_compile(monkeypatch):
+    from tests.unit.services.test_assessment_model_delivery import source
+
+    artifacts = _ArtifactService()
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=artifacts,
+        launch_policy_ref=default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES),
+        plan_store=_PlanStore(None),
+        extra_parameters={
+            "assessmentProject": source({"modelDelivery": "disabled"}).parameters[
+                "assessmentProject"
+            ],
+            "workflow": {
+                "instructions": "Run deterministic assessment",
+                "plan": [{"tool": {"type": "activity", "name": "security.assess"}}],
+            },
+        },
+    )
+    assert result.binding.plan_ref

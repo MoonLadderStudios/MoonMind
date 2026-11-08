@@ -119,12 +119,21 @@ async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(prov
             return {"choices": [{"message": {"content": response}}]}
         return {"content": [{"type": "text", "text": response}]}
 
-    implementation = TemporalReviewActivities(reviewer=ConfiguredStepReviewer(config, transport=ASGITransport(app)))
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    environment = ActivityEnvironment()
+    canonical = SimpleNamespace(workflow_id=environment.info.workflow_id, run_id=environment.info.workflow_run_id, parameters={})
+    session = SimpleNamespace(get=AsyncMock(return_value=canonical))
+    @asynccontextmanager
+    async def sessions():
+        yield session
+    implementation = TemporalReviewActivities(reviewer=ConfiguredStepReviewer(config, transport=ASGITransport(app)), session_factory=sessions)
     handler = _bind_activity_handler(implementation, func=TemporalReviewActivities.step_review, activity_type="step.review")
     payload = {"node_id": "review", "execution_result": {"summary": "actual execution evidence"}}
     if model is not None:
         payload["reviewer_model"] = model
-    result = await ActivityEnvironment().run(handler, payload)
+    result = await environment.run(handler, payload)
     assert len(requests) == (2 if repair_first else 1)
     assert result["verdict"] == ("FULLY_IMPLEMENTED" if provider_verdict == "PASS" else "ADDITIONAL_WORK_NEEDED")
     assert result["confidence"] == 0.8
@@ -190,3 +199,98 @@ async def test_invalid_review_timeout_returns_unavailable_without_losing_executi
     assert result["verdict"] == "NO_DETERMINATION"
     assert result["recoverableInCurrentRuntime"] is False
     assert execution["status"] == "COMPLETED"
+
+@pytest.mark.asyncio
+async def test_assessment_evidence_strings_and_repair_are_sanitized_on_provider_wire():
+    import json
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport
+
+    from moonmind.config.settings import AppSettings, OpenAISettings
+    from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
+    app = FastAPI()
+    prompts = []
+    marker = 'synthetic-private-value'
+    address = 'assessment-person@example.invalid'
+
+    @app.post('/v1/chat/completions')
+    async def endpoint(request: Request):
+        prompt = (await request.json())['messages'][0]['content']
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            response = 'password=' + marker + ' contact ' + address
+        else:
+            response = json.dumps({'verdict': 'PASS', 'confidence': 0.8, 'feedback': 'Reviewed.'})
+        return {'choices': [{'message': {'content': response}}]}
+
+    config = AppSettings(default_chat_provider='openai', openai=OpenAISettings(openai_api_key='hermetic', openai_enabled=True))
+    execution = {'status': 'COMPLETED', 'outputs': {'summary': 'password=' + marker, 'email': address}}
+    result = await step_review_activity({'node_id': 'privacy', 'execution_result': execution, 'previous_feedback': 'password=' + marker + ' ' + address}, reviewer=ConfiguredStepReviewer(config, transport=ASGITransport(app)))
+    assert result['verdict'] == 'FULLY_IMPLEMENTED'
+    assert len(prompts) == 2
+    assert all(marker not in prompt and address not in prompt for prompt in prompts)
+    assert execution['status'] == 'COMPLETED'
+    assert result['reviewProvenance']['transformation']['piiLimitations']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('policy', [
+    {'modelDelivery': 'disabled'},
+    {'modelDelivery': 'local_only'},
+    {'modelDelivery': 'allowed', 'allowedProfileRefs': ['profile-specific']},
+], ids=['disabled', 'local', 'profile-bound'])
+async def test_assessment_processing_blocks_auxiliary_recipient_without_losing_work(policy):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    reviewer = SimpleNamespace(review=AsyncMock())
+    execution = {'status': 'COMPLETED', 'outputs': {'reportRef': 'art_saved'}}
+    result = await step_review_activity({'node_id': 'privacy', 'execution_result': execution}, reviewer=reviewer, processing_policy=policy)
+    assert result['verdict'] == 'NO_DETERMINATION'
+    assert result['issues'][0]['code'].startswith('evidence_delivery_')
+    reviewer.review.assert_not_awaited()
+    assert execution['outputs'] == {'reportRef': 'art_saved'}
+
+
+@pytest.mark.asyncio
+async def test_review_wrapper_uses_actual_execution_identity_for_processing(monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal import activity_runtime
+    from tests.unit.services.test_assessment_model_delivery import source
+    canonical = source({'modelDelivery': 'local_only'})
+    session = SimpleNamespace(get=AsyncMock(return_value=canonical))
+    @asynccontextmanager
+    async def sessions():
+        yield session
+    monkeypatch.setattr(activity_runtime.temporal_activity, 'info', lambda: SimpleNamespace(workflow_id='source', workflow_run_id='source-run'))
+    reviewer = SimpleNamespace(review=AsyncMock())
+    implementation = activity_runtime.TemporalReviewActivities(reviewer=reviewer, session_factory=sessions)
+    result = await implementation.step_review({'node_id': 'privacy', 'workflow_context': {'workflow_id': 'forged', 'run_id': 'forged'}, 'inputs': {'assessmentProject': None}})
+    assert result['verdict'] == 'NO_DETERMINATION'
+    assert session.get.await_args.args[1] == 'source'
+    reviewer.review.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_review_wrapper_missing_source_preserves_outputs(monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal import activity_runtime
+    session = SimpleNamespace(get=AsyncMock(return_value=None))
+    @asynccontextmanager
+    async def sessions():
+        yield session
+    monkeypatch.setattr(activity_runtime.temporal_activity, 'info', lambda: SimpleNamespace(workflow_id='missing', workflow_run_id='missing-run'))
+    reviewer = SimpleNamespace(review=AsyncMock())
+    implementation = activity_runtime.TemporalReviewActivities(reviewer=reviewer, session_factory=sessions)
+    payload = {'node_id': 'review', 'execution_result': {'status': 'COMPLETED', 'outputs': {'reportRef': 'art_saved'}}}
+    result = await implementation.step_review(payload)
+    assert result['verdict'] == 'NO_DETERMINATION'
+    assert result['issues'][0]['code'] == 'evidence_delivery_context_unavailable'
+    assert payload['execution_result']['outputs']['reportRef'] == 'art_saved'
+    reviewer.review.assert_not_awaited()

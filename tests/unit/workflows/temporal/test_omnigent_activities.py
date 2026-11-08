@@ -33,9 +33,11 @@ from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("assessment_case", ["inherit", "remove", "replace", "corrupt"], ids=["inherit", "remove", "replace", "corrupt"])
 async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
+    assessment_case,
 ) -> None:
     from api_service.services import omnigent_execution_plan_service
     from moonmind.workflows.temporal.activities import omnigent_session_activities
@@ -52,12 +54,18 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
         staticmethod(lambda: store),
     )
 
+    from api_service.services.omnigent_execution_plan_service import (
+        json_artifact_digest,
+    )
+    from tests.unit.services.test_assessment_model_delivery import source
+    assessment = source({"allowedProfileRefs": ["opencode-zen-free"]}).parameters["assessmentProject"]
+    parent_task = {"target": {"initialParameters": {"assessmentProject": assessment}}}
     parent_binding = {
         "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
         "planDigest": "sha256:" + "a" * 64,
         "planArtifactRef": "art-parent-plan",
         "taskInputSnapshotRef": "art-parent-task",
-        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        "taskInputSnapshotDigest": json_artifact_digest(parent_task),
     }
     child_binding = OmnigentExecutionPlanBinding(
         planRef="omnigent-execution-plan:sha256:" + "c" * 64,
@@ -89,6 +97,8 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
         return parent_plan
 
     async def fake_read_json(ref, *, access):
+        if ref == "art-parent-task":
+            return {} if assessment_case == "corrupt" else parent_task
         assert ref == "art-agent-profile"
         assert access == access_for_test("user-1")
         return {"document": {"harness": {"id": "opencode-native"}}}
@@ -157,8 +167,7 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
 
     monkeypatch.setattr(db_base, "async_session_maker", fake_session_factory)
 
-    result = await omnigent_prepare_child_execution_plan_activity(
-        {
+    activity_payload = {
             "principal": "user-1",
             "parentWorkflowId": "mm:parent",
             "childWorkflowId": "resolver:child:1",
@@ -187,9 +196,18 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
                     },
                 },
             },
-        },
-        access=access_for_test("user-1"),
-    )
+        }
+    if assessment_case in {"remove", "replace"}:
+        activity_payload["childWorkflowRequest"]["initial_parameters"]["assessmentProject"] = (
+            None if assessment_case == "remove" else source({"modelDelivery": "allowed"}).parameters["assessmentProject"]
+        )
+    if assessment_case != "inherit":
+        with pytest.raises(ValueError, match="assessment|snapshot"):
+            await omnigent_prepare_child_execution_plan_activity(activity_payload, access=access_for_test("user-1"))
+        assert "taskSnapshot" not in observed
+        return
+    result = await omnigent_prepare_child_execution_plan_activity(activity_payload, access=access_for_test("user-1"))
+    assert observed["compile"]["initial_parameters"]["assessmentProject"] == assessment
 
     assert result["initial_parameters"]["omnigentExecutionPlan"] == (
         child_binding.model_dump(mode="json", by_alias=True)

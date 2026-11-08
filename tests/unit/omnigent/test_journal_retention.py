@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import exists, or_, select, text
+from sqlalchemy import delete, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +15,8 @@ from api_service.db.models import (
     OmnigentObservation,
     OmnigentSession,
     TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
 )
@@ -22,18 +24,28 @@ from moonmind.omnigent import bridge_store
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactStateError,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest_asyncio.fixture
-async def journals(tmp_path, monkeypatch):
+async def journal_sessions(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/journal.db")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def journals(tmp_path, monkeypatch, journal_sessions):
+    sessions = journal_sessions
     blobs = LocalTemporalArtifactStore(tmp_path / "blobs")
 
     def service(session):
@@ -96,10 +108,7 @@ async def journals(tmp_path, monkeypatch):
                 refs.append(f"artifact:{artifact.artifact_id}")
         return tuple(refs)
 
-    try:
-        yield store, row.bridge_session_id, sessions, service, blobs, publish
-    finally:
-        await engine.dispose()
+    yield store, row.bridge_session_id, sessions, service, blobs, publish
 
 
 @pytest.mark.asyncio
@@ -535,7 +544,7 @@ async def test_replacing_a_different_chunk_requires_retaining_it(journals):
 async def test_completed_chunks_of_live_journal_survive_troubleshooting_expiry(
     journals,
 ):
-    store, session_id, sessions, service, blobs, publish = journals
+    store, session_id, sessions, service, _blobs, publish = journals
     completed = await publish(2, chunk=0)
     current = await publish(1, chunk=2)
     for refs in (completed, current):
@@ -564,6 +573,24 @@ async def test_completed_chunks_of_live_journal_survive_troubleshooting_expiry(
         row.status = "completed"
         await session.commit()
         result = await artifacts.sweep_lifecycle(
+            principal="service:storage-maintenance"
+        )
+        # A status alone is not a durable replacement for the only history.
+        assert result.soft_deleted_count == 0
+
+    final = await publish(3)
+    await store.mark_terminal(
+        "journal-test",
+        status="completed",
+        terminal_refs={
+            "metadataRefs": {
+                "rawSseStreamRef": final[0],
+                "normalizedEventStreamRef": final[1],
+            }
+        },
+    )
+    async with sessions() as session:
+        result = await service(session).sweep_lifecycle(
             principal="service:storage-maintenance"
         )
         assert result.soft_deleted_count == 4
@@ -825,6 +852,18 @@ async def test_compaction_preserves_live_history_for_legacy_readers_and_sweepers
         assert [item["metadata"] for item in restored] == [
             item["metadata"] for item in events
         ]
+    async with sessions() as session:
+        artifacts = service(session)
+        for ref in source_refs:
+            artifact_id = ref.removeprefix("artifact:")
+            assert not await artifacts._repository.has_active_journal_reference(
+                artifact_id
+            )
+            with pytest.raises(TemporalArtifactStateError, match="expired"):
+                await artifacts.read(
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:workflow-test"),
+                )
     indexed = await store.list_events(session_id)
     assert [event.sequence for event in indexed] == [1, 2, 3]
     assert [event.artifact_ref for event in indexed] == [row.normalized_events_ref] * 3
@@ -1111,3 +1150,141 @@ async def test_compaction_never_publishes_incomplete_or_cross_owner_history(
     assert (row.raw_events_ref, row.normalized_events_ref) == current
     assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY in row.metadata_
     assert row.first_message_state != bridge_store.FIRST_MESSAGE_TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_terminal_pending_chunks_retain_exact_bytes_without_new_raw_rights(
+    journals,
+):
+    store, session_id, sessions, service, _blobs, publish = journals
+    first = await publish(1, chunk=0, events=[{"eventType": "response.delta"}])
+    current = await publish(1, chunk=1, events=[{"eventType": "response.delta"}])
+    unrelated = await publish(1, chunk=9)
+    for refs in (first, current):
+        await store.attach_active_journal_refs(
+            session_id, raw_ref=refs[0], normalized_ref=refs[1], new_chunk=True
+        )
+    await store.mark_terminal("journal-test", status="failed")
+    owner = access_for_test("service:omnigent-generic-host")
+    reader = access_for_test("workflow:workflow-test")
+    async with sessions() as session:
+        artifacts = service(session)
+        for artifact in await session.scalars(select(TemporalArtifact)):
+            artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+            artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+        await session.commit()
+        retained_ids = {ref.removeprefix("artifact:") for ref in (*first, *current)}
+        for artifact_id in retained_ids:
+            assert await artifacts._repository.has_active_journal_reference(artifact_id)
+            assert (await artifacts.read(artifact_id=artifact_id, access=owner))[1]
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await artifacts.read(artifact_id=artifact_id, access=reader)
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await artifacts.read(
+                    artifact_id=artifact_id, access=access_for_test("workflow:foreign")
+                )
+        expired = await artifacts._repository.list_expired_artifacts(
+            now=datetime.now(UTC)
+        )
+        expired_ids = {item.artifact_id for item in expired}
+        assert not retained_ids.intersection(expired_ids)
+        assert {ref.removeprefix("artifact:") for ref in unrelated} <= expired_ids
+        for ref in unrelated:
+            assert not await artifacts._repository.has_active_journal_reference(
+                ref.removeprefix("artifact:")
+            )
+            with pytest.raises(TemporalArtifactStateError, match="expired"):
+                await artifacts.read(
+                    artifact_id=ref.removeprefix("artifact:"), access=owner
+                )
+        selected = first[0].removeprefix("artifact:")
+        await artifacts.delegate_read_access(
+            artifact_ids=[selected], workflow_id="workflow-test", access=owner
+        )
+        assert (await artifacts.read(artifact_id=selected, access=reader))[1]
+        await session.execute(
+            delete(TemporalArtifactLink).where(
+                TemporalArtifactLink.artifact_id == selected,
+                TemporalArtifactLink.link_type == "input.artifact.raw",
+            )
+        )
+        await session.commit()
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await artifacts.read(artifact_id=selected, access=reader)
+        artifact = await artifacts._repository.get_artifact(selected)
+        artifact.metadata_json = {**artifact.metadata_json, "quarantine": True}
+        await session.commit()
+        with pytest.raises(TemporalArtifactStateError, match="QUARANTINED"):
+            await artifacts.read(artifact_id=selected, access=owner)
+        artifact.metadata_json = {
+            key: value
+            for key, value in artifact.metadata_json.items()
+            if key != "quarantine"
+        }
+        artifact.deleted_at = datetime.now(UTC)
+        await session.commit()
+        with pytest.raises(TemporalArtifactStateError, match="not available"):
+            await artifacts.read(artifact_id=selected, access=owner)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "absent",
+        "empty",
+        "object",
+        "string",
+        "scalar-entry",
+        "wrong-key",
+        "incomplete-pair",
+        "suffix",
+    ],
+)
+async def test_terminal_journal_metadata_cannot_keep_expired_unrelated_bytes(
+    journals, shape
+):
+    store, session_id, sessions, service, _blobs, publish = journals
+    refs = await publish(1, chunk=0)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=refs[0], normalized_ref=refs[1]
+    )
+    await store.mark_terminal("journal-test", status="completed")
+    raw, normalized = refs
+    malformed = {
+        "absent": None,
+        "empty": [],
+        "object": {"raw": raw, "normalized": normalized},
+        "string": raw,
+        "scalar-entry": [raw, normalized],
+        "wrong-key": [{"raw": normalized, "normalized": normalized, "note": raw}],
+        "incomplete-pair": [{"raw": raw}],
+        "suffix": [{"raw": "unrelated:" + raw, "normalized": normalized}],
+    }[shape]
+    async with sessions() as session:
+        bridge = await session.get(OmnigentBridgeSession, session_id)
+        # Empty/malformed history cannot retain even a terminal current ref;
+        # valid pairs also cannot retain unrelated refs in other fields.
+        if shape in {"wrong-key", "suffix"}:
+            bridge.raw_events_ref = None
+            bridge.normalized_events_ref = None
+        bridge.metadata_ = (
+            {}
+            if malformed is None
+            else {bridge_store.SEALED_JOURNAL_CHUNKS_KEY: malformed}
+        )
+        artifacts = service(session)
+        artifact_id = raw.removeprefix("artifact:")
+        artifact = await artifacts._repository.get_artifact(artifact_id)
+        artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+        assert not await artifacts._repository.has_active_journal_reference(artifact_id)
+        with pytest.raises(TemporalArtifactStateError, match="expired"):
+            await artifacts.read(
+                artifact_id=artifact_id,
+                access=access_for_test("workflow:workflow-test"),
+            )
+        expired = await artifacts._repository.list_expired_artifacts(
+            now=datetime.now(UTC)
+        )
+        assert artifact_id in {item.artifact_id for item in expired}

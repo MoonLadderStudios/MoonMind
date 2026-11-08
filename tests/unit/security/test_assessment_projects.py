@@ -99,6 +99,56 @@ def test_snapshot_integrity_is_data_integrity_not_permission():
     assert "grants" not in raw["configuration"]
 
 
+def test_evidence_processing_constraints_are_frozen_with_assessment_context():
+    document = project_document()
+    policy = {"modelDelivery": "local_only", "allowedProfileRefs": ["review-private"]}
+    document["projects"][0]["environments"][0]["evidenceProcessing"] = policy
+    snapshot = resolve_assessment_project(
+        document, project_id="shop", environment_id="staging", version=2
+    )
+    raw = snapshot.model_dump(mode="json", by_alias=True)
+    assert raw["configuration"]["evidenceProcessing"] == policy
+    raw["configuration"]["evidenceProcessing"]["modelDelivery"] = "allowed"
+    with pytest.raises(ValidationError):
+        AssessmentProjectSnapshot.model_validate(raw)
+
+
+def test_legacy_snapshot_keeps_its_original_wire_shape_and_digest():
+    snapshot = resolve_assessment_project(
+        project_document(), project_id="shop", environment_id="staging", version=1
+    )
+    # Captured with the previous v1 schema, before evidenceProcessing existed.
+    assert snapshot.digest == "c8a27dd5231d7754e15743458b8418f941cc7ab4f8f19b2dfe4b763314741761"
+    raw = snapshot.model_dump(mode="json", by_alias=True)
+    assert "evidenceProcessing" not in raw["configuration"]
+    assert AssessmentProjectSnapshot.model_validate(raw).model_dump(
+        mode="json", by_alias=True
+    ) == raw
+    with_null = copy.deepcopy(raw)
+    with_null["configuration"]["evidenceProcessing"] = None
+    assert AssessmentProjectSnapshot.model_validate(with_null).model_dump(
+        mode="json", by_alias=True
+    ) == raw
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"modelDelivery": "fallback"},
+        {"modelDelivery": "allowed", "allowedProfileRefs": ["same", "same"]},
+        {"modelDelivery": "allowed", "allowedProfileRefs": [""]},
+        {"modelDelivery": "allowed", "allowedProfileRefs": ["profile with spaces"]},
+        {"modelDelivery": "allowed", "rawSecrets": True},
+    ],
+    ids=["unknown-mode", "duplicate-ref", "empty-ref", "invalid-ref", "extra-authority"],
+)
+def test_evidence_processing_rejects_ambiguous_or_unsupported_constraints(policy):
+    document = project_document()
+    document["projects"][0]["environments"][0]["evidenceProcessing"] = policy
+    with pytest.raises(ValidationError):
+        AssessmentProjects.model_validate(document)
+
+
 def test_defaults_fill_missing_values_never_override_or_admit_credentials():
     snapshot = resolve_assessment_project(
         project_document(), project_id="shop", environment_id="staging", version=1

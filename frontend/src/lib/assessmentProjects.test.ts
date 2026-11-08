@@ -31,6 +31,20 @@ describe('assessment input defaults', () => {
     expect(inputs.assessmentProject).not.toBe(snapshot);
     expect(inputs.scope).not.toBe(snapshot.configuration.assets);
   });
+  it('carries explicit processing constraints in an independent frozen step snapshot', () => {
+    const selected: AssessmentProjectSnapshot = { ...snapshot, configuration: {
+      ...snapshot.configuration, dataClassification: 'restricted',
+      evidenceProcessing: { modelDelivery: 'disabled', allowedProfileRefs: ['review-private'] },
+    } };
+    const inputs = applyAssessmentInputDefaults(schema, {}, selected);
+    const frozen = inputs.assessmentProject as AssessmentProjectSnapshot;
+    selected.configuration.evidenceProcessing!.modelDelivery = 'allowed';
+    selected.configuration.evidenceProcessing!.allowedProfileRefs.push('another');
+    expect(frozen.configuration.evidenceProcessing).toEqual({ modelDelivery: 'disabled', allowedProfileRefs: ['review-private'] });
+    expect(frozen.configuration.dataClassification).toBe('restricted');
+    expect(inputs).not.toHaveProperty('providerProfileRef');
+    expect(inputs.credentialRefs).toEqual([]);
+  });
   it('preserves explicit values including empty arrays and objects during repeated use', () => {
     const overrides = { scope: {}, budget: { baseSeconds: 15, maxSeconds: 20, progressStallSeconds: 5 }, reportRefs: [], tools: [], credentialRefs: [], networkRefs: [] };
     const first = applyAssessmentInputDefaults(schema, overrides, snapshot);

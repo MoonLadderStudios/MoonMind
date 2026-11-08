@@ -9590,7 +9590,7 @@ def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
 
 
 @pytest.fixture
-def caller_runtime_profile_session() -> SimpleNamespace:
+def caller_runtime_profile_session(client) -> SimpleNamespace:
     provider_profile = ManagedAgentProviderProfile(
         profile_id="codex_default",
         runtime_id="codex_cli",
@@ -9603,6 +9603,11 @@ def caller_runtime_profile_session() -> SimpleNamespace:
     )
 
     async def get_row(model, key):
+        if model is TemporalExecutionCanonicalRecord and key == "mm:parent-task":
+            # These inheritance tests have an admitted parent without an
+            # assessment policy; model selection reads the canonical source.
+            parent = client[1].describe_execution.return_value
+            return SimpleNamespace(**{**vars(parent), "run_id": "parent-run"})
         if model is ManagedAgentProviderProfile and key == provider_profile.profile_id:
             return provider_profile
         return None
@@ -9948,7 +9953,11 @@ def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
         "agentProfileSnapshot": {"agentId": "forged-agent"},
     }
     test_client.app.dependency_overrides[get_async_session] = lambda: (
-        SimpleNamespace(get=AsyncMock(return_value=None))
+        SimpleNamespace(get=AsyncMock(side_effect=lambda kind, key: (
+            SimpleNamespace(**{**vars(service.describe_execution.return_value), "run_id": "parent-run"})
+            if kind is TemporalExecutionCanonicalRecord and key == "mm:parent-task"
+            else None
+        )))
     )
     response = test_client.post(
         "/api/executions",
@@ -10048,10 +10057,11 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
     )
     db_session = SimpleNamespace(
         get=AsyncMock(
-            # The idempotency reservation finds no admitted execution
-            # before the caller's Provider Profile and the plan compiler
-            # load it.
-            side_effect=[None, provider_profile, provider_profile, None]
+            side_effect=lambda kind, key: (
+                SimpleNamespace(**{**vars(service.describe_execution.return_value), "run_id": "parent-run"})
+                if kind is TemporalExecutionCanonicalRecord and key == "mm:parent-task"
+                else provider_profile if kind is ManagedAgentProviderProfile else None
+            )
         ),
         commit=AsyncMock(),
         refresh=AsyncMock(),
@@ -24552,3 +24562,223 @@ def test_assessment_edit_cannot_replace_plan_artifact_after_review(
         assert response.status_code == 409, response.text
         assert response.json()["detail"]["code"] == "assessment_review_required"
         service.update_execution.assert_not_awaited()
+def test_create_model_processing_denial_is_actionable_before_start(client):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+
+    test_client, service, _user = client
+    provider = SimpleNamespace(profile_id="review-selected", provider_id="openai")
+    session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider, None]), commit=AsyncMock()
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "review-profile",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "review-selected",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "capture": {},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    message = (
+        "Local-only model delivery is unavailable; retained evidence remains available."
+    )
+    compiler = AsyncMock(side_effect=TemporalArtifactAuthorizationError(message))
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_task", "sha256:" + "b" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=compiler,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "review-profile",
+                        "providerProfileRef": "review-selected",
+                    },
+                    "workflow": {
+                        "instructions": "Review selected evidence.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["message"] == message
+    compiler.assert_awaited_once()
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("selected_profile", ["profile-a", "profile-b"])
+@pytest.mark.parametrize("child_context", ["omitted", "same", "clear", "replace"])
+def test_fanout_preserves_parent_processing_even_with_explicit_recipient(
+    client,
+    monkeypatch,
+    selected_profile,
+    child_context,
+):
+    from api_service.services.assessment_model_delivery import (
+        require_execution_model_delivery,
+    )
+    from tests.unit.services.test_assessment_model_delivery import source
+
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    parent = source({"allowedProfileRefs": ["profile-a"]})
+    parent.workflow_id = "mm:parent-task"
+    parent.owner_id = user.id
+    parent.owner_type = "user"
+    parent.memo = {}
+    parent.search_attributes = {}
+    parent.parameters.update(targetRuntime="codex_cli", profileId="profile-a")
+    service.describe_execution.return_value = parent
+    service.create_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    provider = SimpleNamespace(profile_id=selected_profile, provider_id="openai")
+
+    async def get_row(kind, key):
+        if kind is TemporalExecutionCanonicalRecord and key == parent.workflow_id:
+            return parent
+        if kind is ManagedAgentProviderProfile:
+            return provider
+        return None
+
+    session = SimpleNamespace(
+        get=AsyncMock(side_effect=get_row), commit=AsyncMock(), refresh=AsyncMock()
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "review-profile",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": selected_profile,
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "capture": {},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan",
+        taskInputSnapshotRef="art_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+
+    async def compile_plan(**kwargs):
+        require_execution_model_delivery(
+            kwargs["initial_parameters"], profile_ref=selected_profile
+        )
+        return _compiled_plan_result(
+            binding=binding,
+            artifact_refs=("art_plan",),
+            resolved_skillset_ref="art_skills",
+        )
+
+    monkeypatch.setattr(
+        executions_module,
+        "resolve_agent_profile_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    monkeypatch.setattr(
+        executions_module,
+        "get_temporal_artifact_service",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+        AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+        compile_plan,
+    )
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json={
+            "type": "workflow",
+            "payload": {
+                "runtimeInheritance": "caller",
+                **(
+                    {
+                        "assessmentProject": (
+                            None
+                            if child_context == "clear"
+                            else source({"modelDelivery": "allowed"}).parameters[
+                                "assessmentProject"
+                            ]
+                            if child_context == "replace"
+                            else parent.parameters["assessmentProject"]
+                        )
+                    }
+                    if child_context != "omitted"
+                    else {}
+                ),
+                "targetRuntime": "omnigent",
+                "agentProfile": {
+                    "profileId": "review-profile",
+                    "providerProfileRef": selected_profile,
+                },
+                "workflow": {
+                    "idempotencyKey": "assessment-child:" + selected_profile,
+                    "instructions": "Review selected evidence.",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "providerProfileRef": selected_profile,
+                    },
+                },
+            },
+        },
+    )
+    if child_context in {"clear", "replace"}:
+        assert response.status_code == 422, response.text
+        assert "cannot remove or replace" in response.json()["detail"]["message"]
+        service.create_execution.assert_not_awaited()
+    elif selected_profile == "profile-b":
+        assert response.status_code == 422, response.text
+        assert "outside" in response.json()["detail"]["message"]
+        service.create_execution.assert_not_awaited()
+    else:
+        assert response.status_code == 201, response.text
+        parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+        assert parameters["assessmentProject"] == parent.parameters["assessmentProject"]

@@ -497,7 +497,7 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
     assert admitted["disposition"] == "admitted"
     assert _PlanStore.persisted.payload.hostImageRef == _REPO + "8" * 64
     assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
-    assert session.commits == 1
+    assert session.commits == 2  # Plan persistence plus caller-owned input admission.
 
 
 async def _successor_admission(monkeypatch, artifacts, parameters, session):
@@ -719,6 +719,8 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
         runtime_id="opencode",
         provider_id="opencode-go",
     )
+    parent_task = {"target": {"initialParameters": {"workflow": {"instructions": "Resolve the existing pull request."}}}}
+    artifacts.payloads["art_request_1"] = json.dumps(parent_task, sort_keys=True, separators=(",", ":")).encode()
     try:
         parent = await _compile_opencode_plan(
             monkeypatch,
@@ -726,6 +728,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
             launch_policy_ref="opencode-on-demand@1",
             plan_store=_PlanStore(object()),
             session_factory=sessions,
+            task_input_snapshot_digest=plan_service.json_artifact_digest(parent_task),
             profile_tools=("gh",),
             extra_parameters={
                 "repository": repository,
@@ -1344,7 +1347,7 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
         # The occurrence keeps the schedule's recorded plan and says why.
         assert admitted["disposition"] == "recorded", admitted
         assert "ModelTierFamilyUnavailableError" in admitted["reason"]
-        assert session.commits == 0
+        assert session.commits == 1  # Input admission commits without replacing the plan.
         return
     assert admitted["disposition"] == "admitted", admitted
     binding = OmnigentExecutionPlanBinding.model_validate(

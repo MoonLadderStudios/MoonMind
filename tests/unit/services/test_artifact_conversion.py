@@ -21,6 +21,10 @@ from api_service.db.models import (
     WorkflowRun,
 )
 from api_service.services import single_user_conversion as conversion
+from moonmind.utils.logging import (
+    EVIDENCE_TRANSFORMATION_LIMITATIONS,
+    EVIDENCE_TRANSFORMATION_VERSION,
+)
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
@@ -99,7 +103,12 @@ async def test_guarded_conversion_preserves_recovery_and_restarts(
                        for row in retained)
             preview = await session.get(TemporalArtifact, preview_id)
             assert preview.redaction_level is TemporalArtifactRedactionLevel.PREVIEW_ONLY
-            assert preview.metadata_json == {"preview_of": artifact_id, "policy": "auto-generated"}
+            assert preview.metadata_json == {
+                "preview_of": artifact_id,
+                "policy": "auto-generated",
+                "transformation": EVIDENCE_TRANSFORMATION_VERSION,
+                "limitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
+            }
             artifacts = service(session, tmp_path)
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await artifacts.read(

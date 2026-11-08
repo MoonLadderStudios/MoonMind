@@ -2,6 +2,10 @@ import { responseError } from './api/client';
 import { newRequestId } from './requestId';
 
 export const ASSESSMENT_PROJECTS_KEY = 'security.assessment_projects';
+export interface EvidenceProcessingPolicy {
+  modelDelivery: 'allowed' | 'disabled' | 'local_only';
+  allowedProfileRefs: string[];
+}
 export interface AssessmentEnvironment {
   id: string;
   name: string;
@@ -14,6 +18,7 @@ export interface AssessmentEnvironment {
   connectionRefs: string[];
   credentialRefs: string[];
   dataClassification: 'public' | 'internal' | 'confidential' | 'restricted';
+  evidenceProcessing?: EvidenceProcessingPolicy | null;
   frameworks: Array<{ id: string; edition: string }>;
   jurisdictions: string[];
   period: { start: string; end: string } | null;

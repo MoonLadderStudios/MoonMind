@@ -357,10 +357,22 @@ async def test_capture_redacts_credentials_from_provider_snapshots(tmp_path) -> 
 
     initial = await gateway.read_text(bundle.metadata_refs["initialSnapshotRef"])
     final = await gateway.read_text(bundle.metadata_refs["finalSnapshotRef"])
-    assert fake_token not in initial
-    assert fake_token not in final
-    assert "[REDACTED]" in initial
-    assert "[REDACTED]" in final
+    expected = {
+        **snapshot,
+        "items": [
+            {
+                "type": "function_call_output",
+                "data": {
+                    "output": "origin\thttps://[REDACTED_USERINFO]@github.com/example/repository.git (fetch)"
+                },
+            }
+        ],
+    }
+    for captured in (initial, final):
+        assert fake_token not in captured
+        assert "x-access-token" not in captured
+        assert credential_url not in captured
+        assert json.loads(captured) == expected
 
 
 @pytest.mark.asyncio

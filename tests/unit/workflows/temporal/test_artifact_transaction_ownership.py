@@ -174,8 +174,9 @@ async def test_create_and_complete_share_outer_transaction(tmp_path, commit):
 
 
 @pytest.mark.parametrize("commit", [False, True])
+@pytest.mark.parametrize("surface", ["compute_preview", "get_metadata"])
 async def test_preview_mutations_survive_read_cleanup_but_follow_outer_transaction(
-    tmp_path, commit
+    tmp_path, commit, surface
 ):
     from api_service.db.models import TemporalArtifactRedactionLevel
 
@@ -188,10 +189,19 @@ async def test_preview_mutations_survive_read_cleanup_but_follow_outer_transacti
             await session.commit()
         async with maker() as session:
             service = _caller_service(session, store)
-            preview = await service.compute_preview(
-                artifact_id=artifact_id,
-                access=ArtifactAccessContext.for_service("service:owner"),
-            )
+            if surface == "compute_preview":
+                preview = await service.compute_preview(
+                    artifact_id=artifact_id,
+                    access=ArtifactAccessContext.for_service("service:owner"),
+                )
+            else:
+                from tests.artifact_access import access_for_test
+
+                _, _, _, policy = await service.get_metadata(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
+                assert not policy.raw_access_allowed
+                preview = policy.preview_artifact_ref
             preview_id = preview.artifact_id
             assert (await session.get(TemporalArtifact, artifact_id)).metadata_json[
                 "preview_artifact_id"

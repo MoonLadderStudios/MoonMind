@@ -13,6 +13,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -89,6 +90,27 @@ class AssessmentFramework(FrameworkContract):
     edition: Text
 
 
+class EvidenceProcessingPolicy(FrameworkContract):
+    """Explicit delivery limits, never a grant to a model or credential."""
+
+    model_delivery: Literal["allowed", "disabled", "local_only"] = "allowed"
+    allowed_profile_refs: Annotated[
+        list[
+            Annotated[
+                str,
+                StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,254}$"),
+            ]
+        ],
+        Field(max_length=32),
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def distinct_profiles(self):
+        if len(self.allowed_profile_refs) != len(set(self.allowed_profile_refs)):
+            raise ValueError("duplicate permitted evidence recipient")
+        return self
+
+
 class AssessmentEnvironment(FrameworkContract):
     id: Identifier
     name: Text
@@ -113,6 +135,7 @@ class AssessmentEnvironment(FrameworkContract):
     data_classification: Literal["public", "internal", "confidential", "restricted"] = (
         "internal"
     )
+    evidence_processing: EvidenceProcessingPolicy | None = None
     frameworks: Annotated[list[AssessmentFramework], Field(max_length=16)] = Field(
         default_factory=list
     )
@@ -124,6 +147,16 @@ class AssessmentEnvironment(FrameworkContract):
         )
     )
     retention_days: int | None = Field(default=None, ge=1, le=3650)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_processing_shape(self, handler):
+        value = handler(self)
+        # A new optional policy must not rewrite retained v1 snapshot digests.
+        # Absent/null adds no constraint; explicit limits remain serialized.
+        if self.evidence_processing is None:
+            value.pop("evidenceProcessing", None)
+            value.pop("evidence_processing", None)
+        return value
 
     @field_validator("origin_candidates")
     @classmethod

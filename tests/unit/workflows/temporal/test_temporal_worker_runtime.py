@@ -4841,6 +4841,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     assert deployment_handler_calls == []
     mock_agent_runtime_activities_cls.assert_called_once_with(
         artifact_service=ANY,
+        session_factory=ANY,
         run_store=run_store,
         run_supervisor=run_supervisor,
         run_launcher=run_launcher,
@@ -5001,6 +5002,8 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
 
     mock_agent_runtime_activities_cls.assert_called_once()
     assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
+    assert mock_agent_runtime_activities_cls.call_args.kwargs["session_factory"] is not None
+    assert mock_review_activities_cls.call_args.kwargs["session_factory"] is mock_agent_runtime_activities_cls.call_args.kwargs["session_factory"]
     # Legacy workload handlers are not registered on the agent-facing dispatcher.
     await resources.aclose()
 

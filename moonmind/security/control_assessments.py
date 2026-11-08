@@ -320,8 +320,10 @@ def assess_controls(
 def render_control_assessment(report: ControlAssessment) -> str:
     """Use the ordinary assessment report, with evidence refs in its bundle."""
 
+    from moonmind.utils.logging import redact_evidence_text
+
     def clean(value):
-        return html.escape(str(value)).replace("\n", " ")
+        return html.escape(redact_evidence_text(str(value))).replace("\n", " ")
 
     lines = [
         "",

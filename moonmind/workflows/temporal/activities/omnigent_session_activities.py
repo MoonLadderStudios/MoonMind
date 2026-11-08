@@ -955,6 +955,23 @@ async def _reconstruct_plan_bound_request(
     )
 
     authored_parameters = original_task_snapshot_parameters(snapshot)
+    from api_service.services.assessment_model_delivery import (
+        processing_from_parameters,
+        require_model_delivery,
+    )
+
+    processing, _ = processing_from_parameters(authored_parameters)
+    model_profiles = {
+        value.providerProfileRef
+        for value in model_bindings_of(plan.payload.credentialBindings).values()
+    }
+    for profile_ref in model_profiles or {None}:
+        require_model_delivery(processing, profile_ref=profile_ref)
+    # Saved engagement configuration is admission authority, not model context.
+    # Its credentials references and unrelated personal details stay in the
+    # retained task snapshot; the already admitted scoped capabilities remain.
+    authored_parameters.pop("assessmentProject", None)
+
     # A schedule's task input also carries the Agent Profile snapshot it was
     # compiled with. The plan binds that snapshot by reference; it is not
     # authored request input.

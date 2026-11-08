@@ -258,8 +258,10 @@ def test_intent_snapshot_keeps_plan_bound_authority_compact() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("processing", [None, {"modelDelivery": "disabled"}, {"modelDelivery": "local_only"}, {"allowedProfileRefs": ["different-profile"]}, {"allowedProfileRefs": ["provider-profile-1"]}], ids=["legacy", "disabled", "local", "profile-bound", "allowed-profile"])
 async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     monkeypatch: pytest.MonkeyPatch,
+    processing,
 ) -> None:
     snapshot = {
         "schemaVersion": "task-input-snapshot/v1",
@@ -286,6 +288,9 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
             },
         },
     }
+    if processing is not None:
+        from tests.unit.services.test_assessment_model_delivery import source
+        snapshot["draft"]["assessmentProject"] = source(processing).parameters["assessmentProject"]
     snapshot_digest = omnigent_session_activities._digest_bytes(
         omnigent_session_activities._json_bytes(snapshot)
     )
@@ -326,6 +331,17 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
         AsyncMock(return_value=snapshot),
     )
 
+    if processing is not None and processing != {"allowedProfileRefs": ["provider-profile-1"]}:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactAuthorizationError,
+        )
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await omnigent_session_activities._reconstruct_plan_bound_request(
+                binding=binding, plan=plan, workflow_id="workflow-1",
+                step_execution_id="step-execution-1", agent_run_id="agent-run-1", logical_step_id="implement",
+            )
+        return
+
     request = await omnigent_session_activities._reconstruct_plan_bound_request(
         binding=binding,
         plan=plan,
@@ -335,6 +351,7 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
         logical_step_id="implement",
     )
 
+    assert "assessmentProject" not in request.parameters
     assert request.instruction_ref == "Implement the selected change."
     assert request.instruction_ref != binding.task_input_snapshot_ref
     assert request.idempotency_key == "step-execution-1"

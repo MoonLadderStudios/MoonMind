@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from moonmind.workflows.temporal.github_issue_attempts import (
     OUTCOME_RETRY_RESET,
     AttemptHandoff,
@@ -290,9 +292,15 @@ def test_reconstruction_carries_the_retry_explanation() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_an_audited_reset_record_restores_the_allowance_and_keeps_history() -> None:
+@pytest.mark.parametrize(
+    "instant",
+    ["2026-09-26T12:00:00+00:00", "2026-09-26T12:00:00", "2026-09-26T12:00:00-05:30"],
+    ids=["aware", "historical-naive", "offset"],
+)
+def test_an_audited_reset_record_restores_the_allowance_and_keeps_history(instant) -> None:
     history = _recorded_failures()
     reset = _reset(history[-1], "102", [item.attempt_id for item in history])
+    reset = replace(reset, reset_authorization=f"{BOT} at {instant}")
     comments = _comments([*history, reset])
 
     result = reconstruct_from_comments(
@@ -315,6 +323,14 @@ def test_an_audited_reset_record_restores_the_allowance_and_keeps_history() -> N
     assert retry["resetAuthorization"] == reset.reset_authorization
     assert BOT in reset.reset_authorization
     assert retry["unauthorizedResets"] == 0
+
+
+
+def test_ordinary_attempt_preserves_empty_reset_authorization() -> None:
+    handoff = _recorded_failures()[0]
+    parsed = parse_attempt_comment(render_attempt_comment(handoff))
+    assert parsed.status == "ok"
+    assert parsed.handoff.reset_authorization == ""
 
 
 def _reconstruct(comments, *, trusted=(BOT,)):
@@ -367,6 +383,23 @@ def test_a_reset_whose_authorization_names_another_account_is_ignored() -> None:
 
     assert result.reason_code == "budget_exhausted"
     assert result.to_dict()["retry"]["unauthorizedResets"] == 1
+
+
+def test_credential_bearing_reset_authorization_is_withheld_without_resetting() -> None:
+    history = _recorded_failures()
+    reset = _reset(history[-1], "102", [item.attempt_id for item in history])
+    reset = replace(
+        reset,
+        reset_authorization=reset.reset_authorization + " Bearer synthetic-private-value",
+    )
+    comments = _comments([*history, reset])
+    assert all("synthetic-private-value" not in comment["body"] for comment in comments)
+
+    result = _reconstruct(comments)
+
+    assert result.reason_code == "budget_exhausted"
+    assert result.to_dict()["retry"]["unauthorizedResets"] == 1
+    assert len(result.lineage) == 4
 
 
 def test_a_reset_clears_only_the_attempts_it_names() -> None:
