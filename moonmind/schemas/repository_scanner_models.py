@@ -625,8 +625,6 @@ class TLSAssessment(Contract):
     @field_validator("ciphers")
     @classmethod
     def cipher_names(cls, values):
-        import re
-
         if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", v) for v in values):
             raise ValueError("select individual cipher names, not cipher expressions")
         return values
