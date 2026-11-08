@@ -608,6 +608,14 @@ class OmnigentHttpClient:
     async def get_session(self, session_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/sessions/{quote(session_id, safe='')}")
 
+    async def list_session_child_sessions(self, session_id: str) -> dict[str, Any]:
+        """Read one page of unarchived child sessions."""
+        return await self._request(
+            "GET",
+            f"/v1/sessions/{quote(session_id, safe='')}/child_sessions",
+            params={"limit": 1},
+        )
+
     async def post_event(
         self,
         session_id: str,

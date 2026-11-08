@@ -1699,6 +1699,97 @@ def _snapshot_confirms_current_turn_terminal(
     )
 
 
+def _snapshot_confirms_native_final_answer(
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    response_id: str,
+    turn_state: Mapping[str, Any],
+) -> bool:
+    """Corroborate an observed native running/idle pair without a quiet wait.
+
+    Phase alone is not turn completion. The caller supplies a native response
+    id only after observing both lifecycle edges on the uninterrupted live
+    stream. Require the visible marked user item and completed final answer to
+    belong to that response, with no intervening or outstanding work. Ambiguous
+    or older projections retain the ordinary quiescence fallback.
+    """
+
+    labels = snapshot.get("labels", {})
+    if (
+        snapshot.get("id") != session_id
+        or snapshot.get("harness") != "codex-native"
+        or snapshot.get("status") != "idle"
+        or "active_response_id" not in snapshot
+        or snapshot["active_response_id"] is not None
+        or _snapshot_projects_active_response(snapshot)
+        or snapshot.get("pending_inputs") != []
+        or snapshot.get("pending_elicitations") != []
+        or snapshot.get("terminal_pending") is not False
+        or snapshot.get("background_task_count") not in (None, 0)
+        or snapshot.get("background_tasks") not in (None, [])
+        or snapshot.get("last_task_error")
+        or not isinstance(labels, Mapping)
+        or labels.get("omnigent.codex_native.collaboration_mode")
+        not in (None, "default")
+        or turn_state.get("boundarySource") != "marker"
+    ):
+        return False
+    items = snapshot.get("items")
+    marker_index = turn_state["markerIndex"]
+    if (
+        not isinstance(items, list)
+        or items[marker_index].get("response_id") != response_id
+    ):
+        return False
+    pending_calls: set[str] = set()
+    last_assistant: Mapping[str, Any] | None = None
+    instrumentation = turn_instrumentation_item_indexes(items, harness="codex-native")
+    for index, item in enumerate(items[marker_index + 1 :], start=marker_index + 1):
+        if not isinstance(item, Mapping) or item.get("status") != "completed":
+            return False
+        if item.get("response_id") != response_id:
+            return False
+        data = item.get("data")
+        if not isinstance(data, Mapping):
+            return False
+        item_type = item.get("type")
+        if item_type in {"function_call", "function_call_output"}:
+            call_id = data.get("call_id")
+            if not isinstance(call_id, str) or not call_id:
+                return False
+            if item_type == "function_call":
+                pending_calls.add(call_id)
+            else:
+                pending_calls.discard(call_id)
+            # Only completed, paired native diff instrumentation may follow
+            # the answer. Unlike the quiet heuristic, no unmatched call is
+            # forgiven merely because an assistant message appeared later.
+            if index in instrumentation:
+                continue
+            last_assistant = None
+        elif item_type == "message" and data.get("role") == "assistant":
+            if data.get("interrupted") or data.get("subagent_return_id"):
+                return False
+            last_assistant = item
+        else:
+            return False
+    if pending_calls or last_assistant is None:
+        return False
+    data = last_assistant["data"]
+    content = data.get("content")
+    return (
+        data.get("phase") == "final_answer"
+        and isinstance(content, list)
+        and any(
+            isinstance(block, Mapping)
+            and isinstance(block.get("text"), str)
+            and block["text"].strip()
+            for block in content
+        )
+    )
+
+
 def _marked_turn_failure_snapshot(
     event: Mapping[str, Any],
     snapshot: Mapping[str, Any],
@@ -1939,6 +2030,8 @@ async def _await_marked_turn_terminal(
     baseline_item_ids: frozenset[str] | None = None,
     event_count: int,
     terminal_status: str,
+    native_terminal_response_id: str | None = None,
+    observation_diagnostics: list[dict[str, Any]] | None = None,
     timeout_seconds: float = 1800.0,
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
@@ -1953,8 +2046,10 @@ async def _await_marked_turn_terminal(
     turn, so the session snapshot itself does not become terminal. Stock native
     sessions can replay the prior SSE terminal frame and can briefly project an
     assistant preamble as their last item before its next tool appears. Marked
-    item ordering plus a bounded stable period therefore owns the terminal
-    decision; neither a terminal frame nor a transient last assistant does.
+    item ordering plus a bounded stable period normally owns the terminal
+    decision. A live, response-correlated native running/idle pair may skip that
+    wait only when the marked snapshot also proves a completed final answer.
+    Generic terminal frames and transient last assistants remain candidates.
 
     OpenCode can leave the interactive session status at ``running`` after a
     post-dispatch terminal event when the bounded transcript ends with a tool
@@ -1984,6 +2079,7 @@ async def _await_marked_turn_terminal(
     )
     quiet_signature: tuple[Any, ...] | None = None
     quiet_since: float | None = None
+    native_children_absent = False
     last_snapshot: dict[str, Any] | None = None
     last_turn_state: dict[str, Any] | None = None
     while loop.time() < deadline:
@@ -2039,6 +2135,57 @@ async def _await_marked_turn_terminal(
             observation_started_at=observation_started_at,
             observation_completed_at=observation_completed_at,
         )
+        if (
+            terminal_status == "completed"
+            and native_terminal_response_id
+            and not observation_was_slow
+            and not observation_diagnostics
+            and _snapshot_confirms_native_final_answer(
+                snapshot,
+                session_id=session_id,
+                response_id=native_terminal_response_id,
+                turn_state=turn_state,
+            )
+        ):
+            # Native child spawns are not parent transcript items, and the
+            # parent snapshot does not roll up their liveness. Exclude every
+            # child-bearing session rather than infer completion from child
+            # status. This optional lookup runs once, never extending the
+            # fallback with repeated failures or an unbounded outage retry.
+            if not native_children_absent:
+                try:
+                    children = await asyncio.wait_for(
+                        client.list_session_child_sessions(session_id), timeout=2.0
+                    )
+                except (OmnigentClientError, TimeoutError):
+                    children = None
+                if (
+                    isinstance(children, Mapping)
+                    and children.get("data") == []
+                    and children.get("has_more") is False
+                    and not observation_diagnostics
+                ):
+                    native_children_absent = True
+                    # A user input, running turn or provider failure may have
+                    # arrived during the lookup. Re-enter through a fresh read
+                    # and the ordinary failure/slow-observation checks.
+                    continue
+                native_terminal_response_id = None
+            else:
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "normalizedStatus": "completed",
+                        "eventsCaptured": event_count,
+                        "firstMessagePosted": True,
+                        "markedTurnTerminalEvidence": "codex_native_final_answer",
+                        "turnQuietTargetSeconds": 0.0,
+                    }
+                )
+                return "completed", snapshot
+        elif native_children_absent:
+            # The corroborating read changed or is no longer trustworthy.
+            native_terminal_response_id = None
         terminal_event_tool_only_candidate = bool(
             not inactive
             and not _snapshot_projects_live_native_turn(snapshot)
@@ -3580,6 +3727,11 @@ async def run_omnigent_execution(
                     idle_tick_seconds=_TERMINAL_RECONCILIATION_INTERVAL_SECONDS,
                 )
             next_terminal_reconciliation_at = 0.0
+            live_native_response_id: str | None = None
+            native_completion_disqualified = (
+                external_state["retry"]["sessionResolution"] != "created"
+                or pre_dispatch_item_ids != frozenset()
+            )
 
             async def observe_marked_turn(source: str) -> bool:
                 """Read the provider snapshot and evaluate the marked turn once.
@@ -3666,6 +3818,29 @@ async def run_omnigent_execution(
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
+                    event_type = str(event.get("type") or "")
+                    if (
+                        event_type == "stream.resume_gap"
+                        or event_type.startswith("session.child")
+                        or (
+                            event_type == "session.created"
+                            and event.get("child_session_id")
+                        )
+                    ):
+                        # Archived children are omitted by child_sessions, but
+                        # native registration publishes this live signal before
+                        # returning. Keep the veto even after a child disappears.
+                        native_completion_disqualified = True
+                    native_status_event = (
+                        arrived_after_message_post
+                        and not native_completion_disqualified
+                        and external_state["retry"]["firstMessageOutcome"] == "posted"
+                        and not observation_diagnostics
+                        and event.get("type") == "session.status"
+                        and event.get("conversation_id") == session_id
+                    )
+                    if native_status_event and event.get("status") == "running":
+                        live_native_response_id = _provider_response_id(event)
                     if arrived_after_message_post:
                         start_watchdog.observe_terminal_response_event(event)
                         start_watchdog.observe_progress_event(event)
@@ -3825,6 +4000,16 @@ async def run_omnigent_execution(
                             baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
                             terminal_status=terminal_event_status,
+                            native_terminal_response_id=(
+                                live_native_response_id
+                                if native_status_event
+                                and event.get("status") == "idle"
+                                and not event.get("error")
+                                and live_native_response_id
+                                == _provider_response_id(event)
+                                else None
+                            ),
+                            observation_diagnostics=observation_diagnostics,
                             timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
                             allow_same_session_continuation=allow_same_session_continuation,
