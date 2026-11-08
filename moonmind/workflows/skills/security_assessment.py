@@ -13,6 +13,11 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 from temporalio import activity
 
+from moonmind.security.application_access import (
+    ApplicationAccessReport,
+    ApplicationAccessSpec,
+    verify_report_evidence,
+)
 from moonmind.security.assessments import (
     MAX_RETAINED_REPORT_BYTES,
     AdvisoryFeed,
@@ -719,6 +724,70 @@ def _game_math_observation(
             "gameMathSource": summary.provenance.source_ref,
             "gameMathApproval": summary.provenance.approval_ref or "unavailable",
             "gameMathOutcome": summary.outcome,
+        },
+    )
+
+
+def _verify_application_access_report(summary, spec_body, capture_body):
+    from moonmind.security.application_access_target import (
+        ApplicationAccessCapture,
+        validate_capture_spec,
+    )
+
+    if summary.job is None:
+        raise ValueError("application access report requires retained job inputs")
+    spec = ApplicationAccessSpec.model_validate_json(spec_body)
+    capture = ApplicationAccessCapture.model_validate_json(capture_body)
+    validate_capture_spec(spec, capture)
+    verify_report_evidence(summary, spec, capture.bundle, spec_body, capture_body)
+    return spec, capture
+
+
+def _application_access_observation(request, summary, spec, capture, ref, created_at):
+    origin = capture.scope.web.origin
+    if origin not in request.scope.assets:
+        raise ValueError("application access target outside admitted assessment scope")
+    evidence = [ref, summary.job.input_refs["spec"], summary.job.input_refs["capture"]]
+    # The reviewed case and complete target scope are part of comparability.
+    # Removing an identity, object, predicate or route cannot establish a fix.
+    config = content_key(
+        ["application-access", summary.spec_digest, capture.scope_digest]
+    )
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=[
+            Finding(
+                source="application-access",
+                tool="application-access",
+                rule_id=row.case_ref,
+                asset=origin,
+                native_id=content_key(
+                    [row.case_ref, row.identity_ref, row.resource_ref]
+                ),
+                evidence_refs=evidence,
+            )
+            for row in summary.cases
+            if row.outcome == "finding"
+        ],
+        coverage=[
+            Coverage(
+                source="application-access",
+                tool="application-access",
+                assets=[origin],
+                rule_ids=[row.case_ref for row in summary.cases],
+                config_ref=config,
+                status=summary.status,
+                evidence_method="deterministic_check",
+            )
+        ],
+        provenance={
+            "applicationAccessSummary": ref,
+            "applicationAccessSpec": summary.spec_digest,
+            "applicationAccessScope": capture.scope_digest,
+            "applicationAccessPolicy": spec.policy_ref,
+            "applicationAccessPolicyReview": spec.policy_review_ref,
         },
     )
 
@@ -1853,6 +1922,85 @@ class AssessmentExecution:
                                     "verification": game_summary.certification,
                                 }
                             )
+                        elif (
+                            payload.get("schemaVersion")
+                            == "application-access-report/v1"
+                        ):
+                            access_summary = ApplicationAccessReport.model_validate(
+                                payload
+                            )
+                            if access_summary.job is None:
+                                raise ValueError(
+                                    "application access job inputs unavailable"
+                                )
+                            try:
+                                _, spec_body = await self.read(
+                                    access_summary.job.input_refs["spec"]
+                                )
+                                _, capture_body = await self.read(
+                                    access_summary.job.input_refs["capture"]
+                                )
+                            except TemporalArtifactNotFoundError as exc:
+                                raise ValueError(
+                                    "application access input evidence unavailable"
+                                ) from exc
+                            access_spec, access_capture = (
+                                _verify_application_access_report(
+                                    access_summary, spec_body, capture_body
+                                )
+                            )
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _application_access_observation(
+                                request,
+                                access_summary,
+                                access_spec,
+                                access_capture,
+                                ref,
+                                observed_at,
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "application-access",
+                                    "cases": [
+                                        {
+                                            "caseRef": row.case_ref,
+                                            "identityRef": row.identity_ref,
+                                            "resourceRef": row.resource_ref,
+                                            "expected": row.expected,
+                                            "observed": row.access.observed,
+                                            "authenticationState": row.authentication_state,
+                                            "outcome": row.outcome,
+                                            "coverage": row.coverage,
+                                            "reasons": row.reasons,
+                                            "request": {
+                                                "method": case.request.method,
+                                                "path": case.request.path,
+                                            },
+                                        }
+                                        for row, case in zip(
+                                            access_summary.cases, access_spec.cases
+                                        )
+                                    ],
+                                    "target": access_capture.scope.web.origin,
+                                    "summaryRef": ref,
+                                    "nativeRefs": {
+                                        "assessment": ref,
+                                        **access_summary.job.input_refs,
+                                    },
+                                    "coverage": access_summary.status,
+                                    "outcome": access_summary.outcome,
+                                    "execution": {
+                                        "cases": access_capture.stop_reason
+                                        or access_capture.status
+                                    },
+                                    "limitations": sorted(access_summary.limitations),
+                                    "verification": access_summary.verification,
+                                    "specDigest": access_summary.spec_digest,
+                                    "inputDigests": access_summary.input_digests,
+                                }
+                            )
                         elif payload.get("schemaVersion") == "rgs-assessment/v1":
                             rgs_summary = RgsAssessment.model_validate(payload)
                             if rgs_summary.job:
@@ -2878,6 +3026,20 @@ def _scanner_summary(summaries: list[dict]) -> str:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
+        if summary["scanner"] == "application-access":
+
+            def safe(value):
+                value = html.escape(redact_sensitive_text(str(value)), quote=True)
+                return re.sub(r"([\\`*_[\]{}()#!|>])", r"\\\1", value)
+
+            for row in summary["cases"]:
+                lines.append(
+                    f"- Case {safe(row['caseRef'])}: {safe(row['identityRef'])} on {safe(row['resourceRef'])}, "
+                    f"{safe(row['request']['method'])} {safe(row['request']['path'])}. "
+                    f"Expected {row['expected']}; observed {row['observed']}. "
+                    f"Authentication {row['authenticationState']}; outcome {row['outcome']}; coverage {row['coverage']}. "
+                    f"Reasons: {', '.join(row['reasons']) or 'none'}."
+                )
         if summary["scanner"] == "rng":
             for key, label in (
                 ("implementationReview", "Implementation observations"),
