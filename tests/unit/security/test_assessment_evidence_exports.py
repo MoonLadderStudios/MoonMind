@@ -40,6 +40,33 @@ def test_selected_export_contract_is_explicit_bounded_and_optional():
             AssessmentRequest.model_validate(request_payload(evidenceExport=selection))
 
 
+def test_service_inventory_summary_export_validates_then_transforms_only_copy():
+    from moonmind.security.evidence_exports import (
+        WithheldEvidence,
+        prepare_evidence_member,
+    )
+    from tests.unit.security.test_service_inventory_integration import summarized
+
+    payload = summarized().model_dump(mode="json", by_alias=True)
+    payload["evidenceRef"] = f"art_native?token={SECRET} contact {EMAIL}"
+    original = json.dumps(payload).encode()
+    body, extension, schema = prepare_evidence_member(
+        original, content_type="application/json", hint=""
+    )
+    emitted = json.loads(body)
+    assert extension == "json" and schema == "service-inventory/v1"
+    assert SECRET.encode() not in body and EMAIL.encode() not in body
+    assert emitted["endpoints"] == payload["endpoints"]
+    assert emitted["comparisonKey"] == payload["comparisonKey"]
+    assert json.loads(original) == payload
+
+    malformed = {**payload, "planKey": "0" * 64}
+    with pytest.raises(WithheldEvidence, match="malformed_evidence"):
+        prepare_evidence_member(
+            json.dumps(malformed).encode(), content_type="application/json", hint=""
+        )
+
+
 @pytest.mark.asyncio
 async def test_actual_control_and_oscal_producers_redact_presentations_not_native(
     environment,

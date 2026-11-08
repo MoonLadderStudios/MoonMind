@@ -35,6 +35,7 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.security.dns_assessments import DNSAssessment
 from moonmind.security.native_network import NativeNetworkSelection
+from moonmind.security.service_inventory import ServiceInventoryOptions
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
     FeedRefresh,
@@ -474,10 +475,16 @@ class WorkloadProfileSelection(ContractModel):
     )
     native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
     dns_assessment: DNSAssessment | None = Field(None, alias="dnsAssessment")
+    service_inventory: ServiceInventoryOptions | None = Field(
+        None, alias="serviceInventory"
+    )
 
     @model_serializer(mode="wrap")
     def _legacy_native_shape(self, handler):
         value = handler(self)
+        if self.service_inventory is None:
+            value.pop("serviceInventory", None)
+            value.pop("service_inventory", None)
         if self.native_network is None:
             value.pop("nativeNetwork", None)
             value.pop("native_network", None)

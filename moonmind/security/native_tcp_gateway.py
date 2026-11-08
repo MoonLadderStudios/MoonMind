@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import hashlib
 import ipaddress
 import json
@@ -25,6 +26,47 @@ import time
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
+
+# Exact pre-tunnel responses. Never interpolate peer input or exception text.
+# Importing this module stays stdlib-only for the isolated gateway image.
+DIAL_OUTCOMES = frozenset(
+    {"open", "refused", "unreachable", "timed_out", "transport_error"}
+)
+CONNECT_SUCCESS = b"HTTP/1.1 200 Connection Established\r\n\r\n"
+CONNECT_CLOSE_ON_EOF = "X-MoonMind-Close-On-EOF: 1"
+CONNECT_FAILURES = {
+    outcome: (
+        (
+            "HTTP/1.1 403 Forbidden"
+            if outcome == "denied"
+            else "HTTP/1.1 502 Bad Gateway"
+        )
+        + "\r\nX-MoonMind-Dial-Outcome: "
+        + outcome
+        + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    ).encode("ascii")
+    for outcome in (*sorted(DIAL_OUTCOMES - {"open"}), "denied")
+}
+
+
+def validate_dial_outcomes(snapshot):
+    """Optional extension; absent legacy fields are never invented or rewritten."""
+    if "dialOutcomes" not in snapshot:
+        return
+    counts = snapshot["dialOutcomes"]
+    if (
+        not isinstance(counts, dict)
+        or set(counts) - DIAL_OUTCOMES
+        or any(
+            type(value) is not int or not 0 <= value <= snapshot["attempts"]
+            for value in counts.values()
+        )
+        or sum(counts.values()) > snapshot["attempts"]
+        or counts.get("transport_error", 0)
+        > snapshot.get("transportErrors", {}).get("io", 0)
+        or (snapshot["bytesReserved"] and not counts.get("open", 0))
+    ):
+        raise ValueError("invalid native dial outcome evidence")
 
 
 def _ipv4(value):
@@ -183,6 +225,9 @@ class NativeTCPGateway:
         self.state_directory = Path(state_directory)
         self.server = None
         self._tasks = set()
+        # Cleanup remains tracked after an explicitly short-lived tunnel has
+        # stopped both transports and returned its concurrency reservation.
+        self._slots = set()
         self._writers = set()
         self._timer = None
         self._closed = False
@@ -191,6 +236,7 @@ class NativeTCPGateway:
         self._bytes = 0
         self._denials = Counter()
         self._transport_errors = Counter()
+        self._dial_outcomes = Counter()
         self._starts = deque()
         self._status = "created"
         self._pid = os.getpid()
@@ -211,10 +257,11 @@ class NativeTCPGateway:
             "processStart": self._process_start,
             "status": self._status,
             "attempts": self._attempts,
-            "activeConnections": len(self._tasks),
+            "activeConnections": len(self._slots),
             "bytesReserved": self._bytes,
             "denials": dict(self._denials),
             "transportErrors": dict(self._transport_errors),
+            "dialOutcomes": dict(self._dial_outcomes),
             "endpoints": self.config.to_mapping()["endpoints"],
         }
 
@@ -282,6 +329,29 @@ class NativeTCPGateway:
             self._transport_errors[reason] + 1, 2**63 - 1
         )
         self._record()
+
+    def _dial_outcome(self, outcome):
+        self._dial_outcomes[outcome] += 1
+        if outcome == "transport_error":
+            self._transport_errors["io"] += 1
+        self._record()  # Persist the observation before exposing it to a client.
+
+    async def _failure_response(self, writer, outcome):
+        # Best effort only. These fixed control bytes are not target traffic and
+        # cannot become arbitrary output or bypass the payload reservation pump.
+        # Keep the writer owned until closed; expiry still aborts backpressure.
+        if self._expire_if_due():
+            return
+        try:
+            async with asyncio.timeout(
+                min(self.config.handshake_seconds, self._remaining())
+            ):
+                writer.write(CONNECT_FAILURES[outcome])
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+        except (OSError, TimeoutError):
+            writer.transport.abort()
 
     async def start(self):
         if self._started or self._closed:
@@ -380,18 +450,20 @@ class NativeTCPGateway:
                 self._deny("client")
                 writer.close()
                 return
-            if len(self._tasks) >= self.config.max_concurrent_connections:
+            if len(self._slots) >= self.config.max_concurrent_connections:
                 self._deny("concurrency")
                 writer.close()
                 return
             self._writers.add(writer)
             task = asyncio.create_task(self._session(reader, writer))
             self._tasks.add(task)
+            self._slots.add(task)
 
             def finished(done):
                 writer.close()
                 self._writers.discard(writer)
                 self._tasks.discard(done)
+                self._slots.discard(done)
                 if not done.cancelled():
                     done.exception()
                 if not self._closed:
@@ -411,9 +483,11 @@ class NativeTCPGateway:
         pumps = []
         graceful = False
         limited = False
+        close_on_eof = False
         try:
             header = await asyncio.wait_for(
-                reader.readuntil(b"\r\n\r\n"), self.config.handshake_seconds
+                reader.readuntil(b"\r\n\r\n"),
+                min(self.config.handshake_seconds, self._remaining()),
             )
             if len(header) > 4096:
                 raise ValueError("header")
@@ -423,8 +497,9 @@ class NativeTCPGateway:
                 raise ValueError("header")
             authority = _authority(match[1])
             # OpenSSL and curl use these fixed CONNECT preambles.
-            # Header values never influence forwarding; no arbitrary headers,
-            # authentication, request bodies, or duplicate Host are accepted.
+            # Header values never influence destination or payload forwarding.
+            # One exact opt-in header shortens tunnel lifetime on either EOF.
+            # No arbitrary headers, auth or duplicate Host are accepted.
             allowed = ([], [f"Host: {authority}"])
             if match[2] == "0":
                 allowed = (*allowed, ["Proxy-Connection: Keep-Alive"])
@@ -440,11 +515,16 @@ class NativeTCPGateway:
                         "Proxy-Connection: Keep-Alive",
                     ],
                 )
-            if lines[1:-2] not in allowed:
+            close_on_eof = match[2] == "1" and lines[1:-2] == [
+                f"Host: {authority}",
+                CONNECT_CLOSE_ON_EOF,
+            ]
+            if lines[1:-2] not in allowed and not close_on_eof:
                 raise ValueError("header")
             endpoints = {a: (b, c) for a, b, c in self.config.endpoints}
             if authority not in endpoints:
                 self._deny("destination")
+                await self._failure_response(writer, "denied")
                 return
             loop = asyncio.get_running_loop()
             now = loop.time()
@@ -454,9 +534,11 @@ class NativeTCPGateway:
                 self._starts.popleft()
             if self._attempts >= self.config.max_connections:
                 self._deny("attempts")
+                await self._failure_response(writer, "denied")
                 return
             if len(self._starts) >= self.config.max_connections_per_second:
                 self._deny("rate")
+                await self._failure_response(writer, "denied")
                 return
             self._attempts += 1
             self._starts.append(now)
@@ -465,21 +547,46 @@ class NativeTCPGateway:
                 return
             host, port = endpoints[authority]
             # AI_NUMERICHOST and AF_INET forbid resolver fallback, even on errors.
-            remote_reader, upstream = await asyncio.wait_for(
-                asyncio.open_connection(
-                    host,
-                    port,
-                    family=socket.AF_INET,
-                    flags=socket.AI_NUMERICHOST,
-                    limit=16384,
-                ),
-                self.config.connect_seconds,
-            )
+            try:
+                remote_reader, upstream = await asyncio.wait_for(
+                    asyncio.open_connection(
+                        host,
+                        port,
+                        family=socket.AF_INET,
+                        flags=socket.AI_NUMERICHOST,
+                        limit=16384,
+                    ),
+                    min(self.config.connect_seconds, self._remaining()),
+                )
+            except OSError as error:
+                if self._expire_if_due():
+                    return
+                outcome = {
+                    errno.ECONNREFUSED: "refused",
+                    errno.ENETUNREACH: "unreachable",
+                    errno.EHOSTUNREACH: "unreachable",
+                    errno.ETIMEDOUT: "timed_out",
+                }.get(error.errno, "transport_error")
+                if isinstance(error, TimeoutError):
+                    outcome = "timed_out"
+                self._dial_outcome(outcome)
+                await self._failure_response(writer, outcome)
+                return
             self._writers.add(upstream)
             if self._expire_if_due():
                 return
-            writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            await asyncio.wait_for(writer.drain(), self.config.idle_seconds)
+            self._dial_outcome("open")
+            if self._expire_if_due():
+                return
+            if close_on_eof:
+                # Before target EOF can close this opt-in tunnel, all observed
+                # payload must have left the asyncio buffer. The original
+                # deadline still aborts stalled writes, without leaking a slot.
+                writer.transport.set_write_buffer_limits(high=0, low=0)
+            writer.write(CONNECT_SUCCESS)
+            await asyncio.wait_for(
+                writer.drain(), min(self.config.idle_seconds, self._remaining())
+            )
             touched = loop.time()
 
             async def pump(source, destination):
@@ -500,7 +607,7 @@ class NativeTCPGateway:
                     destination.write(chunk)
                     await destination.drain()
                     touched = loop.time()
-                if destination.can_write_eof():
+                if not close_on_eof and destination.can_write_eof():
                     destination.write_eof()
 
             async def idle():
@@ -519,11 +626,17 @@ class NativeTCPGateway:
             transfer = asyncio.gather(*pumps[:2])
             try:
                 done, _ = await asyncio.wait(
-                    [transfer, pumps[2]], return_when=asyncio.FIRST_COMPLETED
+                    [transfer, pumps[2], *(pumps[:2] if close_on_eof else [])],
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in done:
                     task.result()
-                graceful = transfer in done and pumps[2] not in done and not limited
+                graceful = (
+                    not close_on_eof
+                    and transfer in done
+                    and pumps[2] not in done
+                    and not limited
+                )
             finally:
                 transfer.cancel()
                 # Only successful bidirectional EOF may flush queued output.
@@ -533,6 +646,12 @@ class NativeTCPGateway:
                         stream.close()
                     else:
                         stream.transport.abort()
+                if close_on_eof:
+                    # Both transports are stopped before releasing capacity.
+                    # Keep the task in _tasks until every canceled pump and
+                    # close callback is joined; no cleanup ownership is lost.
+                    pumps[2].cancel()
+                    self._slots.discard(asyncio.current_task())
                 await asyncio.gather(transfer, return_exceptions=True)
         except (
             ValueError,
@@ -541,8 +660,12 @@ class NativeTCPGateway:
             asyncio.LimitOverrunError,
         ):
             self._deny("header")
+            await self._failure_response(writer, "denied")
         except TimeoutError:
-            self._deny("timeout")
+            if not self._expire_if_due():
+                self._deny("timeout")
+                if upstream is None:
+                    await self._failure_response(writer, "denied")
         except OSError:
             if not self._closed:
                 self._transport_error("io")
@@ -612,6 +735,7 @@ def check(config, state_directory):
     _integer(snapshot.get("attempts"), 0, config.max_connections)
     _integer(snapshot.get("activeConnections"), 0, config.max_concurrent_connections)
     _integer(snapshot.get("bytesReserved"), 0, config.max_bytes)
+    validate_dial_outcomes(snapshot)
     if snapshot.get("endpoints") != config.to_mapping()["endpoints"]:
         raise ValueError("gateway endpoint evidence mismatch")
     return snapshot
