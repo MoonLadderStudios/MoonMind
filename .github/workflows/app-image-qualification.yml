@@ -1,18 +1,115 @@
-name: CI / Supplied App Image Qualification
+name: CI / Supplemental Scanner Payload Qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: MoonMind source revision whose staged scanner Python payload will be tested
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: app-image-qualification-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  qualify-supplied-image:
-    permissions:
-      contents: read
-      packages: read
-    uses: ./.github/workflows/pytest-unit-tests.yml
+  qualify-scanner-payload:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      TEST_ARCHITECTURE: ${{ matrix.architecture }}
+      CANDIDATE_REF: ${{ inputs.candidate_ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          fetch-depth: 1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Stage the candidate payload and retain published base provenance
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/scanner-payload
+          docker pull --platform "linux/$TEST_ARCHITECTURE" ghcr.io/moonladderstudios/repository-security:latest
+          docker image inspect ghcr.io/moonladderstudios/repository-security:latest > artifacts/scanner-payload/base-image.json
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from tools.ci.repository_security_image import stage_runner
+          candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert re.fullmatch(r'[a-f0-9]{40}', os.environ['CANDIDATE_REF'])
+          assert candidate == os.environ['CANDIDATE_REF']
+          root = Path('artifacts/scanner-payload')
+          stage_runner(root / 'runner')
+          inspection = json.loads((root / 'base-image.json').read_text())[0]
+          assert inspection['Architecture'] == os.environ['TEST_ARCHITECTURE']
+          record = {
+              'testedRevision': candidate,
+              'workflowRevision': os.environ.get('GITHUB_WORKFLOW_SHA'),
+              'baseImageId': inspection['Id'],
+              'baseRepoDigests': inspection['RepoDigests'],
+              'architecture': inspection['Architecture'],
+              'scope': 'Current staged Python payload on the published scanner base; upstream binaries and original inventory are unchanged.',
+              'files': {str(p.relative_to(root / 'runner')): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((root / 'runner').rglob('*')) if p.is_file()},
+          }
+          (root / 'payload-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - name: Replace only the Python payload in an isolated test image
+        run: |
+          set -euo pipefail
+          BASE_REF=$(docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/moonladderstudios/repository-security:latest)
+          cat > artifacts/scanner-payload/Dockerfile <<'DOCKER'
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          USER root
+          RUN rm -rf /opt/moonmind-scanner-python
+          COPY runner/ /opt/moonmind-scanner-python/
+          USER 1000:1000
+          DOCKER
+          docker build --pull=false --network=none --platform "linux/$TEST_ARCHITECTURE" --build-arg "BASE_IMAGE=$BASE_REF" --tag assessment-scanner:qualification artifacts/scanner-payload
+          docker image inspect assessment-scanner:qualification > artifacts/scanner-payload/test-image.json
+      - name: Verify exact packaged files and imported module locations
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --mount "type=bind,src=$PWD/artifacts/scanner-payload/payload-provenance.json,dst=/payload-provenance.json,readonly" \
+            --entrypoint python assessment-scanner:qualification -I -c '
+          import hashlib, importlib, json
+          from pathlib import Path
+          record = json.loads(Path("/payload-provenance.json").read_text())
+          root = Path("/opt/moonmind-scanner-python")
+          for relative, expected in record["files"].items():
+              assert hashlib.sha256((root / relative).read_bytes()).hexdigest() == expected, relative
+          modules = {}
+          for name in ("moonmind.security.assessment_projects", "moonmind.security.repository_scanner_runner", "moonmind.security.image_assessment_runner", "moonmind.security.scanner_feeds"):
+              module = importlib.import_module(name)
+              path = Path(module.__file__).resolve()
+              assert path.is_relative_to(root), str(path)
+              modules[name] = str(path)
+          print(json.dumps({"testedRevision": record["testedRevision"], "verifiedFiles": len(record["files"]), "importedModules": modules}))
+          ' > artifacts/scanner-payload/payload-import-check.json
+      - name: Qualify real scanners, isolation, admitted runners and SBOM
+        run: |
+          set -euo pipefail
+          TESTED_REVISION=$(git rev-parse HEAD)
+          sudo env GITHUB_SHA="$TESTED_REVISION" python3 -m tools.ci.qualify_repository_security_image \
+            --image assessment-scanner:qualification --evidence artifacts/scanner-payload/runtime
+      - name: Retain qualification and exact payload evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: assessment-scanner-payload-${{ matrix.architecture }}
+          path: artifacts/scanner-payload/
+          retention-days: 30
