@@ -36,6 +36,7 @@ beforeEach(() => {
       const environment = saved.projects[0]!.environments.find(item => item.id === request.environmentId)!;
       return response({ snapshot: { ...snapshot, environmentId: environment.id, environmentName: environment.name, configuration: { ...environment, ...request.overrides } }, gaps: [] });
     }
+    if (url === '/mcp/tools') return response({ tools: [{ name: 'security.assess', inputSchema: { type: 'object', 'x-assessment-project-defaults': true } }, { name: 'jira.get_issue', inputSchema: { type: 'object' } }] });
     if (url.startsWith('/api/v1/provider-profiles')) return response([{ profile_id: 'codex-test', runtime_id: 'codex_cli', account_label: 'Test profile', enabled: true }]);
     if (url.startsWith('/api/workflows/skills')) return response({ items: { worker: [] } });
     return response({ items: [] });
@@ -44,6 +45,33 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('reusable assessment context browser journeys', () => {
+  it('starts with ordinary steps and shows assessment setup only when a relevant Tool is chosen', async () => {
+    window.history.replaceState({}, '', '/workflows/new');
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    await screen.findByText('Step 1');
+    expect(screen.queryByText(/Repository scanners/)).toBeNull();
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    expect(screen.queryByLabelText('Assessment authorization')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add assessment setup' })).toBeNull();
+    await page.screenshot({ path: '../../../artifacts/create-ordinary-uncluttered.png' });
+    await page.getByRole('radio', { name: 'Tool', exact: true }).click();
+    await page.getByRole('button', { name: 'jira.get_issue', exact: true }).click();
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    await page.getByRole('button', { name: 'security.assess', exact: true }).click();
+    const context = await screen.findByLabelText('Assessment context');
+    expect(screen.getByText('Step 1').compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByRole('option', { name: 'Payments' });
+    await userEvent.selectOptions(screen.getByLabelText('Assessment system'), 'payments');
+    await userEvent.selectOptions(screen.getByLabelText('Assessment environment'), 'prod');
+    await page.getByText('Override context for this run', { exact: true }).click();
+    await userEvent.clear(screen.getByLabelText('Assets')); await userEvent.type(screen.getByLabelText('Assets'), 'draft-api');
+    await page.getByText('Security assessment setup', { exact: true }).click();
+    await page.getByRole('button', { name: 'jira.get_issue', exact: true }).click();
+    await page.getByText('Security assessment setup', { exact: true }).click();
+    expect((screen.getByLabelText('Assets') as HTMLTextAreaElement).value).toBe('draft-api');
+    await page.getByRole('button', { name: 'security.assess', exact: true }).click();
+    await page.screenshot({ path: '../../../artifacts/create-assessment-opt-in.png' });
+  });
   it('edits and copies nested Settings, saves, and dismisses the departure guard without losing the draft', async () => {
     window.history.replaceState({}, '', '/settings/instance');
     renderWithClient(<MemoryRouter initialEntries={['/settings/instance']}><InstanceSettingsPage payload={payload} /><a href="/workflows/new">Go to Create</a></MemoryRouter>);
@@ -72,6 +100,9 @@ describe('reusable assessment context browser journeys', () => {
   it('uses normal Create to select, clear, retry rejected context, and keep run-only overrides', async () => {
     window.history.replaceState({}, '', '/workflows/new');
     renderWithClient(<WorkflowStartPage payload={payload} />);
+    await page.getByLabelText('Advanced mode', { exact: true }).click();
+    await page.getByRole('button', { name: 'Add assessment setup', exact: true }).click();
+    await page.getByLabelText('Advanced mode', { exact: true }).click();
     await screen.findByRole('option', { name: 'Payments' });
     await userEvent.selectOptions(screen.getByLabelText('Assessment system'), 'payments');
     await userEvent.selectOptions(screen.getByLabelText('Assessment environment'), 'prod');
