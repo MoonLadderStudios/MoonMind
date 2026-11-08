@@ -449,3 +449,22 @@ def test_denial_does_not_accept_an_unrelated_receipt_projection():
         ),
     )
     assert assess(s, [obs]).cases[0].outcome == "inconclusive"
+
+
+def test_denied_authorized_mutation_with_unchanged_state_is_a_finding():
+    data = spec(mutating=True, expected="allow").model_dump()
+    data["cases"][0]["state_assertions"][0]["operator"] = "changed"
+    selected = ApplicationAccessSpec.model_validate(data)
+    obs = observation(
+        selected,
+        {"error": "forbidden"},
+        attempt_ref="attempt-1",
+        receipt={"id": "receipt", "matched": False},
+        state=project_state(
+            {"version": 1}, {"version": 1}, selected.cases[0].state_assertions
+        ),
+    )
+    report = assess(selected, [obs])
+    assert (report.status, report.outcome) == ("complete", "violations")
+    assert report.cases[0].access.observed == "deny"
+    assert report.cases[0].reasons == ["expected_access_denied"]

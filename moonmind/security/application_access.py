@@ -488,7 +488,12 @@ def assess_application_access(
                 and deny
                 and not allow
                 and not leaked
-                and state_ok
+                and state is not None
+                and all(
+                    (a.operator == "unchanged" and state[a.id] is True)
+                    or (a.operator == "changed" and state[a.id] is False)
+                    for a in case.state_assertions
+                )
                 and obs.attempt_ref is not None
                 and obs.receipt_ref is None
                 and (
@@ -499,7 +504,6 @@ def assess_application_access(
                         and obs.receipt.id == case.receipt_assertion.id
                     )
                 )
-                and all(a.operator == "unchanged" for a in case.state_assertions)
             )
             if (
                 case.mutation_ref

@@ -224,6 +224,24 @@ async def test_materialized_inputs_and_capture_survive_cleanup(
         "complete",
     )
     assert result["counts"]["new"] == 1
+    (case,) = summary["cases"]
+    assert (case["caseRef"], case["identityRef"], case["resourceRef"]) == (
+        "read",
+        "anon",
+        "record",
+    )
+    assert (
+        case["expected"],
+        case["observed"],
+        case["authenticationState"],
+        case["outcome"],
+    ) == ("deny", "allow", "verified", "finding")
+    assert case["request"] == {"method": "GET", "path": "/record"}
+    from moonmind.workflows.skills.security_assessment import _scanner_summary
+
+    readable = _scanner_summary([summary])
+    assert "Expected deny; observed allow" in readable
+    assert "GET /record" in readable
     dependencies = await game_jobs.recurring.required(
         environment.service, result["scanRef"]
     )
@@ -308,6 +326,8 @@ async def test_removed_policy_case_does_not_mark_a_finding_fixed(
     ref = await second.publish(terminal_state="succeeded", exit_code=0)
     result = await second.assess(ref, "access-after-review", first["comparisonRef"])
     assert result["counts"]["remediated_verified"] == 0
+    assert result["counts"]["absent_comparable"] == 0
+    assert result["counts"]["not_reassessed"] == 1
 
 
 async def test_cli_submission_reaches_signed_session_mcp_admission(
@@ -383,3 +403,38 @@ async def test_cli_submission_reaches_signed_session_mcp_admission(
     assert started.request.source.source == "omnigent"
     assert started.request.spec.workload_profile.profile_ref == "application-access"
     assert started.request.spec.network_mode == "none"
+
+
+@pytest.mark.parametrize("count", [65, 512])
+async def test_supported_case_counts_retain_findings_and_bounded_coverage(
+    environment, tmp_path, monkeypatch, count
+):
+    import sys
+
+    scope = target_scope()
+    scope.max_requests = 2048
+    scope.web.max_requests_per_second = 100
+    monkeypatch.setattr(sys.modules[__name__], "target_scope", lambda: scope)
+    data = spec().model_dump(mode="json")
+    first_case, first_access = (
+        data["cases"][0],
+        data["authorization_matrix"]["cases"][0],
+    )
+    data["cases"] += [{**first_case, "case_ref": f"read-{i}"} for i in range(1, count)]
+    data["authorization_matrix"]["cases"] += [
+        {**first_access, "id": f"read-{i}", "action": f"read-{i}"}
+        for i in range(1, count)
+    ]
+    policy = ApplicationAccessSpec.model_validate(data)
+    job = Job(environment, tmp_path, monkeypatch)
+    await launch(job, f"access-many-{count}", policy=policy, leak=True)
+    ref = await job.publish(terminal_state="succeeded", exit_code=0)
+    result = await job.assess(ref, f"access-many-review-{count}")
+    assert result["counts"]["new"] == 1
+    scan = await game_jobs.recurring.read(environment.service, result["scanRef"])
+    coverage = scan["observation"]["coverage"]
+    assert 1 <= len(coverage) <= 64
+    assert set().union(*(set(row["ruleIds"]) for row in coverage)) == {
+        c.case_ref for c in policy.cases
+    }
+    assert all(row["status"] == "complete" for row in coverage)

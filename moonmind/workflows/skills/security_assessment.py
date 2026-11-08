@@ -772,16 +772,11 @@ def _application_access_observation(request, summary, spec, capture, ref, create
                 source="application-access",
                 tool="application-access",
                 assets=[origin],
-                rule_ids=[row.case_ref],
+                rule_ids=[row.case_ref for row in summary.cases],
                 config_ref=config,
-                status=(
-                    "complete"
-                    if summary.status == "complete" and row.outcome != "inconclusive"
-                    else "partial"
-                ),
+                status=summary.status,
                 evidence_method="deterministic_check",
             )
-            for row in summary.cases
         ],
         provenance={
             "applicationAccessSummary": ref,
@@ -1957,6 +1952,26 @@ class AssessmentExecution:
                             scanner_summaries.append(
                                 {
                                     "scanner": "application-access",
+                                    "cases": [
+                                        {
+                                            "caseRef": row.case_ref,
+                                            "identityRef": row.identity_ref,
+                                            "resourceRef": row.resource_ref,
+                                            "expected": row.expected,
+                                            "observed": row.access.observed,
+                                            "authenticationState": row.authentication_state,
+                                            "outcome": row.outcome,
+                                            "coverage": row.coverage,
+                                            "reasons": row.reasons,
+                                            "request": {
+                                                "method": case.request.method,
+                                                "path": case.request.path,
+                                            },
+                                        }
+                                        for row, case in zip(
+                                            access_summary.cases, access_spec.cases
+                                        )
+                                    ],
                                     "target": access_capture.scope.web.origin,
                                     "summaryRef": ref,
                                     "nativeRefs": {
@@ -2967,6 +2982,20 @@ def _scanner_summary(summaries: list[dict]) -> str:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
+        if summary["scanner"] == "application-access":
+
+            def safe(value):
+                value = html.escape(redact_sensitive_text(str(value)), quote=True)
+                return re.sub(r"([\\`*_[\]{}()#!|>])", r"\\\1", value)
+
+            for row in summary["cases"]:
+                lines.append(
+                    f"- Case {safe(row['caseRef'])}: {safe(row['identityRef'])} on {safe(row['resourceRef'])}, "
+                    f"{safe(row['request']['method'])} {safe(row['request']['path'])}. "
+                    f"Expected {row['expected']}; observed {row['observed']}. "
+                    f"Authentication {row['authenticationState']}; outcome {row['outcome']}; coverage {row['coverage']}. "
+                    f"Reasons: {', '.join(row['reasons']) or 'none'}."
+                )
         if summary["scanner"] == "rng":
             for key, label in (
                 ("implementationReview", "Implementation observations"),
