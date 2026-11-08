@@ -29,7 +29,13 @@ from moonmind.schemas.repository_scanner_models import (
     CLOUD_OUTPUT_FILES,
     CloudAssessment,
 )
-from moonmind.security.assessments import Contract, Finding, Items, Text
+from moonmind.security.assessments import (
+    MAX_RETAINED_REPORT_BYTES,
+    Contract,
+    Finding,
+    Items,
+    Text,
+)
 from moonmind.security.repository_scanners import NativeResult
 from moonmind.security.workload_credentials import READ_ONLY_POLICY_ARNS
 
@@ -423,6 +429,69 @@ class CloudAssessmentSummary(Contract):
         return self
 
 
+def _bound_summary(summary: CloudAssessmentSummary) -> CloudAssessmentSummary:
+    """Keep the compact projection readable; the native report remains complete.
+
+    Prefer retaining findings over duplicate check details. Any size omission
+    makes evidence partial, so a retained prefix never claims full coverage.
+    """
+    if (
+        len(summary.model_dump_json(by_alias=True).encode())
+        <= MAX_RETAINED_REPORT_BYTES
+    ):
+        return summary
+    limits = sorted(set(summary.limitations) | {"summary_projection_truncated"})
+    summary = summary.model_copy(deep=True)
+    summary.limitations = limits
+    summary.status = "partial"
+    summary.outcome = (
+        "findings"
+        if any(f.status == "FAIL" for f in summary.findings)
+        else "incomplete"
+    )
+    summary.result.coverage = "partial"
+    summary.result.limitations = limits
+    summary.result.unexamined_assets = [
+        f"{summary.admission.provider}:{summary.admission.account}"
+    ]
+    checks = summary.check_evidence or []
+    summary.check_evidence = []
+    # Older projections can also exceed the bound through finding narratives or
+    # resource arrays. Retain a bounded prefix with explicit truncation, never
+    # discard the canonical native report or infer clean coverage from omission.
+    while (
+        len(summary.model_dump_json(by_alias=True).encode()) > MAX_RETAINED_REPORT_BYTES
+    ):
+        summary.findings = sorted(
+            summary.findings, key=lambda row: row.status != "FAIL"
+        )[: max(1, len(summary.findings) // 2)]
+        kept = {row.finding_uid for row in summary.findings}
+        summary.result.findings = [
+            row for row in summary.result.findings if row.native_id in kept
+        ]
+        for name in (
+            "compliant_resources",
+            "noncompliant_resources",
+            "unevaluated_resources",
+        ):
+            resources = getattr(summary.coverage, name)
+            setattr(summary.coverage, name, resources[: max(1, len(resources) // 2)])
+    remaining = (
+        MAX_RETAINED_REPORT_BYTES
+        - len(summary.model_dump_json(by_alias=True).encode())
+        - 128
+    )
+    retained = []
+    for check in checks:
+        size = len(check.model_dump_json(by_alias=True).encode()) + 1
+        if size > remaining:
+            break
+        remaining -= size
+        retained.append(check)
+    summary.check_evidence = retained
+    return CloudAssessmentSummary.model_validate(summary.model_dump())
+
+
 def interpret_exit(exit_code: int | None, terminal_state: str) -> CloudExecution:
     """Prowler exits 0 after a run (exit 3 is disabled); anything else failed."""
     state = (
@@ -657,13 +726,13 @@ def review_cloud_mappings(summary: CloudAssessmentSummary, plan=None) -> list[di
                     "reasons": reasons or ["upstream_mapping_is_not_control_evidence"],
                 }
             )
-            if len(reviews) == 4096:
+            if len(reviews) == 256:
                 if (
                     sum(
                         len(row.compliance_mappings)
                         for row in summary.check_evidence or []
                     )
-                    > 4096
+                    > 256
                 ):
                     reviews[-1]["reasons"].append(
                         "additional_mapping_reviews_omitted_see_check_evidence"
@@ -971,20 +1040,22 @@ def summarize_cloud_assessment(
         manual=statuses["MANUAL"],
         muted=muted,
     )
-    return CloudAssessmentSummary(
-        admission=assessment,
-        image=image,
-        execution=execution,
-        outcome=outcome,
-        status="complete" if complete else "partial",
-        findings=findings,
-        checkEvidence=check_evidence,
-        coverage=coverage,
-        diagnostics=diagnostics,
-        limitations=gaps,
-        result=result,
-        nativeRef=native_ref,
-        logRef=log_ref,
+    return _bound_summary(
+        CloudAssessmentSummary(
+            admission=assessment,
+            image=image,
+            execution=execution,
+            outcome=outcome,
+            status="complete" if complete else "partial",
+            findings=findings,
+            checkEvidence=check_evidence,
+            coverage=coverage,
+            diagnostics=diagnostics,
+            limitations=gaps,
+            result=result,
+            nativeRef=native_ref,
+            logRef=log_ref,
+        )
     )
 
 

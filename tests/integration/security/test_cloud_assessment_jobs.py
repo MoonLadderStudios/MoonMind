@@ -538,7 +538,9 @@ async def test_findings_and_compliant_resources_use_only_the_issued_session(
         "findings",
     )
     assert outputs["counts"]["new"] == 3
-    assert reviewed["checkEvidence"] == summary["checkEvidence"]
+    assert reviewed["checkEvidenceRef"] == names["summary"]["artifactRef"]
+    assert reviewed["checkEvidenceCount"] == len(summary["checkEvidence"])
+    assert "checkEvidence" not in reviewed
     assert reviewed["mappingReviews"]
     assert all(row["state"] == "review_required" for row in reviewed["mappingReviews"])
     assert {"collection_incomplete", "region_population_incomplete"} <= set(
@@ -581,9 +583,14 @@ async def test_denied_and_throttled_collection_is_partial_coverage(
         key="cloud-partial-review",
     )
     assert outputs["scannerSummaries"][0]["coverage"] == "partial"
-    assert {
-        row["status"] for row in outputs["scannerSummaries"][0]["checkEvidence"]
-    } == {"PASS", "FAIL", "MANUAL"}
+    assert {row["status"] for row in summary["checkEvidence"]} == {
+        "PASS",
+        "FAIL",
+        "MANUAL",
+    }
+    assert outputs["scannerSummaries"][0]["checkEvidenceCount"] == len(
+        summary["checkEvidence"]
+    )
     assert (
         "collection_incomplete"
         in outputs["scannerSummaries"][0]["controlEvidenceLimitations"]
@@ -778,6 +785,15 @@ async def test_retained_positive_checks_feed_only_selected_control_objective(
     )
     calls = list(ProviderApi.calls)
     today = datetime.now(UTC).date().isoformat()
+    original = await invoke(
+        environment.service,
+        posture_review(artifact_names(harness, accepted)["summary"]["artifactRef"]),
+        key="cloud-before-control-selection",
+    )
+    assert all(
+        not row["selectedRequirements"]
+        for row in original["scannerSummaries"][0]["mappingReviews"]
+    )
     outputs = await invoke(
         environment.service,
         posture_review(
@@ -814,8 +830,12 @@ async def test_retained_positive_checks_feed_only_selected_control_objective(
     control = await recurring.read(environment.service, outputs["controlAssessmentRef"])
     assert control["requirements"][0]["objectives"][0]["outcome"] == "passed"
     assert control["requirements"][0]["conclusion"] == "inconclusive"
+    assert outputs["scanRef"] == original["scanRef"]
     retained = outputs["scannerSummaries"][0]
-    assert retained["checkEvidence"] == summary["checkEvidence"]
+    source = await recurring.read(environment.service, retained["checkEvidenceRef"])
+    assert source["checkEvidence"] == summary["checkEvidence"]
+    assert retained["checkEvidenceCount"] == len(summary["checkEvidence"])
+    assert "checkEvidence" not in retained
     assert retained["mappingReviews"][0]["selectedRequirements"] == ["C1"]
     assert retained["mappingReviews"][0]["state"] == "review_required"
     assert ProviderApi.calls == calls

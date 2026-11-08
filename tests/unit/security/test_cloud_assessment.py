@@ -924,3 +924,39 @@ def test_future_check_cannot_borrow_an_earlier_same_day_observation_window():
     assert observed.expires_at == datetime.fromtimestamp(row["time"], UTC) + timedelta(
         days=1
     )
+
+
+def test_large_check_evidence_summary_stays_within_retained_reader_limit():
+    from copy import deepcopy
+
+    native_row = json.loads(records("basic.ocsf.json", "FAIL"))[0]
+    template = {
+        key: native_row[key]
+        for key in (
+            "status_code",
+            "metadata",
+            "cloud",
+            "resources",
+            "status_detail",
+            "time",
+            "time_dt",
+        )
+    }
+    template["finding_info"] = {"uid": "finding", "title": "title"}
+    template["unmapped"] = {"compliance": {}}
+    template["finding_info"]["title"] = "T" * 1000
+    template["status_detail"] = "D" * 1000
+    template["unmapped"]["compliance"] = {}
+    rows = []
+    for index in range(2200):
+        row = deepcopy(template)
+        row["finding_info"]["uid"] = f"finding-{index}"
+        rows.append(row)
+    native = json.dumps(rows).encode()
+    assert len(native) < 8 * 1024 * 1024
+    result = summary(report=native)
+    assert len(result.model_dump_json(by_alias=True).encode()) <= 8 * 1024 * 1024
+    assert len(result.findings) == 2200
+    assert result.native_ref == "art_native"
+    assert "summary_projection_truncated" in result.limitations
+    assert result.status == "partial"

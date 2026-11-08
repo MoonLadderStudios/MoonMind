@@ -27,6 +27,8 @@ from moonmind.security.frameworks import (
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
 
+MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
+
 Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
 Evidence = Annotated[list[Text], Field(min_length=1, max_length=64)]

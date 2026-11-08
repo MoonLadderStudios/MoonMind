@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from temporalio import activity
 
 from moonmind.security.assessments import (
+    MAX_RETAINED_REPORT_BYTES,
     AdvisoryFeed,
     AssessmentRequest,
     Comparison,
@@ -60,7 +61,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
 
 TOOL_NAME = "security.assess"
-_MAX_INPUT_BYTES = 8 * 1024 * 1024
+_MAX_INPUT_BYTES = MAX_RETAINED_REPORT_BYTES
 # Retaining a comparison keeps its baseline's exact bytes, not the baseline's
 # own lineage: evidence a comparison still cites is sealed directly, so every
 # recurring occurrence does not retain all earlier history.
@@ -1686,16 +1687,9 @@ class AssessmentExecution:
                                     "limitations": sorted(cloud_summary.limitations),
                                     "verification": cloud_summary.verification,
                                     "interpretation": cloud_summary.interpretation,
-                                    "checkEvidence": (
-                                        [
-                                            check.model_dump(mode="json", by_alias=True)
-                                            for check in cloud_summary.check_evidence
-                                        ]
-                                        if cloud_summary.check_evidence is not None
-                                        else None
-                                    ),
-                                    "mappingReviews": review_cloud_mappings(
-                                        cloud_summary, request.control_assessment
+                                    "checkEvidenceRef": ref,
+                                    "checkEvidenceCount": len(
+                                        cloud_summary.check_evidence or []
                                     ),
                                     "controlEvidenceLimitations": _cloud_control_evidence(
                                         cloud_summary
@@ -2119,6 +2113,19 @@ class AssessmentExecution:
             "reviewStatus": review_status,
             "scannerSummaries": work.get("scannerSummaries", []),
         }
+        # Mapping relationships depend on today's control plan, unlike the
+        # immutable native scan. Never reuse a previous plan's review results.
+        outputs["scannerSummaries"] = [dict(row) for row in outputs["scannerSummaries"]]
+        for scanner in outputs["scannerSummaries"]:
+            if scanner.get("scanner") != "prowler":
+                continue
+            source = inputs.get(scanner["summaryRef"])
+            if source is None:
+                continue
+            current_cloud = CloudAssessmentSummary.model_validate_json(source[1])
+            scanner["mappingReviews"] = review_cloud_mappings(
+                current_cloud, request.control_assessment
+            )
         if comparison["productComparison"] is not None:
             outputs.update(
                 productBaselineRef=request.product_baseline_ref,
