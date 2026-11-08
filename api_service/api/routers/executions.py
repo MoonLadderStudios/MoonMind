@@ -106,6 +106,7 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.assessment_engagements import (
+    AUTHORITY_KEYS,
     admit_assessment_parameters,
     assessment_edit_material,
     compile_assessment_proposal,
@@ -387,7 +388,10 @@ from moonmind.workflows.temporal.publication_recovery import (
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.service import reject_historical_control
+from moonmind.workflows.temporal.service import (
+    UPDATE_REQUEST_DIGEST_KEY,
+    reject_historical_control,
+)
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 
@@ -19700,6 +19704,25 @@ def _pinned_continuation_source(
     return pinned
 
 
+def _require_unscoped_linked_continuation(*parameter_documents: Mapping[str, Any]) -> None:
+    if any(
+        parameters.get(key) is not None
+        for parameters in parameter_documents
+        for key in AUTHORITY_KEYS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "assessment_review_required",
+                "message": (
+                    "Linked continuations cannot review assessment authority. "
+                    "Use Create, select a saved authorization, and review the "
+                    "complete successor workflow before starting."
+                ),
+            },
+        )
+
+
 @router.post(
     "/{workflow_id}/continue",
     response_model=ContinueInNewWorkflowResponse,
@@ -19891,6 +19914,13 @@ async def continue_in_new_workflow(
             or []
         )
     else:
+        # This route authors a new turn and new copied inputs without a review
+        # preview. It must not inherit stale review, erase retained scope, or
+        # admit raw authored authority. Accepted destinations above still own
+        # their exact reconciliation; only new work needs the Create journey.
+        _require_unscoped_linked_continuation(
+            canonical.parameters or {}, payload.initial_parameters or {}
+        )
         # Author the destination through the ordinary create path. Inherit the
         # source's authored choices (sanitized like a rerun), layer operator-authored
         # overrides, then pin the source lineage so both Workflows present the linked
@@ -19905,6 +19935,7 @@ async def continue_in_new_workflow(
                 access=access,
             )
         )
+        _require_unscoped_linked_continuation(source_payload)
         # The artifact can own instructions, steps, and top-level settings even
         # when the retained parameters contain a partial task. Hydrate both layers
         # before sanitizing rerun-only state and applying the new authored turn.
@@ -20453,7 +20484,58 @@ async def update_execution(
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
+    request_digest = compute_request_digest(
+        payload.model_dump(mode="json", by_alias=True, exclude={"idempotency_key"})
+    )
+    cached = getattr(record, "last_update_response", None)
+    if (
+        payload.idempotency_key
+        and payload.idempotency_key == getattr(record, "last_update_idempotency_key", None)
+        and isinstance(cached, dict)
+        and cached.get(UPDATE_REQUEST_DIGEST_KEY)
+    ):
+        if cached[UPDATE_REQUEST_DIGEST_KEY] != request_digest:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "idempotency_conflict",
+                    "message": "This idempotency key was already used for a different update request.",
+                },
+            )
+        if cached.get("accepted") is True:
+            # Reconcile the existing durable receipt before rechecking mutable
+            # authority or the run identity changed by an accepted rerun. This
+            # does not dispatch work or grant permission for another action.
+            destination_id = str(cached.get("workflow_id") or record.workflow_id)
+            destination = record
+            if destination_id != record.workflow_id:
+                destination = await _get_owned_execution(
+                    service=service, workflow_id=destination_id, user=user
+                )
+            canonical_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+            if alias_used:
+                _mark_execution_alias_usage(
+                    response,
+                    raw_identifier=workflow_id,
+                    canonical_identifier=canonical_id,
+                )
+            return UpdateExecutionResponse(
+                **cached,
+                execution=_serialize_execution(destination, user=user),
+                refresh=ExecutionRefreshEnvelope(
+                    patched_execution=True,
+                    list_stale=True,
+                    refetch_suggested=True,
+                    refreshed_at=_compatibility_refreshed_at(destination),
+                ),
+            )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
+    assessment_update = is_task_editing_update and any(
+        (record.parameters or {}).get(key) is not None
+        or (payload.parameters_patch or {}).get(key) is not None
+        for key in AUTHORITY_KEYS
+    )
+    reviewed_run_id = record.run_id if assessment_update else None
     recorded_plan = (
         (getattr(record, "parameters", None) or {}).get("omnigentExecutionPlan")
         if isinstance(getattr(record, "parameters", None), Mapping)
@@ -20549,12 +20631,11 @@ async def update_execution(
             await validate_retained_assessment(effective_parameters, session=session)
         elif any(
             effective_parameters.get(key) is not None
-            for key in (
-                "assessmentScope",
-                "assessmentAuthorizationRef",
-                "assessmentReview",
-            )
+            or (record.parameters or {}).get(key) is not None
+            for key in AUTHORITY_KEYS
         ):
+            # A patch cannot turn an admitted assessment into unrestricted
+            # work by clearing all three authority fields before this check.
             reviewed_parameters = copy.deepcopy(dict(payload.parameters_patch or {}))
             if not reviewed_parameters.get("assessmentAuthorizationRef"):
                 raise HTTPException(
@@ -20627,7 +20708,19 @@ async def update_execution(
             parameters_patch=effective_parameters_patch,
             title=payload.title,
             idempotency_key=payload.idempotency_key,
+            **(
+                {"request_digest": request_digest, "expected_run_id": reviewed_run_id}
+                if assessment_update else {}
+            ),
         )
+    except TemporalExecutionTargetRunChangedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "assessment_review_required",
+                "message": "The source run changed before applying this assessment update. Review the current workflow before trying again.",
+            },
+        ) from exc
     except (
         TemporalExecutionRerunPlanError,
         TemporalExecutionRerunSkillSnapshotError,

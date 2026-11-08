@@ -168,6 +168,16 @@ _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
 _CREATE_START_RPC_TIMEOUT_SECONDS = 10.0
 _CREATE_START_MEMO_KEY = "temporalStart"
 _CANCEL_INTENT_MEMO_KEY = "temporalCancel"
+UPDATE_REQUEST_DIGEST_KEY = "requestDigest"
+
+
+def _update_response_receipt(
+    response: Mapping[str, Any], request_digest: str | None
+) -> dict[str, Any]:
+    receipt = dict(response)
+    if request_digest is not None:
+        receipt[UPDATE_REQUEST_DIGEST_KEY] = request_digest
+    return receipt
 
 
 # Edits apply a shallow parameters patch, where an omitted key keeps its stored
@@ -3778,6 +3788,7 @@ class TemporalExecutionService:
         title: str | None = None,
         idempotency_key: str | None = None,
         expected_run_id: str | None = None,
+        request_digest: str | None = None,
     ) -> dict[str, Any]:
         if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
@@ -3824,7 +3835,19 @@ class TemporalExecutionService:
         if idempotency_key and idempotency_key == record.last_update_idempotency_key:
             cached = record.last_update_response
             if isinstance(cached, dict):
-                return dict(cached)
+                stored_digest = cached.get(UPDATE_REQUEST_DIGEST_KEY)
+                if (
+                    request_digest is not None
+                    and stored_digest is not None
+                    and request_digest != stored_digest
+                ):
+                    raise TemporalExecutionValidationError(
+                        "Idempotency key was already used for a different update request"
+                    )
+                return {
+                    key: value for key, value in cached.items()
+                    if key != UPDATE_REQUEST_DIGEST_KEY
+                }
 
         if expected_run_id is not None and record.run_id != expected_run_id:
             raise TemporalExecutionTargetRunChangedError(
@@ -3871,7 +3894,9 @@ class TemporalExecutionService:
             await self._session.refresh(record)
             if idempotency_key:
                 record.last_update_idempotency_key = idempotency_key
-                record.last_update_response = dict(response)
+                record.last_update_response = _update_response_receipt(
+                    response, request_digest
+                )
             await self._session.commit()
             await self._session.refresh(record)
             return response
@@ -3917,7 +3942,9 @@ class TemporalExecutionService:
                     await self._session.refresh(record)
                     if idempotency_key:
                         record.last_update_idempotency_key = idempotency_key
-                        record.last_update_response = dict(response)
+                        record.last_update_response = _update_response_receipt(
+                            response, request_digest
+                        )
                     await self._session.commit()
                     await self._session.refresh(record)
                     return response
@@ -3984,7 +4011,9 @@ class TemporalExecutionService:
 
         if idempotency_key:
             record.last_update_idempotency_key = idempotency_key
-            record.last_update_response = dict(response)
+            record.last_update_response = _update_response_receipt(
+                response, request_digest
+            )
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()

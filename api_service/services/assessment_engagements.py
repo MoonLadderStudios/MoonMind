@@ -27,9 +27,22 @@ def _denied(message: str, *, code="assessment_review_required", status=409):
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
+def _reject_parameter_envelope(parameters: Mapping[str, Any]) -> None:
+    if "initialParameters" in parameters or "initial_parameters" in parameters:
+        raise _denied(
+            "Workflow parameters cannot contain a nested direct execution envelope.",
+            status=422,
+        )
+
+
 def _parameter_document(payload: Mapping[str, Any]) -> dict[str, Any]:
     plan = copy.deepcopy(dict(payload))
     if "initialParameters" in plan or "initial_parameters" in plan:
+        if "workflow" in plan or "task" in plan:
+            raise _denied(
+                "Provide a direct execution envelope or workflow parameters, not both.",
+                status=422,
+            )
         from moonmind.schemas.temporal_models import CreateExecutionRequest
 
         try:
@@ -42,6 +55,7 @@ def _parameter_document(payload: Mapping[str, Any]) -> dict[str, Any]:
             mode="json", by_alias=True, exclude_none=True, exclude_unset=True
         )
         initial = plan.pop("initialParameters", {})
+        _reject_parameter_envelope(initial)
         plan = {**dict(initial), **plan}
     return plan
 
@@ -77,6 +91,7 @@ def assessment_edit_material(
     """
     material = copy.deepcopy(dict(getattr(record, "parameters", None) or {}))
     material.update(copy.deepcopy(dict(patch or {})))
+    _reject_parameter_envelope(material)
     from moonmind.workflows.executions.execution_contract import (
         workflow_payload_from_parameters,
     )
@@ -346,7 +361,11 @@ async def admit_assessment_parameters(
         raise _denied(
             "Select a saved assessment authorization and review its proposal before starting. Existing admitted executions retain their recorded authority."
         )
-    material = {**parameters, **dict(plan_overrides or {})}
+    # Callers pass actual parameters separately from transport metadata. A
+    # recurring target may supply a complete direct envelope as its override;
+    # normalize that owner before merging instead of creating a mixed shape.
+    _reject_parameter_envelope(parameters)
+    material = {**parameters, **_parameter_document(plan_overrides or {})}
     proposal = await compile_assessment_proposal(
         material, ref, session=session, user=user, access=access
     )

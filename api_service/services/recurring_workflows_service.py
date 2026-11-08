@@ -1735,18 +1735,26 @@ class RecurringWorkflowsService:
         normalized = _normalize_target(_json_object(target, field_name="target"))
         parameters = normalized["initialParameters"]
         from api_service.services.assessment_engagements import (
+            AUTHORITY_KEYS,
             admit_assessment_parameters,
             validate_retained_assessment,
         )
 
         has_assessment = any(
-            parameters.get(key) is not None
-            for key in (
-                "assessmentScope",
-                "assessmentAuthorizationRef",
-                "assessmentReview",
-            )
+            parameters.get(key) is not None for key in AUTHORITY_KEYS
         )
+        saved_parameters = (
+            saved_target.get("initialParameters", saved_target.get("initial_parameters"))
+            if isinstance(saved_target, Mapping)
+            else None
+        )
+        if not has_assessment and isinstance(saved_parameters, Mapping) and any(
+            saved_parameters.get(key) is not None for key in AUTHORITY_KEYS
+        ):
+            raise RecurringWorkflowValidationError(
+                "Review the changed assessment with a saved authorization; "
+                "retained assessment authority cannot be removed."
+            )
         if has_assessment:
             retained = bool(
                 saved_target is not None

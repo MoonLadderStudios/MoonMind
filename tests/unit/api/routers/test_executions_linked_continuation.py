@@ -10,6 +10,7 @@ bidirectional relationship display without mutating the source.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -202,6 +203,74 @@ def _payload(**overrides) -> ex.ContinueInNewWorkflowRequest:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["clear_scoped", "change_scoped", "author_scope", "ordinary"])
+async def test_continue_cannot_drop_or_author_assessment_authority(
+    monkeypatch, scenario
+) -> None:
+    from tests.unit.services.test_assessment_engagements import record as authorization_record
+    from moonmind.security.assessment_authorizations import authorization_scope
+
+    engine, sessions = await _database()
+    operator = OperatorAdmission(via="loopback")
+    await _seed_canonical(sessions, owner_id="operator")
+    _patch_collaborators(monkeypatch)
+    copies = AsyncMock(return_value=[])
+    monkeypatch.setattr(ex, "_materialize_continuation_source_attachments", copies)
+    source_inputs = {"workflow": {"instructions": "Original assessment"}}
+    authorization = authorization_record()
+    scope = authorization_scope(authorization).model_dump(mode="json", by_alias=True)
+    if scenario in {"clear_scoped", "change_scoped"}:
+        source_inputs.update(
+            assessmentScope=scope,
+            assessmentAuthorizationRef=authorization.ref,
+            assessmentReview={"retained": "original review"},
+        )
+    hydrate = AsyncMock(return_value=(source_inputs, source_inputs["workflow"]))
+    monkeypatch.setattr(ex, "_snapshot_source_payload_from_parameters_and_artifact", hydrate)
+    authored = {}
+    if scenario == "clear_scoped":
+        authored = {key: None for key in ex.AUTHORITY_KEYS}
+    elif scenario == "author_scope":
+        authored = {"assessmentScope": scope}
+    service = _FakeService()
+    try:
+        async with sessions() as session:
+            source = await session.get(TemporalExecutionCanonicalRecord, "mm:source")
+            source.parameters = source_inputs
+            await session.commit()
+            request = dict(
+                workflow_id="mm:source",
+                payload=_payload(
+                    instructions="Continue with changed work",
+                    initialParameters=authored,
+                    selectedSourceArtifactRefs=["art_final"],
+                ),
+                service=service,
+                session=session,
+                user=operator,
+                access=ArtifactAccessContext.for_operator(operator),
+                _submit_enabled=None,
+            )
+            if scenario == "ordinary":
+                result = await ex.continue_in_new_workflow(**request)
+                assert result.created
+                assert len(service.create_calls) == 1
+                assert service.create_calls[0]["initial_parameters"].get("assessmentScope") is None
+                copies.assert_awaited_once()
+            else:
+                with pytest.raises(HTTPException) as error:
+                    await ex.continue_in_new_workflow(**request)
+                assert error.value.status_code == 409
+                assert error.value.detail["code"] == "assessment_review_required"
+                assert "Create" in error.value.detail["message"]
+                copies.assert_not_awaited()
+                hydrate.assert_not_awaited()
+                assert not service.create_calls
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source_state", ["completed", "no_commit", "failed", "canceled"]
 )
@@ -371,7 +440,8 @@ async def test_continue_rejects_authored_repository_tool_admissions(
 
 
 @pytest.mark.asyncio
-async def test_continue_is_idempotent_on_repeat_key(monkeypatch) -> None:
+@pytest.mark.parametrize("source_scope_changed", [False, True])
+async def test_continue_is_idempotent_on_repeat_key(monkeypatch, source_scope_changed) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())
     await _seed_canonical(sessions, owner_id=str(user.id))
@@ -390,6 +460,11 @@ async def test_continue_is_idempotent_on_repeat_key(monkeypatch) -> None:
             )
 
     first = await _run()
+    if source_scope_changed:
+        async with sessions() as session:
+            source = await session.get(TemporalExecutionCanonicalRecord, "mm:source")
+            source.parameters = {**source.parameters, "assessmentScope": {"retained": "scope"}}
+            await session.commit()
     second = await _run()
 
     assert first.created is True

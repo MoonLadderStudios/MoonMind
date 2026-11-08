@@ -109,6 +109,48 @@ async def test_retained_target_keeps_admission_but_changed_target_needs_review(
     assert admitted["initialParameters"]["workflow"]["instructions"] == "Changed work"
 
 
+@pytest.mark.parametrize("clear", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_replacement_target_cannot_discard_retained_assessment_authority(
+    authority, clear, legacy
+):
+    owner = service()
+    saved = await owner._admit_target_inputs(
+        reviewed_target(authority), actor=OPERATOR
+    )
+    if legacy:
+        saved["initialParameters"].pop("assessmentAuthorizationRef")
+        saved["initialParameters"].pop("assessmentReview")
+        saved["initialParameters"]["assessmentScope"] = authority.scope.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+    # The unchanged target retains its original admission, including legacy
+    # scope, without manufacturing a new review.
+    assert await owner._admit_target_inputs(
+        deepcopy(saved), actor=OPERATOR, saved_target=saved
+    ) == saved
+    changed = deepcopy(saved)
+    parameters = changed["initialParameters"]
+    for key in ("assessmentScope", "assessmentAuthorizationRef", "assessmentReview"):
+        if clear:
+            parameters[key] = None
+        else:
+            parameters.pop(key, None)
+    parameters["workflow"]["instructions"] = "Unrestricted replacement work"
+    with pytest.raises(RecurringWorkflowValidationError, match="[Rr]eview"):
+        await owner._admit_target_inputs(
+            changed, actor=OPERATOR, saved_target=saved
+        )
+
+
+async def test_ordinary_new_target_stays_unscoped():
+    target = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {"workflow": {"instructions": "Ordinary workflow"}},
+    }
+    assert await service()._admit_target_inputs(target, actor=OPERATOR) == target
+
+
 @pytest.mark.parametrize("fault", ["missing_review", "legacy_scope", "not_operator"])
 async def test_direct_target_cannot_bypass_new_admission(authority, fault):
     target = reviewed_target(authority, assessment_already_admitted=True)

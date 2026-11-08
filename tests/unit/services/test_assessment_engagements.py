@@ -122,6 +122,39 @@ def test_direct_execution_envelope_binds_external_artifact_inputs():
     assert build_assessment_proposal(flat, auth) == proposal
 
 
+@pytest.mark.parametrize("initial_key", ["initialParameters", "initial_parameters"])
+@pytest.mark.parametrize("workflow_key", ["workflow", "task"])
+def test_review_rejects_mixed_envelope_and_parameter_plans(initial_key, workflow_key):
+    auth = record()
+    original = payload()["workflow"]
+    mixed = {
+        "workflowType": "MoonMind.UserWorkflow",
+        initial_key: {"workflow": deepcopy(original)},
+        workflow_key: deepcopy(original),
+    }
+    # Even identical siblings are ambiguous: the execution entrypoint, not
+    # the presence of an extra field, determines which one actually runs.
+    with pytest.raises(HTTPException) as error:
+        build_assessment_proposal(mixed, auth)
+    assert error.value.status_code == 422
+
+
+@pytest.mark.parametrize("initial_key", ["initialParameters", "initial_parameters"])
+def test_direct_review_cannot_reinterpret_nested_parameter_envelope(initial_key):
+    direct = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "inputArtifactRef": "art_executed_input",
+        "initialParameters": {
+            "workflowType": "MoonMind.UserWorkflow",
+            initial_key: payload(),
+            "instructions": "Actual parameters are not a second transport envelope",
+        },
+    }
+    with pytest.raises(HTTPException) as error:
+        build_assessment_proposal(direct, record())
+    assert error.value.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_non_operator_cannot_admit_reviewed_scope():
     from api_service.services.assessment_engagements import admit_assessment_parameters
