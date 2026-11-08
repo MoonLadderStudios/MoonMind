@@ -12,9 +12,13 @@ import hashlib
 import importlib.util
 import io
 import json
+import ssl
 import stat
 import tarfile
+import time
+import urllib.error
 from pathlib import Path
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -90,6 +94,235 @@ def test_platform_selection_matches_manifest_keys() -> None:
     assert helper.platform_key("arm64") == "linux/arm64"
     with pytest.raises(RuntimeError):
         helper.platform_key("riscv64")
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+def test_download_recovers_from_transient_http_errors(tmp_path, monkeypatch, status):
+    helper = _helper()
+    url = "https://example.invalid/gh.tar.gz"
+    payload = b"verified archive"
+    error = urllib.error.HTTPError(url, status, "temporary failure", {}, None)
+    request = Mock(side_effect=[error, io.BytesIO(payload)])
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", sleep)
+    destination = tmp_path / "gh.tar.gz"
+
+    helper._download(url, destination, hashlib.sha256(payload).hexdigest())
+
+    assert destination.read_bytes() == payload
+    assert request.call_args_list == [call(url, timeout=60)] * 2
+    sleep.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("timed out"),
+        urllib.error.URLError(TimeoutError("timed out")),
+        ConnectionResetError("connection reset"),
+    ],
+)
+def test_download_discards_partial_bytes_before_retry(tmp_path, monkeypatch, error):
+    helper = _helper()
+    payload = b"verified archive"
+    destination = tmp_path / "gh.tar.gz"
+
+    class InterruptedResponse(io.BytesIO):
+        def read(self, size):
+            if self.tell():
+                raise error
+            return super().read(size)
+
+        read1 = read
+
+    request = Mock(side_effect=[InterruptedResponse(b"partial"), io.BytesIO(payload)])
+
+    def backoff(delay):
+        assert delay == 1
+        assert not destination.exists()
+
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", backoff)
+
+    helper._download(
+        "https://example.invalid/gh.tar.gz",
+        destination,
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    assert destination.read_bytes() == payload
+    assert request.call_count == 2
+
+
+def test_download_stops_after_three_transient_failures(tmp_path, monkeypatch, capsys):
+    helper = _helper()
+    url = "https://example.invalid/gh.tar.gz"
+    errors = [
+        urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None) for _ in range(3)
+    ]
+    request = Mock(side_effect=errors)
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", sleep)
+    destination = tmp_path / "gh.tar.gz"
+
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        helper._download(url, destination, "0" * 64)
+
+    assert raised.value is errors[-1]
+    assert request.call_args_list == [call(url, timeout=60)] * 3
+    assert sleep.call_args_list == [call(1), call(2)]
+    assert not destination.exists()
+    assert "504" in capsys.readouterr().err
+
+
+def test_download_deadline_stops_a_slow_stream(tmp_path, monkeypatch):
+    helper = _helper()
+    elapsed = [0]
+
+    class SlowResponse(io.BytesIO):
+        def read1(self, size):
+            elapsed[0] += 60
+            return super().read(1)
+
+        def read(self, size):
+            pytest.fail(
+                "read() may perform repeated socket reads without a deadline check"
+            )
+
+    request = Mock(return_value=SlowResponse(b"slow archive"))
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(time, "sleep", sleep)
+    destination = tmp_path / "gh.tar.gz"
+
+    with pytest.raises(TimeoutError, match="download.*budget"):
+        helper._download("https://example.invalid/gh.tar.gz", destination, "0" * 64)
+
+    assert elapsed[0] == 180
+    assert request.call_count == 1
+    sleep.assert_not_called()
+    assert not destination.exists()
+
+
+def test_download_caps_retry_timeout_to_remaining_budget(tmp_path, monkeypatch):
+    helper = _helper()
+    url = "https://example.invalid/gh.tar.gz"
+    payload = b"verified archive"
+    elapsed = [0]
+
+    def respond(*args, **kwargs):
+        if elapsed[0] == 0:
+            elapsed[0] = 160
+            raise urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None)
+        return io.BytesIO(payload)
+
+    def backoff(delay):
+        elapsed[0] += delay
+
+    request = Mock(side_effect=respond)
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(time, "sleep", backoff)
+    destination = tmp_path / "gh.tar.gz"
+
+    helper._download(url, destination, hashlib.sha256(payload).hexdigest())
+
+    assert request.call_args_list == [call(url, timeout=60), call(url, timeout=19)]
+    assert destination.read_bytes() == payload
+
+
+def test_download_preserves_last_error_when_elapsed_budget_expires(
+    tmp_path, monkeypatch
+):
+    helper = _helper()
+    url = "https://example.invalid/gh.tar.gz"
+    error = urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None)
+    elapsed = [0]
+
+    def respond(*args, **kwargs):
+        elapsed[0] = 180
+        raise error
+
+    request = Mock(side_effect=respond)
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(time, "sleep", sleep)
+
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        helper._download(url, tmp_path / "gh.tar.gz", "0" * 64)
+
+    assert raised.value is error
+    assert request.call_count == 1
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 501])
+def test_download_does_not_retry_permanent_http_errors(tmp_path, monkeypatch, status):
+    helper = _helper()
+    url = "https://example.invalid/gh.tar.gz"
+    error = urllib.error.HTTPError(url, status, "permanent failure", {}, None)
+    request = Mock(side_effect=error)
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", sleep)
+
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        helper._download(url, tmp_path / "gh.tar.gz", "0" * 64)
+
+    assert raised.value is error
+    assert request.call_count == 1
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError(ssl.SSLCertVerificationError("invalid certificate")),
+        urllib.error.URLError("unknown URL type"),
+        PermissionError("access denied"),
+    ],
+)
+def test_download_does_not_retry_non_transient_errors(tmp_path, monkeypatch, error):
+    helper = _helper()
+    request = Mock(side_effect=error)
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", sleep)
+
+    with pytest.raises(type(error)) as raised:
+        helper._download(
+            "https://example.invalid/gh.tar.gz", tmp_path / "gh.tar.gz", "0" * 64
+        )
+
+    assert raised.value is error
+    assert request.call_count == 1
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["checksum", "size"])
+def test_download_does_not_retry_or_retain_invalid_artifacts(
+    tmp_path, monkeypatch, failure
+):
+    helper = _helper()
+    payload = b"unverified archive"
+    request = Mock(return_value=io.BytesIO(payload))
+    sleep = Mock()
+    monkeypatch.setattr(helper.urllib.request, "urlopen", request)
+    monkeypatch.setattr(time, "sleep", sleep)
+    if failure == "size":
+        monkeypatch.setattr(helper, "MAX_ARTIFACT_BYTES", len(payload) - 1)
+    destination = tmp_path / "gh.tar.gz"
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch|artifact exceeds"):
+        helper._download("https://example.invalid/gh.tar.gz", destination, "0" * 64)
+
+    assert request.call_count == 1
+    sleep.assert_not_called()
+    assert not destination.exists()
 
 
 def test_install_produces_image_owned_read_only_layout(
