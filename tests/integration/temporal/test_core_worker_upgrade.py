@@ -26,7 +26,12 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 
-from api_service.db.models import Base
+from api_service.db import base as db_base
+from api_service.db.models import (
+    Base,
+    MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -36,6 +41,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 from tools.worker_runtime_activity_probe import run_probe
@@ -45,7 +51,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.integration_ci,
     pytest.mark.temporal_boundary,
-    pytest.mark.timeout(180),
+    pytest.mark.timeout(300),
 ]
 
 FLEETS = ("workflow", "artifacts", "llm", "integrations")
@@ -177,6 +183,9 @@ async def _wait_for_activity(handle, name, *, completed):
             rows = [row for row in _activities(history) if row["activityType"] == name]
             if rows and bool(rows[0]["completedEventId"]) == completed:
                 return history, rows[0]
+            if (await handle.describe()).status != WorkflowExecutionStatus.RUNNING:
+                await handle.result()  # Surface the original workflow failure.
+                pytest.fail(f"workflow closed before {name}")
             await asyncio.sleep(0.05)
 
 
@@ -186,6 +195,16 @@ async def _result(client, history, event_id):
         event.activity_task_completed_event_attributes.result.payloads
     )
     return result
+
+
+async def _save_history(handle, report, output):
+    try:
+        async with asyncio.timeout(10):
+            (output / "history.json").write_text((await handle.fetch_history()).to_json())
+            report["observedStatus"] = (await handle.describe()).status.name
+    except Exception as exc:
+        # Diagnostic collection must not replace the scenario's original error.
+        report["historyCollectionError"] = type(exc).__name__
 
 
 async def _observe_paused(handle, receipts, phase):
@@ -230,6 +249,11 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
     database_url = f"sqlite+aiosqlite:///{tmp_path}/journey.db"
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", sessions)
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow, "temporal_artifact_root", str(tmp_path / "artifacts"),
+    )
     store = LocalTemporalArtifactStore(tmp_path / "artifacts")
     workspace = tmp_path / "documents"
     workspace.mkdir()
@@ -267,12 +291,25 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
                         "split-" + fleet, (fleet,), environment, receipts, output,
                     ))
                 adapter = TemporalClientAdapter(env.client)
-                started = await adapter.start_workflow(
-                    workflow_type="MoonMind.UserWorkflow",
-                    workflow_id=f"mm:{uuid4()}",
-                    input_args={
-                        "workflow_type": "MoonMind.UserWorkflow",
-                        "initial_parameters": {"workflow": {
+                async with sessions() as session:
+                    service = TemporalExecutionService(
+                        session,
+                        client_adapter=adapter,
+                        namespace=env.client.namespace,
+                    )
+                    # The actual admission owner creates the canonical identity
+                    # and trusted owner metadata. No test principal or scripted
+                    # Workflow start stands in for production admission.
+                    started = await service.create_execution(
+                        workflow_type="MoonMind.UserWorkflow",
+                        owner_id=None,
+                        title="Core worker topology transition",
+                        input_artifact_ref=None,
+                        plan_artifact_ref=None,
+                        manifest_artifact_ref=None,
+                        failure_policy=None,
+                        idempotency_key=f"core-upgrade-{uuid4().hex}",
+                        initial_parameters={"workflow": {
                             "instructions": "Discover the saved document.",
                             "publish": {"mode": "none"},
                             "steps": [{
@@ -287,12 +324,12 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
                                 }},
                             }],
                         }},
-                    },
-                )
+                    )
                 handle = env.client.get_workflow_handle(
                     started.workflow_id, run_id=started.run_id,
                 )
                 report.update(workflowId=handle.id, runId=started.run_id)
+                stack.push_async_callback(_save_history, handle, report, output)
                 planned_history, planned = await _wait_for_activity(
                     handle, "plan.generate", completed=True,
                 )
@@ -370,8 +407,8 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
                 # Compare actual committed history bytes and schedule counts,
                 # rather than treating a new successful execution as continuity.
                 prefix = after.events[:len(before.events)]
-                assert [e.SerializeToString() for e in prefix] == [
-                    e.SerializeToString() for e in before.events
+                assert [e.SerializeToString(deterministic=True) for e in prefix] == [
+                    e.SerializeToString(deterministic=True) for e in before.events
                 ]
                 activities = _activities(after)
                 assert all(row["completedEventId"] for row in activities)
@@ -390,6 +427,14 @@ async def test_in_progress_workflow_completes_after_core_upgrade_and_restart(
                 assert recorded_tool["outputs"]["documentPaths"] == ["retained.md"]
                 assert recorded_tool["outputs"]["source"] == "filesystem"
                 assert await read_plan() == plan_digest
+                async with sessions() as session:
+                    record = await session.get(TemporalExecutionCanonicalRecord, handle.id)
+                    assert record.run_id == started.run_id
+                    assert record.state == MoonMindWorkflowState.COMPLETED
+                    report["canonicalTerminal"] = {
+                        "workflowId": record.workflow_id,
+                        "runId": record.run_id, "state": record.state.value,
+                    }
                 await Replayer(
                     workflows=[MoonMindUserWorkflow],
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
