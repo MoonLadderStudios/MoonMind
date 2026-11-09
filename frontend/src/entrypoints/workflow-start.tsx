@@ -12297,6 +12297,11 @@ function WorkflowStartPageContent({
                 Pinned run
                 <input value={remediationDraft.target.runId} readOnly />
               </label>
+              {remediationDraft.target.securityFinding ? <>
+                <label>Original security finding<input readOnly value={remediationDraft.target.securityFinding.findingId} /></label>
+                <label>Pinned security comparison<input readOnly value={remediationDraft.target.securityFinding.comparisonArtifactRef} /></label>
+                <p>Assessment authority does not authorize edits or publication. The server verifies and preserves original evidence; fixes and comparable retests use separately admitted authority.</p>
+              </> : null}
               {remediationDraft.target.state ? (
                 <label>
                   Original target outcome

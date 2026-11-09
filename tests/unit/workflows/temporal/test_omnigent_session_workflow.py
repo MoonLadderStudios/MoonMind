@@ -433,13 +433,17 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("remediation", [True, False])
+@pytest.mark.parametrize("remediation,security", [(True, False), (False, False), (True, True)])
 async def test_compact_plan_handoff_delivers_remediation_context_as_input(
-    monkeypatch: pytest.MonkeyPatch, remediation: bool
+    monkeypatch: pytest.MonkeyPatch, remediation: bool, security: bool
 ) -> None:
     workflow: dict[str, object] = {"instructions": "Diagnose the failed run."}
     if remediation:
         workflow["remediation"] = {"target": {"workflowId": "mm:failed"}}
+        if security:
+            workflow["remediation"]["target"]["securityFinding"] = {
+                "comparisonArtifactRef": "art_comparison", "findingId": "finding-1",
+            }
     snapshot = {
         "schemaVersion": "task-input-snapshot/v1",
         "draft": {
@@ -487,6 +491,9 @@ async def test_compact_plan_handoff_delivers_remediation_context_as_input(
         context_lookup,
     )
 
+    security_lookup = AsyncMock(return_value=["artifact://art_comparison", "artifact://art_native"])
+    monkeypatch.setattr(omnigent_session_activities, "_remediation_security_input_refs", security_lookup)
+
     request = await omnigent_session_activities._reconstruct_plan_bound_request(
         binding=binding,
         plan=plan,
@@ -497,11 +504,18 @@ async def test_compact_plan_handoff_delivers_remediation_context_as_input(
     )
 
     if remediation:
-        assert request.input_refs == ["artifact://art_remediation_context"]
+        assert request.input_refs == ["artifact://art_remediation_context", *(
+            ["artifact://art_comparison", "artifact://art_native"] if security else []
+        )]
         context_lookup.assert_awaited_once_with("mm:remediation")
     else:
         assert request.input_refs == []
         context_lookup.assert_not_awaited()
+
+    if security:
+        security_lookup.assert_awaited_once_with("mm:remediation")
+    else:
+        security_lookup.assert_not_awaited()
 
 
 def test_activity_request_carries_one_atomic_runtime_binding_fence() -> None:

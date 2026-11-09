@@ -16,6 +16,7 @@ type RemediationRow = {
   attentionRequired: boolean;
   targetWorkflowId: string;
   targetTitle: string;
+  securityFinding?: { comparisonArtifactRef: string; findingId: string };
   authorityMode: string;
   mode: string;
   latestActionSummary?: string | null;
@@ -65,7 +66,11 @@ function compactRows(payload: unknown): RemediationRow[] {
     const remediationWorkflowId = compactText(record, 'remediationWorkflowId');
     const targetWorkflowId = compactText(record, 'targetWorkflowId');
     if (!isWorkflowId(remediationWorkflowId) || !isWorkflowId(targetWorkflowId)) return [];
+    const security = record.securityFinding as Record<string, unknown> | null | undefined;
+    const securityFinding = security && typeof security.findingId === 'string' && typeof security.comparisonArtifactRef === 'string'
+      ? { findingId: security.findingId, comparisonArtifactRef: security.comparisonArtifactRef } : undefined;
     return [{
+      ...(securityFinding ? { securityFinding } : {}),
       remediationWorkflowId,
       targetWorkflowId,
       title: compactText(record, 'title') || remediationWorkflowId,
@@ -145,7 +150,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     const term = filter.trim().toLowerCase();
     const allRows = query.data?.rows ?? [];
     return term ? allRows.filter((row) =>
-      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution]
+      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution, row.securityFinding?.findingId, row.securityFinding?.comparisonArtifactRef]
         .some((value) => String(value ?? '').toLowerCase().includes(term))) : allRows;
   }, [filter, query.data]);
   const unavailableCount = query.data?.unavailableCount ?? 0;
@@ -154,6 +159,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'title', header: 'Remediation', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.remediationWorkflowId)}`} aria-label={`${row.title} remediation workflow`}>{row.title}</Link> },
     { key: 'status', header: 'Lifecycle / attention', render: (row) => <><span>{row.status}</span>{row.attentionRequired ? <strong> · Attention</strong> : null}</> },
     { key: 'targetTitle', header: 'Source Workflow', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.targetWorkflowId)}`} aria-label={`${row.targetTitle} source workflow`}>{row.targetTitle}</Link> },
+    { key: 'securityFinding', header: 'Security evidence', render: (row) => row.securityFinding ? <><Link to={`/workflows/${encodeURIComponent(row.targetWorkflowId)}/artifacts`} aria-label={`${row.securityFinding.findingId} security finding`}>{row.securityFinding.findingId}</Link><p className="small">{row.securityFinding.comparisonArtifactRef}</p></> : '—' },
     { key: 'authorityMode', header: 'Contract', render: (row) => `${row.authorityMode} · ${row.mode}` },
     { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || row.resolution || '—' },
     { key: 'createdAt', header: 'Created', sortable: true, render: (row) => formatDateTime(row.createdAt) },

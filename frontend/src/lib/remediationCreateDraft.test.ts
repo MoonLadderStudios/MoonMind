@@ -392,3 +392,23 @@ describe('remediationCreateDraft', () => {
     });
   });
 });
+
+it('pins selected security evidence across authoring reload without granting publication', () => {
+  const selection = { comparisonArtifactRef: 'art_comparison', findingId: 'ownership' };
+  const draft = buildRemediationCreateDraft({ workflowId: 'assessment', runId: 'source-run', repository: 'owner/repo' }, { securityFinding: selection });
+  expect(draft.skill).toBe('security-investigate');
+  expect(draft.publishMode).toBe('none');
+  expect(draft.remediation.target.securityFinding).toEqual(selection);
+  const id = storeRemediationCreateDraft(draft);
+  expect(readRemediationCreateDraft(id)?.remediation.target.securityFinding).toEqual(selection);
+  expect(() => updateRemediationCreateDraft(id, { ...draft, remediation: { ...draft.remediation, target: { ...draft.remediation.target, securityFinding: { ...selection, findingId: 'different' } } } })).toThrow(/changed/);
+});
+
+it('replays an authored security selection unchanged after an uncertain admission', () => {
+  const draft = buildRemediationCreateDraft({ workflowId: 'assessment', runId: 'source-run' }, { securityFinding: { comparisonArtifactRef: 'art_original', findingId: 'original' } });
+  const id = storeRemediationCreateDraft(draft);
+  const authored = { ...draft, authoring: { ...authoredDraft().authoring!, request: { type: 'task', priority: 5, maxAttempts: 3, payload: { targetRuntime: 'omnigent', task: { instructions: draft.instructions, remediation: draft.remediation } } } } };
+  updateRemediationCreateDraft(id, authored);
+  expect(readRemediationCreateDraft(id)?.authoring).toEqual(authored.authoring);
+  expect(() => updateRemediationCreateDraft(id, { ...authored, target: { ...authored.target, securityFinding: { comparisonArtifactRef: 'art_replacement', findingId: 'original' } }, remediation: { ...authored.remediation, target: { ...authored.remediation.target, securityFinding: { comparisonArtifactRef: 'art_replacement', findingId: 'original' } } } })).toThrow(/changed/);
+});

@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-Workflow Remediation starts an ordinary MoonMind workflow about one failed **target** run. It uses saved evidence to diagnose and fix causes in the target repository or MoonMind. The original failure stays recorded. Repair is the remediation's result; recovering the target requires an operator retry.
+Workflow Remediation starts an ordinary MoonMind workflow about one **target** run or a selected security finding. It uses saved evidence to diagnose and fix causes in the target repository or MoonMind. The original failure stays recorded. Repair is the remediation's result; recovering the target requires an operator retry.
 
 [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step) owns retry from a step, [Verification Cadence](RemediationVerificationCadence.md) owns repair attempts inside one workflow, and [Checkpoint Branches](CheckpointBranchSystem.md) own corrective branches.
 
@@ -49,6 +49,14 @@ Submission is ordinary `POST /api/executions` with a `workflow.remediation` obje
 ```
 
 `POST /api/executions/{workflowId}/remediation` is a convenience route through the same admission. Admission rejects a target that is missing or not a workflow id, the remediation itself, a target that is not a `MoonMind.UserWorkflow` or is itself a remediation, a `runId` other than the target's current run, step selectors or AgentRun ids that do not belong to the target, unsupported modes or policies, and `admin_auto` authority, which stays closed. The modes are `snapshot` and `snapshot_then_follow`; only the operator follow API can follow a live target.
+
+## Security finding handoff
+
+The source workflow's Artifacts tab lists retained security comparisons. Selecting a finding opens ordinary Remediation Create with the comparison and finding identities pinned, `security-investigate` selected, and publication disabled by default. Successful assessment execution can still contain a vulnerability. The collection links selected findings back to source evidence; remediation detail shows the admitted comparison beside the existing candidate/checkpoint and publication history.
+
+Admission verifies the comparison's exact source workflow/run, readable artifact dependencies and content seal. It records original finding evidence, scope, comparison state, decisions, review/expiry and changed intelligence in the existing context. Browser-authored dispositions cannot replace this snapshot. Draft reloads and authored retries preserve the selection; normal checkpoint recovery preserves candidate work and publication reconciliation owns uncertain effects.
+
+Assessment scope is evidence, not remediation authority. Source edits and PR publication use their separate admission; infrastructure-as-code follows the ordinary code path, while direct infrastructure mutation is unsupported. Lifecycle completion and successful CI do not imply `remediated_verified`. Retests remain with the existing security comparison owner, which distinguishes incomplete coverage, failed/inconclusive retests, source/environment mismatch, upstream closure and changed intelligence. The handoff introduces no additional repair loop or resource controller.
 
 ## 5. Remediation context
 

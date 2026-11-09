@@ -17,6 +17,8 @@ export type RemediationCreateDraftReadResult =
       draft: null;
     };
 
+export type SecurityFindingSelection = { comparisonArtifactRef: string; findingId: string };
+
 export type RemediationCreateDraft = {
   source: 'remediation';
   schemaVersion: 1;
@@ -24,6 +26,7 @@ export type RemediationCreateDraft = {
   target: {
     workflowId: string;
     runId: string;
+    securityFinding?: SecurityFindingSelection;
     title?: string;
     state?: string;
     stepSelectors?: Array<Record<string, unknown>>;
@@ -70,6 +73,7 @@ export type RemediationCreateDraft = {
     target: {
       workflowId: string;
       runId: string;
+      securityFinding?: SecurityFindingSelection;
       stepSelectors?: Array<Record<string, unknown>>;
       agentRunIds?: string[];
     };
@@ -199,12 +203,16 @@ export function buildRemediationCreateDraft(
   options: {
     runId?: string;
     instructions?: string;
+    securityFinding?: SecurityFindingSelection;
   } = {},
 ): RemediationCreateDraft {
   const workflowId = cleanText(execution.workflowId);
   const runId = cleanText(options.runId || execution.temporalRunId || execution.runId);
   if (!workflowId || !runId) {
     throw new Error('Remediation draft requires target workflow and run identity.');
+  }
+  if (options.securityFinding && !securityFindingIsValid(options.securityFinding)) {
+    throw new Error('Security remediation requires comparison artifact and finding identity.');
   }
   const runtimeFields = buildRemediationRuntimeRequestFields(execution);
   const runtime = (
@@ -220,6 +228,7 @@ export function buildRemediationCreateDraft(
   const remediationTarget = {
     workflowId,
     runId,
+    ...(options.securityFinding ? { securityFinding: { ...options.securityFinding } } : {}),
     ...(stepSelectors.length > 0 ? { stepSelectors } : {}),
   };
   const storedAgentProfile = (
@@ -283,13 +292,14 @@ export function buildRemediationCreateDraft(
     target: {
       workflowId,
       runId,
+      ...(options.securityFinding ? { securityFinding: { ...options.securityFinding } } : {}),
       ...(title ? { title } : {}),
       ...(state ? { state } : {}),
       ...(stepSelectors.length > 0 ? { stepSelectors } : {}),
     },
     repository,
     ...(startingBranch ? { branch: startingBranch, startingBranch } : {}),
-    publishMode: repository ? 'pr' : 'none',
+    publishMode: repository && !options.securityFinding ? 'pr' : 'none',
     ...(executionProfileRef ? { executionProfileRef } : {}),
     ...(launchPolicyRef ? { launchPolicyRef } : {}),
     runtime: {
@@ -310,8 +320,10 @@ export function buildRemediationCreateDraft(
       : {}),
     instructions:
       options.instructions ||
-      `Diagnose why workflow ${title || workflowId} failed using the remediation context in the workspace, fix the cause where it is safe to, and report how to keep it from recurring.`,
-    skill: REMEDIATION_SKILL_ID,
+      (options.securityFinding
+        ? `Investigate security finding ${options.securityFinding.findingId} from the pinned comparison and original evidence in the remediation context. Preserve the hypothesis, scope, expected behavior and selected candidate. Assessment authority does not authorize edits, publication or cloud mutation. Use existing separately admitted authority for any fix and comparable retest; CI success alone is not a verified security fix. Infrastructure-as-code uses the ordinary code path; direct infrastructure mutation is unsupported.`
+        : `Diagnose why workflow ${title || workflowId} failed using the remediation context in the workspace, fix the cause where it is safe to, and report how to keep it from recurring.`),
+    skill: options.securityFinding ? 'security-investigate' : REMEDIATION_SKILL_ID,
     remediation: {
       target: remediationTarget,
       ...OBSERVE_ONLY_DIAGNOSIS,
@@ -370,6 +382,12 @@ function isNonEmptyText(value: unknown): value is string {
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function securityFindingIsValid(value: unknown): boolean {
+  return value === undefined || (isRecordValue(value) &&
+    isNonEmptyText(value.comparisonArtifactRef) && value.comparisonArtifactRef.startsWith('art_') &&
+    isNonEmptyText(value.findingId));
 }
 
 function optionalRecordIsValid(value: unknown): boolean {
@@ -450,6 +468,9 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     typeof draft.repository === 'string' &&
     remediationTarget.workflowId === target.workflowId &&
     remediationTarget.runId === target.runId &&
+    securityFindingIsValid(target.securityFinding) &&
+    securityFindingIsValid(remediationTarget.securityFinding) &&
+    JSON.stringify(target.securityFinding) === JSON.stringify(remediationTarget.securityFinding) &&
     stepSelectorsAreValid(target.stepSelectors) &&
     stepSelectorsAreValid(remediationTarget.stepSelectors) &&
     agentRunIdsAreValid(target.agentRunIds) &&
@@ -555,7 +576,8 @@ export function updateRemediationCreateDraft(draftId: string, draft: Remediation
   if (previous.status !== 'valid' || !draftIsStructurallyValid(draft) ||
     previous.draft.target.workflowId !== draft.target.workflowId ||
     previous.draft.target.runId !== draft.target.runId ||
-    previous.draft.createdAt !== draft.createdAt) {
+    previous.draft.createdAt !== draft.createdAt ||
+    JSON.stringify(previous.draft.target.securityFinding) !== JSON.stringify(draft.target.securityFinding)) {
     throw new Error('The remediation draft is unavailable or changed. Open Remediate again before submitting.');
   }
   // Keep the original target pin, tab and expiry. A failed write stops before

@@ -378,6 +378,35 @@ afterEach(async () => {
 });
 
 describe('routed remediation operator journey', () => {
+  it('opens pinned finding investigation from a successful assessment and preserves it on reload and discard', async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/executions/source-workflow/remediation-security-findings?')) return jsonResponse({ comparisonArtifactRef: 'art_comparison', findings: [{
+        comparisonArtifactRef: 'art_comparison', comparisonDigest: 'verified-digest', findingId: 'ownership', coverageStatus: 'complete', intelligenceChanges: [],
+        finding: { findingId: 'ownership', state: 'new', evidenceExpiresAt: '2027-01-01T00:00:00Z', finding: { nativeId: 'ownership', asset: 'app', ruleId: 'owner-check', evidenceRefs: ['art_original'] } }, decisions: [],
+      }] });
+      if (url.includes('/executions/source-workflow/artifacts')) return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: 'security.comparison' }] }] });
+      if (/\/executions\/source-workflow(?:\?|$)/.test(url)) return jsonResponse({ ...sourceExecution, state: 'succeeded', rawState: 'succeeded', status: 'succeeded', attentionRequired: false });
+      return fallback(input, init);
+    });
+    window.history.replaceState({}, '', '/workflows/source-workflow/artifacts');
+    cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    await screen.findByLabelText('Security comparison');
+    await userEvent.selectOptions(screen.getByLabelText('Security comparison'), 'art_comparison');
+    await userEvent.click(await screen.findByRole('button', { name: 'Investigate ownership' }));
+    expect(await screen.findByText('Remediation Draft')).toBeTruthy();
+    expect((screen.getByLabelText('Original security finding') as HTMLInputElement).value).toBe('ownership');
+    expect((screen.getByLabelText('Pinned security comparison') as HTMLInputElement).value).toBe('art_comparison');
+    expect(createRequests).toHaveLength(0);
+    cleanupRender();
+    cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    expect(await screen.findByLabelText('Original security finding')).toBeTruthy();
+    expect(createRequests).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Discard remediation draft' }));
+    expect(createRequests).toHaveLength(0);
+  });
+
   it.each(['', '/steps', '/artifacts'])('opens editable Create from source detail %s without starting a run', async (tab) => {
     window.history.replaceState({}, '', `/workflows/source-workflow${tab}?source=temporal`);
     cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;

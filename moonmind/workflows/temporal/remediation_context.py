@@ -6,6 +6,7 @@ workflow history carries refs and compact metadata instead of raw logs or artifa
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
+from moonmind.security.assessments import MAX_RETAINED_REPORT_BYTES, Comparison
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -174,6 +176,77 @@ SAFE_POLICY_KEYS = frozenset({"authorityMode"})
 
 class RemediationContextError(RuntimeError):
     """Raised when a remediation context artifact cannot be generated."""
+
+
+async def read_security_remediation_findings(
+    *, service: TemporalArtifactService, workflow_id: str, run_id: str,
+    comparison_artifact_ref: str, access: ArtifactAccessContext,
+) -> dict[str, Any]:
+    """Read sealed comparison evidence belonging to the exact selected run.
+
+    This is a presentation/admission projection of the assessment owner, not
+    a new security verdict or authority grant. Completed scans are never rerun.
+    """
+    artifact, links, _pinned, _policy = await service.get_metadata(
+        artifact_id=comparison_artifact_ref, access=access,
+    )
+    if not any(link.workflow_id == workflow_id and link.run_id == run_id
+               and link.link_type == "security.comparison" for link in links):
+        raise RemediationContextError("Comparison must belong to the source workflow/run.")
+    if int(artifact.size_bytes or 0) > MAX_RETAINED_REPORT_BYTES:
+        raise RemediationContextError("Security comparison exceeds the input bound.")
+    artifact, body = await service.read(artifact_id=comparison_artifact_ref, access=access)
+    if len(body) > MAX_RETAINED_REPORT_BYTES:
+        raise RemediationContextError("Security comparison exceeds the input bound.")
+    digest = hashlib.sha256(body).hexdigest()
+    if digest != artifact.sha256:
+        raise RemediationContextError("Security comparison digest does not match its artifact.")
+    comparison = Comparison.model_validate_json(body)
+    closure = await service.verified_dependencies(root_artifact_id=comparison_artifact_ref, access=access)
+    if closure is None:
+        raise RemediationContextError("Security comparison must have sealed evidence dependencies.")
+    from moonmind.workflows.skills.security_assessment import _comparison_citations
+
+    document = comparison.model_dump(mode="json", by_alias=True)
+    citations = {ref for ref in _comparison_citations(document) if ref.startswith("art_")}
+    if not comparison.scan_ref:
+        raise RemediationContextError("Security comparison must retain its original scan.")
+    citations.add(comparison.scan_ref)
+    if comparison.baseline_ref:
+        citations.add(comparison.baseline_ref)
+    required = {entry.artifact_id for entry in closure.dependencies if entry.required and entry.sha256}
+    if not citations <= required:
+        raise RemediationContextError("Security comparison seal does not cover its original evidence.")
+    decisions: dict[str, list[dict[str, Any]]] = {}
+    for decision in comparison.decisions:
+        decisions.setdefault(decision.decision.finding_id, []).append(
+            decision.model_dump(mode="json", by_alias=True)
+        )
+    common = {
+        "comparisonArtifactRef": comparison_artifact_ref,
+        "comparisonDigest": digest,
+        "sourceWorkflowId": workflow_id,
+        "sourceRunId": run_id,
+        "scope": comparison.observation.scope.model_dump(mode="json", by_alias=True),
+        "coverageStatus": comparison.coverage_status,
+        "intelligenceChanges": comparison.intelligence_changes,
+        "scanRef": comparison.scan_ref,
+        "baselineRef": comparison.baseline_ref,
+    }
+    return {
+        "comparisonArtifactRef": comparison_artifact_ref,
+        "findings": [
+            {**common, "findingId": row.finding_id,
+             "finding": row.model_dump(mode="json", by_alias=True),
+             "decisions": decisions.get(row.finding_id, []),
+             "evidenceArtifactRefs": sorted({comparison_artifact_ref, comparison.scan_ref,
+                 *([comparison.baseline_ref] if comparison.baseline_ref else []),
+                 *(ref for ref in row.finding.evidence_refs if ref.startswith("art_")),
+                 *(ref for decision in decisions.get(row.finding_id, [])
+                   for ref in decision["decision"]["evidenceRefs"] if ref.startswith("art_"))})}
+            for row in comparison.findings
+        ],
+    }
 
 
 @dataclass(slots=True)
@@ -517,6 +590,8 @@ class RemediationContextBuilder:
             "remediationWorkflowId": remediation_record.workflow_id,
             "generatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "target": self._target_payload(target_record, link=link),
+            **({"securityEvidence": remediation["securityEvidence"]}
+               if remediation.get("securityEvidence") is not None else {}),
             "selectedSteps": self._normalize_step_selectors(
                 target_mapping.get("stepSelectors"),
                 target_evidence=target_evidence,
