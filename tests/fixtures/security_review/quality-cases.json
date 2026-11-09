@@ -280,7 +280,7 @@
         "authorization"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
@@ -298,7 +298,13 @@
           "authorization"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
     },
     {
       "id": "gaming-rgs-corrected",
@@ -312,7 +318,7 @@
         "authorization"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -326,7 +332,13 @@
           "authorization"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
     },
     {
       "id": "gaming-rgs-clean",
@@ -340,7 +352,7 @@
         "authorization"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -354,7 +366,13 @@
           "authorization"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
     },
     {
       "id": "gaming-rgs-held-out",
@@ -362,18 +380,19 @@
       "family": "rgs",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic rgs fixture, Apache-2.0; no customer data",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#rgs",
       "limits": [
         "transport",
         "authorization"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
         "findings": [
-          "audit-effect"
+          "wallet-effect",
+          "wallet-balance"
         ],
         "covered": [
           "rgs"
@@ -384,7 +403,14 @@
           "authorization"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-rng-defective",
@@ -399,7 +425,7 @@
         "game-fairness"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
@@ -416,7 +442,13 @@
           "game-fairness"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "not_satisfied"
     },
     {
       "id": "gaming-rng-corrected",
@@ -431,7 +463,7 @@
         "game-fairness"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -439,14 +471,20 @@
         "covered": [
           "rng"
         ],
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [
           "cryptographic-security",
           "certification",
           "game-fairness"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "satisfied"
     },
     {
       "id": "gaming-rng-clean",
@@ -461,7 +499,7 @@
         "game-fairness"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -469,14 +507,20 @@
         "covered": [
           "rng"
         ],
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [
           "cryptographic-security",
           "certification",
           "game-fairness"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "satisfied"
     },
     {
       "id": "gaming-rng-held-out",
@@ -484,21 +528,19 @@
       "family": "rng",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic rng fixture, Apache-2.0; no customer data",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#rng",
       "limits": [
         "cryptographic-security",
         "certification",
         "game-fairness"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
         "findings": [
-          "rng-mapped-mapped-frequency",
-          "rng-raw-bit-frequency",
-          "rng-raw-pair-frequency"
+          "rng-mapped-mapped-frequency"
         ],
         "covered": [
           "rng"
@@ -510,7 +552,14 @@
           "game-fairness"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "not_satisfied",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-math-defective",
@@ -525,7 +574,7 @@
         "deployed-implementation"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
@@ -542,7 +591,11 @@
           "deployed-implementation"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "not_satisfied"
     },
     {
       "id": "gaming-math-corrected",
@@ -557,7 +610,7 @@
         "deployed-implementation"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -565,14 +618,18 @@
         "covered": [
           "math"
         ],
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [
           "approval",
           "sampling",
           "deployed-implementation"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "satisfied"
     },
     {
       "id": "gaming-math-clean",
@@ -587,7 +644,7 @@
         "deployed-implementation"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -595,14 +652,18 @@
         "covered": [
           "math"
         ],
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [
           "approval",
           "sampling",
           "deployed-implementation"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "satisfied"
     },
     {
       "id": "gaming-math-held-out",
@@ -610,14 +671,14 @@
       "family": "math",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic math fixture, Apache-2.0; no customer data",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#math",
       "limits": [
         "approval",
         "sampling",
         "deployed-implementation"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "vulnerable",
@@ -634,7 +695,12 @@
           "deployed-implementation"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "not_satisfied",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-gli-defective",
@@ -648,7 +714,7 @@
         "GLI-GSF-2:B"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -677,7 +743,7 @@
         "GLI-GSF-2:B"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -706,7 +772,7 @@
         "GLI-GSF-2:B"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -729,13 +795,13 @@
       "family": "gli",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#gli",
       "edition": "4.0",
       "requirements": [
         "GLI-GSF-2:B"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -750,7 +816,8 @@
           "GLI-GSF-2:B"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-nj-defective",
@@ -765,7 +832,7 @@
         "nj.partner.player-accounts"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -797,7 +864,7 @@
         "nj.partner.player-accounts"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -811,7 +878,7 @@
           "nj.partner.player-accounts"
         ],
         "coverageGaps": 0,
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [],
         "verifiedRemediations": []
       }
@@ -829,7 +896,7 @@
         "nj.partner.player-accounts"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -843,7 +910,7 @@
           "nj.partner.player-accounts"
         ],
         "coverageGaps": 0,
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [],
         "verifiedRemediations": []
       }
@@ -854,14 +921,14 @@
       "family": "nj",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#nj",
       "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
       "requirements": [
         "nj.rgs.games-releases",
         "nj.partner.player-accounts"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -878,7 +945,8 @@
           "nj.partner.player-accounts"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-uk-defective",
@@ -892,7 +960,7 @@
         "8.32"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -921,7 +989,7 @@
         "8.32"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -933,7 +1001,7 @@
           "8.32"
         ],
         "coverageGaps": 0,
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [],
         "verifiedRemediations": []
       }
@@ -950,7 +1018,7 @@
         "8.32"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "clean",
@@ -962,7 +1030,7 @@
           "8.32"
         ],
         "coverageGaps": 0,
-        "satisfied": false,
+        "satisfied": true,
         "unknowns": [],
         "verifiedRemediations": []
       }
@@ -973,13 +1041,13 @@
       "family": "uk",
       "variant": "held-out",
       "split": "held-out",
-      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#uk",
       "edition": "ISO/IEC 27001:2022",
       "requirements": [
         "8.32"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -994,7 +1062,8 @@
           "8.32"
         ],
         "verifiedRemediations": []
-      }
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
     },
     {
       "id": "gaming-math-verified-remediation",
@@ -1048,7 +1117,7 @@
         "GLI-GSF-2:B"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -1080,7 +1149,7 @@
         "game-fairness"
       ],
       "requiredMutations": [
-        "false-pass"
+        "wrong-conclusion"
       ],
       "expected": {
         "outcome": "incomplete",
@@ -1098,7 +1167,13 @@
           "rng"
         ],
         "coverageGaps": 1
-      }
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "inconclusive"
     }
   ]
 }

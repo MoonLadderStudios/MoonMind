@@ -1,0 +1,324 @@
+{
+  "license": "Apache-2.0",
+  "origin": "First-party synthetic held-out inputs; no private or licensed source data.",
+  "selectionPolicy": "These distinct inputs were frozen after the production checks were implemented. They are not imported from regression cases and do not tune the same checks. They are small control examples, not a statistically independent benchmark.",
+  "rgs": {
+    "spec": {
+      "schemaVersion": "rgs-scenario-spec/v1",
+      "gameRef": "game:rgs-fixture",
+      "sourceRef": "fixture:heldout-rollback-short-credit",
+      "integrationRulesRef": "fixture:synthetic-integration-only",
+      "states": [
+        "open",
+        "locked",
+        "interrupted",
+        "finished"
+      ],
+      "initialState": "open",
+      "transitions": [
+        {
+          "event": "close",
+          "fromState": "open",
+          "toState": "locked"
+        },
+        {
+          "event": "interrupt",
+          "fromState": "locked",
+          "toState": "interrupted"
+        },
+        {
+          "event": "finish",
+          "fromState": "locked",
+          "toState": "finished"
+        },
+        {
+          "event": "finish",
+          "fromState": "interrupted",
+          "toState": "finished"
+        }
+      ],
+      "bettingClose": {
+        "event": "close",
+        "recognition": "processed",
+        "tie": "deny"
+      },
+      "cashoutClose": {
+        "event": "finish",
+        "recognition": "processed",
+        "tie": "deny"
+      },
+      "allowedStates": {
+        "wager": [
+          "open"
+        ],
+        "cashout": [
+          "locked",
+          "interrupted"
+        ],
+        "rollback": [
+          "interrupted"
+        ],
+        "settle": [
+          "finished"
+        ],
+        "reconnect": [
+          "open",
+          "locked",
+          "interrupted",
+          "finished"
+        ]
+      },
+      "interruption": {
+        "event": "interrupt",
+        "policy": "rollback"
+      },
+      "scenarios": [
+        {
+          "id": "heldout-rollback-short-credit",
+          "evidenceRefs": [
+            "fixture:heldout-rollback-contract"
+          ],
+          "events": [
+            {
+              "event": "close",
+              "at": 7
+            },
+            {
+              "event": "interrupt",
+              "at": 9
+            },
+            {
+              "event": "finish",
+              "at": 30
+            }
+          ],
+          "initialBalances": {
+            "wallet-heldout": 1003
+          },
+          "wagers": [
+            {
+              "id": "heldout-wager",
+              "accountRef": "wallet-heldout",
+              "stake": 37,
+              "cashoutCredit": 74,
+              "settlementCredit": 0
+            }
+          ],
+          "operations": [
+            {
+              "id": "heldout-place",
+              "kind": "wager",
+              "transactionId": "hold-wager",
+              "receivedAt": 1,
+              "processedAt": 1,
+              "wagerRef": "heldout-wager"
+            },
+            {
+              "id": "heldout-replay",
+              "kind": "wager",
+              "transactionId": "hold-wager",
+              "receivedAt": 3,
+              "processedAt": 3,
+              "wagerRef": "heldout-wager"
+            },
+            {
+              "id": "heldout-refund",
+              "kind": "rollback",
+              "transactionId": "hold-refund",
+              "receivedAt": 10,
+              "processedAt": 10,
+              "wagerRef": "heldout-wager"
+            },
+            {
+              "id": "heldout-refund-replay",
+              "kind": "rollback",
+              "transactionId": "hold-refund",
+              "receivedAt": 12,
+              "processedAt": 12,
+              "wagerRef": "heldout-wager"
+            },
+            {
+              "id": "heldout-reconnect",
+              "kind": "reconnect",
+              "transactionId": "hold-reconnect",
+              "receivedAt": 31,
+              "processedAt": 31
+            }
+          ]
+        }
+      ],
+      "walletUnit": "synthetic-cent"
+    },
+    "traces": {
+      "schemaVersion": "rgs-traces/v1",
+      "sourceRef": "fixture:synthetic-rgs",
+      "traces": [
+        {
+          "scenario": "heldout-rollback-short-credit",
+          "evidenceRefs": [
+            "fixture:heldout-rollback-short-credit"
+          ],
+          "operations": [
+            {
+              "operation": "heldout-place",
+              "decision": "accepted",
+              "reconciledBy": null
+            },
+            {
+              "operation": "heldout-replay",
+              "decision": "accepted",
+              "reconciledBy": null
+            },
+            {
+              "operation": "heldout-refund",
+              "decision": "accepted",
+              "reconciledBy": null
+            },
+            {
+              "operation": "heldout-refund-replay",
+              "decision": "accepted",
+              "reconciledBy": null
+            },
+            {
+              "operation": "heldout-reconnect",
+              "decision": "accepted",
+              "reconciledBy": null
+            }
+          ],
+          "walletEffects": [
+            {
+              "id": "effect-0",
+              "transactionId": "hold-wager",
+              "kind": "debit",
+              "accountRef": "wallet-heldout",
+              "amount": -37
+            },
+            {
+              "id": "effect-1",
+              "transactionId": "hold-refund",
+              "kind": "rollback",
+              "accountRef": "wallet-heldout",
+              "amount": 36
+            }
+          ],
+          "auditEffects": [
+            {
+              "id": "effect-0",
+              "transactionId": "hold-wager",
+              "kind": "debit",
+              "accountRef": "wallet-heldout",
+              "amount": -37
+            },
+            {
+              "id": "effect-1",
+              "transactionId": "hold-refund",
+              "kind": "rollback",
+              "accountRef": "wallet-heldout",
+              "amount": 37
+            }
+          ],
+          "balances": {
+            "wallet-heldout": 1002
+          },
+          "wagerOutcomes": {
+            "heldout-wager": "rolled_back"
+          },
+          "roundState": "finished",
+          "complete": true,
+          "accessObservations": null
+        }
+      ],
+      "collection": null,
+      "observations": null
+    }
+  },
+  "rng": {
+    "rawTransform": "xor-165",
+    "modulus": 11,
+    "outcomes": 5,
+    "amount": 32768
+  },
+  "math": {
+    "spec": {
+      "schemaVersion": "game-math-spec/v1",
+      "gameRef": "game:crash-fixture",
+      "provenance": {
+        "sourceRef": "fixture:heldout-quarter-target",
+        "contentDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "approvalRef": "filing-5199"
+      },
+      "game": {
+        "kind": "crash",
+        "precision": "1/100",
+        "boundary": "inclusive",
+        "minTarget": "1.01",
+        "survival": {
+          "kind": "inverse",
+          "houseEdge": "1/100"
+        }
+      },
+      "wagers": [
+        {
+          "id": "heldout-quarter",
+          "stake": "3",
+          "target": "4.25"
+        }
+      ],
+      "strategies": [
+        {
+          "id": "heldout-quarter-cash",
+          "bets": [
+            "heldout-quarter"
+          ],
+          "assumption": "Synthetic fixed target at 4.25x"
+        }
+      ],
+      "settlement": {
+        "quantum": "0.01",
+        "rounding": "floor"
+      },
+      "declared": [],
+      "criteria": {
+        "tolerance": "1/20",
+        "confidence": "99/100"
+      }
+    },
+    "settlements": [
+      {
+        "strategy": "heldout-quarter-cash",
+        "multiplier": "4.25",
+        "payouts": [
+          "12.70"
+        ],
+        "total": "12.70"
+      }
+    ]
+  },
+  "packs": {
+    "gli": {
+      "systems": [
+        "casino",
+        "heldout-gli-mirror"
+      ],
+      "scenario": "Two individually scoped records cannot jointly masquerade as one full-scope observation."
+    },
+    "nj": {
+      "systems": [
+        "rgs",
+        "heldout-nj-mirror"
+      ],
+      "scenario": "Full-scope records have no approval or partner link; partial-scope records retain links. They cannot be combined to manufacture full-scope approval."
+    },
+    "uk": {
+      "systems": [
+        "casino",
+        "heldout-uk-mirror"
+      ],
+      "scenario": "Enquiry/evidence cover both systems. Observation covers one system now and the other only after the audit period.",
+      "futurePeriod": {
+        "start": "2027-01-01",
+        "end": "2027-12-31"
+      }
+    }
+  }
+}

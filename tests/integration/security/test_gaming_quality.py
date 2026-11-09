@@ -6,6 +6,7 @@ assessment and report owners run. No money or external targets are involved.
 
 import copy
 import json
+import re
 
 import pytest
 
@@ -15,6 +16,8 @@ from tests.integration.security import test_rng_assessment_jobs as rng
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security.quality import MANIFEST, QualityRun, observation
 from tests.artifact_access import access_for_test
+
+HELDOUT = json.loads(MANIFEST.with_name("gaming-heldout.json").read_text())
 
 environment = recurring.environment
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -36,14 +39,34 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
     family, variant = case["family"], case["variant"]
     if family == "rgs":
         job = rgs.Job(environment, tmp_path, monkeypatch)
-        fault = {"defective": "double-debit", "held-out": "missing-audit"}.get(variant)
-        _, argv, _ = await rgs.launch(job, case["id"], fault=fault)
+        if variant == "held-out":
+            fixture = HELDOUT["rgs"]
+            _, argv = await job.launch(
+                case["id"],
+                {"spec": "spec/spec.json", "traces": "traces/traces.json"},
+                {
+                    name: json.dumps(fixture[name]).encode()
+                    for name in ("spec", "traces")
+                },
+            )
+        else:
+            _, argv, _ = await rgs.launch(
+                job,
+                case["id"],
+                fault="double-debit" if variant == "defective" else None,
+            )
     elif family == "rng":
         job = rng.Job(environment, tmp_path, monkeypatch)
         spec = rng.specification(mapped=True)
         raw = rng.RAW
         if variant == "held-out":
-            raw = bytes([0]) * len(raw)
+            fixture = HELDOUT["rng"]
+            raw = bytes(b ^ 165 for b in rng.RAW)
+            spec["expectedOutcomes"] = {
+                str(i): "1/5" for i in range(fixture["outcomes"])
+            }
+            spec["mapped"]["originRef"] = "fixture:heldout-eleven-to-five"
+            spec["mapped"]["transformations"] = ["xor 165; modulo 11; modulo 5"]
         elif variant == "insufficient-sample":
             raw = b"\x55"
             spec["raw"]["amount"] = 1
@@ -52,6 +75,10 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
             for b in raw
             if variant in {"defective", "held-out"} or (b & 7) < 6
         ]
+        if variant == "held-out":
+            outcomes = [
+                str((b % fixture["modulus"]) % fixture["outcomes"]) for b in raw
+            ]
         spec["mapped"]["amount"] = len(outcomes)
         _, argv = await job.launch(
             case["id"],
@@ -71,9 +98,10 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         settlements = copy.deepcopy(math.SETTLEMENTS)
         if variant in {"clean", "corrected"}:
             settlements[1].update(payouts=["0"], total="0")
-        elif variant == "held-out":
-            settlements = [{**settlements[0], "payouts": ["0"], "total": "0"}]
         spec = copy.deepcopy(math.SPEC)
+        if variant == "held-out":
+            spec = copy.deepcopy(HELDOUT["math"]["spec"])
+            settlements = HELDOUT["math"]["settlements"]
         spec["provenance"].pop("approvalRef")
         _, argv = await job.launch(
             case["id"],
@@ -87,7 +115,27 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
     _, stderr = process.communicate(timeout=60)
     assert process.returncode == 0, stderr.decode()
     ref = await job.publish(terminal_state="succeeded", exit_code=0)
-    result = await job.assess(ref, case["id"] + "-assessment")
+    native = json.loads(job.published[ref])
+    plan = math.controls()
+    requirement = plan["requirements"][0]
+    requirement["scope"]["assets"] = [
+        native["spec"]["gameRef"] if family == "rgs" else native["gameRef"]
+    ]
+    source = {"rgs": "rgs-scenarios", "rng": "rng", "math": "game-math"}[family]
+    requirement["title"] = (
+        f"Selected synthetic {family} diagnostic rules have no recorded violation"
+    )
+    objective = requirement["objectives"][0]
+    objective["description"] = (
+        "Check only the explicitly named fixture diagnostics, not deployed-game approval"
+    )
+    objective.update(source=source, tool=source, ruleIds=case["controlRules"])
+    result = await job.assess(ref, case["id"] + "-assessment", controlAssessment=plan)
+    control = await recurring.read(service, result["controlAssessmentRef"])
+    conclusion = control["requirements"][0]["conclusion"]
+    assert (
+        conclusion == case["conclusion"]
+    ), "native conclusion differs from ground truth"
     compared = await recurring.read(service, result["comparisonRef"])
     native = json.loads(job.published[ref])
     # Evaluate actual assessment findings, not the variant label or fixture expectation.
@@ -99,7 +147,7 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         findings,
         [family] if result["coverageStatus"] == "complete" else [],
         native_ref=ref,
-        satisfied=False,
+        satisfied=conclusion == "satisfied",
     )
     if family == "rgs":
         unknowns = [
@@ -136,10 +184,15 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         unknowns.append("sampling")
     actual.update(unknowns=unknowns, verifiedRemediations=[])
     # Replay the actual assessment owner with the same retained inputs.
-    repeat = await job.assess(ref, case["id"] + "-repeat")
+    repeat = await job.assess(ref, case["id"] + "-repeat", controlAssessment=plan)
+    repeat_control = await recurring.read(service, repeat["controlAssessmentRef"])
+
     assert repeat["counts"] == result["counts"]
     repeat_comparison = await recurring.read(service, repeat["comparisonRef"])
     repeated = copy.deepcopy(actual)
+    repeated["satisfied"] = (
+        repeat_control["requirements"][0]["conclusion"] == "satisfied"
+    )
     repeated["findings"] = sorted(
         {r["finding"]["ruleId"] for r in repeat_comparison["findings"]}
     )
@@ -154,6 +207,9 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         artifact_id=report_ref, access=access_for_test("workflow:assessment")
     )
     assert exported and result["publicationOutcome"] == "published"
+    assert re.findall(rb"Conclusion: \*\*([a-z_]+)\*\*", exported) == [
+        conclusion.encode()
+    ], "exported conclusion differs from retained control"
     export_limits = {
         "rgs": [b"transport_not_exercised", b"authorization_matrix_not_exercised"],
         "rng": [b"Unverified", b"cryptographic", b"game fairness"],
@@ -168,14 +224,22 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         service,
         case["id"],
         actual,
-        [ref, result["scanRef"], result["comparisonRef"], report_ref],
+        [
+            ref,
+            result["scanRef"],
+            result["comparisonRef"],
+            result["controlAssessmentRef"],
+            report_ref,
+        ],
         provenance={
             "fixture": case["source"],
             "nativeInputDigests": native.get("inputDigests"),
             "limits": case["limits"],
         },
         repeat=repeated,
-        mutations={"false-pass": {**actual, "findings": [], "satisfied": True}},
+        mutations={
+            "wrong-conclusion": {**actual, "satisfied": not actual["satisfied"]}
+        },
     )
 
 
@@ -204,7 +268,12 @@ async def test_gaming_pack_scope_and_exports(environment, case):
                 "synthetic-other-edition"
             )
         elif variant == "held-out":
-            records[0]["edition"] = "synthetic-other-edition"
+            systems = HELDOUT["packs"]["gli"]["systems"]
+            payload["scope"]["assets"] = systems
+            payload["framework"]["systemInputs"]["systems"] = systems
+            records = [
+                {**copy.deepcopy(records[0]), "systems": [system]} for system in systems
+            ]
     elif family == "nj":
         data, _ = await materialize(service)
         # Already materialized approval and partner references remain real artifacts.
@@ -218,9 +287,15 @@ async def test_gaming_pack_scope_and_exports(environment, case):
                 row.pop("divisionApprovalRef", None)
                 row.pop("operatorEvidenceRef", None)
         elif variant == "held-out":
-            # A release/configuration outside the assessed system cannot inherit evidence.
-            for row in records:
-                row["systems"] = ["old-release"]
+            systems = HELDOUT["packs"]["nj"]["systems"]
+            payload["scope"]["assets"] = systems
+            payload["framework"]["systemInputs"]["systems"] = systems
+            full_scope = copy.deepcopy(records)
+            for row in full_scope:
+                row["systems"] = systems
+                row.pop("divisionApprovalRef", None)
+                row.pop("operatorEvidenceRef", None)
+            records += full_scope
     else:
         data = uk.fixture()
         records = data["evidence"]
@@ -232,8 +307,23 @@ async def test_gaming_pack_scope_and_exports(environment, case):
         if variant == "defective":
             records = [r for r in records if r["method"] != "observation"]
         elif variant == "held-out":
+            fixture = HELDOUT["packs"]["uk"]
+            systems = fixture["systems"]
+            payload["scope"]["assets"] = systems
+            for system in payload["framework"]["systemInputs"]["criticalSystems"]:
+                system["systems"] = systems
             for row in records:
-                row["period"] = {"start": "2025-01-01", "end": "2025-12-31"}
+                if row["method"] != "observation":
+                    row["systems"] = systems
+            records += [
+                {
+                    **copy.deepcopy(row),
+                    "systems": [systems[1]],
+                    "period": fixture["futurePeriod"],
+                }
+                for row in records
+                if row["method"] == "observation"
+            ]
     refs = [await recurring.put(service, row) for row in records]
     payload["framework"]["evidenceRefs"] = refs
     first = await recurring.invoke(service, payload, key=case["id"])
@@ -256,13 +346,17 @@ async def test_gaming_pack_scope_and_exports(environment, case):
         [],
         covered,
         native_ref=first["frameworkRef"],
-        satisfied=False,
+        satisfied=native["readiness"] == "prepared",
     )
     actual.update(unknowns=unknowns, verifiedRemediations=[])
     report_ref = first["reportBundle"]["primary_report_ref"]["artifact_id"]
     _, exported = await service.read(
         artifact_id=report_ref, access=access_for_test("workflow:assessment")
     )
+    assert first["frameworkReadiness"] == native["readiness"]
+    assert re.findall(rb"Readiness: (prepared|incomplete)", exported) == [
+        native["readiness"].encode()
+    ], "exported readiness differs from retained framework"
     assert b"Unverified" in exported
     for requirement in unknowns:
         assert requirement.encode() in exported and b"incomplete" in exported
@@ -293,7 +387,9 @@ async def test_gaming_pack_scope_and_exports(environment, case):
             "period": payload["framework"]["period"],
             "source": case["source"],
         },
-        mutations={"false-pass": {**actual, "satisfied": True}},
+        mutations={
+            "wrong-conclusion": {**actual, "satisfied": not actual["satisfied"]}
+        },
     )
 
 
@@ -339,3 +435,71 @@ async def test_optional_redacted_historical_fixture(environment):
             "context": reference["context"],
         },
     )
+
+
+@pytest.mark.parametrize("boundary", ["producer", "export"])
+async def test_gaming_corpus_rejects_false_prepared_headline(
+    environment, monkeypatch, tmp_path, boundary
+):
+    from moonmind.security import gli_readiness
+    from tests.integration.security import quality
+
+    original = gli_readiness.prepare_assessment
+
+    def false_pass(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result["readiness"] = "prepared"
+        return result
+
+    monkeypatch.setattr(quality, "OUTPUT", tmp_path / "rejected-headline")
+    if boundary == "producer":
+        monkeypatch.setattr(gli_readiness, "prepare_assessment", false_pass)
+    else:
+        render = gli_readiness.render_assessment
+        monkeypatch.setattr(
+            gli_readiness,
+            "render_assessment",
+            lambda report: render(report).replace(
+                "Readiness: incomplete", "Readiness: prepared"
+            ),
+        )
+    case = next(c for c in CASES if c["id"] == "gaming-gli-defective")
+    expected_failure = (
+        "incorrectSatisfiedConclusions"
+        if boundary == "producer"
+        else "exported readiness"
+    )
+    with pytest.raises(AssertionError, match=expected_failure):
+        await test_gaming_pack_scope_and_exports(environment, case)
+
+
+@pytest.mark.parametrize("boundary", ["producer", "export"])
+async def test_gaming_corpus_rejects_false_native_conclusion(
+    environment, monkeypatch, tmp_path, boundary
+):
+    from moonmind.security import control_assessments
+    from tests.integration.security import quality
+
+    monkeypatch.setattr(quality, "OUTPUT", tmp_path / "rejected-control")
+    if boundary == "producer":
+        assess = control_assessments.assess_controls
+
+        def false_pass(*args, **kwargs):
+            report = assess(*args, **kwargs)
+            report.requirements[0].conclusion = "satisfied"
+            return report
+
+        monkeypatch.setattr(control_assessments, "assess_controls", false_pass)
+    else:
+        render = control_assessments.render_control_assessment
+        monkeypatch.setattr(
+            control_assessments,
+            "render_control_assessment",
+            lambda report: render(report).replace("**not_satisfied**", "**satisfied**"),
+        )
+    case = next(c for c in CASES if c["id"] == "gaming-math-defective")
+    expected_failure = (
+        "native conclusion" if boundary == "producer" else "exported conclusion"
+    )
+    with pytest.raises(AssertionError, match=expected_failure):
+        await test_native_gaming_corpus(environment, tmp_path, monkeypatch, case)
