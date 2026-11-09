@@ -368,7 +368,8 @@ the same artifact and renderer in the native owner's private app-server HOME.
 Selected inherited instruction links become private files; untouched entries stay
 visible. Environment templates referencing those files bind to that private HOME
 at native launch; generic support paths and recorded literals retain their meaning.
-API-key custom-provider environment references into the declared Codex HOME retain
+API-key custom-provider environment references into the declared Codex HOME,
+including ambiguous support paths with dot segments or repeated separators, retain
 the direct route because native sessions relocate that HOME.
 Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,

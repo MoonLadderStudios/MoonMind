@@ -622,11 +622,12 @@ def test_profile_file_projection_cannot_follow_a_sibling_home_symlink(tmp_path):
 
 @pytest.mark.parametrize("home", ["codex-home", "operator-home"])
 @pytest.mark.parametrize("suffix", ["", "/reports"])
-def test_custom_provider_home_references_keep_direct_routing(home, suffix):
+@pytest.mark.parametrize("prefix", ["/", "/./", "//", "/cache/../"])
+def test_custom_provider_home_references_keep_direct_routing(home, suffix, prefix):
     selected = profile()
     selected.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/" + home}
     selected.file_templates[0]["path"] = "{{runtime_support_dir}}/" + home + "/config.toml"
-    selected.env_template["REPORT_DIR"] = "{{ runtime_support_dir }}/" + home + suffix
+    selected.env_template["REPORT_DIR"] = "{{ runtime_support_dir }}" + prefix + home + suffix
     endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is None
     assert "HOME-relative" in reason

@@ -390,6 +390,13 @@ def configuration_for_profile(profile):
         environment_templates = validate_environment_template_context(environment_templates)
         for value in environment_templates.values():
             normalized = re.sub(r"{{\s*runtime_support_dir\s*}}", "{{runtime_support_dir}}", value)
+            # Keep ambiguous support paths on the direct route rather than
+            # treating an alternate spelling of the relocated HOME as generic.
+            if "{{runtime_support_dir}}" in normalized and any(
+                "//" in path or re.search(r"/\.{1,2}(?:/|$)", path)
+                for path in (normalized, parsed["homePath"])
+            ):
+                return None, "Codex HOME-relative or ambiguous environment requires native delivery"
             # Native sessions relocate the declared HOME. Generic runtime paths
             # are equivalent, but references into that HOME need its own owner.
             if re.search(re.escape(parsed["homePath"].rstrip("/")) + r"(?=/|$)", normalized):
