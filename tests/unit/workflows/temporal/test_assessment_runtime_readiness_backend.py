@@ -381,3 +381,38 @@ async def test_default_probe_capture_streams_with_bounded_retention(
     assert options["on_output"] is not None
     assert options["output_limit_bytes"] == 16385
     assert options["timeout_seconds"] == 90
+
+
+@pytest.mark.asyncio
+async def test_cloud_probe_uses_same_offline_command_as_image_qualification(
+    tmp_path, monkeypatch
+):
+    from tools.ci import qualify_repository_security_image as qualification
+
+    calls = []
+
+    async def runner(args):
+        calls.append(list(args))
+        return 0, b"Prowler 5.0.0", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, settings=configured(), command_runner=runner
+    )
+    backend.acquire_image = AsyncMock(
+        return_value=ContainerJobActivityResult(resolvedImageRef="sha256:" + "b" * 64)
+    )
+    await backend.assessment_readiness(
+        request(), kind="cloud-assessment", selection={}, caches=[]
+    )
+    production = next(args for args in calls if args[0] == "run")
+    qualified = []
+    monkeypatch.setattr(
+        qualification,
+        "invoke",
+        lambda args, *a, **kw: qualified.append(args) or "Prowler 5.0.0",
+    )
+    qualification.qualify_readiness("upstream:stable", tmp_path, kind="cloud")
+    assert production[-3:] == qualified[0][-3:]
+    assert production[-3:-1] == ["sh", "-c"]
+    assert "/home/*/.venv/bin/prowler" in production[-1]
+    assert production[-1].endswith('exec "$p" --version')

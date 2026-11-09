@@ -1337,8 +1337,14 @@ class DockerContainerJobBackend:
                     "--signal=TERM",
                     "--kill-after=5s",
                     "75s",
-                    "prowler",
-                    "--version",
+                    "sh",
+                    "-c",
+                    # The supported upstream image keeps its console script in
+                    # its user's virtualenv rather than on the overridden PATH.
+                    'p="$(command -v prowler)"; if [ -z "$p" ]; then '
+                    'for candidate in /home/*/.venv/bin/prowler; do '
+                    'if [ -x "$candidate" ]; then p="$candidate"; break; fi; '
+                    'done; fi; [ -n "$p" ] || exit 127; exec "$p" --version',
                 )
             )
         elif kind == "web-assessment":

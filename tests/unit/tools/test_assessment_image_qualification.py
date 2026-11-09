@@ -93,7 +93,14 @@ def test_repository_qualification_rejects_missing_or_blocked_evidence(
     "kind,command",
     [
         ("web", ["/zap/zap.sh", "-Xmx512m", "-dir", "/tmp/zap", "-version"]),
-        ("cloud", ["prowler", "--version"]),
+        (
+            "cloud",
+            [
+                "sh",
+                "-c",
+                'p="$(command -v prowler)"; if [ -z "$p" ]; then for candidate in /home/*/.venv/bin/prowler; do if [ -x "$candidate" ]; then p="$candidate"; break; fi; done; fi; [ -n "$p" ] || exit 127; exec "$p" --version',
+            ],
+        ),
     ],
 )
 def test_upstream_qualification_requires_real_version(
