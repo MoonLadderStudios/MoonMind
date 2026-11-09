@@ -298,9 +298,7 @@ async def test_sigkill_without_result_stays_missing(environment, tmp_path, monke
     process.kill()
     process.communicate(timeout=10)
     assert process.returncode == -signal.SIGKILL
-    job.request.terminal_state = "failed"
-    job.request.exit_code = 137
-    await job.backend.publish_evidence(job.request)
+    await job.publish_evidence(terminal_state="failed", exit_code=137)
     assert not any(job.result_schema in value for value in job.published.values())
     diagnostics = next(
         json.loads(v) for v in job.published.values() if b'"terminalState"' in v
@@ -325,9 +323,7 @@ async def test_protected_fields_in_invalid_output_never_reach_artifact_export(
     data = json.loads(path.read_text())
     data["internalState"] = "LIVE_STATE_DO_NOT_EXPORT"
     path.write_text(json.dumps(data))
-    job.request.terminal_state = "succeeded"
-    job.request.exit_code = 0
-    await job.backend.publish_evidence(job.request)
+    await job.publish_evidence(terminal_state="succeeded", exit_code=0)
     assert not any(
         b"LIVE_STATE_DO_NOT_EXPORT" in value for value in job.published.values()
     )
