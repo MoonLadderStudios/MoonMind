@@ -471,7 +471,8 @@ class ComparedFinding(Contract):
     state: FindingState
     observed_coverage_key: Text | None
     evidence_expires_at: AwareDatetime
-    # How remediation was verified; set only for remediated_verified.
+    # upstream_fixed remains readable in immutable historical comparisons.
+    # New comparisons verify remediation only through a passing retest.
     verification: Literal["retest_passed", "upstream_fixed"] | None = None
     # Intelligence of the covering tool that differs from the baseline, so a
     # new or absent finding is not attributed to a subject change alone.
@@ -1132,8 +1133,8 @@ def compare_observations(
 
     A disposition annotates a finding; it never changes the scanner's facts.
     Absence alone is a coverage observation. It becomes verified remediation
-    only with a linked passing fix-retest, or when the source itself reports
-    the finding fixed.
+    only with a linked passing fix-retest and sufficient comparable coverage.
+    Upstream closure records the source's claim independently of verification.
     """
     prior = Comparison.model_validate(previous) if previous is not None else None
     previous_observation = prior.observation if prior else None
@@ -1218,15 +1219,13 @@ def compare_observations(
     for retained in old.values():
         closure = current.upstream_closed.get(retained.finding_id)
         verification = None
-        if closure == "fixed":
-            state, verification = "remediated_verified", "upstream_fixed"
+        comparable = _comparable(retained, current, prior.observation, now)
+        if comparable and retained.finding_id in retest_passed:
+            state, verification = "remediated_verified", "retest_passed"
         elif closure is not None:
             state = "closed_upstream"
-        elif _comparable(retained, current, prior.observation, now):
-            if retained.finding_id in retest_passed:
-                state, verification = "remediated_verified", "retest_passed"
-            else:
-                state = "absent_comparable"
+        elif comparable:
+            state = "absent_comparable"
         else:
             state = "not_reassessed"
         compared.append(

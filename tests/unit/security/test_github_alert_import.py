@@ -596,7 +596,14 @@ async def test_analyzer_change_and_upstream_closure_keep_comparison_honest():
     result = compare_observations(closed, baseline, now=now + timedelta(seconds=1))
     states = {row["finding"]["nativeId"]: row["state"] for row in result["findings"]}
     assert states == {
-        "1": "remediated_verified",
+        "1": "closed_upstream",
         "2": "closed_upstream",
         "3": "still_observed",
     }
+    assert result["observation"]["upstreamClosed"] == {
+        ids["1"]: "fixed",
+        ids["2"]: "dismissed",
+    }
+    assert all(row["verification"] is None for row in result["findings"])
+    assert result["counts"]["closed_upstream"] == 2
+    assert result["counts"]["remediated_verified"] == 0

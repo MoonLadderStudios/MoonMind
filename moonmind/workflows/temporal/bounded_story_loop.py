@@ -1132,19 +1132,38 @@ def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
         (
             ("elapsedSeconds", "elapsed_seconds"),
             budget.max_elapsed_seconds,
-            "wall_clock_budget_exhausted",
         ),
         (
             ("provider", "provider_budget"),
             budget.provider_budget,
-            "provider_budget_exhausted",
         ),
-        (("tokens", "token_budget"), budget.token_budget, "token_budget_exhausted"),
-        (("cost", "cost_budget"), budget.cost_budget, "cost_budget_exhausted"),
+        (("tokens", "token_budget"), budget.token_budget),
+        (("cost", "cost_budget"), budget.cost_budget),
     )
-    for keys, limit, reason in optional:
-        amount = _consumed(*keys)
-        if limit is not None and amount >= limit and amount > 0:
+    # Retain this controller's historical first-consumption semantics for zero
+    # limits. Dynamic admission can check the same resource policy before work.
+    return resource_budget_exhaustion_reason(
+        limits={
+            keys[0]: limit if _consumed(*keys) > 0 else None
+            for keys, limit in optional
+        },
+        consumed={keys[0]: _consumed(*keys) for keys, _ in optional},
+    )
+
+
+def resource_budget_exhaustion_reason(
+    *, limits: Mapping[str, int | None], consumed: Mapping[str, int | float]
+) -> str | None:
+    """Shared aggregate resource policy for the existing remediation owners."""
+
+    for counter, reason in (
+        ("elapsedSeconds", "wall_clock_budget_exhausted"),
+        ("provider", "provider_budget_exhausted"),
+        ("tokens", "token_budget_exhausted"),
+        ("cost", "cost_budget_exhausted"),
+    ):
+        limit = limits.get(counter)
+        if limit is not None and consumed.get(counter, 0) >= limit:
             return reason
     return None
 
