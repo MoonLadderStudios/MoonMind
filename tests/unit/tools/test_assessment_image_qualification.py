@@ -20,6 +20,8 @@ def test_readiness_container_is_source_free_and_hardened():
         "--pull=never",
         "--network",
         "none",
+        "--hostname",
+        "localhost",
         "--read-only",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
@@ -30,7 +32,7 @@ def test_readiness_container_is_source_free_and_hardened():
         "--pids-limit",
         "128",
         "--tmpfs",
-        "/tmp:rw,nosuid,nodev,size=536870912",
+        "/tmp:rw,exec,nosuid,nodev,size=536870912",
         "--env",
         "HOME=/tmp",
         "--env",
@@ -89,7 +91,10 @@ def test_repository_qualification_rejects_missing_or_blocked_evidence(
 
 @pytest.mark.parametrize(
     "kind,command",
-    [("web", ["/zap/zap.sh", "-version"]), ("cloud", ["prowler", "--version"])],
+    [
+        ("web", ["/zap/zap.sh", "-Xmx512m", "-dir", "/tmp/zap", "-version"]),
+        ("cloud", ["prowler", "--version"]),
+    ],
 )
 def test_upstream_qualification_requires_real_version(
     monkeypatch, tmp_path, kind, command
@@ -102,7 +107,7 @@ def test_upstream_qualification_requires_real_version(
 
     monkeypatch.setattr(qualification, "invoke", invoke)
     qualification.qualify_readiness("upstream:stable", tmp_path, kind=kind)
-    assert calls[0][-2:] == command
+    assert calls[0][-len(command) :] == command
     monkeypatch.setattr(qualification, "invoke", lambda *a, **k: "startup failed")
     with pytest.raises(qualification.ImageError):
         qualification.qualify_readiness("upstream:stable", tmp_path, kind=kind)

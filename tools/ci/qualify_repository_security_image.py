@@ -74,10 +74,10 @@ def container(
 def readiness_container(image: str, probe: list[str]) -> list[str]:
     """Use the same offline, source-free envelope as runtime readiness."""
     return [
-        "docker", "run", "--rm", "--pull=never", "--network", "none",
+        "docker", "run", "--rm", "--pull=never", "--network", "none", "--hostname", "localhost",
         "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--cpus", "1", "--memory", "1g", "--pids-limit", "128",
-        "--tmpfs", "/tmp:rw,nosuid,nodev,size=536870912",
+        "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=536870912",
         "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
         "--entrypoint", "timeout", image,
         "--signal=TERM", "--kill-after=5s", "75s", *probe,
@@ -88,7 +88,7 @@ def qualify_readiness(image: str, evidence: Path, *, kind: str = "repository") -
     """Run packaged helpers and upstream startup under the production limits."""
     evidence.mkdir(parents=True, exist_ok=True)
     if kind in {"web", "cloud"}:
-        probe = ["/zap/zap.sh", "-version"] if kind == "web" else ["prowler", "--version"]
+        probe = ["/zap/zap.sh", "-Xmx512m", "-dir", "/tmp/zap", "-version"] if kind == "web" else ["prowler", "--version"]
         output = invoke(
             readiness_container(image, probe), evidence / f"readiness-{kind}.json",
             timeout=90,

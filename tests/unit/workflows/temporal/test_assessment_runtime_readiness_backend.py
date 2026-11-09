@@ -93,6 +93,11 @@ async def test_preflight_prepares_image_then_probes_without_target_authority(tmp
     assert "--read-only" in command and "--pull=never" in command
     assert "--cap-drop=ALL" in command and "--security-opt=no-new-privileges" in command
     assert "--mount" not in command
+    assert (
+        command[command.index("--tmpfs") + 1]
+        == "/tmp:rw,exec,nosuid,nodev,size=536870912"
+    )
+    assert command[command.index("--hostname") + 1] == "localhost"
     assert not any("credential" in part or "/workspace" in part for part in command)
     assert calls[-1][:2] == ["rm", "-f"]
 

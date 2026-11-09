@@ -1282,6 +1282,8 @@ class DockerContainerJobBackend:
         if not image:
             return readiness_failure("scanner_image_unavailable", unavailable=True)
         name = "mm-assessment-readiness-" + uuid.uuid4().hex
+        # Opengrep executes its unpacked runtime from private scratch.
+        # The fixed localhost name keeps offline Java startup out of DNS.
         args = [
             "run",
             "--rm",
@@ -1290,6 +1292,8 @@ class DockerContainerJobBackend:
             "--pull=never",
             "--network",
             "none",
+            "--hostname",
+            "localhost",
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
@@ -1300,7 +1304,7 @@ class DockerContainerJobBackend:
             "--pids-limit",
             "128",
             "--tmpfs",
-            "/tmp:rw,nosuid,nodev,size=536870912",
+            "/tmp:rw,exec,nosuid,nodev,size=536870912",
             "--env",
             "HOME=/tmp",
             "--env",
@@ -1347,6 +1351,9 @@ class DockerContainerJobBackend:
                     "--kill-after=5s",
                     "75s",
                     "/zap/zap.sh",
+                    "-Xmx512m",
+                    "-dir",
+                    "/tmp/zap",
                     "-version",
                 )
             )
