@@ -32,6 +32,7 @@ from moonmind.security.assessments import (
     ProductBaseline,
     SecurityReview,
     TriageDecision,
+    WebAPITestPlan,
     compare_observations,
     content_key,
 )
@@ -1640,7 +1641,196 @@ class AssessmentExecution:
         await self.seal(root, dependencies)
         return root, report
 
+    async def prepare_methodology_plan(self, request):
+        if request.methodology is None:
+            return None
+        from moonmind.security.framework_packs import load_declared_pack
+        from moonmind.security.web_api_methodology import validate_plan
+
+        _, raw = await self.read(request.methodology.plan_ref)
+        plan = WebAPITestPlan.model_validate_json(raw)
+        if not request.scope.equivalent(plan.scope):
+            raise ValueError("methodology plan differs from admitted scope")
+        _, raw = await self.read(plan.pack.artifact_ref)
+        if hashlib.sha256(raw).hexdigest() != plan.pack.sha256:
+            raise ValueError("methodology pack content differs from selected digest")
+        pack = load_declared_pack(
+            raw,
+            pack_id=plan.pack.pack_id,
+            edition=plan.pack.edition,
+            revision=plan.pack.revision,
+        )
+        if pack.distribution != "redistributable":
+            raise ValueError("portable methodology requires redistributable procedures")
+        validate_plan(plan, pack, now=datetime.now(UTC))
+        # The rules of engagement are retained context, never a new execution
+        # grant. Actual methods go through the existing job admission owners.
+        await self.read(plan.authority_ref)
+        return plan, pack
+
+    async def prepare_methodology(self, request, prepared, summaries):
+        from moonmind.security.web_api_methodology import (
+            ProcedureResults,
+            bind_native_runs,
+            compare_methodology,
+            evaluate_coverage,
+            evidence_refs,
+        )
+
+        plan, pack = prepared
+        selection = request.methodology
+        required = [selection.plan_ref, plan.pack.artifact_ref, plan.authority_ref]
+        unavailable = []
+        checked, total_bytes = set(), 0
+
+        async def read_evidence(ref):
+            nonlocal total_bytes
+            if ref not in checked:
+                _, raw = await self.read(ref)
+                total_bytes += len(raw)
+                if total_bytes > _MAX_INPUT_BYTES * 2:
+                    raise ValueError(
+                        "methodology evidence exceeds the aggregate input bound"
+                    )
+                checked.add(ref)
+
+        # Missing source remains a visible prerequisite gap. It cannot erase
+        # other completed procedures or be replaced by clean scanner results.
+        for field in ("source_refs", "api_context_refs"):
+            readable = []
+            for ref in getattr(plan, field):
+                try:
+                    await read_evidence(ref)
+                    readable.append(ref)
+                except Exception as exc:
+                    unavailable.append(
+                        f"{field}: evidence unavailable ({type(exc).__name__})"
+                    )
+            required.extend(readable)
+            # Every declared source is a prerequisite for its review. One
+            # readable file cannot silently replace an inaccessible second file.
+            plan = plan.model_copy(
+                update={
+                    field: (
+                        readable if len(readable) == len(getattr(plan, field)) else []
+                    )
+                }
+            )
+        results = None
+        if selection.results_ref:
+            try:
+                _, raw = await self.read(selection.results_ref)
+                results = ProcedureResults.model_validate_json(raw)
+                if results.plan_ref != selection.plan_ref:
+                    raise ValueError("results belong to a different plan")
+                required.append(selection.results_ref)
+                runs = []
+                for run in results.runs:
+                    try:
+                        for ref in [
+                            *run.evidence_refs,
+                            *([run.native_report_ref] if run.native_report_ref else []),
+                        ]:
+                            await read_evidence(ref)
+                        runs.append(run)
+                    except Exception as exc:
+                        runs.append(
+                            run.model_copy(
+                                update={
+                                    "status": "blocked",
+                                    "evidence_refs": [],
+                                    "native_report_ref": None,
+                                    "reason": f"Procedure evidence unavailable ({type(exc).__name__})",
+                                }
+                            )
+                        )
+                results = results.model_copy(update={"runs": runs})
+            except Exception as exc:
+                results = None
+                unavailable.append(
+                    f"Procedure results unavailable ({type(exc).__name__})"
+                )
+        if results is not None:
+            # Derive from the retained native bytes even when a saved scan
+            # predates methodology reporting. Completed scanning is reusable.
+            summaries = [dict(row) for row in summaries]
+            for summary in summaries:
+                if summary["scanner"] == "zap":
+                    _, raw = await self.read(summary["summaryRef"])
+                    native = WebAssessmentSummary.model_validate_json(raw)
+                    summary["methodologyOutcome"] = (
+                        "finding" if native.findings else "clear"
+                    )
+                    summary["methodologyRoutes"] = [
+                        route.split(" ", 1)[-1]
+                        for route in native.coverage.tested_routes
+                    ]
+                    summary["configurationRef"] = (
+                        _web_observation(
+                            request, native, summary["summaryRef"], datetime.now(UTC)
+                        )
+                        .coverage[0]
+                        .config_ref
+                    )
+            results = bind_native_runs(plan, pack, results, summaries)
+        report = evaluate_coverage(plan, pack, results, plan_ref=selection.plan_ref)
+        report["limitations"].extend(unavailable)
+        report["resultsRef"] = selection.results_ref
+        baseline_ref = None
+        if selection.baseline_ref:
+            try:
+                _, raw = await self.read(selection.baseline_ref)
+                previous = json.loads(raw)
+                if (
+                    previous.get("schemaVersion") != report["schemaVersion"]
+                    or await _proof(self.service, selection.baseline_ref, self.access)
+                    is None
+                ):
+                    raise ValueError(
+                        "methodology baseline must be a sealed coverage report"
+                    )
+                report["retest"] = compare_methodology(previous, report)
+                baseline_ref = selection.baseline_ref
+                report["baselineRef"] = baseline_ref
+            except Exception as exc:
+                report["retest"] = {"status": "baseline_unavailable"}
+                report["limitations"].append(
+                    f"Retest baseline unavailable ({type(exc).__name__})"
+                )
+        required += evidence_refs(plan, results)
+        key = content_key(report)
+        saved = await self.saved(kind="security.web-api-coverage", key=key)
+        root = (
+            saved[0]
+            if saved
+            else await self.write(
+                _json(report), kind="security.web-api-coverage", key=key
+            )
+        )
+
+        async def dependencies():
+            entries = [
+                ArtifactDependency(
+                    ref, await self.digest(ref), True, "security.methodology-evidence"
+                )
+                for ref in dict.fromkeys(required)
+            ]
+            if baseline_ref:
+                entries.append(
+                    ArtifactDependency(
+                        baseline_ref,
+                        await self.digest(baseline_ref),
+                        True,
+                        BASELINE_ROLE,
+                    )
+                )
+            return entries
+
+        await self.seal(root, dependencies)
+        return root, report
+
     async def execute(self, request: AssessmentRequest) -> ToolResult:
+        methodology_plan = await self.prepare_methodology_plan(request)
         request, framework_pack_context = await self.prepare_framework_pack(request)
         change_control = None
         if request.github_change_control is not None:
@@ -2770,6 +2960,25 @@ class AssessmentExecution:
                     externalVerification=framework_report["externalVerification"],
                 )
         summary_ref = None
+        methodology = None
+        if methodology_plan is not None:
+            try:
+                methodology = await self.prepare_methodology(
+                    request, methodology_plan, work.get("scannerSummaries", [])
+                )
+                methodology_ref, methodology_report = methodology
+                evidence.append(methodology_ref)
+                outputs.update(
+                    methodologyRef=methodology_ref,
+                    methodologyStatus=(
+                        "complete" if methodology_report["complete"] else "incomplete"
+                    ),
+                )
+            except Exception as exc:
+                outputs["methodologyStatus"] = "unavailable"
+                outputs["diagnostics"].append(
+                    {"boundary": "methodology", "error": type(exc).__name__}
+                )
         try:
             project_summary = ""
             project_digest = None
@@ -2806,6 +3015,12 @@ class AssessmentExecution:
                 + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
+            if methodology:
+                from moonmind.security.web_api_methodology import render_methodology
+
+                summary += render_methodology(methodology_report).encode()
+            elif request.methodology is not None:
+                summary += b"\nWeb/API methodology coverage unavailable; native evidence retained. Objectives remain Unverified.\n"
             if identity:
                 from moonmind.security.okta_evidence import render_identity_summary
 
@@ -2844,6 +3059,14 @@ class AssessmentExecution:
                     request.review_ref,
                     review_status,
                 ]
+                + (
+                    [
+                        outputs.get("methodologyStatus"),
+                        methodology_ref if methodology else None,
+                    ]
+                    if request.methodology is not None
+                    else []
+                )
                 + ([project_digest] if project_digest else [])
                 + ([framework_ref] if framework else [])
                 + (
@@ -2924,6 +3147,12 @@ class AssessmentExecution:
                     principal=self.principal,
                     execution_ref={**self.execution, "link_type": "report.structured"},
                 )
+            if methodology:
+                await self.service.link_artifact(
+                    artifact_id=methodology_ref,
+                    principal=self.principal,
+                    execution_ref={**self.execution, "link_type": "report.structured"},
+                )
             if review_readable:
                 await self.service.link_artifact(
                     artifact_id=request.review_ref,
@@ -2942,7 +3171,12 @@ class AssessmentExecution:
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",
-                report_scope=comparison["coverageStatus"],
+                report_scope=(
+                    "partial"
+                    if request.methodology is not None
+                    and outputs.get("methodologyStatus") != "complete"
+                    else comparison["coverageStatus"]
+                ),
                 sensitivity="restricted",
                 counts=comparison["counts"],
             )
