@@ -2455,6 +2455,10 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
         )
         from moonmind.schemas.container_job_models import ContainerJobSubmitRequest
 
+        game_math = "moonmind.security.game_math" in (
+            *request.request.spec.entrypoint[1:],
+            *request.request.spec.command,
+        )
         source_workflow = None
         source_link = None
         requested_assessment = assessment_marked(request.request.spec)
@@ -2472,7 +2476,12 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                         "container job retained admission is invalid"
                     ) from None
                 scoped = record.assessment_scope_json is not None or assessment_marked(saved.spec)
-            if scoped or requested_assessment:
+                # Removing the incoming module marker cannot downgrade retained
+                # math evidence or bypass its durable admission check.
+                game_math = game_math or "moonmind.security.game_math" in (
+                    *saved.spec.entrypoint[1:], *saved.spec.command
+                )
+            if scoped or requested_assessment or game_math:
                 record = await _container_job_admitted_record(session, request)
                 # Finished effects survive revocation, cancellation and loss of
                 # canonical scope. Only the actual job and saved request grant
@@ -2493,10 +2502,6 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                         "run_id": source.run_id,
                         "link_type": "output.container-job",
                     }
-        game_math = "moonmind.security.game_math" in (
-            *request.request.spec.entrypoint[1:],
-            *request.request.spec.command,
-        )
         content_type = _container_job_evidence_content_type(name)
         artifact, _ = await artifact_service.create_for_activity(
             principal=principal,
@@ -2542,7 +2547,7 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                 ],
                 access=ArtifactAccessContext.for_activity(),
             )
-        if scoped and source_workflow:
+        if (scoped or game_math) and source_workflow:
             await artifact_service.delegate_read_access(
                 artifact_ids=[artifact.artifact_id],
                 workflow_id=source_workflow,

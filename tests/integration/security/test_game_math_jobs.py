@@ -225,12 +225,14 @@ class Job:
                 request, name, payload
             )
             self.published[ref] = payload
-            # The assessment fixture explicitly admits all outputs from this job.
-            await self.environment.service.delegate_read_access(
-                artifact_ids=[ref],
-                workflow_id="assessment",
-                access=ArtifactAccessContext.for_activity(),
-            )
+            # Other shared profile fixtures retain their existing admission;
+            # game math must use only the production publisher's source grant.
+            if self.profile_ref != "game-math":
+                await self.environment.service.delegate_read_access(
+                    artifact_ids=[ref],
+                    workflow_id="assessment",
+                    access=ArtifactAccessContext.for_activity(),
+                )
             return ref
 
         self.backend = DockerContainerJobBackend(
@@ -711,3 +713,60 @@ async def test_revoked_retained_input_blocks_cached_positive_scan(
     await environment.session.commit()
     with pytest.raises(ApplicationError, match="(quarantined|QUARANTINED|read|access)"):
         await job.assess(ref, "cache", controlAssessment=controls())
+
+
+async def test_production_publisher_grants_only_durable_math_origin(
+    environment, tmp_path, monkeypatch
+):
+    from tests.artifact_access import access_for_test
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+
+    job, ref = await retained_job(environment, tmp_path, monkeypatch)
+    summary = json.loads(job.published[ref])
+    refs = {ref, job.request.artifacts_ref, *summary["job"]["inputRefs"].values()}
+    for artifact_ref in refs:
+        artifact, _ = await environment.service.read(
+            artifact_id=artifact_ref, access=access_for_test("workflow:assessment")
+        )
+        assert artifact.redaction_level == "restricted"
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await environment.service.read(
+                artifact_id=artifact_ref, access=access_for_test("workflow:unrelated")
+            )
+
+
+@pytest.mark.parametrize("attack", ["source", "owner", "activity", "missing_job", "disguised_spec"])
+async def test_math_publisher_rejects_unverified_origin(
+    environment, tmp_path, monkeypatch, attack
+):
+    from api_service.services.assessment_authorizations import AssessmentAuthorizationDenied
+    from moonmind.schemas.container_job_models import container_job_workflow_id
+
+    job = Job(environment, tmp_path, monkeypatch)
+    await job.launch(
+        "origin-admission", {"spec": "spec/spec.json"},
+        {"spec": json.dumps(SPEC).encode()},
+    )
+    request = job.request.model_copy(deep=True)
+    if attack == "source":
+        request.request.source.workflow_id = "unrelated"
+    elif attack == "owner":
+        request.owner.principal_id = "unrelated"
+    elif attack == "disguised_spec":
+        request.request.spec.entrypoint = ["python"]
+        request.request.spec.command = ["-c", "print(1)"]
+    elif attack == "missing_job":
+        request.job_id = "container-job:" + "0" * 32
+    activity = ActivityEnvironment()
+    activity.info = replace(
+        activity.info,
+        workflow_id=("unrelated" if attack == "activity" else container_job_workflow_id(request.job_id)),
+    )
+    create = AsyncMock(wraps=environment.service.create_for_activity)
+    monkeypatch.setattr(environment.service, "create_for_activity", create)
+    with pytest.raises(AssessmentAuthorizationDenied):
+        await activity.run(
+            _container_job_evidence_publisher(environment.service),
+            request, "retained-input.json", b"{}",
+        )
+    create.assert_not_awaited()
