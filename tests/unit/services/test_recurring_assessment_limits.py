@@ -239,7 +239,10 @@ async def test_native_scheduled_activity_uses_current_canonical_authority(
         payload = {
             "workflowId": "workflow-1",
             "initialParameters": {
-                "assessmentScope": scope.model_dump(mode="json", by_alias=True)
+                "assessmentScope": scope.model_dump(mode="json", by_alias=True),
+                "workflow": {
+                    "plan": [{"tool": {"type": "activity", "name": "security.assess"}}]
+                },
             },
         }
         first = await environment.run(
