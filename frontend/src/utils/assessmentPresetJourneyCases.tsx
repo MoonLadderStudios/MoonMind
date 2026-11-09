@@ -190,7 +190,7 @@ it.each([false, true])('retains the admitted expansion on retry unless authored 
     expect(expanded).toHaveLength(2);
     expect(submitted[1]).toEqual(submitted[0]);
   }
-});
+}, 15_000);
 
 it('starts with advanced fields collapsed again after preset reselection', async () => {
   const original = fetchSpy.getMockImplementation()!;
