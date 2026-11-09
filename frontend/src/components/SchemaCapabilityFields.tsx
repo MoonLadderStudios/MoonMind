@@ -436,15 +436,22 @@ export function SchemaCapabilityFields({
   defaultIssueRepository?: string;
 }): ReactElement | null {
   const fieldGroupId = useId();
-  if (fields.length === 0) {
-    return null;
-  }
   // Dependent defaults are resolved against the current values so a field whose
   // default follows another selection re-renders with the derived value.
   const effectiveDefaults = capabilityEffectiveDefaults(detail, values);
-  return (
-    <div className="grid-2">
-      {fields.map(([name, rawSchema]) => {
+  const guidedNames = schemaGuidedInputNames(detail.inputSchema);
+  const isAdvanced = ([name]: [string, unknown]) =>
+    capabilityFieldUiSchema(detail.uiSchema, name).advanced === true && !guidedNames.has(name);
+  const advancedFields = fields.filter(isAdvanced);
+  const hasAdvancedErrors = advancedFields.some(([name]) =>
+    Object.keys(errors).some(path => path === name || path.startsWith(`${name}.`)),
+  );
+  const advancedDisclosure = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (hasAdvancedErrors && advancedDisclosure.current) advancedDisclosure.current.open = true;
+  }, [errors, hasAdvancedErrors]);
+  if (fields.length === 0) return null;
+  const renderField = ([name, rawSchema]: [string, unknown]) => {
         const fieldSchema = recordValue(rawSchema);
         const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
@@ -846,7 +853,12 @@ export function SchemaCapabilityFields({
             {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
           </label>{omitControl}</div>
         );
-      })}
-    </div>
-  );
+      };
+  return <>
+    <div className="grid-2">{fields.filter(field => !isAdvanced(field)).map(renderField)}</div>
+    {advancedFields.length > 0 ? <details ref={advancedDisclosure}>
+      <summary>Advanced {String(detail.inputSchema?.title || "input")} options</summary>
+      <div className="grid-2">{advancedFields.map(renderField)}</div>
+    </details> : null}
+  </>;
 }

@@ -8,7 +8,7 @@ export function assessmentPresetJourneyCases(userEvent: {
   click: (element: HTMLElement) => Promise<unknown>;
   fill: (element: HTMLElement, value: string) => Promise<unknown>;
   selectOptions: (element: HTMLElement, value: string) => Promise<unknown>;
-}, page: { viewport: (width: number, height: number) => Promise<unknown> }, clickCreateNavigation: () => Promise<unknown>) {
+}, page: { viewport: (width: number, height: number) => Promise<unknown> }, clickCreateNavigation: () => Promise<unknown>, verifyDisclosure?: () => Promise<unknown>) {
 // Controlled catalog and admission responses isolate authoring and retry boundaries.
 
 
@@ -106,7 +106,7 @@ afterEach(async () => {
 // served Create form, not scanner execution or external account readiness.
 const preset = {
   slug: 'assessment-schema-fixture', title: 'Bounded assessment', version: '1', latestVersion: '1',
-  description: 'Read the selected targets and retain a report.', defaults: {}, uiSchema: {},
+  description: 'Read the selected targets and retain a report.', defaults: {}, uiSchema: { assessment: { limit: { advanced: true }, optional: { advanced: true } } },
   inputSchema: { type: 'object', required: ['assessment'], properties: {
     assessment: { type: 'object', title: 'Assessment', required: ['target'], properties: {
       target: { type: 'string', title: 'Target' },
@@ -148,15 +148,26 @@ it.each([false, true])('retains the admitted expansion on retry unless authored 
   await waitFor(() => expect(within(select).getByRole('option', { name: preset.title })).toBeTruthy());
   await userEvent.selectOptions(select, preset.slug);
   await userEvent.fill(await within(step).findByRole('textbox', { name: 'Target' }), 'repo/source');
+  const advanced = within(step).getByText('Advanced Assessment options');
+  expect(advanced.closest('details')).toHaveProperty('open', false);
+  expect(within(step).getByLabelText('Evidence path').closest('details')).toBe(advanced.closest('details'));
+  await verifyDisclosure?.();
+  await userEvent.click(advanced);
   await userEvent.fill(within(step).getByRole('textbox', { name: 'Evidence path' }), 'saved/report.json');
   await userEvent.click(within(step).getByRole('button', { name: 'Omit Optional evidence' }));
   expect(within(step).getByRole('textbox', { name: 'Evidence path' })).toHaveProperty('value', '');
   await userEvent.fill(within(step).getByRole('textbox', { name: 'Regions' }), 'us-east-1\neu-west-1');
   const limit = within(step).getByRole('spinbutton', { name: 'Limit' });
   await userEvent.fill(limit, '6');
+  await userEvent.click(advanced);
+  expect(advanced.closest('details')).toHaveProperty('open', false);
   await userEvent.click(within(step).getByRole('button', { name: 'Expand' }));
   await waitFor(() => expect(limit.getAttribute('aria-invalid')).toBe('true'));
   expect(expanded).toHaveLength(0);
+  expect(advanced.closest('details')).toHaveProperty('open', true);
+  await userEvent.click(advanced);
+  await userEvent.click(within(step).getByRole('button', { name: 'Expand' }));
+  await waitFor(() => expect(advanced.closest('details')).toHaveProperty('open', true));
   await userEvent.fill(limit, '3');
   expect(limit.getAttribute('aria-invalid')).toBe('false');
   await userEvent.click(within(step).getByRole('button', { name: 'Expand' }));
@@ -179,6 +190,30 @@ it.each([false, true])('retains the admitted expansion on retry unless authored 
     expect(expanded).toHaveLength(2);
     expect(submitted[1]).toEqual(submitted[0]);
   }
+});
+
+it('starts with advanced fields collapsed again after preset reselection', async () => {
+  const original = fetchSpy.getMockImplementation()!;
+  fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/presets') return jsonResponse({ items: [preset] });
+    if (String(input) === `/api/presets/${preset.slug}`) return jsonResponse(preset);
+    return original(input, init);
+  });
+  const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+  cleanupRender = unmount;
+  await screen.findByLabelText('Instructions', {}, { timeout: 10_000 });
+  const step = screen.getByText('Step 1').closest('section')!;
+  await userEvent.click(within(step).getByRole('radio', { name: 'Preset' }).closest('label')!);
+  const select = within(step).getByLabelText('Preset Template');
+  await waitFor(() => expect(within(select).getByRole('option', { name: preset.title })).toBeTruthy());
+  await userEvent.selectOptions(select, preset.slug);
+  const summary = await within(step).findByText('Advanced Assessment options');
+  await userEvent.click(summary);
+  expect(summary.closest('details')).toHaveProperty('open', true);
+  await userEvent.selectOptions(select, '');
+  await userEvent.selectOptions(select, preset.slug);
+  expect((await within(step).findByText('Advanced Assessment options')).closest('details')).toHaveProperty('open', false);
+  expect(within(step).getByLabelText('Limit')).toHaveProperty('value', '3');
 });
 
 it('cancels an interrupted preset submission on navigation without leaking it into the next draft', async () => {

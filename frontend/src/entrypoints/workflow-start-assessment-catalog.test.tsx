@@ -6,15 +6,16 @@ import { afterEach, expect, it } from 'vitest';
 import { SchemaCapabilityFields, resolveSchemaCapabilityValues } from './workflow-start';
 import { safeCapabilityDefault } from '../components/SchemaCapabilityFields';
 
-const yaml = createRequire(import.meta.url)('js-yaml') as { load: (text: string) => { annotations: { inputSchema: Record<string, unknown> } } };
+const yaml = createRequire(import.meta.url)('js-yaml') as { load: (text: string) => { annotations: { inputSchema: Record<string, unknown>; uiSchema?: Record<string, unknown> } } };
 afterEach(cleanup);
 
 it.each([
   ['security-code-supply-chain', { scanner: 'trivy', outputDirectory: 'reports', inputPath: 'src', exclusions: ['vendor'], gitleaksOwnsSecrets: false, requireFreshFeeds: false }, 'Input path', 'selected/src', 'inputPath'],
   ['security-web-api', { assessmentRef: 'web-review', mode: 'baseline', origin: 'https://example.test', routes: [{ path: '/approved', methods: ['GET'] }, { path: '/login', methods: ['GET', 'POST'] }], startPaths: ['/approved'], exclusions: ['/logout'], egressPolicyRef: 'web', identity: { name: 'reader', method: 'form', credentialRef: 'vault://reader', verificationPath: '/approved', loggedInMarker: 'Fixture reader', loginPath: '/login', username: 'reader', usernameField: 'username', passwordField: 'password' } }, 'Origin', 'https://selected.test', 'origin'],
 ])('round-trips saved native %s defaults through selection and nested edits', (slug, assessment, label, selected, key) => {
-  const schema = yaml.load(readFileSync(`api_service/data/presets/${slug}.yaml`, 'utf8')).annotations.inputSchema;
-  const detail = { inputSchema: schema, defaults: { assessment } };
+  const annotations = yaml.load(readFileSync(`api_service/data/presets/${slug}.yaml`, 'utf8')).annotations;
+  const schema = annotations.inputSchema;
+  const detail = { ...annotations, defaults: { assessment } };
   function Draft() {
     const [values, setValues] = useState<Record<string, unknown>>({});
     const resolved = resolveSchemaCapabilityValues(detail, values);
@@ -23,6 +24,7 @@ it.each([
       <output data-testid="native-saved">{JSON.stringify(resolved.assessment)}</output></>;
   }
   const view = render(<Draft />);
+  expect(view.getByText('Advanced Assessment options').closest('details')).toHaveProperty('open', false);
   expect(JSON.parse(view.getByTestId('native-saved').textContent!)).toMatchObject(assessment);
   fireEvent.change(view.getByRole('textbox', { name: label }), { target: { value: selected } });
   expect(JSON.parse(view.getByTestId('native-saved').textContent!)).toMatchObject({ ...assessment, [key]: selected });
@@ -101,4 +103,22 @@ it.each([
   const resolved = JSON.parse(view.getByTestId('switched-native-inputs').textContent!);
   for (const key of omittedKeys) expect(Object.hasOwn(resolved, key)).toBe(false);
   expect(resolved[switchLabel.toLowerCase()]).toBe(next);
+});
+
+it.each([
+  ['security-code-supply-chain', ['Scanner', 'Input path', 'Output directory', 'Exclusions', 'Require fresh feeds'], ['Max files', 'Database digest']],
+  ['security-image-sbom', ['Operation', 'Target', 'Image reference', 'Input artifact ref', 'Egress policy ref', 'Target credential ref', 'Database cache ref', 'Database digest'], ['Max sbom bytes', 'Max input bytes']],
+  ['security-aws-posture', ['Account', 'Credential ref', 'Regions', 'Egress policy ref'], ['Max retry attempts', 'Max report bytes']],
+  ['security-web-api', ['Mode', 'Origin', 'Egress policy ref', 'Exclusions', 'Active strength', 'Format'], ['Max depth', 'Credential ref']],
+])('keeps common %s inputs outside its advanced disclosure', (slug, commonLabels, advancedLabels) => {
+  const annotations = yaml.load(readFileSync(`api_service/data/presets/${slug}.yaml`, 'utf8')).annotations;
+  const schema = annotations.inputSchema;
+  const view = render(<SchemaCapabilityFields fields={Object.entries(schema.properties as Record<string, unknown>)}
+    detail={annotations} values={resolveSchemaCapabilityValues(annotations, {})} errors={{}}
+    disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={() => {}} />);
+  const disclosure = view.getByText('Advanced Assessment options').closest('details')!;
+  expect(disclosure.open).toBe(false);
+  expect(disclosure.querySelectorAll('input, select, textarea').length).toBeGreaterThanOrEqual(4);
+  for (const label of commonLabels) expect(view.getByLabelText(label).closest('details')).toBeNull();
+  for (const label of advancedLabels) expect(view.getByLabelText(label).closest('details')).toBe(disclosure);
 });

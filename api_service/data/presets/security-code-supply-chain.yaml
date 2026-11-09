@@ -13,6 +13,28 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    assessment:
+      allowInlineSuppressions:
+        advanced: true
+      trivyScanners:
+        advanced: true
+      gitleaksOwnsSecrets:
+        advanced: true
+      databaseCacheRef:
+        advanced: true
+      databaseDigest:
+        advanced: true
+      feedMaxAgeHours:
+        advanced: true
+      maxFiles:
+        advanced: true
+      maxInputBytes:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
   inputSchema:
     type: object
     required:

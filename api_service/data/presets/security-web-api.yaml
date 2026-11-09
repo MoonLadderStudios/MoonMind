@@ -12,6 +12,24 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    assessment:
+      identity:
+        advanced: true
+      discovery:
+        advanced: true
+      maxRequestsPerSecond:
+        advanced: true
+      maxDepth:
+        advanced: true
+      maxChildren:
+        advanced: true
+      outputDirectory:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
   inputSchema:
     type: object
     required:

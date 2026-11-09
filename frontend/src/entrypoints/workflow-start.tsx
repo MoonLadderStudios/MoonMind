@@ -12562,6 +12562,7 @@ function WorkflowStartPageContent({
                     >
                       {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
                         <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
+                          key={step.presetKey}
                           fields={visiblePresetSchemaFields}
                           detail={step.presetDetail}
                           values={step.presetInputValues}

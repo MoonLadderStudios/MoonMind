@@ -162,12 +162,14 @@ def test_saved_native_defaults_keep_contract_names_and_reject_secrets(
         (ROOT / "api_service/data/presets" / f"{slug}.yaml").read_text()
     )
     seed["annotations"]["defaults"] = {"assessment": assessment}
-    assert _normalize_seed_annotations(seed)["defaults"]["assessment"] == assessment
+    normalized = _normalize_seed_annotations(seed)
+    assert normalized["defaults"]["assessment"] == assessment
+    assert normalized["uiSchema"] == seed["annotations"]["uiSchema"]
     definition = next(
         item
         for item in _schema_contract_input_definitions(
             input_schema=seed["annotations"]["inputSchema"],
-            ui_schema={},
+            ui_schema=normalized["uiSchema"],
             defaults={"assessment": assessment},
         )
         if item["name"] == "assessment"
@@ -269,6 +271,7 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
             assert rerun.status_code == 200, rerun.text
             assert rerun.json()["steps"] == expanded["steps"]
             detail = (await client.get(f"/api/presets/{slug}")).json()
+            assert detail["uiSchema"] == yaml.safe_load(source.read_text())["annotations"]["uiSchema"]
             saved = await client.post(
                 "/api/presets",
                 json={

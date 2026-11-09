@@ -12,6 +12,16 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    assessment:
+      maxRetryAttempts:
+        advanced: true
+      outputDirectory:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
   inputSchema:
     type: object
     required:

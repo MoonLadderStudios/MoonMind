@@ -12,6 +12,20 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    assessment:
+      feedMaxAgeHours:
+        advanced: true
+      outputDirectory:
+        advanced: true
+      maxInputBytes:
+        advanced: true
+      maxSbomBytes:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
   inputSchema:
     type: object
     required:
