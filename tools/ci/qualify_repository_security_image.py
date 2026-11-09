@@ -88,15 +88,15 @@ def qualify_readiness(image: str, evidence: Path, *, kind: str = "repository") -
     """Run packaged helpers and upstream startup under the production limits."""
     evidence.mkdir(parents=True, exist_ok=True)
     if kind in {"web", "cloud"}:
+        prowler_startup = (
+            'p="$(command -v prowler)"; if [ -z "$p" ]; then '
+            'for candidate in /home/*/.venv/bin/prowler; do '
+            'if [ -x "$candidate" ]; then p="$candidate"; break; fi; '
+            'done; fi; [ -n "$p" ] || exit 127; exec "$p" --version'
+        )
         probe = (
             ["/zap/zap.sh", "-Xmx512m", "-dir", "/tmp/zap", "-version"]
-            if kind == "web" else [
-                "sh", "-c",
-                'p="$(command -v prowler)"; if [ -z "$p" ]; then '
-                'for candidate in /home/*/.venv/bin/prowler; do '
-                'if [ -x "$candidate" ]; then p="$candidate"; break; fi; '
-                'done; fi; [ -n "$p" ] || exit 127; exec "$p" --version',
-            ]
+            if kind == "web" else ["sh", "-c", prowler_startup]
         )
         output = invoke(
             readiness_container(image, probe), evidence / f"readiness-{kind}.json",
