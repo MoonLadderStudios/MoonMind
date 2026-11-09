@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
@@ -433,6 +434,16 @@ class WebAssessment(Contract):
     output_directory: str = "web-assessment"
     max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
     timeout_seconds: int = Field(900, ge=300, le=3600)
+
+    @model_serializer(mode="wrap")
+    def _retained_scope_shape(self, handler):
+        value = handler(self)
+        # HTTP/RGS and real-time captures hash this nested contract. An empty
+        # selection adds no authority and must retain their pre-template shape.
+        if not self.template_ids:
+            value.pop("template_ids", None)
+            value.pop("templateIds", None)
+        return value
 
     @model_validator(mode="before")
     @classmethod
