@@ -646,7 +646,7 @@ Add:
 ### 15.2 Workflow worker
 
 Add:
-- worker-level resource attributes (`service.name=moonmind-temporal-worker-workflow`)
+- worker-level resource attributes (`service.name=temporal-worker-core`)
 - workflow and activity interceptors
 - minimal workflow task spans
 - correlation-aware logging

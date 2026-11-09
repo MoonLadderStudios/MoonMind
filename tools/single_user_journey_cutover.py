@@ -412,6 +412,15 @@ def run_recovery_cutover(*, api_base, **kwargs):
         operation_id = operation["operationId"]
         assert operation["installed"]["image"] == kwargs["image"]
         installed = snapshot()
+        # A release may consolidate fleets. Recovery must preserve its target
+        # workers, while the retired source services stay removed.
+        installed_workers = {
+            name for name in operation["target"]["services"]
+            if name.startswith("temporal-worker-")
+        }
+        assert installed_workers and {
+            name for name in installed if name.startswith("temporal-worker-")
+        } == installed_workers, installed
         assert recovery["apply_count"] == 1
         controller.engine.wait_for_services = original_wait
         controller.engine.run_command(
@@ -441,13 +450,16 @@ def run_recovery_cutover(*, api_base, **kwargs):
         assert result["passed"], result
         assert recovery["apply_count"] == 1
         after = snapshot()
-        assert {name: after[name]["ID"] for name in ("api", *workers)} == {
-            name: installed[name]["ID"] for name in ("api", *workers)
+        assert {
+            name for name in after if name.startswith("temporal-worker-")
+        } == installed_workers, after
+        assert {name: after[name]["ID"] for name in ("api", *installed_workers)} == {
+            name: installed[name]["ID"] for name in ("api", *installed_workers)
         }
         assert all(
             after[name]["State"] == "running"
             and after[name]["Health"] in ("", "healthy")
-            for name in workers
+            for name in installed_workers
         )
         assert operator_health(api_base) == 200
         assert (

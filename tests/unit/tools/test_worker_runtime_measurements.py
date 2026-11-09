@@ -14,87 +14,61 @@ from tools import worker_runtime_measurements as measurement
 def model():
     return {
         "services": {
-            f"temporal-worker-{fleet}": {
+            "temporal-worker-core": {
                 "image": "example@sha256:abc",
                 "environment": {
-                    "TEMPORAL_WORKER_FLEET": fleet,
+                    "TEMPORAL_WORKER_FLEET": "artifacts",
+                    "TEMPORAL_WORKER_FLEETS": json.dumps(measurement.FLEETS),
                     "SHARED": "unchanged",
-                    f"QUEUE_{fleet}": fleet,
+                    **{f"QUEUE_{fleet}": fleet for fleet in measurement.FLEETS},
                 },
                 "volumes": [
-                    {"type": "volume", "source": "secrets", "target": "/secrets"}
+                    {"type": "volume", "source": "secrets", "target": "/secrets"},
+                    {"type": "volume", "source": "workspaces", "target": "/work"},
                 ],
-                "depends_on": {"temporal": {"condition": "service_started"}},
+                "depends_on": {
+                    name: {"condition": "service_started"}
+                    for name in ("temporal", "minio")
+                },
                 "networks": {"control": None},
                 "entrypoint": ["sh", "start-worker.sh"],
                 "stop_grace_period": "6m",
+                "labels": {"moonmind.journal-consumer": "true"},
+                "healthcheck": {"test": ["CMD", "readyz"], "start_period": "3m"},
             }
-            for fleet in ("workflow", "artifacts", "llm", "integrations")
         }
     }
 
 
-def test_combined_override_keeps_workflow_environment_and_unions_requirements():
+def test_combined_override_uses_the_canonical_core_without_changing_configuration():
     config = model()
-    config["services"]["temporal-worker-workflow"]["volumes"].append(
-        {"type": "volume", "source": "workspaces", "target": "/work"}
-    )
-    config["services"]["temporal-worker-artifacts"]["depends_on"]["minio"] = {
-        "condition": "service_started"
-    }
     before = copy.deepcopy(config)
     result = measurement.comparison_override(config, combined=True, debug=True)
-    core = result["services"]["temporal-worker-workflow"]
-    assert (
-        core["environment"]["TEMPORAL_WORKER_FLEETS"]
-        == '["workflow", "artifacts", "llm", "integrations"]'
-    )
-    assert core["environment"]["TEMPORAL_WORKER_FLEET"] == "artifacts"
-    assert core["environment"]["SHARED"] == "unchanged"
-    assert core["environment"]["PYTHONASYNCIODEBUG"] == "1"
-    assert {key for key in core["environment"] if key.startswith("QUEUE_")} == {
-        "QUEUE_workflow",
-        "QUEUE_artifacts",
-        "QUEUE_llm",
-        "QUEUE_integrations",
-    }
-    assert {volume["target"] for volume in core["volumes"]} == {"/work", "/secrets"}
-    assert set(core["depends_on"]) == {"temporal", "minio"}
-    assert core["labels"]["moonmind.journal-consumer"] == "true"
-    assert all(
-        result["services"][f"temporal-worker-{fleet}"]["profiles"]
-        == ["separate-worker-comparison"]
-        for fleet in ("artifacts", "llm", "integrations")
-    )
+    assert result == {"services": {
+        "temporal-worker-core": {"environment": {"PYTHONASYNCIODEBUG": "1"}}
+    }}
     assert config == before
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["environment", "volumes", "networks", "image", "entrypoint", "stop_grace_period"],
-)
-def test_override_refuses_to_silently_change_incompatible_fleet_configuration(field):
+def test_separate_baseline_preserves_core_resources_and_every_fleet_contract():
     config = model()
-    service = config["services"]["temporal-worker-artifacts"]
-    if field == "environment":
-        service[field]["SHARED"] = "different-secret-must-not-appear-in-errors"
-    elif field == "volumes":
-        service[field][0]["source"] = "different"
-    else:
-        service[field] = "different"
-    with pytest.raises(ValueError) as error:
-        measurement.comparison_override(config, combined=True, debug=True)
-    assert "different-secret" not in str(error.value)
-
-
-def test_separate_debug_override_does_not_change_fleet_or_queue_configuration():
-    result = measurement.comparison_override(model(), combined=False, debug=True)
-    assert result == {
-        "services": {
-            f"temporal-worker-{fleet}": {"environment": {"PYTHONASYNCIODEBUG": "1"}}
-            for fleet in ("workflow", "artifacts", "llm", "integrations")
-        }
-    }
+    before = copy.deepcopy(config)
+    result = measurement.comparison_override(config, combined=False, debug=True)
+    assert result["services"]["temporal-worker-core"]["profiles"]
+    for fleet in measurement.FLEETS:
+        service = result["services"][f"temporal-worker-{fleet}"]
+        expected = copy.deepcopy(before["services"]["temporal-worker-core"])
+        expected["environment"].update(
+            TEMPORAL_WORKER_FLEET=fleet, TEMPORAL_WORKER_FLEETS=None,
+            PYTHONASYNCIODEBUG="1",
+        )
+        expected["labels"]["moonmind.journal-consumer"] = (
+            "true" if fleet == "artifacts" else "false"
+        )
+        if fleet == "workflow":
+            expected["networks"]["control"] = {"aliases": ["temporal-worker-core"]}
+        assert service == expected
+    assert config == before
 
 
 def test_log_evidence_separates_loop_callbacks_and_activation_deadlocks_without_task_content():
@@ -246,10 +220,10 @@ def test_missing_measured_worker_does_not_turn_into_a_lower_memory_result():
 
 
 @pytest.mark.parametrize(
-    "extra", ["temporal-worker-artifacts", "temporal-worker-workflow"]
+    "extra", ["temporal-worker-artifacts", "temporal-worker-core"]
 )
 def test_combined_sample_refuses_extra_or_duplicate_worker_containers(extra):
-    ids = {"a" * 12: "temporal-worker-workflow", "b" * 12: extra}
+    ids = {"a" * 12: "temporal-worker-core", "b" * 12: extra}
 
     def run(*args):
         if args[0] == "ps":
@@ -279,7 +253,7 @@ def test_combined_sample_refuses_extra_or_duplicate_worker_containers(extra):
 def test_sample_refuses_partial_or_duplicate_total_resource_inventory():
     def run(*args):
         if args[0] == "ps":
-            return "a" * 12 + "\ttemporal-worker-workflow\n" + "b" * 12 + "\tapi"
+            return "a" * 12 + "\ttemporal-worker-core\n" + "b" * 12 + "\tapi"
         if args[0] == "stats":
             return json.dumps({"ID": "a" * 12, "MemUsage": "100MiB / 1GiB"})
         return json.dumps(
@@ -332,7 +306,7 @@ def report(topology):
                 "cpusetCpus": "",
             }
             for index, service in enumerate(
-                measurement.SERVICES if separate else measurement.SERVICES[:1]
+                measurement.SERVICES if separate else ("temporal-worker-core",)
             )
         },
         "summary": {

@@ -82,6 +82,7 @@ async def test_start_healthcheck_server_responds(monkeypatch):
     monkeypatch.setenv("WORKER_HEALTHCHECK_ENABLED", "true")
     monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "0")  # Auto-assign port
     monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "test_fleet")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     server = await start_healthcheck_server()
     assert server is not None
@@ -96,7 +97,7 @@ async def test_start_healthcheck_server_responds(monkeypatch):
         url = f"http://127.0.0.1:{port}/healthz"
         loop = asyncio.get_event_loop()
         response_bytes = await loop.run_in_executor(
-            None, lambda: urllib.request.urlopen(url, timeout=5).read()
+            None, lambda: opener.open(url, timeout=5).read()
         )
         body = json.loads(response_bytes)
 
@@ -112,6 +113,7 @@ async def test_start_healthcheck_server_responds(monkeypatch):
 async def test_readiness_fails_closed_until_worker_pollers_start(monkeypatch):
     monkeypatch.setenv("WORKER_HEALTHCHECK_ENABLED", "true")
     monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "0")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     state = WorkerHealthState(
         code_revision="test-release",
         readiness_metadata={
@@ -127,7 +129,7 @@ async def test_readiness_fails_closed_until_worker_pollers_start(monkeypatch):
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             await loop.run_in_executor(
                 None,
-                lambda: urllib.request.urlopen(
+                lambda: opener.open(
                     f"http://127.0.0.1:{port}/readyz", timeout=5
                 ).read(),
             )
@@ -138,7 +140,7 @@ async def test_readiness_fails_closed_until_worker_pollers_start(monkeypatch):
         state.pollers_started = True
         response_bytes = await loop.run_in_executor(
             None,
-            lambda: urllib.request.urlopen(
+            lambda: opener.open(
                 f"http://127.0.0.1:{port}/readyz", timeout=5
             ).read(),
         )
