@@ -85,6 +85,7 @@ def target():
     gateway.shutdown()
     fixture.Gateway.denied.clear()
     fixture.App.posted.clear()
+    fixture.App.known_issue_requests.clear()
 
 
 def origin(app) -> str:
@@ -875,9 +876,106 @@ async def create_container_in_activity(backend, request, environment, monkeypatc
     from moonmind.schemas.container_job_models import container_job_workflow_id
     from moonmind.workflows.temporal import worker_runtime
 
-    monkeypatch.setattr(worker_runtime, "get_async_session_context", environment.sessions)
+    monkeypatch.setattr(
+        worker_runtime, "get_async_session_context", environment.sessions
+    )
     activity = ActivityEnvironment()
     activity.info = replace(
         activity.info, workflow_id=container_job_workflow_id(request.job_id)
     )
     return await activity.run(backend.create_container, request)
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/middleware", "match"),
+        ("/fixed/middleware", "negative"),
+        ("/middleware/redirect", "incomplete"),
+    ],
+)
+async def test_curated_known_issue_uses_existing_job_and_retained_report(
+    environment, tmp_path, monkeypatch, target, path, expected
+):
+    app, gateway = target
+    web = assessment(
+        app,
+        mode="known-issues",
+        templateIds=["nextjs-middleware-bypass"],
+        routes=[{"path": path, "methods": ["GET"]}],
+        startPaths=[path],
+        discovery=[],
+    )
+    admitted = scope(app, action_classes=("web-known-issue",))
+    harness = Harness(
+        environment, tmp_path, monkeypatch, app, gateway, admitted=admitted
+    )
+    summary, _, _, accepted, _ = await harness.run(web, "known-issue")
+    assert summary["coverage"]["templates"][0]["outcome"] == expected
+    assert summary["status"] == ("partial" if expected == "incomplete" else "complete")
+    assert len(fixture.App.known_issue_requests) == 2
+    assert all(r[:2] == ("GET", path) for r in fixture.App.known_issue_requests)
+    assert not fixture.Gateway.denied
+    assert summary["templateProvenance"][0]["sha256"]
+    assert summary["execution"]["version"]
+    assert summary["verification"] == "not_performed"
+    names = artifact_names(harness, accepted)
+    outputs = await invoke(
+        environment.service,
+        {
+            "scope": {"assets": [origin(app)]},
+            "tools": ["retained-report"],
+            "reportRefs": [names["summary"]["artifactRef"]],
+            "credentialRefs": [],
+            "networkRefs": [],
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
+        },
+        key="known-issue-review",
+    )
+    assert outputs["scannerSummaries"][0]["scanner"] == "zap"
+    assert "synthetic-known-issue-cookie" not in json.dumps(
+        harness.published, default=str
+    )
+    harness.assert_no_secret()
+
+
+@pytest.mark.parametrize(
+    "fault,terminal",
+    [("malformed", None), ("warning", None), ("", "timed_out"), ("", "canceled")],
+)
+async def test_known_issue_partial_output_never_reports_complete_negative(
+    environment, tmp_path, monkeypatch, target, fault, terminal
+):
+    app, gateway = target
+    harness = Harness(
+        environment,
+        tmp_path,
+        monkeypatch,
+        app,
+        gateway,
+        admitted=scope(app, action_classes=("web-known-issue",)),
+    )
+    web = assessment(
+        app,
+        mode="known-issues",
+        templateIds=["nextjs-middleware-bypass"],
+        routes=[{"path": "/fixed/middleware", "methods": ["GET"]}],
+        startPaths=["/fixed/middleware"],
+    )
+    summary, _, storage, accepted, _ = await harness.run(
+        web, "partial-template", fault=fault, terminal=terminal
+    )
+    assert summary["status"] == "partial"
+    assert summary["coverage"]["templates"][0]["outcome"] == "incomplete"
+    assert attachments.release(
+        storage, ownership_token=f"{accepted.job_id}:v1", retain_outputs=False
+    ) in {"removed", "outputs_retained"}
+    _, payload = await environment.service.read(
+        artifact_id=artifact_names(harness, accepted)["summary"]["artifactRef"],
+        access=ArtifactAccessContext.for_execution("assessment"),
+    )
+    assert json.loads(payload)["coverage"]["templates"][0]["outcome"] == "incomplete"

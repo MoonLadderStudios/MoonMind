@@ -15,7 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from temporalio import activity
+from temporalio import activity, workflow
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.security.operator_admission import OperatorAdmission
@@ -45,6 +45,19 @@ from tests.unit.services.test_recurring_workflows_service import recurring_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 SCOPE = {"assets": ["app"], "exclusions": [], "repositoryExceptions": []}
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class ContinuingAssessmentFixture:
+    """Real Temporal histories; production admission must ignore wider CAN input."""
+
+    @workflow.run
+    async def run(self, request: dict) -> None:
+        if not workflow.info().continued_run_id:
+            successor = copy.deepcopy(request)
+            successor["initial_parameters"]["assessmentScope"]["targets"].append({"artifactRef": "art_unadmitted"})
+            workflow.continue_as_new(successor)
+        await workflow.wait_condition(lambda: False)
 
 
 @pytest_asyncio.fixture
@@ -144,7 +157,7 @@ async def inputs(service, *, rules=True):
 
 
 async def invoke(
-    service, request, *, workflow_id="assessment", run_id="run", key="occurrence"
+    service, request, *, workflow_id="assessment", run_id="run", key="occurrence", activity_age_seconds=0
 ):
     dispatcher = ToolActivityDispatcher()
     register_security_assessment_tool_handler(dispatcher)
@@ -193,7 +206,7 @@ async def invoke(
             namespace="default",
             workflow_id=workflow_id,
             workflow_run_id=run_id,
-            scheduled_time=started,
+            scheduled_time=started - timedelta(seconds=activity_age_seconds),
             current_attempt_scheduled_time=started,
             started_time=started,
         )
@@ -1675,9 +1688,10 @@ async def test_cancellation_starts_no_successor_and_retains_completed_work(
     assert (await read(service, first["scanRef"]))["scanOutcome"] == "completed"
 
 
+@pytest.mark.parametrize("bounded", [False, True, "cancel_before_admission"])
 @pytest.mark.parametrize("authored_runtime", ["codex_cli", None])
 async def test_product_api_security_schedule_lifecycle(
-    environment, temporal_environment, monkeypatch, authored_runtime
+    environment, temporal_environment, monkeypatch, authored_runtime, bounded
 ):
     """Real HTTP -> service/DB -> Temporal occurrence -> planner/Activity/artifact.
 
@@ -1767,6 +1781,17 @@ async def test_product_api_security_schedule_lifecycle(
         workflow_target["steps"][0]["inputAttachments"] = workflow_target.pop("inputAttachments")
     if authored_runtime is not None:
         target["initialParameters"]["targetRuntime"] = authored_runtime
+    if bounded:
+        from api_service.db.models import SettingsOverride, AssessmentOccurrenceRecord, TemporalExecutionCanonicalRecord
+        from api_service.services.assessment_engagements import build_assessment_proposal
+        from moonmind.security.assessment_authorizations import SETTINGS_KEY
+        from tests.unit.services.test_assessment_job_authority import authorization
+        auth = authorization(recurring={"minIntervalSeconds": 60, "maxOccurrences": 2,
+            "maxJobsPerOccurrence": 1, "maxJobSecondsPerOccurrence": 120, "maxRunSeconds": 120})
+        environment.session.add(SettingsOverride(key=SETTINGS_KEY, value_json={"authorizations": [auth.model_dump(mode="json", by_alias=True)]}))
+        await environment.session.commit()
+        target["initialParameters"]["assessmentAuthorizationRef"] = auth.ref
+        target["initialParameters"]["assessmentReview"] = build_assessment_proposal(target, auth)
     schedule = None
     handle = None
     try:
@@ -1814,6 +1839,49 @@ async def test_product_api_security_schedule_lifecycle(
             )
             assert overlap.status_code == 201, overlap.text
             assert overlap.json()["outcome"] == "skipped"
+            if bounded:
+                from api_service.db import base
+                from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_admit_scheduled_occurrence_plan_activity
+                monkeypatch.setattr(base, "async_session_maker", environment.sessions)
+                monkeypatch.setattr(TemporalArtifactService, "_build_store_from_settings", staticmethod(lambda: LocalTemporalArtifactStore(environment.storage_root)))
+                assert await environment.session.get(TemporalExecutionCanonicalRecord, action.workflow_id) is None
+                from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+                async with Worker(client, task_queue=queue, workflows=[ContinuingAssessmentFixture], workflow_runner=UnsandboxedWorkflowRunner()):
+                    for _ in range(100):
+                        current = await handle.describe()
+                        if current.run_id != action.first_execution_run_id:
+                            break
+                        await asyncio.sleep(0.05)
+                    assert current.run_id != action.first_execution_run_id
+                successor = await adapter.read_workflow_start_input(action.workflow_id, run_id=current.run_id)
+                assert successor["initial_parameters"]["assessmentScope"] != parameters["assessmentScope"]
+                native_env = ActivityEnvironment()
+                native_env.info = replace(native_env.info, namespace="default", workflow_id=action.workflow_id, workflow_run_id=current.run_id)
+                payload = {"workflowId": action.workflow_id, "initialParameters": parameters}
+                if bounded == "cancel_before_admission":
+                    from moonmind.workflows.temporal.service import TemporalExecutionService
+                    from temporalio.exceptions import ApplicationError
+                    control = TemporalExecutionService(environment.session, client_adapter=adapter)
+                    await control.describe_execution(action.workflow_id)
+                    await control.cancel_execution(workflow_id=action.workflow_id, reason="Cancel before first assessment admission", graceful=True)
+                    with pytest.raises(ApplicationError, match="canceled"):
+                        await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                    marker = await environment.session.get(AssessmentOccurrenceRecord, action.workflow_id)
+                    assert marker.assessment_ref is None and "scope" not in marker.authority_json
+                    return
+                await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+                changed = copy.deepcopy(successor["initial_parameters"])
+                for remove in (False, True):
+                    if remove:
+                        changed.pop("assessmentScope")
+                    with pytest.raises(RecurringWorkflowValidationError):
+                        await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity,
+                                             {"workflowId": action.workflow_id, "initialParameters": changed})
+                await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                occurrence = await environment.session.get(AssessmentOccurrenceRecord, action.workflow_id)
+                assert occurrence.authority_json["ordinal"] == 1
+                assert await environment.session.get(TemporalExecutionCanonicalRecord, action.workflow_id) is None
 
             execution = {
                 "namespace": "default",
@@ -1887,15 +1955,182 @@ async def test_product_api_security_schedule_lifecycle(
             assert (await read(service, result["comparisonRef"], principal=f"workflow:{action.workflow_id}"))[
                 "counts"
             ]["new"] == 1
-            await handle.cancel()
+            if bounded:
+                # Deleting a schedule must not delete already admitted scope
+                # or refund the occurrence reservation.
+                await schedule.delete()
+                schedule = None
+                await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                from moonmind.workflows.temporal.service import TemporalExecutionService
+                execution_owner = TemporalExecutionService(environment.session, client_adapter=adapter)
+                projected = await execution_owner.describe_execution(action.workflow_id)
+                assert projected.parameters["assessmentOccurrence"]["ordinal"] == 1
+                assert projected.parameters["assessmentOccurrence"]["evidenceRefs"] == [result["comparisonRef"]]
+                await execution_owner.cancel_execution(workflow_id=action.workflow_id, reason="Controlled fixture cancellation", graceful=True)
+                from temporalio.exceptions import ApplicationError
+                with pytest.raises(ApplicationError, match="canceled"):
+                    await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+            else:
+                await handle.cancel()
             history = await handle.fetch_history()
             assert any(
                 event.HasField("workflow_execution_cancel_requested_event_attributes")
                 for event in history.events
             )
-            assert len((await schedule.describe()).info.recent_actions) == 1
+            if schedule is not None:
+                assert len((await schedule.describe()).info.recent_actions) == 1
     finally:
         if handle is not None:
             await handle.terminate("Security schedule fixture cleanup")
         if schedule is not None:
             await schedule.delete()
+
+
+async def test_continuing_passive_occurrence_keeps_authority_and_comparison_evidence(environment):
+    from api_service.db.models import SettingsOverride, AssessmentOccurrenceRecord
+    from sqlalchemy import select
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_job_authority import authorization, save_scope
+
+    auth = authorization(recurring={
+        "minIntervalSeconds": 60, "maxOccurrences": 2,
+        "maxJobsPerOccurrence": 1, "maxJobSecondsPerOccurrence": 120,
+        "maxRunSeconds": 120,
+    })
+    await save_scope(environment.session, authorization_scope(auth), workflow="assessment", auth=auth)
+    request, _, _ = await inputs(environment.service)
+    output = await invoke(environment.service, request)
+    source = await environment.session.get(AssessmentOccurrenceRecord, "assessment", populate_existing=True)
+    occurrence = source.authority_json
+    assert occurrence["scope"]["networkRefs"] == []
+    assert occurrence["scope"]["grants"] == []
+    assert occurrence["evidenceRefs"] == [output["comparisonRef"]]
+    proof = occurrence["observations"][output["comparisonRef"]]
+    assert proof["coverage"] == output["coverageStatus"]
+    assert proof["counts"] == output["counts"]
+    original_deadline = occurrence["expiresAt"]
+    repeated = await invoke(environment.service, request)
+    assert repeated["scanRef"] == output["scanRef"]
+    assert source.authority_json["expiresAt"] == original_deadline
+    settings = await environment.session.scalar(select(SettingsOverride))
+    settings.value_json = {"authorizations": [auth.model_copy(update={"enabled": False}).model_dump(mode="json", by_alias=True)]}
+    await environment.session.commit()
+    from temporalio.exceptions import ApplicationError
+    with pytest.raises(ApplicationError, match="revoked"):
+        await invoke(environment.service, request, key="new-after-revoke")
+
+
+async def test_delayed_passive_activity_keeps_remaining_occurrence_budget(environment):
+    from api_service.services.assessment_authorizations import admit_assessment_occurrence
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_job_authority import authorization, save_scope
+
+    auth = authorization(recurring={"minIntervalSeconds": 60, "maxOccurrences": 2,
+        "maxJobsPerOccurrence": 1, "maxJobSecondsPerOccurrence": 120, "maxRunSeconds": 120})
+    await save_scope(environment.session, authorization_scope(auth), workflow="assessment", auth=auth)
+    await admit_assessment_occurrence(environment.session, workflow_id="assessment", now=datetime.now(UTC)-timedelta(seconds=70))
+    await environment.session.commit()
+    request, _, _ = await inputs(environment.service)
+    output = await invoke(environment.service, request, activity_age_seconds=70)
+    assert output["coverageStatus"] == "complete"
+
+
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("sync_available", [False, True])
+async def test_manual_occurrence_temporal_api_read_enriches_existing_projection(
+    environment, monkeypatch, stale, sync_available
+):
+    """The operator GET route must enrich canonical + projection reads too."""
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers import executions as routes
+    from api_service.db.models import (
+        AssessmentOccurrenceRecord,
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+    )
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+    from tests.unit.services.test_assessment_job_authority import (
+        authorization,
+        save_scope,
+    )
+
+    workflow_id = "mm:manual-assessment"
+    auth = authorization(
+        recurring={
+            "minIntervalSeconds": 60,
+            "maxOccurrences": 2,
+            "maxJobsPerOccurrence": 1,
+            "maxJobSecondsPerOccurrence": 120,
+            "maxRunSeconds": 120,
+        }
+    )
+    await save_scope(
+        environment.session, authorization_scope(auth), workflow=workflow_id, auth=auth
+    )
+    request, inventory, _ = await inputs(environment.service)
+    if stale:
+        inventory["expiresAt"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        request["inventoryRef"] = await put(environment.service, inventory)
+    await environment.service.delegate_read_access(
+        artifact_ids=[request["inventoryRef"], request["feedRef"]],
+        workflow_id=workflow_id,
+        access=access_for_test("operator"),
+    )
+    output = await invoke(environment.service, request, workflow_id=workflow_id)
+    source = await environment.session.get(
+        TemporalExecutionCanonicalRecord, workflow_id
+    )
+    source.state = MoonMindWorkflowState.COMPLETED
+    source.close_status = "completed"
+    await environment.session.commit()
+    await environment.session.refresh(source)
+    owner = TemporalExecutionService(
+        environment.session,
+        client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
+    )
+    projection = await owner._upsert_projection_from_source(source)
+    await environment.session.commit()
+    assert "assessmentOccurrence" not in projection.parameters
+    occurrence = await environment.session.get(AssessmentOccurrenceRecord, workflow_id)
+    retained = copy.deepcopy(occurrence.authority_json)
+
+    async def sync(*_args, **_kwargs):
+        if not sync_available:
+            raise ConnectionError("Controlled Temporal read outage")
+        return projection
+
+    monkeypatch.setattr(routes.execution_sync, "fetch_and_sync_execution", sync)
+    monkeypatch.setattr(
+        routes, "_resolve_agent_run_ids_from_managed_store", lambda *_args: {}
+    )
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(environment.storage_root)),
+    )
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[routes._get_service] = lambda: owner
+    app.dependency_overrides[routes.get_async_session] = lambda: environment.session
+    app.dependency_overrides[routes.get_temporal_client] = lambda: AsyncMock()
+    app.dependency_overrides[routes.get_instance_access_optional] = lambda: (
+        OperatorAdmission(via="loopback")
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/executions/{workflow_id}", params={"source": "temporal"}
+        )
+    assert response.status_code == 200, response.text
+    proof = response.json()["inputParameters"]["assessmentOccurrence"]
+    assert proof["ordinal"] == 1
+    assert proof["evidenceRefs"] == [output["comparisonRef"]]
+    assert proof["coverage"] == ("gap" if stale else "complete")
+    assert proof["comparisonDisposition"] == ("review_required" if stale else "initial")
+    await environment.session.refresh(occurrence)
+    await environment.session.refresh(source)
+    assert occurrence.authority_json == retained
+    assert "assessmentOccurrence" not in source.parameters

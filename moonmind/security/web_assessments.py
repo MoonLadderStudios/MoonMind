@@ -3,7 +3,7 @@
 The upstream ZAP image runs one Automation Framework plan rendered here from
 an admitted :class:`WebAssessment`, never from caller text. ``baseline``
 crawls and checks passively, ``api`` imports an admitted definition and checks
-passively, and only ``active`` adds the active scanner at exactly its declared
+passively, and ``active`` adds the active scanner at exactly its declared
 strength. The worker writes the plan into the job's outputs and delivers an
 identity's secret as a read-only file, so neither the plan nor argv holds it.
 """
@@ -22,6 +22,7 @@ from moonmind.schemas.repository_scanner_models import (
     WebAssessment,
     route_within,
 )
+from moonmind.security import known_issue_templates
 from moonmind.security.assessments import Contract, Finding, Items, Text, content_key
 from moonmind.security.repository_scanners import NativeResult
 from moonmind.utils.logging import redact_sensitive_text
@@ -36,7 +37,7 @@ API_FILES = {"openapi": "definition.json", "graphql": "schema.graphql"}
 CREDENTIAL_TARGET = "/run/moonmind-web-credential"
 SECRET_ENV = "MOONMIND_WEB_SECRET"
 #: The only Automation Framework jobs a plan may contain. No Nuclei, template
-#: catalog or caller script is reachable from an admission; the one script is
+#: runner or caller script is reachable from an admission; the one script is
 #: MoonMind's request guard.
 PLAN_JOB_TYPES = frozenset(
     {
@@ -97,6 +98,7 @@ DENIED_HOST = "request-denied.moonmind.invalid"
 # host outside the admitted routes and methods is redirected to DENIED_HOST.
 _GUARD = """var SCOPE = %s;
 var URI = Java.type("org.apache.commons.httpclient.URI");
+var KNOWN_ISSUE_SENT = {};
 function within(path, prefix) {
   return prefix === "/" || path === prefix || path.indexOf(prefix + "/") === 0;
 }
@@ -115,6 +117,25 @@ function sendingRequest(msg, initiator, helper) {
   var header = msg.getRequestHeader();
   var uri = header.getURI();
   var host = uri.getHost();
+  if (SCOPE.knownIssuePaths) {
+    var absolute = String(uri.toString());
+    var exact = false;
+    for (var j = 0; j < SCOPE.knownIssuePaths.length; j++) {
+      if (absolute === SCOPE.origin + SCOPE.knownIssuePaths[j]) exact = true;
+    }
+    header.setHeader("Cookie", null);
+    header.setHeader("Authorization", null);
+    var sent = KNOWN_ISSUE_SENT[absolute] || 0;
+    var subrequest = header.getHeader("X-Middleware-Subrequest");
+    if (subrequest !== null) subrequest = String(subrequest);
+    var expected = sent === 0 ? null : SCOPE.knownIssueHeader;
+    if (!exact || String(header.getMethod()) !== "GET" || msg.getRequestBody().length() !== 0 ||
+        String(header.getHeader("X-Nextjs-Data")) !== "1" || subrequest !== expected || sent >= 2) {
+      header.setURI(new URI("http://" + SCOPE.denied + "/", true));
+      return;
+    }
+    KNOWN_ISSUE_SENT[absolute] = sent + 1;
+  }
   if (host === null || String(host).toLowerCase() !== SCOPE.host) return;
   var raw = uri.getEscapedPath();
   var path = raw === null || String(raw) === "" ? "/" : String(raw);
@@ -133,6 +154,12 @@ def _guard_job(assessment: WebAssessment) -> dict:
         "exclusions": assessment.exclusions,
         "denied": DENIED_HOST,
     }
+    if assessment.mode == "known-issues":
+        scope.update(
+            origin=assessment.origin,
+            knownIssuePaths=assessment.start_paths,
+            knownIssueHeader=known_issue_templates.SUBREQUEST,
+        )
     return {
         "type": "script",
         "parameters": {
@@ -232,6 +259,14 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
                 "name": "verify-identity",
                 "parameters": dict(user),
                 "requests": verify,
+            }
+        )
+    if a.mode == "known-issues":
+        jobs.append(
+            {
+                "type": "requestor",
+                "name": "curated-known-issues",
+                "requests": known_issue_templates.requests(origin, a.start_paths),
             }
         )
     api = a.api_definition
@@ -547,7 +582,30 @@ class WebAuthentication(Contract):
     reason: Text | None = None
 
 
+class KnownIssueProvenance(Contract):
+    reference: Text
+    template_id: Text
+    rule_id: Text
+    origin: Text
+    license: Text
+    author: Text
+    impact: Text
+    applicable_targets: Text
+    sha256: Text
+    matcher: Text
+
+
+class KnownIssueCoverage(Contract):
+    template_id: Text
+    route: Text
+    execution: Literal["executed", "skipped", "failed"]
+    outcome: Literal["match", "negative", "incomplete"]
+    reason: Text
+    evidence_refs: Items = Field(default_factory=list)
+
+
 class WebCoverage(Contract):
+    templates: list[KnownIssueCoverage] = Field(default_factory=list, max_length=16)
     discovered_routes: Items = Field(default_factory=list)
     tested_routes: Items = Field(default_factory=list)
     untested_routes: Items = Field(default_factory=list)
@@ -570,6 +628,9 @@ class WebExecution(Contract):
 class WebAssessmentSummary(Contract):
     schema_version: Literal["web-assessment/v1"] = "web-assessment/v1"
     tool: Literal["zap"] = "zap"
+    template_provenance: list[KnownIssueProvenance] = Field(
+        default_factory=list, max_length=1
+    )
     admission: WebAssessment
     action_class: Text
     execution: WebExecution
@@ -848,6 +909,12 @@ def summarize_web_assessment(
     identity = a.identity
     actor = identity.name if identity is not None else "anonymous"
 
+    # Execution-wide failures invalidate every negative. Route-local failures
+    # below must not erase independent, supported observations on other routes.
+    template_execution_incomplete = (
+        bool(limits) or stopped_early or execution.version is None
+    )
+
     # Coverage from the messages ZAP actually exchanged.
     discovered, tested, unreachable, inaccessible = set(), set(), set(), set()
     denied, challenges = set(), set()
@@ -875,7 +942,7 @@ def summarize_web_assessment(
             if scheme:
                 challenges.add(scheme.lower())
         location = _header(response, "location")
-        if 300 <= status < 400 and location:
+        if a.mode != "known-issues" and 300 <= status < 400 and location:
             target_origin, target_path = _split(urljoin(a.origin + path, location))
             if target_origin != a.origin or not path_admitted(a, target_path):
                 denied.add(f"redirect {route} -> {target_origin}{target_path}")
@@ -995,7 +1062,81 @@ def summarize_web_assessment(
             responseExcerpt=_bounded(inst.get("response-body"), EXCERPT_BYTES),
             reproduction=f"{reproduce}#alert/{rule}/{index}",
         )
+    template_coverage = []
+    template_provenance = []
+    if a.mode == "known-issues":
+        if execution.version is None:
+            limits.append("template_engine_version_unavailable")
+        manifest = known_issue_templates.provenance()
+        template_provenance.append(
+            KnownIssueProvenance(
+                templateId=manifest["id"],
+                ruleId=manifest["ruleId"],
+                origin=manifest["origin"],
+                reference=manifest["reference"],
+                license=manifest["license"],
+                author=manifest["author"],
+                impact=manifest["impact"],
+                applicableTargets=manifest["applicableTargets"],
+                sha256=manifest["sha256"],
+                matcher=manifest["matcher"],
+            )
+        )
+        for path in a.start_paths:
+            outcome, reason, indices = known_issue_templates.observe(
+                a.origin, path, entries
+            )
+            if outcome == "negative" and template_execution_incomplete:
+                outcome, reason = "incomplete", "execution_incomplete"
+            if not messages_ref:
+                outcome, reason = "incomplete", "retained_messages_unavailable"
+            if outcome == "incomplete":
+                limits.append(f"template_incomplete:{manifest['id']}:{path}:{reason}")
+            refs = (
+                [f"{messages_ref}#log/entries/{i}" for i in indices]
+                if messages_ref
+                else []
+            )
+            template_coverage.append(
+                KnownIssueCoverage(
+                    templateId=manifest["id"],
+                    route=path,
+                    outcome=outcome,
+                    reason=reason,
+                    execution=(
+                        "executed"
+                        if outcome != "incomplete"
+                        else ("failed" if indices else "skipped")
+                    ),
+                    evidenceRefs=refs,
+                )
+            )
+            if outcome == "match":
+                row = Finding(
+                    source="web",
+                    tool="zap",
+                    ruleId=manifest["ruleId"],
+                    asset=a.origin,
+                    nativeId=content_key([manifest["id"], "GET", path, actor]),
+                    evidenceRefs=[messages_ref],
+                )
+                native[row.finding_id] = row
+                findings[row.finding_id] = WebFinding(
+                    findingId=row.finding_id,
+                    ruleId=manifest["ruleId"],
+                    name="Possible Next.js middleware authorization bypass",
+                    risk="high",
+                    confidence="request-pair match; exploitability unconfirmed",
+                    phase="active",
+                    target=a.origin,
+                    route=path,
+                    method="GET",
+                    identity=actor,
+                    evidenceExcerpt=reason,
+                    reproduction=refs[-1],
+                )
     coverage = WebCoverage(
+        templates=template_coverage,
         discoveredRoutes=sorted(discovered),
         testedRoutes=sorted(tested),
         untestedRoutes=untested,
@@ -1023,6 +1164,7 @@ def summarize_web_assessment(
     )
     return WebAssessmentSummary(
         admission=a,
+        templateProvenance=template_provenance,
         actionClass=a.action_class,
         execution=execution,
         result=result,

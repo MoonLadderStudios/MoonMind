@@ -149,6 +149,8 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
     load_remediation_target,
+    read_security_remediation_findings,
+    RemediationContextError,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -1347,6 +1349,53 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "workflow.remediation.target.runId must match the current target runId."
             )
+        security_evidence = None
+        security_selection = target.get("securityFinding")
+        if security_selection is not None:
+            if (
+                not isinstance(security_selection, Mapping)
+                or set(security_selection) not in ({"comparisonArtifactRef", "findingId"}, {"reviewArtifactRef", "interpretationId"})
+                or not all(isinstance(value, str) and value.strip() for value in security_selection.values())
+            ):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.securityFinding requires one comparison/finding or review/interpretation pair."
+                )
+            is_review = "reviewArtifactRef" in security_selection
+            identity_key = "interpretationId" if is_review else "findingId"
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(self._session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            )
+            try:
+                findings = await read_security_remediation_findings(
+                    service=artifact_service,
+                    workflow_id=target_record.workflow_id,
+                    run_id=target_record.run_id,
+                    comparison_artifact_ref=security_selection.get("comparisonArtifactRef"),
+                    review_artifact_ref=security_selection.get("reviewArtifactRef"),
+                    access=ArtifactAccessContext.for_execution(
+                        target_record.workflow_id,
+                        principal="service:remediation-admission",
+                    ),
+                )
+                security_evidence = next(
+                    (row for row in findings["findings"] if row[identity_key] == security_selection[identity_key]),
+                    None,
+                )
+                if security_evidence is None:
+                    raise RemediationContextError("Selected finding is not in the comparison.")
+            except (RemediationContextError, ValidationError, TemporalArtifactAuthorizationError,
+                    TemporalArtifactNotFoundError, TemporalArtifactStateError,
+                    TemporalArtifactValidationError) as exc:
+                raise TemporalExecutionValidationError(
+                    f"Security remediation evidence unavailable: {exc}"
+                ) from exc
+            # Retain original admission as evidence only. Never install its
+            # scope/authorization as the remediation workflow's authority.
+            security_evidence["sourceAssessmentScope"] = (target_record.parameters or {}).get("assessmentScope")
+        if remediation.get("securityEvidence") is not None and remediation["securityEvidence"] != security_evidence:
+            raise TemporalExecutionValidationError("Security remediation evidence is server-owned and cannot be changed.")
+
         agent_run_ids = (
             target.get("agentRunIds")
             if "agentRunIds" in target
@@ -1583,7 +1632,7 @@ class TemporalExecutionService:
                 f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
-        return TemporalExecutionRemediationLink(
+        link = TemporalExecutionRemediationLink(
             remediation_workflow_id=new_workflow_id,
             remediation_run_id=new_run_id,
             target_workflow_id=target_record.workflow_id,
@@ -1593,6 +1642,8 @@ class TemporalExecutionService:
             status="created",
             trigger_type=trigger_type,
         )
+        link.security_evidence = security_evidence
+        return link
 
     @classmethod
     def _target_agent_run_ids(
@@ -2619,6 +2670,8 @@ class TemporalExecutionService:
                 pinned_target["workflowId"] = remediation_link.target_workflow_id
                 pinned_target["runId"] = remediation_link.target_run_id
                 pinned_remediation["target"] = pinned_target
+                if getattr(remediation_link, "security_evidence", None) is not None:
+                    pinned_remediation["securityEvidence"] = remediation_link.security_evidence
                 task_params["remediation"] = pinned_remediation
                 params["workflow"] = task_params
         # Re-promote the normalized task payload under the canonical
@@ -2852,6 +2905,23 @@ class TemporalExecutionService:
         if remediation_link is not None:
             self._session.add(remediation_link)
         try:
+            if remediation_link is not None and getattr(remediation_link, "security_evidence", None):
+                # The existing create identity wins before any input grant.
+                # The selected evidence confers read rights only, not mutation,
+                # publication or deployment authority.
+                await self._session.flush()
+                artifact_service = TemporalArtifactService(
+                    TemporalArtifactRepository(self._session),
+                    transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                )
+                await artifact_service.delegate_read_access(
+                    artifact_ids=remediation_link.security_evidence["evidenceArtifactRefs"],
+                    workflow_id=workflow_id, namespace=self._namespace,
+                    access=ArtifactAccessContext.for_execution(
+                        remediation_link.target_workflow_id,
+                        principal="service:remediation-admission",
+                    ),
+                )
             if _admitted_execution_plan is not None:
                 # The canonical unique create identity chooses the winner
                 # before it may delegate. Competing same-key API requests use
@@ -3537,7 +3607,7 @@ class TemporalExecutionService:
                 # Temporal-authoritative projection is the durable control-plane
                 # record used for ownership and parent-runtime inheritance.
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
+                return await self._with_assessment_occurrence(projection)
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
@@ -3550,8 +3620,24 @@ class TemporalExecutionService:
             )
             if projection is not None:
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
-        return await self._sync_projection_best_effort(record)
+                return await self._with_assessment_occurrence(projection)
+        return await self._with_assessment_occurrence(await self._sync_projection_best_effort(record))
+
+    async def _with_assessment_occurrence(self, projection):
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import project_assessment_occurrence
+
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        if not (projection.parameters or {}).get("assessmentScope") and not scheduled_definition_id(projection.workflow_id):
+            return projection
+        row = await self._session.get(AssessmentOccurrenceRecord, projection.workflow_id)
+        parameters = {key: value for key, value in (projection.parameters or {}).items() if key != "assessmentOccurrence"}
+        if row is not None:
+            parameters["assessmentOccurrence"] = project_assessment_occurrence(row.authority_json)
+        # Projection only; this never creates or changes authority/reservations.
+        projection.parameters = parameters
+        return projection
 
     def canonicalize_workflow_id(self, workflow_id: str) -> str:
         candidate = TemporalExecutionRecord.canonicalize_identifier(workflow_id)
@@ -5184,6 +5270,24 @@ class TemporalExecutionService:
                 raise TemporalExecutionTargetRunChangedError(
                     "Target run changed before control dispatch"
                 )
+
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import _authorization_row
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        scoped = (record.parameters or {}).get("assessmentScope")
+        continuing = isinstance(scoped, Mapping) and (scoped.get("engagement") or {}).get("recurring")
+        if continuing or scheduled_definition_id(workflow_id):
+            # Serialize cancellation with first native admission as well as
+            # existing reservations. A deny-only marker never supplies scope.
+            await _authorization_row(self._session, for_update=True, ensure_legacy_lock=True)
+            occurrence = await self._session.get(AssessmentOccurrenceRecord, workflow_id, populate_existing=True, with_for_update=True)
+            marker = {"cancelRequestedAt": datetime.now(UTC).isoformat()}
+            if occurrence is None:
+                self._session.add(AssessmentOccurrenceRecord(workflow_id=workflow_id, authority_json=marker))
+            else:
+                occurrence.authority_json = {**occurrence.authority_json, **marker}
+            await self._session.commit()
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -7536,7 +7640,9 @@ class TemporalExecutionService:
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,
-            "parameters": dict(source.parameters or {}),
+            "parameters": {
+                **{key: value for key, value in (source.parameters or {}).items() if key != "assessmentOccurrence"},
+            },
             "integration_state": (
                 dict(source.integration_state)
                 if isinstance(source.integration_state, dict)

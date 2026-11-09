@@ -1,6 +1,7 @@
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, renderWithClient, screen, waitFor } from '../../utils/test-utils';
+import { AssessmentAuthorizationsSettings } from './AssessmentAuthorizationsSettings';
 import { InstanceSettingsPage } from '../../entrypoints/settings';
 import type { BootPayload } from '../../boot/parseBootPayload';
 
@@ -56,6 +57,42 @@ describe('assessment authorization Settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     expect((await screen.findByRole('alert')).textContent).toContain('including timezones');
     expect(fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('saves explicit recurring limits and revocation without resetting aggregate scope', async () => {
+    const fetch = setup(); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    fireEvent.click(await screen.findByLabelText('Bound recurring assessments'));
+    fireEvent.change(screen.getByLabelText('Maximum occurrences'), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke authorization' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!.body)).changes[key].authorizations[0];
+    expect(saved.enabled).toBe(false);
+    expect(saved.recurring).toMatchObject({ maxOccurrences: 4, minIntervalSeconds: 86400 });
+    expect(saved.scope).toEqual(authorization.scope);
+    expect(saved.maxTotalJobSeconds).toBe(120);
+  });
+
+  it('renews a selected authorization without touching another record or sending before save', async () => {
+    const other = { ...authorization, ref: 'other', name: 'Other authorization' };
+    const fetch = setup();
+    const base = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (url, init) => {
+      const result = await base(url, init);
+      if (init?.method === 'PATCH') return result;
+      const catalog = await result.json();
+      if (catalog.categories) catalog.categories.Security[0].effective_value.authorizations.push(other);
+      return new Response(JSON.stringify(catalog));
+    });
+    renderWithClient(<AssessmentAuthorizationsSettings authorizationRef="payments-review" />);
+    fireEvent.change(await screen.findByLabelText('Valid until (ISO time with timezone)'), { target: { value: '2027-01-01T00:00:00Z' } });
+    expect(screen.getAllByLabelText('Authorization name')).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!.body)).changes[key].authorizations;
+    expect(saved[0]).toEqual({ ...authorization, validUntil: '2027-01-01T00:00:00Z' });
+    expect(saved[1]).toEqual(other);
   });
 
 });

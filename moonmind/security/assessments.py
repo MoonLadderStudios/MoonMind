@@ -28,6 +28,13 @@ from moonmind.security.frameworks import (
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
+from moonmind.security.web_api_methodology import (
+    Method,
+    MethodologyInput,
+    PlannedObjective,
+    TestIdentity,
+    TestInterface,
+)
 
 MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
 
@@ -93,6 +100,22 @@ class ThreatModel(Contract):
     entry_points: Annotated[Items, Field(min_length=1)]
     trust_boundaries: Annotated[Items, Field(min_length=1)]
     invariants: Annotated[Items, Field(min_length=1)]
+
+
+class WebAPITestPlan(Contract):
+    schema_version: Literal["web-api-test-plan/v1"] = "web-api-test-plan/v1"
+    pack: FrameworkPackSelection
+    scope: AssessmentScope
+    candidate_ref: Text
+    system_boundary: Text
+    threat_model: ThreatModel
+    authority_ref: Text
+    interfaces: Annotated[list[TestInterface], Field(min_length=1, max_length=64)]
+    identities: Annotated[list[TestIdentity], Field(max_length=64)]
+    source_refs: Annotated[list[Text], Field(max_length=32)]
+    api_context_refs: Annotated[list[Text], Field(max_length=32)]
+    allowed_methods: Annotated[list[Method], Field(min_length=1, max_length=6)]
+    objectives: Annotated[list[PlannedObjective], Field(min_length=1, max_length=64)]
 
 
 class SecurityInterpretation(Contract):
@@ -844,6 +867,7 @@ class AssessmentRequest(Contract):
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
     review_ref: Text | None = None
+    methodology: MethodologyInput | None = None
     github_alerts: GitHubAlertImport | None = None
     github_change_control: GitHubChangeControl | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
@@ -859,7 +883,12 @@ class AssessmentRequest(Contract):
     def validate_admission(self):
         if self.framework_pack is not None and self.control_assessment is not None:
             raise ValueError("frameworkPack cannot also supply controlAssessment")
-        if not self.tools and not self.review_ref and not self.framework:
+        if (
+            not self.tools
+            and not self.review_ref
+            and not self.framework
+            and not self.methodology
+        ):
             raise ValueError(
                 "assessment requires native evidence or an explicit reviewRef"
             )
