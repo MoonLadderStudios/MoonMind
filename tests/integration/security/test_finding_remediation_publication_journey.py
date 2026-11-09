@@ -471,17 +471,43 @@ async def test_seeded_finding_preserves_candidate_through_uncertainty_cancel_res
             )
             assert changed["findings"][0]["changedIntelligence"]
             assert changed["findings"][0]["state"] == "absent_comparable"
-            upstream = {**passing, "upstreamClosed": {finding_id: "dismissed"}}
-            upstream_ref = await put(
-                artifacts,
-                upstream,
-                workflow_id=repair.workflow_id,
-                run_id=repair.run_id,
-            )
-            closed, _ = await assess(
-                {**retest_request, "reportRefs": [upstream_ref]}, "upstream-closure"
-            )
-            assert closed["findings"][0]["state"] == "closed_upstream"
+            for closure in ("fixed", "dismissed", "resolved"):
+                for coverage in ("complete", "partial", "missing", "source"):
+                    upstream = copy.deepcopy(passing)
+                    upstream["upstreamClosed"] = {finding_id: closure}
+                    if coverage == "partial":
+                        upstream["coverage"][0]["status"] = "partial"
+                    elif coverage == "missing":
+                        upstream["coverage"][0]["ruleIds"] = ["different-rule"]
+                    elif coverage == "source":
+                        upstream["coverage"][0]["source"] = "different-environment"
+                    upstream_ref = await put(
+                        artifacts,
+                        upstream,
+                        workflow_id=repair.workflow_id,
+                        run_id=repair.run_id,
+                    )
+                    request = {**retest_request, "reportRefs": [upstream_ref]}
+                    for outcome in (None, "failed", "inconclusive", "passed"):
+                        key = f"closure-{closure}-{coverage}-{outcome}"
+                        closed, _ = (
+                            await assess(request, key)
+                            if outcome is None
+                            else await triaged(
+                                request, {**decision, "retestOutcome": outcome}, key
+                            )
+                        )
+                        sufficient = coverage == "complete" and outcome == "passed"
+                        row = closed["findings"][0]
+                        assert row["state"] == (
+                            "remediated_verified" if sufficient else "closed_upstream"
+                        )
+                        assert row["verification"] == (
+                            "retest_passed" if sufficient else None
+                        )
+                        assert closed["observation"]["upstreamClosed"] == {
+                            finding_id: closure
+                        }
             original_ref = await put(
                 artifacts,
                 retained["native"],

@@ -1547,9 +1547,15 @@ async def test_github_upstream_closure_survives_assessment_aggregation(
         for row in comparison["findings"]
     }
     assert states == {
-        "1": ("remediated_verified", "upstream_fixed"),
+        "1": ("closed_upstream", None),
         "2": ("closed_upstream", None),
     }
+    assert comparison["observation"]["upstreamClosed"] == {
+        row["findingId"]: {"1": "fixed", "2": "dismissed"}[row["finding"]["nativeId"]]
+        for row in comparison["findings"]
+    }
+    assert result["counts"]["closed_upstream"] == 2
+    assert result["counts"]["remediated_verified"] == 0
 
 
 async def test_multiple_reports_preserve_evidence_for_one_native_finding(environment):
