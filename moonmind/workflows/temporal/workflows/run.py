@@ -4283,11 +4283,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
         if (
             self._workflow_patch_enabled(RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH)
-            and self._remediation_loop_continuation is None
+            and not (
+                self._remediation_loop_continuation is not None
+                and getattr(workflow.info(), "continued_run_id", None)
+            )
         ):
             # A new history after Continue-As-New may activate this patch for
-            # an already admitted loop. Restore validates its carried state;
-            # keep its original limits and receipt accounting across upgrades.
+            # an already admitted loop. Require Temporal's continuation identity,
+            # not just caller-supplied state; restore then validates that state
+            # while retaining its original limits and accounting across upgrades.
             for name, limit in (
                 ("tokenBudget", spec.budgets.token_budget),
                 ("costBudget", spec.budgets.cost_budget),
