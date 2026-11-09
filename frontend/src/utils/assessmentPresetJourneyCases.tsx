@@ -228,11 +228,24 @@ it('cancels an interrupted preset submission on navigation without leaking it in
 it('links missing authorization setup to Settings without silently abandoning a Create draft', async () => {
   const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false);
   try {
+    const original = fetchSpy.getMockImplementation()!;
+    const assessmentPreset = { ...preset, tags: ['assessment'] };
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/presets') return jsonResponse({ items: [assessmentPreset] });
+      if (url === `/api/presets/${preset.slug}`) return jsonResponse(assessmentPreset);
+      return original(input, init);
+    });
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
     cleanupRender = unmount;
     const instructions = await screen.findByLabelText('Instructions', {}, { timeout: 10_000 });
     await userEvent.fill(instructions, 'Keep this assessment draft while configuring authorization.');
-    const setup = screen.getByRole('link', { name: 'Manage authorizations in Settings' });
+    const step = screen.getByText('Step 1').closest('section')!;
+    await userEvent.click(within(step).getByRole('radio', { name: 'Preset' }).closest('label')!);
+    const select = within(step).getByLabelText('Preset Template');
+    await waitFor(() => expect(within(select).getByRole('option', { name: preset.title })).toBeTruthy());
+    await userEvent.selectOptions(select, preset.slug);
+    const setup = await screen.findByRole('link', { name: 'Manage authorizations in Settings' });
     expect(setup.getAttribute('href')).toBe('/settings/instance#assessment-authorizations');
     await userEvent.click(setup);
     expect(confirmation).toHaveBeenCalledWith('Leave Create? Unsaved workflow draft changes may be lost.');

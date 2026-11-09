@@ -5,7 +5,6 @@ import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../co
 import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
 import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
-import { RepositoryScannerReadiness } from '../components/RepositoryScannerReadiness';
 import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
