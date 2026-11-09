@@ -9,6 +9,9 @@ provider transport, container, framework, settings, or environment authority
 crosses this boundary, so each decision is separately testable without a
 coordinator, a Provider Profile, or a durable host.
 
+Checkpoint branch binding is also consumed before harness-neutral dispatch,
+so planned and historical launches use the same restore contract.
+
 The legacy coordinator (:mod:`moonmind.omnigent.profile_bound_execution`) keeps
 its side-effect ownership and imports these decisions. It must not re-implement
 them.
@@ -22,7 +25,10 @@ from typing import Any
 
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
+    OmnigentCheckpointIdentity,
     OmnigentRestoreMaterial,
+    materialize_cold_restore_inputs,
+    validate_cold_restore_target,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
@@ -37,6 +43,7 @@ from moonmind.schemas.agent_runtime_models import (
 
 __all__ = [
     "bind_candidate_workspace",
+    "bind_checkpoint_branch_request",
     "bind_cold_restore_workspace_spec",
     "bind_exact_host",
     "classify_launch_failure_evidence",
@@ -216,6 +223,60 @@ def bind_candidate_workspace(
                         *request.input_refs,
                         candidate.head_ref,
                         candidate.checkpoint_ref,
+                    ]
+                )
+            ),
+        }
+    )
+
+
+def bind_checkpoint_branch_request(
+    request: AgentExecutionRequest,
+    *,
+    checkpoint: OmnigentCheckpointIdentity,
+    current_credential_generation: int,
+    candidate_workspace: CandidateWorkspaceAuthority,
+) -> AgentExecutionRequest:
+    """Bind validated branch restore inputs before choosing an execution realizer."""
+
+    validate_cold_restore_target(
+        checkpoint,
+        provider_profile_id=str(request.execution_profile_ref or ""),
+        credential_generation=current_credential_generation,
+    )
+    if request.idempotency_key == checkpoint.idempotency_key:
+        raise ValueError("checkpoint branch requires a new idempotency key")
+    restore_material = materialize_cold_restore_inputs(
+        checkpoint, checkpoint.validation
+    )
+    parameters = dict(request.parameters or {})
+    parameters["checkpointRestore"] = {
+        "mode": "branch",
+        "externalStateRef": checkpoint.external_state_ref,
+        "sourceBridgeSessionId": checkpoint.bridge_session_id,
+        "restoreMaterial": restore_material.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        ),
+        "candidateWorkspace": candidate_workspace.model_dump(
+            by_alias=True, mode="json"
+        ),
+    }
+    return request.model_copy(
+        update={
+            "parameters": parameters,
+            "workspace_spec": bind_cold_restore_workspace_spec(
+                request.workspace_spec,
+                restore_material=restore_material,
+                candidate_workspace=candidate_workspace,
+            ),
+            "input_refs": list(
+                dict.fromkeys(
+                    [
+                        *request.input_refs,
+                        *restore_material.immutable_input_refs,
+                        checkpoint.external_state_ref,
+                        candidate_workspace.head_ref,
+                        candidate_workspace.checkpoint_ref,
                     ]
                 )
             ),

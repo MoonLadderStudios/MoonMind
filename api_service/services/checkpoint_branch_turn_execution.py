@@ -484,9 +484,10 @@ class CheckpointBranchTurnExecutionOwner:
     @asynccontextmanager
     async def _artifact_service(
         self,
+        existing: TemporalArtifactService | None = None,
     ) -> AsyncIterator[tuple[AsyncSession | None, TemporalArtifactService]]:
-        if self._artifacts is not None:
-            yield None, self._artifacts
+        if existing is not None or self._artifacts is not None:
+            yield None, existing if existing is not None else self._artifacts
             return
         bound_factory = self._bound_session_factory()
         async with bound_factory() as artifact_session:
@@ -519,6 +520,63 @@ class CheckpointBranchTurnExecutionOwner:
                 "authority_ref_unavailable", f"{field_name} is unavailable"
             ) from exc
         return payload
+
+    async def _admit_restore_inputs(
+        self,
+        *,
+        checkpoint: StepExecutionCheckpointModel,
+        destination_workflow_id: str,
+        namespace: str,
+        artifact_service: TemporalArtifactService | None = None,
+    ) -> None:
+        """Delegate the source graph's verified restore closure, never payload refs.
+
+        Called after source validation and canonical turn admission on fresh
+        launches and redelivery. Local historical refs retain their existing
+        guarded gateway; durable refs use the artifact owner's normal grants.
+        """
+        from moonmind.workflows.temporal.saved_work_dependencies import (
+            verify_saved_work_dependencies,
+        )
+
+        source = checkpoint.omnigent
+        if source is None:
+            raise CheckpointBranchTurnLaunchError(
+                "checkpoint_restore_unsupported", "checkpoint has no restore authority"
+            )
+        refs = [
+            (source.external_state_ref, source.external_state_digest),
+            (source.head_ref, source.head_digest),
+            (source.workspace_checkpoint_ref, source.workspace_checkpoint_digest),
+            *([(source.diff_ref, source.diff_digest)] if source.diff_ref else []),
+            *((ref, None) for ref in (*source.instruction_refs, *source.context_refs)),
+        ]
+        async with self._artifact_service(artifact_service) as (_session, artifacts):
+            admitted: set[str] = set()
+            for ref, digest in dict.fromkeys(refs):
+                if ref.startswith("artifact://omnigent/"):
+                    continue
+                artifact_id = _artifact_id(ref, field_name="checkpointRestoreInput")
+                artifact, payload = await artifacts.read(
+                    artifact_id=artifact_id, access=self._access
+                )
+                if digest is not None and _sha256(payload) != digest:
+                    raise CheckpointBranchTurnLaunchError(
+                        "checkpoint_digest_mismatch", "restore input bytes changed"
+                    )
+                admitted.add(artifact_id)
+                closure = await verify_saved_work_dependencies(
+                    artifacts, artifact=artifact, payload=payload, access=self._access
+                )
+                if closure is not None:
+                    admitted.update(entry.artifact_id for entry in closure.dependencies)
+            # Preflight the entire closure before installing any read grants.
+            await artifacts.delegate_read_access(
+                artifact_ids=admitted,
+                workflow_id=destination_workflow_id,
+                namespace=namespace,
+                access=self._access,
+            )
 
     async def _validated_remediation_context_ref(
         self, turn: WorkflowCheckpointBranchTurn
@@ -1365,7 +1423,9 @@ class CheckpointBranchTurnExecutionOwner:
         # such side effect, including replay reattachment.
         await self._session.commit()
         if turn.created_step_execution_id:
-            await self._start_claimed_turn(branch=branch, turn=turn, binding=binding)
+            await self._start_claimed_turn(
+                branch=branch, turn=turn, binding=binding, checkpoint=checkpoint
+            )
             if canonical_claim.outcome is ControlPlaneOutcome.APPLIED:
                 await source_command.settle(
                     workflow_id=checkpoint.omnigent.workflow_id,
@@ -1394,7 +1454,7 @@ class CheckpointBranchTurnExecutionOwner:
             ordinal=max(count, 1),
         )
         locator_id = hashlib.sha256(
-            identity.step_execution_id.encode()
+            f"{identity.workflow_id}:{identity.step_execution_id}".encode()
         ).hexdigest()[:24]
         runtime_selection = dict(
             (branch.diagnostics or {}).get("runtimeSelection") or {}
@@ -1718,7 +1778,9 @@ class CheckpointBranchTurnExecutionOwner:
             execution_workflow_id=identity.workflow_id,
         )
         await self._session.commit()
-        await self._start_claimed_turn(branch=branch, turn=claimed, binding=binding)
+        await self._start_claimed_turn(
+            branch=branch, turn=claimed, binding=binding, checkpoint=checkpoint
+        )
         await source_command.settle(
             workflow_id=checkpoint.omnigent.workflow_id,
             idempotency_key=turn.idempotency_key,
@@ -1734,6 +1796,7 @@ class CheckpointBranchTurnExecutionOwner:
         branch: WorkflowCheckpointBranch,
         turn: WorkflowCheckpointBranchTurn,
         binding: WorkflowCheckpointBranchGitBinding,
+        checkpoint: StepExecutionCheckpointModel | None = None,
     ) -> None:
         """Start or reattach after a crash between claim and Temporal start."""
 
@@ -1794,6 +1857,35 @@ class CheckpointBranchTurnExecutionOwner:
                     artifacts=artifacts,
                     principal=self._principal,
                     namespace=source.namespace,
+                )
+                if checkpoint is not None:
+                    # Instruction admission above proves the durable graph's
+                    # destination before any source restoration grants are made.
+                    await self._admit_restore_inputs(
+                        checkpoint=checkpoint,
+                        destination_workflow_id=execution_workflow_id,
+                        namespace=source.namespace,
+                        artifact_service=artifacts,
+                    )
+                # These inputs come from the durable turn, not the request's
+                # arbitrary inputRefs. They were written or validated by this
+                # owner and remain required by retained launch manifests.
+                selected = {
+                    turn.context_bundle_ref,
+                    turn.source_checkpoint_ref,
+                    (turn.diagnostics or {}).get("remediationContextRef"),
+                }
+                await artifacts.delegate_read_access(
+                    artifact_ids={
+                        _artifact_id(ref, field_name="branchTurnInput")
+                        for ref in selected
+                        if ref
+                        and ref in agent_request.input_refs
+                        and not ref.startswith("artifact://omnigent/")
+                    },
+                    workflow_id=execution_workflow_id,
+                    namespace=source.namespace,
+                    access=self._access,
                 )
         except CheckpointBranchTurnLaunchError:
             raise
