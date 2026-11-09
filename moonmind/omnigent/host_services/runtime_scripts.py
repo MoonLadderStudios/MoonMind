@@ -238,8 +238,10 @@ class OmnigentRuntimeScriptService:
                 if not (
                     handle.get("materializerRef") == "codex-oauth-home@1" and enable_codex_runtime
                     or handle.get("materializerRef") == "claude-oauth-home@1" and enable_claude_runtime
+                    or handle.get("materializerRef") == "omnigent-provider-config@1"
+                    and (enable_codex_runtime or enable_claude_runtime)
                 ):
-                    raise ValueError("Profile environment templates require their enrolled materializer")
+                    raise ValueError("Profile environment templates require their native materializer")
                 if not workspace_path or not workspace_path.startswith("/"):
                     raise ValueError("Profile environment templates require the admitted workspace path")
                 from moonmind.provider_profiles.template_renderer import (

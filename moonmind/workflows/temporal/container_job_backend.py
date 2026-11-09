@@ -613,6 +613,11 @@ def _withholds_console(spec) -> bool:
         or spec.tls_assessment is not None
         or spec.web_assessment is not None
         or spec.cloud_assessment is not None
+        or (
+            spec.workload_profile is not None
+            and (spec.workload_profile.service_inventory is not None
+                 or spec.workload_profile.dns_assessment is not None)
+        )
     )
 
 
@@ -2374,7 +2379,14 @@ class DockerContainerJobBackend:
             workload_ref=request.container_ref or self._name(request),
             native_selection=(
                 request.request.spec.workload_profile.native_network
-                if request.request.spec.workload_profile else None
+                if request.request.spec.workload_profile
+                else None
+            ),
+            native_connect_timeout_seconds=(
+                request.request.spec.workload_profile.service_inventory.connect_timeout_seconds
+                if request.request.spec.workload_profile is not None
+                and request.request.spec.workload_profile.service_inventory is not None
+                else None
             ),
         )
 
@@ -3132,6 +3144,14 @@ class DockerContainerJobBackend:
             ))
             for item in scoped.proxy_env():
                 args.extend(("--env", item))
+            if (
+                spec.workload_profile is not None
+                and spec.workload_profile.service_inventory is not None
+            ):
+                # Keep the original lease expiry across retries, never a fresh duration.
+                args.extend((
+                    "--env", f"MOONMIND_EGRESS_DEADLINE={scoped_evidence['expiresAt']}"
+                ))
         if service_connection is not None:
             args.extend((
                 "--dns", "127.0.0.1",
@@ -4243,6 +4263,11 @@ class DockerContainerJobBackend:
             return await self._collect_image_assessment_outputs(request)
         if request.request.spec.tls_assessment is not None:
             return await self._collect_tls_assessment_outputs(request)
+        profile = request.request.spec.workload_profile
+        if profile is not None and profile.dns_assessment is not None:
+            return await self._collect_dns_assessment_outputs(request)
+        if profile is not None and profile.service_inventory is not None:
+            return await self._collect_service_inventory_outputs(request)
         if request.request.spec.web_assessment is not None:
             return await self._collect_web_assessment_outputs(request)
         if request.request.spec.cloud_assessment is not None:
@@ -4905,6 +4930,274 @@ class DockerContainerJobBackend:
             )
         except ValueError:
             rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
+    async def _collect_service_inventory_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Retain bounded native observations before deriving trusted coverage."""
+        from moonmind.security.service_inventory import (
+            MAX_SERVICE_INVENTORY_OUTPUT_BYTES,
+            build_service_inventory_plan,
+            serialize_service_inventory_execution,
+            service_inventory_pinned_identities,
+            summarize_service_inventory,
+            validate_service_inventory_execution,
+            validate_service_inventory_receipt,
+        )
+
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        selection = spec.workload_profile
+        plan = build_service_inventory_plan(
+            selection.native_network, selection.service_inventory
+        )
+        # Workload-authored summaries never participate in retention or comparison.
+        entries = await asyncio.to_thread(
+            self._build_output_entries,
+            self._output_root(request),
+            [
+                output
+                for output in spec.outputs
+                if output.name == "service-inventory-execution"
+            ],
+        )
+        entry = entries[0]
+        manifest = []
+        remaining = self._settings.max_output_total_bytes
+        files = self._settings.max_output_files
+
+        async def publish(kind, payload):
+            nonlocal remaining, files
+            name = f"service-inventory-{kind}"
+            relative = f"service-inventory/{kind}.json"
+            if files < 1 or len(payload) > min(
+                remaining, MAX_SERVICE_INVENTORY_OUTPUT_BYTES
+            ):
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="rejected",
+                        detail="Service inventory output exceeds collection bounds.",
+                    )
+                )
+                return None
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", payload
+            )
+            if not ref:
+                raise RuntimeError("service inventory artifact could not be persisted")
+            remaining -= len(payload)
+            files -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType="application/json",
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        execution = evidence_ref = None
+        if entry["payload"] is not None:
+            try:
+                if len(entry["payload"]) > MAX_SERVICE_INVENTORY_OUTPUT_BYTES:
+                    raise ValueError("service inventory exceeds output bound")
+                execution = validate_service_inventory_execution(
+                    plan, json.loads(entry["payload"])
+                )
+            except (ValueError, TypeError, KeyError, RecursionError, UnicodeDecodeError):
+                manifest.append(
+                    ContainerJobArtifact(
+                        name="service-inventory-execution",
+                        relativePath=entry["relative_path"],
+                        collectionStatus="rejected",
+                        detail="Service inventory evidence failed validation.",
+                    )
+                )
+            else:
+                evidence_ref = await publish(
+                    "execution", serialize_service_inventory_execution(plan, execution)
+                )
+        else:
+            manifest.append(
+                ContainerJobArtifact(
+                    name="service-inventory-execution",
+                    relativePath=entry["relative_path"],
+                    collectionStatus=entry["status"],
+                    detail=entry["detail"],
+                )
+            )
+
+        pins, attestation_ref = (), None
+        receipt_mismatch = False
+        job_state = str(request.terminal_state) if request.terminal_state else None
+        try:
+            resolution = await self._runtime_egress_evidence(request)
+        except (RuntimeError, ValueError, OSError):
+            resolution = None
+        if resolution:
+            # Use the existing lease evidence/digest and artifact owners. Bind the
+            # collector's admitted plan and terminal state, not runner assertions.
+            bound = {
+                **resolution,
+                "serviceInventoryPlanKey": plan.plan_key,
+                "containerJobState": job_state,
+            }
+            try:
+                attestation_ref = await self._publish_artifact(
+                    request,
+                    f"{request.job_id}-service-inventory-attestation.json",
+                    serialize_conformance_evidence(
+                        bound, location="service-inventory-attestation"
+                    ),
+                )
+            except (RuntimeError, ValueError, OSError):
+                # Auxiliary evidence failure cannot erase already retained progress.
+                # No retained attestation means the summary cannot compare absence.
+                attestation_ref = None
+            if attestation_ref:
+                try:
+                    pins = service_inventory_pinned_identities(plan, resolution)
+                except (ValueError, TypeError, KeyError):
+                    pins = ()
+                if pins and execution:
+                    try:
+                        validate_service_inventory_receipt(plan, execution, resolution)
+                    except (ValueError, TypeError, KeyError):
+                        receipt_mismatch = True
+        summary = summarize_service_inventory(
+            plan,
+            execution if evidence_ref else None,
+            evidence_ref or "unavailable",
+            pinned_identities=pins,
+            attestation_ref=attestation_ref,
+            job_state=job_state,
+            native_receipt_mismatch=receipt_mismatch,
+        )
+        await publish("summary", summary.model_dump_json(by_alias=True).encode())
+        return manifest
+
+    async def _collect_dns_assessment_outputs(self, request: ContainerJobActivityRequest):
+        """Recompute DNS artifacts from the persisted deployment-resolved invocation."""
+        from moonmind.security.dns_assessments import (
+            DNS_RUNNER_MODULE,
+            decode_dns_query_plan,
+            serialize_dns_artifacts,
+            validate_dns_execution,
+        )
+
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        # The persisted command is rendered by admission, never supplied by the
+        # runner. Do not switch historical resolver identity on a config update.
+        if spec.entrypoint != ["python"] or spec.command[:3] != [
+            "-I",
+            "-m",
+            DNS_RUNNER_MODULE,
+        ]:
+            raise ValueError("DNS collection requires its fixed admitted invocation")
+        plan = decode_dns_query_plan(spec.command[3:])
+        if plan.assessment != spec.workload_profile.dns_assessment:
+            raise ValueError("DNS invocation differs from admitted selection")
+        entries = await asyncio.to_thread(
+            self._build_output_entries,
+            self._output_root(request),
+            [output for output in spec.outputs if output.name == "execution"],
+        )
+        if len(entries) != 1:
+            raise ValueError("DNS execution output is unavailable")
+        entry = entries[0]
+        manifest = []
+
+        def rejected(name, detail, status="rejected"):
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=f"dns-assessment/{name}.json",
+                    collectionStatus=status,
+                    detail=detail,
+                )
+            )
+
+        if entry["payload"] is None:
+            rejected("execution", entry["detail"], entry["status"])
+            return manifest
+        try:
+            if len(entry["payload"]) > plan.assessment.max_output_bytes:
+                raise ValueError("DNS execution exceeds admitted output budget")
+            execution = validate_dns_execution(plan, json.loads(entry["payload"]))
+            if str(request.terminal_state) != "succeeded":
+                # Retain completed answers on failure/cancellation; a container
+                # that did not finish cannot assert complete job coverage.
+                execution = execution.model_copy(
+                    update={
+                        "stop_reason": "canceled"
+                        if str(request.terminal_state) == "canceled"
+                        else "failed",
+                        "finished_at": execution.checkpoint_at,
+                        "observations": tuple(
+                            row.model_copy(update={"transport_outcome": "interrupted"})
+                            if row.transport_outcome == "in_flight"
+                            else row
+                            for row in execution.observations
+                        ),
+                    }
+                )
+            bodies = serialize_dns_artifacts(plan, execution, "execution.json")
+        except (ValueError, TypeError, KeyError, RecursionError, UnicodeDecodeError):
+            rejected(
+                "execution", "DNS evidence failed admitted plan or semantic validation."
+            )
+            return manifest
+        remaining = min(
+            self._settings.max_output_total_bytes, plan.assessment.max_output_bytes
+        )
+        files = self._settings.max_output_files
+
+        async def publish(name, body):
+            nonlocal remaining, files
+            if len(body) > remaining or files < 1:
+                rejected(name, "DNS output exceeds collection bounds.")
+                return None
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", body
+            )
+            if not ref:
+                raise RuntimeError("DNS artifact could not be persisted")
+            remaining -= len(body)
+            files -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=f"dns-assessment/{name}.json",
+                    artifactRef=ref,
+                    sizeBytes=len(body),
+                    sha256=hashlib.sha256(body).hexdigest(),
+                    mediaType="application/json",
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        native_ref = await publish("execution", bodies["execution.json"])
+        if native_ref:
+            try:
+                # The retained reference is larger than the runner-local name;
+                # apply the original combined limit again, preserving native
+                # progress even when the summary cannot fit.
+                bodies = serialize_dns_artifacts(plan, execution, native_ref)
+            except ValueError:
+                rejected("summary", "DNS summary exceeds original combined output budget.")
+            else:
+                await publish("summary", bodies["summary.json"])
         return manifest
 
     async def _collect_tls_assessment_outputs(self, request: ContainerJobActivityRequest):
@@ -5698,6 +5991,12 @@ class DockerContainerJobBackend:
                 native_selection=(
                     request.request.spec.workload_profile.native_network
                     if request.request.spec.workload_profile
+                    else None
+                ),
+                native_connect_timeout_seconds=(
+                    request.request.spec.workload_profile.service_inventory.connect_timeout_seconds
+                    if request.request.spec.workload_profile is not None
+                    and request.request.spec.workload_profile.service_inventory is not None
                     else None
                 ),
             )

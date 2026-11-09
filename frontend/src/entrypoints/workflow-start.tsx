@@ -1,5 +1,6 @@
 import { schemaProperties, schemaRequired, schemaAlternativeRequiredGroups, schemaGuidedInputNames, capabilityFieldLabel, capabilityFieldUiSchema, capabilityFieldVisible, capabilityWidgetName, safeCapabilityDefault, dependentCapabilityDefault, recordValue, OWNER_REPO_PATTERN, SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
 export { SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
+import { securitySelectionIdentity, securitySelectionArtifact } from '../lib/remediationCreateDraft';
 import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
 import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
@@ -1061,6 +1062,7 @@ interface PresetSummary {
   title: string;
   description: string;
   presetDigest?: string | null;
+  tags?: string[];
   inputs?: PresetInputDefinition[];
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
@@ -1072,6 +1074,7 @@ interface PresetSummary {
 }
 
 interface PresetDetail extends PresetSummary {
+  steps?: ExpandedStepPayload[];
   annotations?: Record<string, unknown>;
 }
 
@@ -5506,6 +5509,7 @@ function WorkflowStartPageContent({
   const [omnigentLaunchPolicyAuthored, setOmnigentLaunchPolicyAuthored] =
     useState(false);
   const [modelSelection, setModelSelection] = useState<ModelSelection>({});
+  const [assessmentSetupRequested, setAssessmentSetupRequested] = useState(false);
   const [assessmentProject, setAssessmentProject] = useState<AssessmentProjectSnapshot | null>(null);
   const [assessmentProjectProblem, setAssessmentProjectProblem] = useState<string | null>(null);
   const [assessmentAuthorizationRef, setAssessmentAuthorizationRef] = useState('');
@@ -5678,6 +5682,7 @@ function WorkflowStartPageContent({
     // Route changes invalidate responses even after Back returns to the old URL.
     createDraftRevisionRef.current += 1;
     setAcceptedCreatePath(null);
+    setAssessmentSetupRequested(false);
     invalidateAssessmentReview();
     submitExpansionInFlightRef.current = false;
     setIsSubmitting(false);
@@ -6837,6 +6842,37 @@ function WorkflowStartPageContent({
   });
 
   const templateItems = templateOptionsQuery.data || [];
+  const hasAssessmentStep = steps.some((step) => {
+    if (step.stepType === "tool") {
+      return step.toolId.trim() === "security.assess" || supportsAssessmentDefaults(
+        trustedToolsQuery.data?.find((tool) => toolDefinitionId(tool) === step.toolId.trim())?.inputSchema,
+      );
+    }
+    if (step.stepType === "skill") {
+      return step.skillId.trim() === "security.assess" || supportsAssessmentDefaults(
+        skillsQuery.data?.detailsById[step.skillId.trim()]?.inputSchema,
+      );
+    }
+    const preset = step.presetDetail || templateItems.find((item) => item.key === step.presetKey);
+    return preset?.tags?.includes("assessment") || supportsAssessmentDefaults(preset?.inputSchema) ||
+      step.presetDetail?.steps?.some((item) =>
+        [item.tool?.id, item.tool?.name, item.skill?.id, item.skill?.name].includes("security.assess"),
+      );
+  });
+  // Display state never removes admitted authority or a partially authored
+  // context. A plain workflow mounts neither picker nor their catalog query.
+  const showAssessmentSetup = Boolean(
+    assessmentSetupRequested || hasAssessmentStep || assessmentProject ||
+    assessmentProjectProblem || assessmentAuthorizationRef ||
+    historicalAssessmentReview || historicalAssessmentScope,
+  );
+
+  useEffect(() => {
+    if (!assessmentSetupRequested) return;
+    const disclosure = submitFormRef.current?.querySelector<HTMLDetailsElement>('[data-create-disclosure="assessment"]');
+    disclosure?.querySelector('summary')?.focus();
+    disclosure?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  }, [assessmentSetupRequested]);
 
   useEffect(() => {
     if (!presetCatalogEnabled || !selectedPresetKey) {
@@ -9421,6 +9457,8 @@ function WorkflowStartPageContent({
       clearSubmitBusy();
     };
     if (assessmentProjectProblem) {
+      const disclosure = submitFormRef.current?.querySelector<HTMLDetailsElement>('[data-create-disclosure="assessment"]');
+      if (disclosure) disclosure.open = true;
       rejectSubmit(assessmentProjectProblem);
       return;
     }
@@ -11492,8 +11530,6 @@ function WorkflowStartPageContent({
         </p>
       ) : null}
 
-      <RepositoryScannerReadiness />
-
       <form
         id="queue-submit-form"
         ref={submitFormRef}
@@ -11598,6 +11634,11 @@ function WorkflowStartPageContent({
                 Pinned run
                 <input value={remediationDraft.target.runId} readOnly />
               </label>
+              {remediationDraft.target.securityFinding ? <>
+                <label>Original security finding<input readOnly value={securitySelectionIdentity(remediationDraft.target.securityFinding)} /></label>
+                <label>Pinned security evidence<input readOnly value={securitySelectionArtifact(remediationDraft.target.securityFinding)} /></label>
+                <p>Assessment authority does not authorize edits or publication. The server verifies and preserves original evidence; fixes and comparable retests use separately admitted authority.</p>
+              </> : null}
               {remediationDraft.target.state ? (
                 <label>
                   Original target outcome
@@ -11740,34 +11781,6 @@ function WorkflowStartPageContent({
             ) : null}
           </section>
         ) : null}
-        <AssessmentProjectPicker
-          key={navigationKey}
-          value={assessmentProject}
-          onChange={changeAssessmentProject}
-          onStatusChange={setAssessmentProjectProblem}
-        />
-        <AssessmentAuthorizationPicker value={assessmentAuthorizationRef} onChange={value => {
-          markDraftEdited(); setAssessmentAuthorizationRef(value);
-        }} />
-        {historicalAssessmentReview ? <AssessmentEngagementReview review={historicalAssessmentReview} historical /> : historicalAssessmentScope ? <section className="card stack" aria-label="Historical assessment scope">
-          <h2>Historical assessment scope</h2><p>This recorded scope is not a renewed authorization. Select a saved authorization to review changes before starting another assessment.</p>
-          <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(historicalAssessmentScope, null, 2)}</pre>
-        </section> : null}
-        {assessmentReviewLoading || assessmentReview ? <div className="stack" data-assessment-review-actions ref={assessmentReviewPanelRef} tabIndex={-1} role="region" aria-label="Assessment review decision">
-          {assessmentReviewLoading ? <p role="status">Preparing rules of engagement…</p> : null}
-          {assessmentReviewReconciliation ? <p className="notice">The previous start is unconfirmed. Retry this identical reviewed request to check for the accepted result. No new authorization is created; the server validates current authority if it has not already accepted the request.</p> : null}
-          {assessmentReview ? <AssessmentEngagementReview review={assessmentReview} /> : null}
-          <div className="actions">
-            {assessmentReview ? <Button type="button" disabled={!assessmentReviewAwaiting} onClick={() => {
-              const decide = assessmentReviewDecisionRef.current;
-              assessmentReviewDecisionRef.current = null;
-              setAssessmentReviewAwaiting(false); decide?.(true);
-            }}>{pageMode.mode === 'edit' && pageMode.intent === 'edit' ? 'Save reviewed changes' : 'Start reviewed workflow'}</Button> : null}
-            {assessmentReviewLoading || assessmentReviewAwaiting ? <Button type="button" variant="secondary" onClick={() => {
-              createDraftRevisionRef.current += 1; invalidateAssessmentReview();
-            }}>Cancel review</Button> : null}
-          </div>
-        </div> : null}
         <section
           className="card queue-steps-section stack"
           data-canonical-create-section="Steps"
@@ -12928,6 +12941,52 @@ function WorkflowStartPageContent({
 
           </div>
         </section>
+
+        {showAdvancedStepOptions && !showAssessmentSetup ? <div className="actions">
+          <Button type="button" variant="ghost" onClick={() => setAssessmentSetupRequested(true)}>
+            Add assessment setup
+          </Button>
+        </div> : null}
+        {showAssessmentSetup ? <CreateOptionDisclosure
+          id="assessment"
+          label="Security assessment setup"
+          summary={[
+            assessmentProject ? `${assessmentProject.projectName} / ${assessmentProject.environmentName}` : "Saved targets and evidence",
+            assessmentAuthorizationRef ? `Authorization: ${assessmentAuthorizationRef}` : "No authorization selected",
+            assessmentProjectProblem ? "Context needs attention" : "",
+          ].filter(Boolean).join(" · ")}
+          defaultOpen
+        >
+          <p className="small">Use saved targets and evidence for a security assessment, and select its approved testing scope before reviewing the rules of engagement.</p>
+          <AssessmentProjectPicker
+            key={navigationKey}
+            value={assessmentProject}
+            onChange={changeAssessmentProject}
+            onStatusChange={setAssessmentProjectProblem}
+          />
+          <AssessmentAuthorizationPicker value={assessmentAuthorizationRef} onChange={value => {
+            markDraftEdited(); setAssessmentAuthorizationRef(value);
+          }} />
+          {historicalAssessmentReview ? <AssessmentEngagementReview review={historicalAssessmentReview} historical /> : historicalAssessmentScope ? <section className="card stack" aria-label="Historical assessment scope">
+            <h2>Historical assessment scope</h2><p>This recorded scope is not a renewed authorization. Select a saved authorization to review changes before starting another assessment.</p>
+            <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(historicalAssessmentScope, null, 2)}</pre>
+          </section> : null}
+        </CreateOptionDisclosure> : null}
+        {assessmentReviewLoading || assessmentReview ? <div className="stack" data-assessment-review-actions ref={assessmentReviewPanelRef} tabIndex={-1} role="region" aria-label="Assessment review decision">
+          {assessmentReviewLoading ? <p role="status">Preparing rules of engagement…</p> : null}
+          {assessmentReviewReconciliation ? <p className="notice">The previous start is unconfirmed. Retry this identical reviewed request to check for the accepted result. No new authorization is created; the server validates current authority if it has not already accepted the request.</p> : null}
+          {assessmentReview ? <AssessmentEngagementReview review={assessmentReview} /> : null}
+          <div className="actions">
+            {assessmentReview ? <Button type="button" disabled={!assessmentReviewAwaiting} onClick={() => {
+              const decide = assessmentReviewDecisionRef.current;
+              assessmentReviewDecisionRef.current = null;
+              setAssessmentReviewAwaiting(false); decide?.(true);
+            }}>{pageMode.mode === 'edit' && pageMode.intent === 'edit' ? 'Save reviewed changes' : 'Start reviewed workflow'}</Button> : null}
+            {assessmentReviewLoading || assessmentReviewAwaiting ? <Button type="button" variant="secondary" onClick={() => {
+              createDraftRevisionRef.current += 1; invalidateAssessmentReview();
+            }}>Cancel review</Button> : null}
+          </div>
+        </div> : null}
 
         <section
           className="stack"

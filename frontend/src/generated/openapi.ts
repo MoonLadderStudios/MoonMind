@@ -1738,6 +1738,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/remediation-security-findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Security Remediation Findings
+         * @description Preview exact retained findings without launching or granting repair work.
+         */
+        get: operations["preview_security_remediation_findings_api_executions__workflow_id__remediation_security_findings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediation": {
         parameters: {
             query?: never;
@@ -7191,6 +7211,83 @@ export interface components {
              */
             markdown: string;
         };
+        /** DNSAssessment */
+        DNSAssessment: {
+            /** Questions */
+            questions: components["schemas"]["DNSQuestion"][];
+            /**
+             * Allowedfollowups
+             * @default []
+             */
+            allowedFollowups: components["schemas"]["DNSQuestion"][];
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["DNSCheckSelection"][];
+            /**
+             * Maxfollowupdepth
+             * @default 4
+             */
+            maxFollowupDepth: number;
+            /**
+             * Maxattempts
+             * @default 64
+             */
+            maxAttempts: number;
+            /**
+             * Timeoutseconds
+             * @default 120
+             */
+            timeoutSeconds: number;
+            /**
+             * Querytimeoutseconds
+             * @default 10
+             */
+            queryTimeoutSeconds: number;
+            /**
+             * Maxresponsebytes
+             * @default 65536
+             */
+            maxResponseBytes: number;
+            /**
+             * Maxoutputbytes
+             * @default 4194304
+             */
+            maxOutputBytes: number;
+            /**
+             * Queriespersecond
+             * @default 5
+             */
+            queriesPerSecond: number;
+        };
+        /** DNSCheckSelection */
+        DNSCheckSelection: {
+            /**
+             * Check
+             * @enum {string}
+             */
+            check: "cname" | "delegation" | "caa" | "dnssec" | "spf" | "dkim" | "dmarc";
+            /** Subject */
+            subject: string;
+            /**
+             * Selectors
+             * @default []
+             */
+            selectors: string[];
+            /** Organizationaldomain */
+            organizationalDomain?: string | null;
+        };
+        /** DNSQuestion */
+        DNSQuestion: {
+            /** Name */
+            name: string;
+            /**
+             * Recordtype
+             * @enum {string}
+             */
+            recordType: "A" | "AAAA" | "CNAME" | "NS" | "SOA" | "CAA" | "TXT" | "MX" | "DS" | "DNSKEY";
+        };
         /**
          * DashboardBranchListResponse
          * @description Dashboard response containing bounded branch suggestions for one repository.
@@ -12303,6 +12400,10 @@ export interface components {
             deliveryStatus?: string | null;
             /** Resolution */
             resolution?: string | null;
+            /** Securityfinding */
+            securityFinding?: {
+                [key: string]: string;
+            } | null;
             /**
              * Createdat
              * Format: date-time
@@ -12415,6 +12516,10 @@ export interface components {
             checkpointBranches?: components["schemas"]["RemediationCheckpointBranchLinkModel"][];
             /** Authoredcontract */
             authoredContract?: {
+                [key: string]: unknown;
+            } | null;
+            /** Securityevidence */
+            securityEvidence?: {
                 [key: string]: unknown;
             } | null;
             /** Selectedstepevidence */
@@ -13181,6 +13286,37 @@ export interface components {
             usages?: components["schemas"]["SecretUsageItemResponse"][];
             /** Diagnostics */
             diagnostics?: components["schemas"]["SecretUsageDiagnosticResponse"][];
+        };
+        /**
+         * ServiceInventoryOptions
+         * @description Probe choices specialize native ports, never grant target authority.
+         */
+        ServiceInventoryOptions: {
+            /**
+             * Bannerports
+             * @default []
+             */
+            bannerPorts: number[];
+            /**
+             * Httpheadports
+             * @default []
+             */
+            httpHeadPorts: number[];
+            /**
+             * Connecttimeoutseconds
+             * @default 5
+             */
+            connectTimeoutSeconds: number;
+            /**
+             * Probetimeoutseconds
+             * @default 2
+             */
+            probeTimeoutSeconds: number;
+            /**
+             * Maxbannerbytes
+             * @default 1024
+             */
+            maxBannerBytes: number;
         };
         /** SessionPolicy */
         SessionPolicy: {
@@ -14126,7 +14262,8 @@ export interface components {
          *
          *     ``baseline`` crawls and checks passively; ``api`` imports an admitted
          *     definition and checks passively; ``active`` adds the active scanner and
-         *     is the only mode that sends attack payloads. One job tests at most one
+         *     sends general attack payloads. ``known-issues`` emits only selected fixed
+         *     HTTP recipes without discovery or credentials. One job tests at most one
          *     identity, so every observation is attributable to it.
          */
         WebAssessment: {
@@ -14134,7 +14271,9 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "baseline" | "api" | "active";
+            mode: "baseline" | "api" | "active" | "known-issues";
+            /** Templateids */
+            templateIds?: "nextjs-middleware-bypass"[];
             /** Assessmentref */
             assessmentRef?: string | null;
             /** Origin */
@@ -14528,6 +14667,8 @@ export interface components {
             /** Assessmentref */
             assessmentRef?: string | null;
             nativeNetwork?: components["schemas"]["NativeNetworkSelection"] | null;
+            dnsAssessment?: components["schemas"]["DNSAssessment"] | null;
+            serviceInventory?: components["schemas"]["ServiceInventoryOptions"] | null;
             /** Credentials */
             credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };
@@ -17922,6 +18063,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageTargetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_security_remediation_findings_api_executions__workflow_id__remediation_security_findings_get: {
+        parameters: {
+            query: {
+                comparisonArtifactRef?: string | null;
+                reviewArtifactRef?: string | null;
+                runId: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

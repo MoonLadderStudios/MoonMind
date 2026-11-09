@@ -304,9 +304,72 @@ gateway can be removed only after its unchanged identity and an empty state
 directory prove no traffic was possible; it does not receive invented counters.
 Retained evidence records effective policy, resolution/target identities,
 allocations, counters and denials; unavailable enforcement evidence is an
-explicit coverage gap. Connection IO errors remain separate transport
-diagnostics with partial coverage, rather than evidence of a scope violation.
-Actual policy or budget denials and nonzero tool exits still fail the job.
+explicit coverage gap. Fixed pre-tunnel responses distinguish observed dial
+refusal, timeout and unreachable routes from enforcement denials. Unknown IO
+errors and legacy IO receipts remain partial transport diagnostics, not proof
+of a closed service or scope violation. Actual policy or budget denials and
+nonzero tool exits still fail the job.
+
+### Bounded service inventory
+
+`moonmind container service-inventory --admission inventory.json` submits a
+`workloadProfile` selection through the existing Container Job client. The
+admission file names `profileRef`, `mode`, `nativeNetwork` and `serviceInventory`;
+it does not supply an image, command or network route. The signed assessment
+scope still supplies authority. Its profile, `service-inventory` action class,
+network policy and native targets must all admit the selection.
+
+The deployment profile uses entrypoint `["python"]` and mode argv
+`["-I", "-m", "moonmind.security.service_inventory_runner"]`, with action class
+`service-inventory`. Admission appends the fixed output directory and bounded
+canonical plan chunks. Its outputs are `service-inventory-execution` at
+`service-inventory/execution.json` and `service-inventory-summary` at
+`service-inventory/summary.json`. This specialization uses `inputAttachments: []`
+and mounts no workspace data. The signed workspace reference still identifies
+the submitting session. Extra arguments, selected configuration exceptions,
+credentials, profile environment, caches and alternative output paths are
+rejected. Generic profile jobs still require captured inputs.
+
+Every selected endpoint receives a TCP-connect observation. `serviceInventory`
+may add disjoint `bannerPorts` and `httpHeadPorts`, each drawn only from the
+selected native ports. A banner probe reads a bounded passive sample; an HTTP
+probe sends only `HEAD /` with a fixed Host header and does not follow redirects
+or authenticate. Both use the same admitted connection. Defaults are a
+five-second connect wait, two-second probe wait and 1,024 captured bytes;
+`connectTimeoutSeconds`, `probeTimeoutSeconds` and `maxBannerBytes` can narrow
+or select values within their schema bounds. The effective sample cap may be
+smaller to keep the complete serialized evidence within 8 MiB. Truncation and
+unperformed work remain visible. A plan must fit the 96 KiB inventory transport
+bound as well as the native authority bounds; targets are never trimmed to fit.
+
+The runner only connects to the enforced proxy. It shares the original lease
+deadline, start rate, concurrency and byte budgets, performs no automatic
+retries, and checkpoints completed observations atomically. A fixed CONNECT
+close-on-EOF hint releases a completed probe's tunnel; ordinary native clients
+retain TCP half-close. Closure waits at most two seconds within the original
+expiry and discards at most 64 KiB of in-flight data, without decoding or retaining
+it as observations. The gateway still accounts for all forwarded payload bytes.
+Restarting does not restart a saved inventory or refill an assessment allocation.
+Cancellation, a later failed probe and job failure can leave useful retained
+observations, but cannot turn an incomplete run into complete coverage.
+
+Reachability and probe results are separate: an open socket remains observed
+open if its banner is delayed, empty or malformed. Refusal, timeout,
+unreachable, denied, untested and unknown transport failures remain distinct.
+Only the gateway's fixed response before tunnel establishment supplies a dial
+outcome; peer text afterward cannot forge it. Banners and service/version
+claims are sanitized, bounded and explicitly unverified, not vulnerabilities
+or authority to inspect a neighbor.
+
+Collection retains native observations, trusted lease evidence and a compact
+summary. `security.assess` rereads retained evidence before comparison. Missing
+attestation or reduced coverage is explicit. Matching complete reachability
+may compare open and refused observations; timeout, denial, unknown or missing
+results do not prove absence. Changed probes, pinned target identity or a
+narrower scope preserve prior observations rather than silently clearing them.
+Selected exports support validated summary copies; native execution and lease
+attestation schemas are explicitly withheld. Exporting changes neither retained
+bytes nor access grants.
 
 ### Bounded HTTPS TLS inspection
 
@@ -340,6 +403,54 @@ failure or cancellation. `security.assess` rereads that evidence; comparison
 identity includes chain, pinned resolution, trust content, probe configuration
 and assessment time. Changed inputs and unobserved backends do not prove
 remediation.
+
+### Bounded DNS observations
+
+`moonmind container dns-assessment --admission dns.json` reads a typed
+workload-profile selection: `profileRef`, mode `query`, `assessmentRef`, and
+`dnsAssessment`. The assessment contains exact `questions` (`name`, `recordType`),
+optional `allowedFollowups`, selected `checks`, and query, duration, rate, depth,
+response-size and combined artifact-size limits. The admitted scope must contain
+that DNS selection, profile, `dns-observation` action and resolver network policy.
+Queries cannot expand the original exact name/type set. DKIM requires supplied
+selectors; DMARC organizational fallback requires an explicitly supplied ancestor
+and its admitted question. No selector or subdomain discovery is performed.
+
+Configure the deployment workload profile with entrypoint `["python"]`, query
+mode argv `["-I", "-m", "moonmind.security.dns_assessment_runner"]`, action class
+`dns-observation`, `dnsResolver.endpoint` set to the approved credential-free
+HTTPS resolver URL, bridge networking and its restricted `egressPolicyRef`.
+Declare exactly two outputs: `execution` at `dns-assessment/execution.json` and
+`summary` at `dns-assessment/summary.json`. Use the `repository-security` image
+source. The profile permits no arguments, credentials, environment, caches or
+configuration exceptions. Its egress policy admits only the resolver HTTPS host
+and port; queried domain names are separate assessment authority, not network
+destinations. There is deliberately no public resolver default.
+
+The runner sends RFC 8484 wire-format POST requests to the configured path over
+the enforced CONNECT proxy with verified TLS. It never redirects, downgrades,
+uses system DNS for queries, follows arbitrary record URLs, or contacts observed
+nameservers, mail servers or report recipients. HTTP rate limits and denial are
+recorded; transient failures receive at most one retry within the same reserved
+query and job ceilings. Every attempt is checkpointed before dispatch. A repeated
+invocation recovers retained evidence without granting new queries. Cancellation,
+lease expiry and malformed or oversized replies preserve completed observations.
+
+Evidence distinguishes NXDOMAIN, NODATA, SERVFAIL, timeout, denied queries and
+cache age/expiry. An absent or invalid HTTP Age value leaves freshness unverified.
+DNSSEC AD is an identified resolver assertion, never independent validation.
+Delegation checks observe the resolver view, not an authoritative parent-child
+survey; dangling-looking aliases remain hypotheses. SPF, explicit DKIM and
+DMARC checks report policy syntax and incomplete evidence without sending mail.
+Native artifacts retain bounded sanitized answer sections, TTLs, timestamps,
+resolver identity and validation provenance. Collection recomputes the summary
+from execution evidence and the admitted fixed invocation. `security.assess`
+uses `dns://<name>` assets for queried names and check subjects, rereads native
+evidence, and retains native references in reports and exports. Comparisons
+require the same resolver, questions, types and selected checks; expired or
+incomplete observations cannot prove remediation. External resolver checks are
+Unverified unless separately run under admitted authority; local HTTPS/CONNECT
+fixtures exercise the transport and limits without external scanning.
 
 ## Lifecycle and evidence
 

@@ -919,3 +919,41 @@ async def test_scoped_cli_does_not_replace_missing_or_changed_canonical_admissio
             authorizer=NO_GRANTS,
         )
     temporal.start_container_job.assert_not_awaited()
+
+
+async def test_curated_issue_cli_mcp_retains_native_request_pairs_after_cleanup(
+    environment, tmp_path, monkeypatch, target
+):
+    app, gateway = target
+    scope = web.scope(app, action_classes=("web-known-issue",))
+    session = Session(environment, monkeypatch, scope=scope)
+    harness = CliWeb(
+        session, environment, tmp_path, monkeypatch, app, gateway, admitted=scope
+    )
+    assessment = web.assessment(
+        app,
+        mode="known-issues",
+        templateIds=["nextjs-middleware-bypass"],
+        startPaths=["/middleware"],
+        routes=[{"path": "/middleware", "methods": ["GET"]}],
+        discovery=[],
+    )
+    summary, _, _, accepted, resolved = await harness.run(assessment, "curated")
+    assert resolved == []
+    assert summary["coverage"]["templates"][0]["outcome"] == "match"
+    names = web.artifact_names(harness, accepted)
+    refs = [names[name]["artifactRef"] for name in ("report", "messages")]
+    retained = dict(
+        zip(
+            refs,
+            [
+                harness.published[f"{accepted.job_id}-output-{file}"]
+                for file in ("report.json", "messages.har")
+            ],
+        )
+    )
+    await finish(harness.backend, harness.request, tmp_path)
+    await assert_retained(environment, refs, retained)
+    await assert_assessment_retains(
+        environment, names["summary"]["artifactRef"], refs, [web.origin(app)]
+    )

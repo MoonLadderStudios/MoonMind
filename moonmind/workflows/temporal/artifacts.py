@@ -4414,6 +4414,77 @@ class TemporalArtifactService:
             )
         await self._finish_mutation()
 
+    async def grant_remediation_context_output_read(
+        self, *, artifact_id: str, access: ArtifactAccessContext
+    ) -> None:
+        """Publish a new context produced by the existing create admission.
+
+        Contexts precede the workflow's first Activity. Their canonical
+        remediation relationship, creator and pending producer link supply
+        provenance; a historical reference or reader request cannot grant it.
+        """
+        access = ArtifactAccessContext.require(access)
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
+        self._assert_not_quarantined(artifact)
+        if self._owner_principal(artifact) != access.principal:
+            raise TemporalArtifactAuthorizationError(
+                "context publication requires its creator"
+            )
+        await self._assert_artifact_raw_access(artifact, access=access)
+        if (
+            artifact.status is not db_models.TemporalArtifactStatus.PENDING_UPLOAD
+            or artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
+            raise TemporalArtifactStateError(
+                "context publication requires a new restricted upload"
+            )
+        metadata = artifact.metadata_json or {}
+        links = await self._repository.list_links(artifact_id)
+        producers = [link for link in links if link.link_type == "remediation.context"]
+        if metadata.get("artifact_type") != "remediation.context" or len(producers) != 1:
+            raise TemporalArtifactAuthorizationError(
+                "context publication requires its producer link"
+            )
+        producer = producers[0]
+        session = self._repository._session
+        record = await session.get(
+            db_models.TemporalExecutionCanonicalRecord, producer.workflow_id
+        )
+        relationship = await session.get(
+            db_models.TemporalExecutionRemediationLink, producer.workflow_id
+        )
+        if (
+            record is None
+            or relationship is None
+            or not producer.run_id
+            or producer.namespace != record.namespace
+            or producer.run_id != record.run_id
+            or relationship.remediation_run_id != record.run_id
+            or metadata.get("targetWorkflowId") != relationship.target_workflow_id
+            or metadata.get("targetRunId") != relationship.target_run_id
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "context publication requires its canonical relationship"
+            )
+        identity = (producer.namespace, producer.workflow_id, producer.run_id)
+        for link_type in (_DELEGATED_RAW_LINK_TYPE, _OPERATOR_OUTPUT_LINK_TYPE):
+            if not any(
+                link.link_type == link_type
+                and (link.namespace, link.workflow_id, link.run_id) == identity
+                for link in links
+            ):
+                await self._repository.add_link(
+                    artifact_id=artifact_id,
+                    execution=ExecutionRef(
+                        namespace=producer.namespace,
+                        workflow_id=producer.workflow_id,
+                        run_id=producer.run_id,
+                        link_type=link_type,
+                    ),
+                )
+        await self._finish_mutation()
+
     async def _recover_activity_creation(self, artifact_id: str) -> None:
         """Drain retained creates that predate producer links, from run history.
 

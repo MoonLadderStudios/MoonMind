@@ -34,7 +34,10 @@ from moonmind.security.native_network import (
     require_native_subset,
     require_native_transport_bytes,
 )
-from moonmind.security.native_tcp_gateway import NativeTCPConfig
+from moonmind.security.native_tcp_gateway import (
+    NativeTCPConfig,
+    validate_dial_outcomes,
+)
 from moonmind.utils.logging import redact_sensitive_text
 
 _CONFIG = "/tmp/moonmind-squid.conf"
@@ -188,9 +191,17 @@ class ScopedEgressLease:
         job_id: str,
         workload_ref: str,
         native_selection: NativeNetworkSelection | None = None,
+        native_connect_timeout_seconds: int | None = None,
     ):
         self.runner, self.policy = runner, policy
         self.native_selection = native_selection
+        if native_connect_timeout_seconds is not None and (
+            native_selection is None
+            or type(native_connect_timeout_seconds) is not int
+            or not 1 <= native_connect_timeout_seconds <= 30
+        ):
+            raise ValueError("typed native dial timeout must be an integer in 1..30")
+        self.native_connect_timeout_seconds = native_connect_timeout_seconds
         if native_selection is not None and policy is not None:
             require_native_subset(native_selection, policy.native_network)
         self.ownership, self.job_id, self.workload_ref = ownership, job_id, workload_ref
@@ -464,7 +475,11 @@ class ScopedEgressLease:
                 "maxConnectionsPerSecond": limits.max_connections_per_second,
                 "maxBytes": limits.max_bytes,
                 "handshakeSeconds": 10,
-                "connectSeconds": 10,
+                "connectSeconds": (
+                    self.native_connect_timeout_seconds
+                    if self.native_connect_timeout_seconds is not None
+                    else 10
+                ),
                 "idleSeconds": 30,
             }
         )
@@ -548,7 +563,7 @@ class ScopedEgressLease:
             or set(startup)
             != {"leaseId", "configDigest", "deadlineUnix", "pid", "processStart"}
             or not isinstance(counters, dict)
-            or set(counters) - {"transportErrors"}
+            or set(counters) - {"transportErrors", "dialOutcomes"}
             != {
                 "schemaVersion",
                 "leaseId",
@@ -613,6 +628,10 @@ class ScopedEgressLease:
                 )
             ):
                 raise RuntimeError(f"native {field} evidence is invalid")
+        try:
+            validate_dial_outcomes(counters)
+        except ValueError as exc:
+            raise RuntimeError("native dial outcome evidence is invalid") from exc
         return counters
 
     @staticmethod
@@ -628,6 +647,11 @@ class ScopedEgressLease:
 
     def _native_attribution(self, snapshot):
         return {
+            **(
+                {"nativeConnectTimeoutSeconds": self.native_connect_timeout_seconds}
+                if self.native_connect_timeout_seconds is not None
+                else {}
+            ),
             "resolvedAddresses": snapshot["addresses"],
             "targetIdentities": snapshot["targetIdentities"],
             "nativeLimits": self.native_selection.limits.model_dump(
@@ -645,6 +669,15 @@ class ScopedEgressLease:
             or evidence.get("networkRef") != self.network_ref
             or evidence.get("nativeSelectionDigest") != _digest(selection)
             or evidence.get("nativeLimits") != selection["limits"]
+            or (
+                "nativeConnectTimeoutSeconds" in evidence
+                if self.native_connect_timeout_seconds is None
+                else (
+                    type(evidence.get("nativeConnectTimeoutSeconds")) is not int
+                    or evidence["nativeConnectTimeoutSeconds"]
+                    != self.native_connect_timeout_seconds
+                )
+            )
             or evidence.get("coverage") == "unverified"
             or not (
                 isinstance(evidence.get("nativeNetwork"), dict)

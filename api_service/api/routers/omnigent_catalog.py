@@ -922,7 +922,7 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
     )
     workflow_worker_url = os.getenv(
         "TEMPORAL_WORKFLOW_READINESS_URL",
-        "http://temporal-worker-workflow:8080/readyz",
+        "http://temporal-worker-core:8080/readyz",
     )
     enforced_network_refs: set[str] = set()
     enforced_egress_profile_refs: set[str] = set()

@@ -408,7 +408,15 @@ if head.startswith(b'HTTP/1.1 200'):
  assert banner.startswith(b'220 '),banner
  print(json.dumps({'accepted':True,'banner':banner.decode().strip()}))
 else:
- assert head==b'',head
+ if head:
+  response=head+f.read(512)
+  expected={
+   (("HTTP/1.1 403 Forbidden" if outcome=="denied" else "HTTP/1.1 502 Bad Gateway")
+    +"\\r\\nX-MoonMind-Dial-Outcome: "+outcome
+    +"\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n").encode()
+   for outcome in ("denied","refused","unreachable","timed_out","transport_error")
+  }
+  assert response in expected,response
  print(json.dumps({'accepted':False}))
 s.close()
 """
@@ -574,7 +582,10 @@ def connect():
  except ConnectionResetError:head=b''
  if head.startswith(b'HTTP/1.1 200'):
   assert f.readline()==b'\\r\\n'; return s,f,True
- assert head==b'';return s,f,False
+ if head:
+  assert head==b'HTTP/1.1 403 Forbidden\\r\\n'
+  assert f.read(512)==b'X-MoonMind-Dial-Outcome: denied\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'
+ return s,f,False
 s,f,ok=connect();assert ok
 banner=f.readline();assert banner.startswith(b'220')
 if boundary=='maxBytes':
