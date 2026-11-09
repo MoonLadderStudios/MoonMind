@@ -1290,6 +1290,17 @@ class AssessmentExecution:
         )
 
         selection = request.framework
+        if selection.pack_id in {"iso-27001-readiness", "soc2-readiness"}:
+            from importlib import import_module
+            from moonmind.security.builtin_frameworks import prepare_builtin_framework
+
+            module = import_module("moonmind.security." + {
+                "iso-27001-readiness": "iso_27001",
+                "soc2-readiness": "soc2_readiness",
+            }[selection.pack_id])
+            return await prepare_builtin_framework(
+                self, request, module=module, collected_evidence_refs=collected_evidence_refs
+            )
         pack = load_framework_pack(selection.pack_id)
         if pack.id == "gli-19-readiness":
             from moonmind.security.gli_readiness import (
