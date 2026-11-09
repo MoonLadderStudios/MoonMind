@@ -278,6 +278,7 @@ async def lock_assessment_admission(session, scope, *, workflow_id):
         await _authorization_row(session, for_update=True, ensure_legacy_lock=True)
     else:
         await validate_current_assessment_authorization(session, scope, for_update=True)
+        await admit_assessment_occurrence(session, workflow_id=workflow_id)
 
 
 def assessment_marked(spec) -> bool:
@@ -326,7 +327,7 @@ async def persisted_assessment_scope(session, record, request, *, bind=True):
     return scope
 
 
-async def assessment_reserved_budget(session, scope, *, include_native=False):
+async def assessment_reserved_budget(session, scope, *, include_native=False, workflow_id=None):
     """Count admitted reservations without reauthorizing historical actions."""
     spec = ContainerJobRecord.request_json["spec"]
     refs = [
@@ -360,6 +361,8 @@ async def assessment_reserved_budget(session, scope, *, include_native=False):
         request = ContainerJobSubmitRequest.model_validate(
             {**record.request_json, "source": record.source_json}
         )
+        if workflow_id is not None and request.source.workflow_id != workflow_id:
+            continue
         # These are API-owned reservation records, not a request to act. The
         # recorded reference selects accounting only; it cannot grant launch
         # authority. Today's canonical targets may differ or no longer exist,
@@ -402,6 +405,10 @@ async def validate_job_assessment_authority(
         session, scope, workflow_id=saved.source.workflow_id
     )
     bind_assessment_job(record, scope, saved)
+    source = await session.get(TemporalExecutionCanonicalRecord, saved.source.workflow_id)
+    occurrence = source.assessment_occurrence_json if source else None
+    if occurrence:
+        record.assessment_deadline_at = min(utc(record.assessment_deadline_at), datetime.fromisoformat(occurrence["expiresAt"]))
     if profiles is not None:
         try:
             resolved_job_within_scope(saved.spec, scope, profiles)
@@ -412,3 +419,61 @@ async def validate_job_assessment_authority(
             "assessment job exhausted its original deadline"
         )
     return utc(record.assessment_deadline_at)
+
+
+async def admit_assessment_occurrence(session, *, workflow_id, now=None):
+    """Reserve a bounded run under the existing source -> Settings lock order.
+
+    Canonical rows, not schedule counters or client-supplied fields, account
+    across schedule edits and process replacement. Failed/revoked runs never
+    refund a reservation. A repeated Activity observes the original deadline.
+    """
+    now = now or datetime.now(UTC)
+    source = await session.get(
+        TemporalExecutionCanonicalRecord, workflow_id,
+        populate_existing=True, with_for_update=True,
+    )
+    if source is None:
+        raise AssessmentAuthorizationDenied("assessment canonical admission is unavailable")
+    if not (source.parameters or {}).get("assessmentScope"):
+        return None
+    scope = await canonical_assessment_scope(session, workflow_id)
+    if scope.engagement is None:
+        return None
+    record = await validate_current_assessment_authorization(session, scope, for_update=True, now=now)
+    terms = record.recurring
+    if terms is None:
+        return None
+    retained = source.assessment_occurrence_json
+    if retained:
+        if retained["scopeDigest"] != scope_digest(scope):
+            raise AssessmentAuthorizationDenied("occurrence authority changed; start a newly reviewed occurrence")
+        if now >= datetime.fromisoformat(retained["expiresAt"]):
+            raise AssessmentAuthorizationDenied("assessment occurrence exhausted its original deadline")
+        return retained
+    for grant in scope.grants:
+        if now >= grant.expires_at:
+            raise AssessmentAuthorizationDenied("assessment credential grant expired")
+    previous = (await session.scalars(select(TemporalExecutionCanonicalRecord).where(
+        TemporalExecutionCanonicalRecord.assessment_occurrence_json["assessmentRef"].as_string() == scope.assessment_ref
+    ))).all()
+    reservations = [row.assessment_occurrence_json for row in previous]
+    if len(reservations) >= terms.max_occurrences:
+        raise AssessmentAuthorizationDenied("assessment occurrence budget is exhausted")
+    if reservations and now < max(datetime.fromisoformat(item["admittedAt"]) for item in reservations) + timedelta(seconds=terms.min_interval_seconds):
+        raise AssessmentAuthorizationDenied("assessment continuing cadence has not elapsed; catch-up cannot compress runs")
+    expires = min(now + timedelta(seconds=terms.max_run_seconds), scope.engagement.valid_until,
+                  *(grant.expires_at for grant in scope.grants))
+    occurrence = {
+        "schemaVersion": "assessment-occurrence/v1", "assessmentRef": scope.assessment_ref,
+        "authorizationRef": record.ref, "authorizationGeneration": record.generation,
+        "scopeDigest": scope_digest(scope), "workflowId": workflow_id,
+        "ordinal": len(reservations) + 1, "admittedAt": now.isoformat(),
+        "expiresAt": expires.isoformat(), "scope": scope.model_dump(mode="json", by_alias=True, exclude_none=True),
+        "coverage": "pending", "comparisonDisposition": "unverified",
+        "limitations": ["Admission is not observation evidence. Missing or expired tool reports remain a coverage gap.",
+                        "External provider qualification is Unverified unless backed by retained run evidence."],
+    }
+    source.assessment_occurrence_json = occurrence
+    await session.flush()
+    return occurrence

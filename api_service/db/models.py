@@ -2233,6 +2233,11 @@ class TemporalExecutionCanonicalRecord(Base):
     input_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     plan_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     manifest_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Admission reservations are not workflow-authored parameters or memo.
+    # They survive retries, Continue-As-New and schedule deletion/recreation.
+    assessment_occurrence_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True,
+    )
     parameters: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )

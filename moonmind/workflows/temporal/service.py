@@ -7536,7 +7536,12 @@ class TemporalExecutionService:
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,
-            "parameters": dict(source.parameters or {}),
+            "parameters": {
+                **{key: value for key, value in (source.parameters or {}).items() if key != "assessmentOccurrence"},
+                **({"assessmentOccurrence": {
+                    **source.assessment_occurrence_json,
+                }} if getattr(source, "assessment_occurrence_json", None) else {}),
+            },
             "integration_state": (
                 dict(source.integration_state)
                 if isinstance(source.integration_state, dict)

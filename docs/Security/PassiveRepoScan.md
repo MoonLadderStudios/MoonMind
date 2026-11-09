@@ -165,16 +165,28 @@ admission owners. Agent-backed steps and PR finishing, including
 `review_only`, retain execution-plan admission; an assessment adds no image or
 source-revision pin.
 
-Use the existing schedule policy (`overlap.mode`, `catchup.mode`) and manual
-`POST /api/recurring-workflows/{id}/run` with an `Idempotency-Key`. Supply a newer
-`feedRef` through normal workflow/schedule authoring when intelligence changes,
-and the last `comparisonRef` as the next `baselineRef`. Trivy feed snapshots
-refresh through a recurring `container.run_job` step
-([feed snapshots](SecurityTools.md#trivy-feed-snapshots)); there is no feed
-poller or second scheduler. Identical admitted inputs reuse a confirmed scanner save;
-a later occurrence can also reuse the supplied baseline's scanner observation.
-Scanner results are saved before report publication, so publication retries
-do not repeat completed work. Cancellation propagates without a successor.
+Use existing `overlap.mode`, `catchup.mode` and idempotent manual runs. Saved
+assessment authorizations can opt into bounded continuing terms: minimum
+admission interval, occurrence count, per-occurrence jobs/seconds and a short
+run lifetime. Existing validity, target/profile/action scope and aggregate job
+limits still apply. Canonical execution reservations survive schedule edits,
+retries and restarts; missed runs cannot compress the admitted cadence. Worker
+launch and passive reassessment recheck current authority. Credential resolution
+stays with the actual workload owner; `CredentialGrant.revision` still identifies
+the secret, not a scope revision. Passive artifact work acquires no network rights.
+
+Renew or revoke through the recorded rules panel in Recurring or Workflow Detail.
+After a material change, edit the schedule, review current assessment authority,
+use the reviewed proposal, then save. Equivalent admitted occurrences need no
+extra confirmation. Renewal changes neither past evidence nor consumed limits.
+The occurrence panel identifies authority and retained comparisons; missing or
+expired observations remain gaps. Tool/pack/feed and coverage changes come from
+the existing comparison reports, never an inference that disappearance means repair.
+
+Supply changed feeds and the previous comparison through normal authoring.
+Feed snapshots use the existing bounded `container.run_job` owner, not another
+poller. Confirmed scans survive publication retries; cancellation starts no
+successor. External provider qualification remains Unverified without run evidence.
 
 ### Evidence contracts
 

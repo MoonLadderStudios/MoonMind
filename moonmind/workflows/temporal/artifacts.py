@@ -3184,6 +3184,58 @@ class TemporalArtifactService:
             purge_after=timedelta(seconds=max(0, int(purge_after_seconds))),
         )
 
+    async def assessment_occurrence(self, *, access: ArtifactAccessContext):
+        """Recheck continuing limits for passive evidence work without network rights."""
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+        from api_service.services.assessment_authorizations import admit_assessment_occurrence
+
+        access = ArtifactAccessContext.require(access)
+        if not access.execution_principal:
+            raise TemporalArtifactAuthorizationError("assessment requires execution admission")
+        workflow_id = access.execution_principal.removeprefix("workflow:")
+        source = await self._repository._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        if source is None or not (source.parameters or {}).get("assessmentScope"):
+            # Ordinary artifact-only assessments need read access, not target authority.
+            return None
+        result = await admit_assessment_occurrence(self._repository._session, workflow_id=workflow_id)
+        await self._finish_mutation()
+        return result
+
+    async def record_assessment_occurrence_evidence(self, *, access: ArtifactAccessContext, comparison_ref: str):
+        """Attach the existing typed comparison, never infer success from disappearance."""
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+        from moonmind.security.assessments import Comparison
+
+        access = ArtifactAccessContext.require(access)
+        if not access.execution_principal:
+            raise TemporalArtifactAuthorizationError("assessment requires execution admission")
+        workflow_id = access.execution_principal.removeprefix("workflow:")
+        source = await self._repository._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        if source is None or not source.assessment_occurrence_json:
+            return
+        _, payload = await self.read(artifact_id=comparison_ref, access=access)
+        comparison = Comparison.model_validate_json(payload)
+        # Lock only after the read owner has completed any standalone mutation.
+        source = await self._repository._session.get(
+            TemporalExecutionCanonicalRecord, workflow_id, populate_existing=True, with_for_update=True,
+        )
+        occurrence = dict(source.assessment_occurrence_json)
+        evidence = dict(occurrence.get("observations") or {})
+        evidence[comparison_ref] = {
+            "scanRef": comparison.scan_ref,
+            "observedAt": comparison.observation.observed_at.isoformat(),
+            "expiresAt": comparison.observation.expires_at.isoformat(),
+            "coverage": comparison.coverage_status,
+            "baselineStatus": comparison.baseline_status,
+            "counts": comparison.counts,
+            "intelligenceChanges": list(comparison.intelligence_changes),
+        }
+        occurrence.update(observations=evidence, evidenceRefs=list(evidence),
+                          coverage=comparison.coverage_status,
+                          comparisonDisposition=comparison.baseline_status)
+        source.assessment_occurrence_json = occurrence
+        await self._finish_mutation()
+
     async def _finish_mutation(self) -> None:
         """Flush borrowed work; only a standalone owner may publish it."""
         if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:

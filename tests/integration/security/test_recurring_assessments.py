@@ -1899,3 +1899,37 @@ async def test_product_api_security_schedule_lifecycle(
             await handle.terminate("Security schedule fixture cleanup")
         if schedule is not None:
             await schedule.delete()
+
+
+async def test_continuing_passive_occurrence_keeps_authority_and_comparison_evidence(environment):
+    from api_service.db.models import SettingsOverride, TemporalExecutionCanonicalRecord
+    from sqlalchemy import select
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_job_authority import authorization, save_scope
+
+    auth = authorization(recurring={
+        "minIntervalSeconds": 60, "maxOccurrences": 2,
+        "maxJobsPerOccurrence": 1, "maxJobSecondsPerOccurrence": 120,
+        "maxRunSeconds": 120,
+    })
+    await save_scope(environment.session, authorization_scope(auth), workflow="assessment", auth=auth)
+    request, _, _ = await inputs(environment.service)
+    output = await invoke(environment.service, request)
+    source = await environment.session.get(TemporalExecutionCanonicalRecord, "assessment", populate_existing=True)
+    occurrence = source.assessment_occurrence_json
+    assert occurrence["scope"]["networkRefs"] == []
+    assert occurrence["scope"]["grants"] == []
+    assert occurrence["evidenceRefs"] == [output["comparisonRef"]]
+    proof = occurrence["observations"][output["comparisonRef"]]
+    assert proof["coverage"] == output["coverageStatus"]
+    assert proof["counts"] == output["counts"]
+    original_deadline = occurrence["expiresAt"]
+    repeated = await invoke(environment.service, request)
+    assert repeated["scanRef"] == output["scanRef"]
+    assert source.assessment_occurrence_json["expiresAt"] == original_deadline
+    settings = await environment.session.scalar(select(SettingsOverride))
+    settings.value_json = {"authorizations": [auth.model_copy(update={"enabled": False}).model_dump(mode="json", by_alias=True)]}
+    await environment.session.commit()
+    from temporalio.exceptions import ApplicationError
+    with pytest.raises(ApplicationError, match="revoked"):
+        await invoke(environment.service, request, key="new-after-revoke")

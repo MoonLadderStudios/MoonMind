@@ -1423,6 +1423,18 @@ class RecurringWorkflowsService:
         from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
         try:
+            if initial_parameters.get("assessmentScope") is not None:
+                from api_service.services.assessment_authorizations import (
+                    admit_assessment_occurrence, canonical_assessment_scope,
+                )
+                from moonmind.security.workload_profiles import AdmittedAssessmentScope
+
+                scope = await canonical_assessment_scope(self._session, workflow_id)
+                if scope != AdmittedAssessmentScope.model_validate(initial_parameters["assessmentScope"]):
+                    raise RecurringWorkflowValidationError("scheduled assessment differs from its canonical authority")
+                await admit_assessment_occurrence(self._session, workflow_id=workflow_id)
+            if not initial_parameters.get("omnigentExecutionPlan"):
+                return {"disposition": "recorded", "reason": "Native occurrence retains its admitted tool plan."}
             if activity.in_activity() and scheduled_definition_id(workflow_id):
                 info = activity.info()
                 artifacts = self._artifact_service or TemporalArtifactService(
