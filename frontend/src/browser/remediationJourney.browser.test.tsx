@@ -391,13 +391,18 @@ describe('routed remediation operator journey', () => {
         comparisonArtifactRef: 'art_comparison', comparisonDigest: 'verified-digest', findingId: 'ownership', coverageStatus: 'complete', intelligenceChanges: [],
         finding: { findingId: 'ownership', state: 'new', evidenceExpiresAt: '2027-01-01T00:00:00Z', finding: { nativeId: 'ownership', asset: 'app', ruleId: 'owner-check', evidenceRefs: ['art_original'] } }, decisions: [],
       }] });
-      if (url.includes('/executions/source-workflow/artifacts')) return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: kind === 'review' ? 'security.review' : 'security.comparison' }] }] });
-      if (/\/executions\/source-workflow(?:\?|$)/.test(url)) return jsonResponse({ ...sourceExecution, state: 'succeeded', rawState: 'succeeded', status: 'succeeded', attentionRequired: false });
+      if (url === '/api/executions/default/source-workflow/source-run/artifacts?link_type=report.primary&latest_only=true') return jsonResponse({ artifacts: [] });
+      if (url === '/api/executions/default/source-workflow/source-run/artifacts') return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: kind === 'review' ? 'security.review' : 'security.comparison' }] }] });
+      if (/\/executions\/source-workflow(?:\?|$)/.test(url)) return jsonResponse({ ...sourceExecution, title: 'Successful security assessment', state: 'succeeded', rawState: 'succeeded', status: 'succeeded', attentionRequired: false });
       return fallback(input, init);
     });
     window.history.replaceState({}, '', '/workflows/source-workflow/artifacts');
     cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    // Detail is a lazy route; wait for its actual source identity before
+    // querying evidence controls rather than timing the initial loading shell.
+    await screen.findByText('Successful security assessment', {}, { timeout: 10_000 });
     await screen.findByLabelText('Security evidence');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/default/source-workflow/source-run/artifacts');
     await userEvent.selectOptions(screen.getByLabelText('Security evidence'), 'art_comparison');
     await userEvent.click(await screen.findByRole('button', { name: 'Investigate ownership' }));
     expect(await screen.findByText('Remediation Draft')).toBeTruthy();
