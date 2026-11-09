@@ -1471,3 +1471,71 @@ async def test_fresh_occurrence_launches_the_model_its_admission_planned(
                 agent_run_id="agent-run-1",
             )
         assert conflict.value.code == "OMNIGENT_EXECUTION_PLAN_CONFLICT"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_schedule", [False, True])
+@pytest.mark.parametrize("has_plan", [False, True])
+async def test_occurrence_disabled_processing_denies_before_plan_reuse(
+    monkeypatch, compiler, native_schedule, has_plan
+):
+    from unittest.mock import AsyncMock
+    from temporalio import activity
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+    )
+    from tests.unit.services.test_assessment_model_delivery import source
+
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, _ = await _schedule_parameters(artifacts)
+    parameters.update(source({"modelDelivery": "disabled"}).parameters)
+    if not has_plan:
+        parameters.pop("omnigentExecutionPlan")
+    original = deepcopy(parameters)
+    readmit_inputs = AsyncMock(return_value={"initial_parameters": original})
+    artifacts.readmit_scheduled_inputs = readmit_inputs
+    monkeypatch.setattr(activity, "in_activity", lambda: native_schedule)
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(namespace="default", workflow_run_id="continued-run"),
+    )
+    if native_schedule:
+        # Continue-As-New arguments cannot remove the original processing policy.
+        parameters.pop("assessmentProject")
+    before = deepcopy(artifacts.payloads)
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
+    with pytest.raises(
+        RecurringWorkflowValidationError, match="Model delivery is disabled"
+    ):
+        await RecurringWorkflowsService(
+            session, artifact_service=artifacts
+        ).admit_occurrence_execution_plan(
+            workflow_id="mm:11111111-1111-4111-8111-111111111111-2026-11-09T00:00:00Z",
+            initial_parameters=parameters,
+        )
+    assert artifacts.payloads == before
+    assert session.commits == 0
+    if native_schedule:
+        readmit_inputs.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disabled_processing_retains_native_tool_only_occurrence(monkeypatch):
+    from unittest.mock import AsyncMock
+    from tests.unit.services.test_assessment_model_delivery import source
+
+    readmit = AsyncMock(side_effect=AssertionError("native tools have no model plan"))
+    monkeypatch.setattr(plan_service, "readmit_frozen_execution_plan", readmit)
+    parameters = {
+        **source({"modelDelivery": "disabled"}).parameters,
+        "workflow": {
+            "plan": [{"tool": {"type": "activity", "name": "security.assess"}}]
+        },
+    }
+    admitted = await RecurringWorkflowsService(None).admit_occurrence_execution_plan(
+        workflow_id="native-tools", initial_parameters=parameters
+    )
+    assert admitted["disposition"] == "recorded"
+    readmit.assert_not_awaited()
