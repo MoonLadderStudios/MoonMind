@@ -1,54 +1,31 @@
 # Passive Repository Scan
 
-**Document Class:** Working document (owning tool/report note)
+**Document Class:** Tool/report note
 **Viewpoint:** Security tooling
 **Status:** Implemented
 **Owners:** MoonMind Engineering
 **Last Updated:** 2026-09-22
 
-> [!NOTE]
-> This is the small owning documentation for one bounded product extension:
-> a single passive, read-only secret-exposure scan over an authorized
-> snapshot, run through the existing Container Job and artifact path. It is
-> not a security platform, scanner runtime, or replacement for core
-> reliability work.
-
-The broader proposed assessment program and tool recommendations are described
-in [Security Tools and Assessment Workflows](SecurityTools.md).
+Passive scans and retained-artifact assessments use the existing Container Job,
+Temporal and artifact owners. See [Security Tools and Assessment Workflows](SecurityTools.md)
+for supported tools and target admission.
 
 ## Scanner selection
 
-One maintained scanner for one declared input class with a useful
-secret-exposure result:
-
-- **Scanner:** the in-repo outbound-scan regex contract
-  (`moonmind.security.outbound_scan.scan_outbound_text`, forced
-  `high_security_mode=True` per file), as wired by
-  `moonmind/security/passive_repo_scan.py`.
-- **Official interface:** `scan_outbound_text(text, location, high_security_mode=True)`;
-  findings are category/location/redacted-preview triples.
-- **Licensing:** in-repo MoonMind code; no new dependency.
-- **Image provenance:** not applicable -- the scan runs in-process; no scanner
-  image is pulled, installed into MoonMind's main image, or executed from a
-  collection.
-- **Configuration:** `PassiveScanConfig` bounds (`max_files`,
-  `max_bytes_per_file`, `max_total_bytes`), recorded in result metadata.
-- **Output behavior:** native machine-readable JSON plus a small Markdown
-  summary; raw matches never leave the scan boundary.
-
-No ToolPack database/schema family, no scanner collection, no universal
-findings model, no feed service, and no assessment-target network access.
+The in-repo `moonmind.security.outbound_scan.scan_outbound_text` regex scanner
+runs with `high_security_mode=True` through `moonmind/security/passive_repo_scan.py`.
+It emits category/location/redacted-preview findings; raw matches never leave
+the boundary. `PassiveScanConfig` records file-count, per-file and total byte
+bounds. Results include native JSON and a Markdown summary. This in-process
+MoonMind code requires no scanner image, external feed or target-network access.
 
 ## Execution
 
-- **Supported journey:** `moonmind container passive-scan` (backed by
+- **Supported journey:** `moonmind container passive-scan` submits through
   `passive_scan_submission()` / `run_passive_scan_job()` in
-  `moonmind/container_job_cli.py`) submits the scan workload through the
-  existing `container_job_submission` path -- workspace and correlation
-  identity are stamped from the admitted managed session, so the authorized
-  operator never hand-authors a JSON workload. The command waits durably and
-  prints the terminal job state plus the collected logs and artifacts
-  references for the retained native report and summary.
+  `moonmind/container_job_cli.py`. Managed-session admission stamps workspace
+  and correlation identity. The command waits durably and prints terminal state,
+  logs and native report/summary references.
 - **Input:** an authorized snapshot directory (declared input class:
   UTF-8 text files). The default snapshot is the mounted workspace root
   (`.` with `workdir: /workspace`): the container-job path mounts the
@@ -165,28 +142,26 @@ admission owners. Agent-backed steps and PR finishing, including
 `review_only`, retain execution-plan admission; an assessment adds no image or
 source-revision pin.
 
-Use existing `overlap.mode`, `catchup.mode` and idempotent manual runs. Saved
-assessment authorizations can opt into bounded continuing terms: minimum
-admission interval, occurrence count, per-occurrence jobs/seconds and a short
-run lifetime. Existing validity, target/profile/action scope and aggregate job
-limits still apply. Canonical execution reservations survive schedule edits,
-retries and restarts; missed runs cannot compress the admitted cadence. Worker
-launch and passive reassessment recheck current authority. Credential resolution
-stays with the actual workload owner; `CredentialGrant.revision` still identifies
-the secret, not a scope revision. Passive artifact work acquires no network rights.
+Use existing overlap/catch-up policy and idempotent manual runs. Assessment
+authorizations optionally bound continuing work by minimum interval, occurrence
+count, per-occurrence jobs/seconds and run lifetime. Original validity, scope
+and aggregate limits still apply. Canonical reservations survive schedule edits,
+retries and restarts; catch-up cannot compress cadence. Worker launch and passive
+reassessment recheck authority. Credential resolution stays with its workload
+owner: `CredentialGrant.revision` identifies the secret, not a policy revision.
+Passive work acquires no network rights.
 
-Renew or revoke through the recorded rules panel in Recurring or Workflow Detail.
-After a material change, edit the schedule, review current assessment authority,
-use the reviewed proposal, then save. Equivalent admitted occurrences need no
-extra confirmation. Renewal changes neither past evidence nor consumed limits.
-The occurrence panel identifies authority and retained comparisons; missing or
-expired observations remain gaps. Tool/pack/feed and coverage changes come from
-the existing comparison reports, never an inference that disappearance means repair.
+Renew/revoke through the recorded rules panel in Recurring or Workflow Detail.
+After material changes, edit the schedule, review current authority, use the
+proposal, then save. Equivalent runs need no extra confirmation. Renewal does
+not reset consumption. The occurrence panel links retained comparisons;
+missing/expired evidence is a gap. Existing comparisons explain scope, tool,
+pack/feed and coverage changes, never treating disappearance alone as remediation.
 
-Supply changed feeds and the previous comparison through normal authoring.
-Feed snapshots use the existing bounded `container.run_job` owner, not another
-poller. Confirmed scans survive publication retries; cancellation starts no
-successor. External provider qualification remains Unverified without run evidence.
+Supply new feeds and previous comparisons through normal authoring. Feed
+snapshots reuse `container.run_job`; no second poller is introduced. Confirmed
+scans survive report retries; cancellation starts no successor. External provider
+qualification remains Unverified without run evidence.
 
 ### Evidence contracts
 

@@ -3466,12 +3466,12 @@ async def security_assessment_handler(
         occurrence = await context["temporal_artifact_service"].assessment_occurrence(access=access)
     except AssessmentAuthorizationDenied as exc:
         raise ToolFailure("POLICY_VIOLATION", str(exc), False) from None
-    if occurrence:
-        remaining = min(remaining, (datetime.fromisoformat(occurrence["expiresAt"]) - datetime.now(UTC)).total_seconds())
     if activity.in_activity():
         remaining -= (
             datetime.now(UTC) - activity.info().scheduled_time
         ).total_seconds()
+    if occurrence:
+        remaining = min(remaining, (datetime.fromisoformat(occurrence["expiresAt"]) - datetime.now(UTC)).total_seconds())
     if remaining <= 0:
         raise ToolFailure("TIMEOUT", "Original assessment budget is exhausted.", False)
     async with asyncio.timeout(remaining):
