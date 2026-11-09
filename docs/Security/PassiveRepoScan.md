@@ -200,34 +200,30 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
 
 ### Requirement assessments
 
-`security.assess` evaluates explicit `controlAssessment.requirements` or a
-[declared framework pack](FrameworkPacks.md) after native scans and comparison.
-The ordinary report publishes `security-control-assessment/v1` as
-`controlAssessmentRef`. Mappings and an empty findings list do not satisfy a
-requirement.
+After native comparison, `security.assess` evaluates `controlAssessment.requirements`
+or a [declared framework pack](FrameworkPacks.md), publishing
+`security-control-assessment/v1` as `controlAssessmentRef`. Mappings and empty
+findings do not satisfy requirements.
 
-Requirements identify their framework/edition, title, scope, period and justified
-applicability. Each objective names explicit `source`, `tool` and `ruleIds`.
-`objectivesComplete` defaults to false; declaring a complete checklist requires
-an `objectiveBasis`. Scope cannot expand admitted assets or drop exclusions and
-repository exceptions. Optional `owner` and `reviewer` are attributed metadata,
-not MoonMind roles or authenticated opinions.
+Requirements identify framework/edition, title, scope, period and justified
+applicability; objectives name `source`, `tool` and `ruleIds`.
+`objectivesComplete` defaults to false; completeness requires an `objectiveBasis`.
+Scope preserves admitted assets, exclusions and repository exceptions. Optional
+`owner` and `reviewer` are attribution, not roles or authenticated opinions.
 
 Satisfaction requires every selected asset/rule check to have complete, current,
 explicitly deterministic evidence covering the declared objectives. Coverage
 rows record `evidenceMethod`; an unclassified legacy record or interpretation
-cannot become an executed check. The inventory/feed and passive source adapters
-identify their deterministic checks, as do RNG statistical diagnostics; RNG
-implementation review stays interpretation. Other unclassified adapters remain
-inconclusive for this purpose until their producer identifies the actual method.
+cannot become an executed check. Inventory/feed, passive-source and RNG statistical checks identify their methods;
+RNG implementation review remains interpretation. Unclassified adapters remain
+inconclusive until their producer identifies the method.
 `allRules` does not prove an arbitrary mapped rule was installed. Conflicting,
 failed or incomplete matching observations remain visible. Observed native defects
 produce `not_satisfied`; accepted risk stays separate triage with its existing
 author, reason, review and expiry semantics.
 
-A single-date period means a point-in-time observation on that date, not
-continuous operation for a day. Multi-day operation cannot be established by
-one snapshot. Per-coverage `coverageWindows` retain each source's observation
+A single-date period is a point observation, not continuous operation. One
+snapshot cannot establish multi-day operation. Per-coverage `coverageWindows` retain each source's observation
 and expiry through aggregation and baseline reuse; refreshing an advisory feed
 does not refresh the inventory population's observation date. Its `validFrom`
 also requires the selected feed to be current. Legacy aggregated
@@ -242,22 +238,19 @@ not executed checks, and cannot replace missing native evidence. Missing,
 denied, expired, out-of-scope or contradictory required context prevents a
 satisfied conclusion. A requested unavailable `reviewRef` remains explicit.
 
-Each result separates applicability, coverage, conclusion, evidence sufficiency,
-review state, methods, exceptions, limitations and next actions. Justified
-non-applicability is not satisfaction. One artifact can support several
-requirements without sharing their conclusions. The implementation bounds
-requirements, check populations, references and evidence bytes; it performs no
-new network operations or scanner launches.
+Results separate applicability, coverage, conclusion, sufficiency, review state,
+methods, exceptions, limitations and next actions. Non-applicability is not
+satisfaction. [Organisational requests](FrameworkPacks.md#organisational-evidence-requests-and-imports)
+reuse scoped artifacts. Requirements, populations, references and bytes are
+bounded; evaluation launches no network operations or scanners.
 
-Read authority, freshness and decisions are reevaluated before immutable control
-results are reused. The control artifact seals its scan, comparison and readable
-context through the existing dependency owner. Unreadable refs remain diagnostics,
-not verified dependencies; readable but invalid interpretations retain their bytes
-without becoming usable evidence. Control or publication failure preserves native
-outcomes; retries reuse completed scans. Changed conclusions do not rewrite
-historical artifacts. Independent assessor conclusions and certification remain
-Unverified; an authorized assessor can review the retained scope, objectives,
-methods and evidence without being an implementation-completion gate.
+Reuse rechecks access, freshness and decisions. Existing dependency seals retain
+the scan, comparison and readable context. Unreadable refs remain diagnostics;
+invalid interpretations retain bytes without becoming usable evidence. Control
+or publication failure preserves native outcomes; retries reuse completed scans.
+Changed conclusions never rewrite history. Independent assessor conclusions and
+certification remain Unverified. Assessors can review retained scope, objectives,
+methods and evidence without becoming an implementation-completion gate.
 
 For assessed gaming deployments, supply `productBaselineRef` separately from
 the finding-history `baselineRef`. It names a `security-product-baseline/v1`

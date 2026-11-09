@@ -86,3 +86,54 @@ intelligence changes, never a newly remediated system. A missing, foreign or
 unsealed previous report makes that comparison Unverified; it does not rewrite
 history or discard usable current evidence. Changed applicability and methods are
 reevaluated rather than inheriting a prior green conclusion.
+
+## Organisational evidence requests and imports
+
+For `security.assess`, expand **Organisational evidence requests and review** in
+Create's selected Tool inputs. Declare requirements in `controlAssessment`, or
+choices in `frameworkPack.requirementChoices`, then add requests to the selected
+requirement. Import a non-empty document or bounded structured JSON file (up to
+4 MiB) with the existing artifact upload service. Copy the completed `art_`
+reference into a revision in the ordinary structured input or JSON editor. The
+upload stays in the artifact store; importing does not accept its contents.
+Explicit revision references are admitted to the selected workflow before it
+starts, separately from image attachments. This does not admit model delivery. Failed
+uploads preserve the file selection for retry. Existing authorized references can
+be reused without uploading again.
+
+Each requirement/choice has an `organisationalEvidence` list. A request records
+`id`, `category`, `purpose` (`design`, `adoption`, or `occurrence`), `description`,
+`owner` (a label, not a role), and `revisions` (empty means requested). Categories
+cover risk registers/treatment, statements of applicability, policies, training,
+access reviews, incidents, suppliers, internal audits, management reviews and
+corrective actions. Each revision records:
+
+- `artifactRef`, `kind` (`document`, `operational_record`, `management_assertion`,
+  or `generated_draft`), `source`, `collectedAt`, `expiresAt`, `sensitivity`
+  (`public`, `internal`, `confidential`, or `restricted`), `population` (asset
+  labels), and `period` (`start`/`end` dates).
+- Optional `review`: `outcome` (`accepted` or `insufficient`), `purpose`,
+  `reviewer`, `reason`, `reviewedAt`, `population`, and `period`. This is an
+  attributed review of the cited revision, not independent event verification.
+
+Use existing security-review Skills to inspect authorized evidence and cite the
+revision when recording the reason. A policy-design review does not establish
+adoption; adoption and occurrence require operational records. Generated policy,
+SoA or minutes drafts and management assertions remain insufficient substitutes
+for those records. Missing, unreadable, expired, future-dated, out-of-period or
+incompletely populated evidence remains an explicit gap. Read access and temporal
+sufficiency are rechecked on every assessment, including retries. `document_review`
+is distinct from deterministic scan results and cannot replace executed checks.
+
+Reuse a reference in several requirements with separate purpose/period reviews.
+Append a new revision to replace evidence; earlier references and their reviews
+remain superseded history. Completed assessments are immutable, so reviewing the
+same evidence for a later period creates another assessment rather than changing
+an earlier review. Only current revisions are admitted, read and retained as
+current evidence; superseded references remain metadata without new read grants.
+Earlier reports retain their own evidence closure. Current artifacts follow
+existing required-dependency retention. There is no new document store, email automation,
+role system or approval engine. Sensitivity labels describe evidence; existing
+artifact authorization and model-delivery admission still govern access and use.
+Real organisation evidence and external assessor conclusions remain Unverified
+unless independently obtained; controlled synthetic evidence tests this journey.
