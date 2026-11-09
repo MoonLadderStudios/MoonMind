@@ -269,6 +269,913 @@
       }
     },
     {
+      "id": "gaming-rgs-defective",
+      "capability": "gaming-native",
+      "family": "rgs",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic rgs fixture, Apache-2.0; no customer data",
+      "limits": [
+        "transport",
+        "authorization"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "audit-effect",
+          "wallet-balance",
+          "wallet-effect"
+        ],
+        "covered": [
+          "rgs"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "transport",
+          "authorization"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
+    },
+    {
+      "id": "gaming-rgs-corrected",
+      "capability": "gaming-native",
+      "family": "rgs",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic rgs fixture, Apache-2.0; no customer data",
+      "limits": [
+        "transport",
+        "authorization"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "rgs"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "transport",
+          "authorization"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
+    },
+    {
+      "id": "gaming-rgs-clean",
+      "capability": "gaming-native",
+      "family": "rgs",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic rgs fixture, Apache-2.0; no customer data",
+      "limits": [
+        "transport",
+        "authorization"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "rgs"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "transport",
+          "authorization"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive"
+    },
+    {
+      "id": "gaming-rgs-held-out",
+      "capability": "gaming-native",
+      "family": "rgs",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#rgs",
+      "limits": [
+        "transport",
+        "authorization"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "wallet-effect",
+          "wallet-balance"
+        ],
+        "covered": [
+          "rgs"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "transport",
+          "authorization"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "wallet-effect",
+        "audit-effect",
+        "wallet-balance"
+      ],
+      "conclusion": "inconclusive",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-rng-defective",
+      "capability": "gaming-native",
+      "family": "rng",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic rng fixture, Apache-2.0; no customer data",
+      "limits": [
+        "cryptographic-security",
+        "certification",
+        "game-fairness"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "rng-mapped-mapped-frequency"
+        ],
+        "covered": [
+          "rng"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "cryptographic-security",
+          "certification",
+          "game-fairness"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "not_satisfied"
+    },
+    {
+      "id": "gaming-rng-corrected",
+      "capability": "gaming-native",
+      "family": "rng",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic rng fixture, Apache-2.0; no customer data",
+      "limits": [
+        "cryptographic-security",
+        "certification",
+        "game-fairness"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "rng"
+        ],
+        "satisfied": true,
+        "unknowns": [
+          "cryptographic-security",
+          "certification",
+          "game-fairness"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "satisfied"
+    },
+    {
+      "id": "gaming-rng-clean",
+      "capability": "gaming-native",
+      "family": "rng",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic rng fixture, Apache-2.0; no customer data",
+      "limits": [
+        "cryptographic-security",
+        "certification",
+        "game-fairness"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "rng"
+        ],
+        "satisfied": true,
+        "unknowns": [
+          "cryptographic-security",
+          "certification",
+          "game-fairness"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "satisfied"
+    },
+    {
+      "id": "gaming-rng-held-out",
+      "capability": "gaming-native",
+      "family": "rng",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#rng",
+      "limits": [
+        "cryptographic-security",
+        "certification",
+        "game-fairness"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "rng-mapped-mapped-frequency"
+        ],
+        "covered": [
+          "rng"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "cryptographic-security",
+          "certification",
+          "game-fairness"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "not_satisfied",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-math-defective",
+      "capability": "gaming-native",
+      "family": "math",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic math fixture, Apache-2.0; no customer data",
+      "limits": [
+        "approval",
+        "sampling",
+        "deployed-implementation"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "settlement"
+        ],
+        "covered": [
+          "math"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "approval",
+          "sampling",
+          "deployed-implementation"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "not_satisfied"
+    },
+    {
+      "id": "gaming-math-corrected",
+      "capability": "gaming-native",
+      "family": "math",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic math fixture, Apache-2.0; no customer data",
+      "limits": [
+        "approval",
+        "sampling",
+        "deployed-implementation"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "math"
+        ],
+        "satisfied": true,
+        "unknowns": [
+          "approval",
+          "sampling",
+          "deployed-implementation"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "satisfied"
+    },
+    {
+      "id": "gaming-math-clean",
+      "capability": "gaming-native",
+      "family": "math",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic math fixture, Apache-2.0; no customer data",
+      "limits": [
+        "approval",
+        "sampling",
+        "deployed-implementation"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "covered": [
+          "math"
+        ],
+        "satisfied": true,
+        "unknowns": [
+          "approval",
+          "sampling",
+          "deployed-implementation"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "satisfied"
+    },
+    {
+      "id": "gaming-math-held-out",
+      "capability": "gaming-native",
+      "family": "math",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#math",
+      "limits": [
+        "approval",
+        "sampling",
+        "deployed-implementation"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "settlement"
+        ],
+        "covered": [
+          "math"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "approval",
+          "sampling",
+          "deployed-implementation"
+        ],
+        "verifiedRemediations": []
+      },
+      "controlRules": [
+        "settlement"
+      ],
+      "conclusion": "not_satisfied",
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-gli-defective",
+      "capability": "gaming-pack",
+      "family": "gli",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "4.0",
+      "requirements": [
+        "GLI-GSF-2:B"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "GLI-GSF-2:B"
+        ],
+        "covered": [],
+        "coverageGaps": 1,
+        "satisfied": false,
+        "unknowns": [
+          "GLI-GSF-2:B"
+        ],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-gli-corrected",
+      "capability": "gaming-pack",
+      "family": "gli",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "4.0",
+      "requirements": [
+        "GLI-GSF-2:B"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "GLI-GSF-2:B"
+        ],
+        "covered": [
+          "GLI-GSF-2:B"
+        ],
+        "coverageGaps": 0,
+        "satisfied": false,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-gli-clean",
+      "capability": "gaming-pack",
+      "family": "gli",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "4.0",
+      "requirements": [
+        "GLI-GSF-2:B"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "GLI-GSF-2:B"
+        ],
+        "covered": [
+          "GLI-GSF-2:B"
+        ],
+        "coverageGaps": 0,
+        "satisfied": false,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-gli-held-out",
+      "capability": "gaming-pack",
+      "family": "gli",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#gli",
+      "edition": "4.0",
+      "requirements": [
+        "GLI-GSF-2:B"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "GLI-GSF-2:B"
+        ],
+        "covered": [],
+        "coverageGaps": 1,
+        "satisfied": false,
+        "unknowns": [
+          "GLI-GSF-2:B"
+        ],
+        "verifiedRemediations": []
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-nj-defective",
+      "capability": "gaming-pack",
+      "family": "nj",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "requirements": [
+        "nj.rgs.games-releases",
+        "nj.partner.player-accounts"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "covered": [],
+        "coverageGaps": 2,
+        "satisfied": false,
+        "unknowns": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-nj-corrected",
+      "capability": "gaming-pack",
+      "family": "nj",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "requirements": [
+        "nj.rgs.games-releases",
+        "nj.partner.player-accounts"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "covered": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "coverageGaps": 0,
+        "satisfied": true,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-nj-clean",
+      "capability": "gaming-pack",
+      "family": "nj",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "requirements": [
+        "nj.rgs.games-releases",
+        "nj.partner.player-accounts"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "covered": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "coverageGaps": 0,
+        "satisfied": true,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-nj-held-out",
+      "capability": "gaming-pack",
+      "family": "nj",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#nj",
+      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "requirements": [
+        "nj.rgs.games-releases",
+        "nj.partner.player-accounts"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "covered": [],
+        "coverageGaps": 2,
+        "satisfied": false,
+        "unknowns": [
+          "nj.rgs.games-releases",
+          "nj.partner.player-accounts"
+        ],
+        "verifiedRemediations": []
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-uk-defective",
+      "capability": "gaming-pack",
+      "family": "uk",
+      "variant": "defective",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "ISO/IEC 27001:2022",
+      "requirements": [
+        "8.32"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "8.32"
+        ],
+        "covered": [],
+        "coverageGaps": 1,
+        "satisfied": false,
+        "unknowns": [
+          "8.32"
+        ],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-uk-corrected",
+      "capability": "gaming-pack",
+      "family": "uk",
+      "variant": "corrected",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "ISO/IEC 27001:2022",
+      "requirements": [
+        "8.32"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "8.32"
+        ],
+        "covered": [
+          "8.32"
+        ],
+        "coverageGaps": 0,
+        "satisfied": true,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-uk-clean",
+      "capability": "gaming-pack",
+      "family": "uk",
+      "variant": "clean",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "ISO/IEC 27001:2022",
+      "requirements": [
+        "8.32"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "clean",
+        "findings": [],
+        "scope": [
+          "8.32"
+        ],
+        "covered": [
+          "8.32"
+        ],
+        "coverageGaps": 0,
+        "satisfied": true,
+        "unknowns": [],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-uk-held-out",
+      "capability": "gaming-pack",
+      "family": "uk",
+      "variant": "held-out",
+      "split": "held-out",
+      "source": "tests/fixtures/security_review/gaming-heldout.json#uk",
+      "edition": "ISO/IEC 27001:2022",
+      "requirements": [
+        "8.32"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "8.32"
+        ],
+        "covered": [],
+        "coverageGaps": 1,
+        "satisfied": false,
+        "unknowns": [
+          "8.32"
+        ],
+        "verifiedRemediations": []
+      },
+      "frozenAgainst": "9cf4952db3b939ac01f85c0f51845badeb9c3f61 production checks; new inputs only, no detector tuning"
+    },
+    {
+      "id": "gaming-math-verified-remediation",
+      "capability": "gaming-remediation",
+      "split": "regression",
+      "source": "First-party synthetic settlement correction and explicit retained retest decision",
+      "expected": {
+        "outcome": "repaired",
+        "findings": [],
+        "covered": [
+          "settlement"
+        ],
+        "satisfied": true,
+        "unknowns": [
+          "certification"
+        ],
+        "verifiedRemediations": [
+          "settlement"
+        ]
+      }
+    },
+    {
+      "id": "gaming-historical-reconciliation",
+      "capability": "gaming-historical",
+      "split": "regression",
+      "source": "tests/fixtures/security_review/gaming-historical.json",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "mapping-bias"
+        ],
+        "covered": [
+          "historical-comparison"
+        ],
+        "satisfied": false,
+        "unknowns": [
+          "external-laboratory"
+        ],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-gli-unsupported-adoption",
+      "capability": "gaming-pack",
+      "family": "gli",
+      "variant": "unsupported-adoption",
+      "split": "regression",
+      "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
+      "edition": "4.0",
+      "requirements": [
+        "GLI-GSF-2:B"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "scope": [
+          "GLI-GSF-2:B"
+        ],
+        "covered": [
+          "GLI-GSF-2:B"
+        ],
+        "coverageGaps": 0,
+        "satisfied": false,
+        "unknowns": [
+          "jurisdiction.adoption"
+        ],
+        "verifiedRemediations": []
+      }
+    },
+    {
+      "id": "gaming-rng-insufficient-sample",
+      "capability": "gaming-native",
+      "family": "rng",
+      "variant": "insufficient-sample",
+      "split": "regression",
+      "source": "First-party synthetic rng fixture, Apache-2.0; no customer data",
+      "limits": [
+        "cryptographic-security",
+        "certification",
+        "game-fairness"
+      ],
+      "requiredMutations": [
+        "wrong-conclusion"
+      ],
+      "expected": {
+        "outcome": "incomplete",
+        "findings": [],
+        "covered": [],
+        "satisfied": false,
+        "unknowns": [
+          "cryptographic-security",
+          "certification",
+          "game-fairness",
+          "sampling"
+        ],
+        "verifiedRemediations": [],
+        "scope": [
+          "rng"
+        ],
+        "coverageGaps": 1
+      },
+      "controlRules": [
+        "rng-mapped-mapped-frequency",
+        "rng-raw-bit-frequency",
+        "rng-raw-pair-frequency"
+      ],
+      "conclusion": "inconclusive"
+    },
+    {
       "id": "methodology-authorization-vulnerable",
       "capability": "methodology",
       "split": "regression",

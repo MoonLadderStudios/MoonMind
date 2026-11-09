@@ -553,6 +553,53 @@ async def test_job_to_control_report_export_and_explicit_retest(
         "requirements"
     ][0]["conclusion"] == "satisfied"
 
+    from tests.integration.security.quality import QualityRun, observation
+
+    comparison = await recurring.read(service, reviewed["comparisonRef"])
+    actual = observation(
+        "repaired" if reviewed["counts"]["remediated_verified"] else "clean",
+        [
+            r["finding"]["ruleId"]
+            for r in comparison["findings"]
+            if r["state"] != "remediated_verified"
+        ],
+        ["settlement"],
+        native_ref=fixed_ref,
+        satisfied=(await recurring.read(service, reviewed["controlAssessmentRef"]))[
+            "requirements"
+        ][0]["conclusion"]
+        == "satisfied",
+    )
+    actual.update(
+        unknowns=["certification"]
+        if json.loads(fixed.published[fixed_ref])["certification"] == "not_performed"
+        else [],
+        verifiedRemediations=[
+            r["finding"]["ruleId"]
+            for r in comparison["findings"]
+            if r["state"] == "remediated_verified"
+        ],
+    )
+    await QualityRun().finish(
+        service,
+        "gaming-math-verified-remediation",
+        actual,
+        [
+            ref,
+            fixed_ref,
+            decisions,
+            result["comparisonRef"],
+            reviewed["comparisonRef"],
+            reviewed["controlAssessmentRef"],
+            recurring.report_ref(reviewed),
+        ],
+        provenance={
+            "scope": [GAME],
+            "baseline": result["comparisonRef"],
+            "retestDecision": decisions,
+        },
+    )
+
 
 @pytest.mark.parametrize(
     "attack",
@@ -706,10 +753,12 @@ async def test_revoked_retained_input_blocks_cached_positive_scan(
         artifact = await environment.session.get(TemporalArtifact, blocked)
         artifact.metadata_json = {**artifact.metadata_json, "quarantine": True}
     else:
-        await environment.session.execute(delete(TemporalArtifactLink).where(
-            TemporalArtifactLink.artifact_id == blocked,
-            TemporalArtifactLink.workflow_id == "assessment",
-        ))
+        await environment.session.execute(
+            delete(TemporalArtifactLink).where(
+                TemporalArtifactLink.artifact_id == blocked,
+                TemporalArtifactLink.workflow_id == "assessment",
+            )
+        )
     await environment.session.commit()
     with pytest.raises(ApplicationError, match="(quarantined|QUARANTINED|read|access)"):
         await job.assess(ref, "cache", controlAssessment=controls())

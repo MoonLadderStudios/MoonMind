@@ -94,7 +94,7 @@ class Job(game_jobs.Job):
             }
         )
 
-    async def assess(self, ref, key):
+    async def assess(self, ref, key, **options):
         from tests.integration.security.test_recurring_assessments import invoke
 
         return await invoke(
@@ -103,6 +103,7 @@ class Job(game_jobs.Job):
                 "scope": {"assets": ["game:rng-fixture"]},
                 "tools": ["retained-report"],
                 "reportRefs": [ref],
+                **options,
                 "credentialRefs": [],
                 "networkRefs": [],
                 "budget": {
