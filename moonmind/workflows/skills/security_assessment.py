@@ -1477,7 +1477,7 @@ class AssessmentExecution:
         from moonmind.security.control_assessments import assess_controls
 
         availability, readable, total = {}, [], 0
-        refs = request.control_assessment.evidence_refs()
+        refs = request.control_assessment.evidence_refs(current_only=True)
         for ref in refs:
             try:
                 if total > _MAX_INPUT_BYTES * 2:

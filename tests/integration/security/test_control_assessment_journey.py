@@ -370,14 +370,28 @@ async def test_organisational_import_review_replacement_and_access_retry(
         service, {"policy": "Replacement synthetic policy"}
     )
     evidence["revisions"].append(
-        {**revision, "artifactRef": replacement, "review": None}
+        {**revision, "artifactRef": replacement}
     )
+    original_read = service.read
+
+    async def deny_history(**kwargs):
+        if kwargs["artifact_id"] == policy:
+            raise TemporalArtifactAuthorizationError("superseded record denied")
+        return await original_read(**kwargs)
+
+    monkeypatch.setattr(service, "read", deny_history)
     second = await recurring.invoke(service, request)
     replaced = await result_row(service, second)
-    assert replaced["organisationalEvidence"][0]["state"] == "supplied"
+    assert replaced["organisationalEvidence"][0]["state"] == "accepted"
     assert replaced["organisationalEvidence"][0]["supersededRefs"] == [policy]
     assert second["scanRef"] == first["scanRef"]
-    assert {policy, assertion, replacement} <= await recurring.required(service, second["controlAssessmentRef"])
+    assert {assertion, replacement} <= await recurring.required(
+        service, second["controlAssessmentRef"]
+    )
+    assert policy not in await recurring.required(
+        service, second["controlAssessmentRef"]
+    )
+    assert policy in await recurring.required(service, first["controlAssessmentRef"])
     assert await result_row(service, first) == original
 
     read = service.read

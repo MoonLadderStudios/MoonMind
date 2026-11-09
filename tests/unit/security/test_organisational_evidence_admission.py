@@ -102,6 +102,15 @@ async def test_imported_document_is_readable_before_start_and_idempotency_does_n
             document = await session.get(TemporalArtifact, policy)
             document.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
             await session.commit()
+    workflow = task(policy)
+    revisions = workflow["steps"][0]["tool"]["inputs"]["controlAssessment"][
+        "requirements"
+    ][0]["organisationalEvidence"][0]["revisions"]
+    revisions.insert(0, {**revisions[0], "artifactRef": other})
+    assert organisational_evidence_refs(workflow) == [policy]
+    assert schedule_input_artifact_ids(
+        {"initialParameters": {"workflow": workflow}}
+    ) == {policy}
     observed = []
 
     async def start_workflow(**kwargs):
@@ -124,7 +133,7 @@ async def test_imported_document_is_readable_before_start_and_idempotency_does_n
         monkeypatch.setattr(service, "_enforce_worker_code_freshness", AsyncMock())
         payload = {
             "type": "workflow",
-            "payload": {"idempotencyKey": "org-input", "workflow": task(policy)},
+            "payload": {"idempotencyKey": "org-input", "workflow": workflow},
         }
         response = await executions.create_execution(
             payload=payload,

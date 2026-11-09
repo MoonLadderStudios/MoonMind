@@ -586,7 +586,7 @@ class ControlAssessmentPlan(Contract):
             raise ValueError("control supporting evidence exceeds the reference bound")
         return self
 
-    def evidence_refs(self) -> list[str]:
+    def evidence_refs(self, *, current_only: bool = False) -> list[str]:
         return list(
             dict.fromkeys(
                 [
@@ -598,7 +598,9 @@ class ControlAssessmentPlan(Contract):
                     revision.artifact_ref
                     for r in self.requirements
                     for request in r.organisational_evidence
-                    for revision in request.revisions
+                    for revision in (
+                        request.revisions[-1:] if current_only else request.revisions
+                    )
                 ]
             )
         )

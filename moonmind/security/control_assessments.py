@@ -303,11 +303,15 @@ def assess_controls(
             )
             organisation_results.append(reviewed)
             methods.add("document_review")
-            for revision in request.revisions:
+            for revision in request.revisions[-1:]:
                 if evidence_availability.get(revision.artifact_ref, "unavailable"):
                     unavailable.append(revision.artifact_ref)
                 else:
                     evidence_refs.append(revision.artifact_ref)
+            if reviewed.superseded_refs:
+                limits.append(
+                    f"{request.id}: Superseded revisions are historical references, not current evidence; their availability is not evaluated."
+                )
             if reviewed.state != "accepted":
                 supporting_incomplete = True
                 limits.extend(

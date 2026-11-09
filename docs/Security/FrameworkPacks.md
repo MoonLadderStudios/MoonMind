@@ -129,8 +129,10 @@ Reuse a reference in several requirements with separate purpose/period reviews.
 Append a new revision to replace evidence; earlier references and their reviews
 remain superseded history. Completed assessments are immutable, so reviewing the
 same evidence for a later period creates another assessment rather than changing
-an earlier review. Readable current and superseded artifacts follow existing
-required-dependency retention. There is no new document store, email automation,
+an earlier review. Only current revisions are admitted, read and retained as
+current evidence; superseded references remain metadata without new read grants.
+Earlier reports retain their own evidence closure. Current artifacts follow
+existing required-dependency retention. There is no new document store, email automation,
 role system or approval engine. Sensitivity labels describe evidence; existing
 artifact authorization and model-delivery admission still govern access and use.
 Real organisation evidence and external assessor conclusions remain Unverified

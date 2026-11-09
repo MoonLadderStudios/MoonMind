@@ -6,7 +6,7 @@ from moonmind.security.frameworks import OrganisationalEvidenceRequest
 
 
 def organisational_evidence_refs(task: Mapping) -> list[str]:
-    """No artifact-string discovery: only revisions of explicit security.assess tools."""
+    """No artifact-string discovery: only current revisions of explicit security.assess tools."""
     refs = []
     steps = task.get("steps") or []
     if not isinstance(steps, list):
@@ -47,7 +47,7 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
                 raise ValueError("invalid organisational evidence collection")
             for request in requests:
                 parsed = OrganisationalEvidenceRequest.model_validate(request)
-                refs.extend(revision.artifact_ref for revision in parsed.revisions)
+                refs.extend(revision.artifact_ref for revision in parsed.revisions[-1:])
     refs = list(dict.fromkeys(refs))
     if len(refs) > 64:
         raise ValueError("organisational evidence exceeds reference bound")

@@ -623,7 +623,8 @@ def test_superseded_refs_and_reviews_are_preserved_and_not_reused_as_current():
     ).requirements[0]
     assert row.organisational_evidence[0].superseded_refs == ["art_policy"]
     assert row.organisational_evidence[0].state == "supplied"
-    assert set(row.evidence_refs) >= {"art_policy", "art_replacement"}
+    assert "art_policy" not in row.evidence_refs
+    assert "art_replacement" in row.evidence_refs
     assert (
         row.requirement.organisational_evidence[0].revisions[0].review.outcome
         == "accepted"
@@ -688,3 +689,19 @@ def test_operational_record_cannot_cover_events_after_collection():
         "after collection" in value
         for value in row.organisational_evidence[0].limitations
     )
+
+
+def test_unreadable_superseded_revision_does_not_block_current_acceptance():
+    evidence = organisational_request()
+    evidence["revisions"].append(
+        {**evidence["revisions"][0], "artifactRef": "art_replacement"}
+    )
+    row = evaluate(
+        requirements=[requirement(organisationalEvidence=[evidence])],
+        availability={"art_policy": "denied", "art_replacement": None},
+    ).requirements[0]
+    assert row.conclusion == "satisfied"
+    assert row.organisational_evidence[0].state == "accepted"
+    assert row.organisational_evidence[0].superseded_refs == ["art_policy"]
+    assert "art_policy" not in row.evidence_refs
+    assert "art_replacement" in row.evidence_refs
