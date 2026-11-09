@@ -62,7 +62,13 @@ Each simulated row records the sample count, estimator, interval method, confide
 
 A stopped run, unusable records, an intractable strategy without a decided simulation, or truncated violations make the status `partial`. Partial evidence keeps its observations but cannot report a consistent outcome. The contract refuses a document that claims consistency over partial or imprecise evidence, so `security.assess` cannot promote one.
 
-`security.assess` maps violations to `game-math` findings on `gameRef`. Coverage names only performed checks and requires decided simulations. Comparable absence requires the same specification; theoretical or model evidence cannot clear untested implementation findings.
+`security.assess` maps violations to `game-math` findings on `gameRef`. Coverage names only performed checks and requires decided simulations. Comparable absence requires the same specification and simulation source; theoretical or model evidence cannot clear untested implementation findings. Absence remains distinct from an evidence-backed successful retest.
+
+Job collection retains the exact captured specification, settlement cases and recorded rounds, binds their references and digests to the result, and seals those dependencies through the existing artifact authority. A workload cannot supply its own job envelope. Failed or cancelled jobs remain partial even if the output was written before termination.
+
+Before classifying a check as executed control evidence, the assessment verifies result membership and digest in the persisted Container Job output manifest, checks its terminal outcome, reads every retained input under current permissions, and reproduces the conclusions. Replay is bounded to 16 MiB of inputs and 100,000 strategy-round evaluations; larger simulations remain retained but unclassified. Stopped runs replay only their recorded prefix. Missing, replaced, corrupt or revoked evidence cannot become satisfied control coverage, including when reusing a saved assessment.
+
+Legacy and imported summaries remain readable findings and uncertainty reports, but carry unclassified control evidence. A digest, approval reference or copied job envelope alone does not prove execution. Verified reference calculations concern only the supplied specification and cases, not the deployed game. Reports and sanitized evidence exports preserve these limits, the exact theory, sample counts and interval decisions; private inputs retain their existing read restrictions.
 
 ## Running as a job
 

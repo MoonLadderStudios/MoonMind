@@ -850,7 +850,13 @@ def _cloud_observation(
 
 
 def _game_math_observation(
-    request, summary: GameMathAssessment, ref: str, created_at: datetime
+    request,
+    summary: GameMathAssessment,
+    ref: str,
+    created_at: datetime,
+    *,
+    verified=False,
+    case_basis=None,
 ) -> Observation:
     """Specification violations as game-math coverage of one game.
 
@@ -868,19 +874,35 @@ def _game_math_observation(
     simulation = summary.simulation
     if summary.settlement_cases or (simulation and simulation.source == "records"):
         rules |= {"settlement", "outcome-support"}
+    verified_basis = ["retained-input-replay"] if verified else []
     coverage = [
         Coverage(
+            evidence_method="deterministic_check" if verified else "unclassified",
             source="game-math",
             tool="game-math",
             assets=[summary.game_ref],
             rule_ids=sorted(rules),
-            config_ref=content_key(["game-math", summary.spec_digest]),
+            config_ref=content_key(["game-math", summary.spec_digest, *verified_basis]),
             status="complete" if summary.covered else "partial",
         )
     ]
+    if verified and rules & {"settlement", "outcome-support"}:
+        coverage[0].rule_ids = sorted(rules - {"settlement", "outcome-support"})
+        coverage.append(
+            Coverage(
+                source="game-math",
+                tool="game-math",
+                assets=[summary.game_ref],
+                rule_ids=["settlement", "outcome-support"],
+                evidence_method="deterministic_check",
+                config_ref=content_key(["game-math", summary.spec_digest, case_basis]),
+                status="complete" if summary.covered else "partial",
+            )
+        )
     if simulation is not None:
         coverage.append(
             Coverage(
+                evidence_method="deterministic_check" if verified else "unclassified",
                 source="game-math",
                 tool="game-math",
                 assets=[summary.game_ref],
@@ -892,6 +914,7 @@ def _game_math_observation(
                         "game-math",
                         summary.spec_digest,
                         simulation.source,
+                        *verified_basis,
                     ]
                 ),
                 status="complete" if summary.covered else "partial",
@@ -908,7 +931,9 @@ def _game_math_observation(
                 rule_id=row.rule,
                 asset=summary.game_ref,
                 native_id=row.identity,
-                evidence_refs=[ref],
+                evidence_refs=[ref, *summary.job.input_refs.values()]
+                if verified
+                else [ref],
             )
             for row in summary.violations
         ],
@@ -919,6 +944,7 @@ def _game_math_observation(
             "gameMathSource": summary.provenance.source_ref,
             "gameMathApproval": summary.provenance.approval_ref or "unavailable",
             "gameMathOutcome": summary.outcome,
+            "gameMathInputVerification": "reproduced" if verified else "unverified",
         },
     )
 
@@ -1168,6 +1194,40 @@ class AssessmentExecution:
             *_history_evidence(_scan_citations(work), history),
         ]
 
+    async def game_math_inputs(self, ref, summary):
+        """Recheck current job/input authority without repeating completed math."""
+        from moonmind.security.game_math_evidence import MAX_INPUT_BYTES
+
+        refs = {"assessment": ref}
+        refs["jobManifest"] = await self.service.verify_game_math_job_output(
+            artifact_id=ref, job=summary.job, access=self.access
+        )
+        bodies = {}
+        for name, input_ref in summary.job.input_refs.items():
+            _, bodies[name] = await self.read(input_ref)
+            refs[name] = input_ref
+        if (
+            sum(map(len, bodies.values())) > MAX_INPUT_BYTES
+            or {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}
+            != summary.job.input_digests
+        ):
+            raise ValueError("game math retained inputs differ or exceed their bound")
+        return refs, bodies
+
+    async def revalidate_game_math_inputs(self, inputs):
+        for ref, (_, raw) in inputs.items():
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                continue
+            if (
+                isinstance(payload, dict)
+                and payload.get("schemaVersion") == "game-math-assessment/v1"
+                and payload.get("job") is not None
+            ):
+                await self.game_math_inputs(
+                    ref, GameMathAssessment.model_validate(payload)
+                )
     async def product_evidence(self, components, records=()) -> list[str]:
         """Check retained evidence through the existing artifact authority.
 
@@ -1305,6 +1365,24 @@ class AssessmentExecution:
         )
 
         selection = request.framework
+        if selection.pack_id in {"iso-27001-readiness", "soc2-readiness"}:
+            from importlib import import_module
+
+            from moonmind.security.builtin_frameworks import prepare_builtin_framework
+
+            module = import_module(
+                "moonmind.security."
+                + {
+                    "iso-27001-readiness": "iso_27001",
+                    "soc2-readiness": "soc2_readiness",
+                }[selection.pack_id]
+            )
+            return await prepare_builtin_framework(
+                self,
+                request,
+                module=module,
+                collected_evidence_refs=collected_evidence_refs,
+            )
         pack = load_framework_pack(selection.pack_id)
         if pack.id == "gli-19-readiness":
             from moonmind.security.gli_readiness import (
@@ -2032,6 +2110,7 @@ class AssessmentExecution:
         scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
+            await self.revalidate_game_math_inputs(inputs)
             scan_ref, work = saved
             observation = Observation.model_validate(work["observation"])
             await self.seal(
@@ -2048,6 +2127,7 @@ class AssessmentExecution:
                 and baseline["observation"]["provenance"].get("assessmentWork")
                 == scan_key
             ):
+                await self.revalidate_game_math_inputs(inputs)
                 # Duplicate feed delivery may reference the previous occurrence's
                 # authorized baseline, so no scanner computation is repeated.
                 observations.append(Observation.model_validate(baseline["observation"]))
@@ -2154,15 +2234,25 @@ class AssessmentExecution:
                                 }
                             )
                         elif payload.get("schemaVersion") == "service-inventory/v1":
-                            inventory_summary = ServiceInventorySummary.model_validate(payload)
+                            inventory_summary = ServiceInventorySummary.model_validate(
+                                payload
+                            )
                             native_body = attestation_body = None
                             native_refs = {}
                             if inventory_summary.evidence_ref != "unavailable":
-                                _, native_body = await self.read(inventory_summary.evidence_ref)
-                                native_refs["execution"] = inventory_summary.evidence_ref
+                                _, native_body = await self.read(
+                                    inventory_summary.evidence_ref
+                                )
+                                native_refs["execution"] = (
+                                    inventory_summary.evidence_ref
+                                )
                             if inventory_summary.attestation_ref:
-                                _, attestation_body = await self.read(inventory_summary.attestation_ref)
-                                native_refs["attestation"] = inventory_summary.attestation_ref
+                                _, attestation_body = await self.read(
+                                    inventory_summary.attestation_ref
+                                )
+                                native_refs["attestation"] = (
+                                    inventory_summary.attestation_ref
+                                )
                             inventory_summary = _verify_service_inventory_report(
                                 inventory_summary, native_body, attestation_body
                             )
@@ -2182,7 +2272,9 @@ class AssessmentExecution:
                                         "jobState": inventory_summary.job_state,
                                         "stopReason": inventory_summary.stop_reason,
                                         "endpoints": [
-                                            endpoint.model_dump(mode="json", by_alias=True)
+                                            endpoint.model_dump(
+                                                mode="json", by_alias=True
+                                            )
                                             for endpoint in inventory_summary.endpoints
                                         ],
                                     },
@@ -2191,9 +2283,14 @@ class AssessmentExecution:
                                         for endpoint in inventory_summary.endpoints
                                         if endpoint.reachability == "untested"
                                     ],
-                                    "reducedCoverage": inventory_summary.status != "complete",
+                                    "reducedCoverage": inventory_summary.status
+                                    != "complete",
                                     "limitations": list(inventory_summary.limitations),
-                                    "verification": "observed" if native_body is not None else "unverified",
+                                    "verification": (
+                                        "observed"
+                                        if native_body is not None
+                                        else "unverified"
+                                    ),
                                     "attribution": "Per-endpoint outcomes are fixed-runner observations; the gateway independently attests aggregate bounds, not each endpoint outcome.",
                                     "interpretation": inventory_summary.interpretation,
                                 }
@@ -2207,7 +2304,9 @@ class AssessmentExecution:
                                 {
                                     "scanner": "dns",
                                     "summaryRef": ref,
-                                    "nativeRefs": {"execution": dns_summary.evidence_ref},
+                                    "nativeRefs": {
+                                        "execution": dns_summary.evidence_ref
+                                    },
                                     "coverage": dns_summary.status,
                                     "execution": dns_summary.execution.model_dump(
                                         mode="json", by_alias=True
@@ -2224,14 +2323,17 @@ class AssessmentExecution:
                                         q.model_dump(mode="json", by_alias=True)
                                         for q in dns_summary.uncovered_questions
                                     ],
-                                    "coverageExpiresAt": dns_summary.coverage_expires_at.isoformat()
-                                    if dns_summary.coverage_expires_at
-                                    else None,
+                                    "coverageExpiresAt": (
+                                        dns_summary.coverage_expires_at.isoformat()
+                                        if dns_summary.coverage_expires_at
+                                        else None
+                                    ),
                                     "limitations": sorted(
                                         {
                                             check.code
                                             for check in dns_summary.checks
-                                            if check.status in {"incomplete", "unsupported"}
+                                            if check.status
+                                            in {"incomplete", "unsupported"}
                                         }
                                     ),
                                     "verification": "resolver_observation",
@@ -2244,7 +2346,9 @@ class AssessmentExecution:
                             # native bytes, not editable summary assertions.
                             native = {}
                             if tls_summary.evidence_ref != "unavailable":
-                                _, native_body = await self.read(tls_summary.evidence_ref)
+                                _, native_body = await self.read(
+                                    tls_summary.evidence_ref
+                                )
                                 native = json.loads(native_body)
                             normalized = summarize_tls_assessment(
                                 TLSAssessment.model_validate(tls_summary.settings),
@@ -2257,13 +2361,18 @@ class AssessmentExecution:
                                 or normalized.findings != tls_summary.findings
                                 or normalized.origin != tls_summary.origin
                                 or normalized.execution != tls_summary.execution
-                                or normalized.unperformed_checks != tls_summary.unperformed_checks
+                                or normalized.unperformed_checks
+                                != tls_summary.unperformed_checks
                             ):
-                                raise ValueError("TLS summary differs from retained evidence")
+                                raise ValueError(
+                                    "TLS summary differs from retained evidence"
+                                )
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
-                            observation = _tls_observation(request, tls_summary, ref, observed_at)
+                            observation = _tls_observation(
+                                request, tls_summary, ref, observed_at
+                            )
                             scanner_summaries.append(
                                 {
                                     "scanner": "openssl",
@@ -2277,15 +2386,31 @@ class AssessmentExecution:
                                     "coverage": "partial",
                                     "execution": {
                                         "probes": [
-                                            {k: p[k] for k in ("protocol", "cipher", "status", "trustResult")}
-                                            for p in tls_summary.execution.get("probes", [])
+                                            {
+                                                k: p[k]
+                                                for k in (
+                                                    "protocol",
+                                                    "cipher",
+                                                    "status",
+                                                    "trustResult",
+                                                )
+                                            }
+                                            for p in tls_summary.execution.get(
+                                                "probes", []
+                                            )
                                         ],
                                         "unperformedChecks": tls_summary.unperformed_checks,
-                                        "errors": tls_summary.execution.get("errors", []),
+                                        "errors": tls_summary.execution.get(
+                                            "errors", []
+                                        ),
                                     },
                                     "limitations": sorted(tls_summary.limitations),
                                     "unperformedChecks": tls_summary.unperformed_checks,
-                                    "verification": "observed" if tls_summary.execution else "unverified",
+                                    "verification": (
+                                        "observed"
+                                        if tls_summary.execution
+                                        else "unverified"
+                                    ),
                                     "interpretation": tls_summary.interpretation,
                                 }
                             )
@@ -2371,11 +2496,32 @@ class AssessmentExecution:
                             )
                         elif payload.get("schemaVersion") == "game-math-assessment/v1":
                             game_summary = GameMathAssessment.model_validate(payload)
+                            game_verified = False
+                            game_refs = {"assessment": ref}
+                            if game_summary.job is not None:
+                                from moonmind.security.game_math_evidence import (
+                                    comparison_basis,
+                                    verify_inputs,
+                                )
+
+                                game_refs, game_bodies = await self.game_math_inputs(
+                                    ref, game_summary
+                                )
+                                game_verified = await asyncio.to_thread(
+                                    verify_inputs, game_summary, game_bodies
+                                )
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
                             observation = _game_math_observation(
-                                request, game_summary, ref, observed_at
+                                request,
+                                game_summary,
+                                ref,
+                                observed_at,
+                                verified=game_verified,
+                                case_basis=comparison_basis(game_bodies)
+                                if game_verified
+                                else None,
                             )
                             simulation = game_summary.simulation
                             scanner_summaries.append(
@@ -2383,7 +2529,10 @@ class AssessmentExecution:
                                     "scanner": "game-math",
                                     "target": game_summary.game_ref,
                                     "summaryRef": ref,
-                                    "nativeRefs": {"assessment": ref},
+                                    "nativeRefs": game_refs,
+                                    "inputVerification": "reproduced"
+                                    if game_verified
+                                    else "unverified",
                                     "coverage": observation.coverage[0].status,
                                     "outcome": game_summary.outcome,
                                     "execution": {
@@ -2393,7 +2542,11 @@ class AssessmentExecution:
                                             else "not_requested"
                                         )
                                     },
-                                    "limitations": sorted(game_summary.limitations),
+                                    "limitations": sorted(
+                                        {*game_summary.limitations,
+                                         *(["input_replay_limit_exceeded"]
+                                           if game_summary.job and not game_verified else [])}
+                                    ),
                                     "verification": game_summary.certification,
                                 }
                             )
@@ -2459,7 +2612,8 @@ class AssessmentExecution:
                                                         "effect": case.request.effect,
                                                         "realtimeCaseRef": case.request.realtime_case_ref,
                                                     }
-                                                    if case.request.realtime_case_ref is not None
+                                                    if case.request.realtime_case_ref
+                                                    is not None
                                                     else {}
                                                 ),
                                             },
@@ -3143,15 +3297,19 @@ class AssessmentExecution:
             structured_refs = [comparison_ref, *evidence]
             if review_readable:
                 structured_refs.append(request.review_ref)
-            summary = bound_report_presentation(summary, structured_refs=structured_refs)
+            summary = bound_report_presentation(
+                summary, structured_refs=structured_refs
+            )
             summary_key = content_key(
                 [
                     report_key,
                     "summary",
                     "professional-report/v4",
-                    request.report_context.model_dump(mode="json", by_alias=True)
-                    if request.report_context
-                    else None,
+                    (
+                        request.report_context.model_dump(mode="json", by_alias=True)
+                        if request.report_context
+                        else None
+                    ),
                     EVIDENCE_TRANSFORMATION_VERSION,
                     request.review_ref,
                     review_status,
@@ -3641,18 +3799,32 @@ def _scanner_summary(summaries: list[dict]) -> str:
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
         if summary["scanner"] == "dns":
-            lines.append("DNS checks: " + json.dumps(summary["checks"], sort_keys=True) + ".")
-            lines.append("Covered questions: " + json.dumps(summary["coveredQuestions"], sort_keys=True) + ".")
-            lines.append("Uncovered questions: " + json.dumps(summary["uncoveredQuestions"], sort_keys=True) + ".")
+            lines.append(
+                "DNS checks: " + json.dumps(summary["checks"], sort_keys=True) + "."
+            )
+            lines.append(
+                "Covered questions: "
+                + json.dumps(summary["coveredQuestions"], sort_keys=True)
+                + "."
+            )
+            lines.append(
+                "Uncovered questions: "
+                + json.dumps(summary["uncoveredQuestions"], sort_keys=True)
+                + "."
+            )
             lines.append("Coverage expires: " + str(summary["coverageExpiresAt"]) + ".")
         if summary["scanner"] == "service-inventory":
             lines.append(summary["attribution"])
             lines.append(
-                "Reduced coverage: " + ("yes" if summary["reducedCoverage"] else "no") + "."
+                "Reduced coverage: "
+                + ("yes" if summary["reducedCoverage"] else "no")
+                + "."
             )
             if summary["missingEndpoints"]:
                 lines.append(
-                    "Untested endpoints: " + ", ".join(summary["missingEndpoints"]) + "."
+                    "Untested endpoints: "
+                    + ", ".join(summary["missingEndpoints"])
+                    + "."
                 )
         if summary["scanner"] == "application-access":
 
@@ -3665,7 +3837,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
                 transport = (
                     f"{safe(request['protocol'])} {safe(request['messageType'])} "
                     f"({safe(request['effect'])}; operation {safe(request['realtimeCaseRef'])}), "
-                    if request.get("realtimeCaseRef") is not None else ""
+                    if request.get("realtimeCaseRef") is not None
+                    else ""
                 )
                 lines.append(
                     f"- Case {safe(row['caseRef'])}: {safe(row['identityRef'])} on {safe(row['resourceRef'])}, "

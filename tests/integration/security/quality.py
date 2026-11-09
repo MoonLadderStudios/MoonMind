@@ -30,6 +30,9 @@ def observation_digest(observed):
         key: sorted(observed[key]) if isinstance(observed[key], list) else observed[key]
         for key in ("outcome", "findings", "covered", "satisfied")
     }
+    for key in ("unknowns", "verifiedRemediations"):
+        if key in observed:
+            facts[key] = sorted(observed[key])
     return (
         "sha256:"
         + hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
@@ -62,6 +65,15 @@ def evaluate(expected, observed, evidence):
         for key in ("falsePositives", "missedDefects", "incorrectSatisfiedConclusions")
         if metrics[key]
     ]
+    if "unknowns" in expected:
+        metrics.update(
+            detectedDefects=len(wanted & found),
+            unknownCoverage=len(set(observed.get("unknowns", []))),
+            verifiedRemediations=len(set(observed.get("verifiedRemediations", []))),
+        )
+        for key in ("unknowns", "verifiedRemediations"):
+            if set(expected.get(key, [])) != set(observed.get(key, [])):
+                failures.append(key + "_mismatch")
     if metrics["coverageGaps"] != expected.get("coverageGaps", 0) or set(
         expected["covered"]
     ) - set(observed["covered"]):
@@ -77,6 +89,32 @@ def evaluate(expected, observed, evidence):
     return {"passed": not failures, "failures": failures, "metrics": metrics}
 
 
+def reconcile_historical(historical, observed):
+    """Compare authorized redacted case metadata, never infer exhaustive assurance.
+
+    Build/configuration equality is a comparison boundary for these fixtures,
+    not a runtime compatibility or admission requirement.
+    """
+    fields = ("build", "configuration", "edition", "criteria", "period", "systems")
+    before, after = historical.get("context", {}), observed.get("context", {})
+    differences = [
+        field
+        for field in fields
+        if not before.get(field)
+        or not after.get(field)
+        or before[field] != after[field]
+    ]
+    return {
+        "status": "Unverified" if differences else "comparable",
+        "differences": differences,
+        "missedRequirements": (
+            []
+            if differences
+            else sorted(set(historical["findings"]) - set(observed["findings"]))
+        ),
+    }
+
+
 def observation(outcome, findings, covered, *, native_ref, satisfied=False):
     return {
         "outcome": outcome,
@@ -89,6 +127,12 @@ def observation(outcome, findings, covered, *, native_ref, satisfied=False):
 
 
 UNVERIFIED = [
+    {
+        "check": "customer and laboratory gaming verification",
+        "status": "Unverified",
+        "reason": "Only first-party synthetic cases were authorized; no private customer artifacts or independent laboratory execution were used.",
+        "nextCheck": "An authorized assessor may supply redacted archived observations and reconcile build, configuration, criteria, edition, dates and scope before comparison. A laboratory report is not an exhaustive defect oracle.",
+    },
     {
         "check": "live scanners and provider accounts",
         "status": "Unverified",

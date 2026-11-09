@@ -91,9 +91,23 @@ class EvidencePeriod(FrameworkContract):
         return self.start <= other.start and self.end >= other.end
 
 
+class OrganisationalSamplingContext(FrameworkContract):
+    """Exact facts covered by an attributed documentary sampling review."""
+
+    requirement_id: AssessmentText
+    population_artifact_ref: Annotated[
+        str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")
+    ]
+    population_size: Annotated[int, Field(ge=0, le=1000000000)]
+    sampling_rationale: Text
+    selected_record_ids: Strings = Field(default_factory=list)
+    exceptions: Strings = Field(default_factory=list)
+
+
 class OrganisationalEvidenceReview(FrameworkContract):
     """Attributed, purpose-specific review, never an independent attestation."""
 
+    sampling_context: OrganisationalSamplingContext | None = None
     outcome: Literal["accepted", "insufficient"]
     purpose: Literal["design", "adoption", "occurrence"]
     reviewer: AssessmentText
@@ -264,6 +278,14 @@ class FrameworkEvidence(FrameworkContract):
 
 
 def load_framework_pack(pack_id: str) -> FrameworkPack:
+    if pack_id == "soc2-readiness":
+        from moonmind.security.soc2_readiness import SOC2_PACK
+
+        return SOC2_PACK.model_copy(deep=True)
+    if pack_id == "iso-27001-readiness":
+        from moonmind.security.iso_27001 import ISO_PACK
+
+        return ISO_PACK.model_copy(deep=True)
     if pack_id == "ukgc-rts-security":
         from moonmind.security.ukgc_rts import UKGC_RTS_PACK
 
@@ -280,6 +302,14 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
 
 
 def render_framework_preparation(report: dict) -> str:
+    if report["pack"]["id"] == "soc2-readiness":
+        from moonmind.security.soc2_readiness import render_assessment
+
+        return render_assessment(report)
+    if report["pack"]["id"] == "iso-27001-readiness":
+        from moonmind.security.iso_27001 import render_assessment
+
+        return render_assessment(report)
     if report["pack"]["id"] == "gli-19-readiness":
         from moonmind.security.gli_readiness import render_assessment
 

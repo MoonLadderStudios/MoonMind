@@ -358,11 +358,44 @@ async def test_capture_limit_is_applied_before_decode(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_original_deadline_preserves_partial_progress(tmp_path):
+@pytest.mark.parametrize("expired_clock", ["wall", "monotonic", "both"])
+async def test_original_deadline_preserves_partial_progress(
+    tmp_path, monkeypatch, expired_clock
+):
+    from types import SimpleNamespace
+
+    from moonmind.security import service_inventory_runner as runner
+
     async with fixture(tmp_path, ["delay", "delay"]) as (gateway, ports, env, _):
-        env["MOONMIND_EGRESS_DEADLINE"] = str(time.time() + 0.15)
+        wall = [time.time()]
+        monotonic = [time.monotonic()]
+        # The original lease is shorter than the plan's 20-second budget.
+        # Advance it at an observed milestone, never by waiting for CI scheduling.
+        lease_seconds = 5
+        env["MOONMIND_EGRESS_DEADLINE"] = str(wall[0] + lease_seconds)
+        monkeypatch.setattr(
+            runner,
+            "time",
+            SimpleNamespace(time=lambda: wall[0], monotonic=lambda: monotonic[0]),
+        )
+        checkpoint = runner._checkpoint
+        expired = False
+
+        def expire_after_confirmed_open(path, value):
+            nonlocal expired
+            checkpoint(path, value)
+            retained = json.loads(path.read_bytes())
+            if not expired and retained["records"][0]["reachability"] == "open":
+                expired = True
+                if expired_clock in {"wall", "both"}:
+                    wall[0] += lease_seconds
+                if expired_clock in {"monotonic", "both"}:
+                    monotonic[0] += lease_seconds
+
+        monkeypatch.setattr(runner, "_checkpoint", expire_after_confirmed_open)
         plan = plan_for(ports, banners=ports, concurrency=1)
         result = await inspect_service_inventory(plan, tmp_path / "output", environ=env)
+        assert expired
         assert result["stopReason"] == "duration_exhausted"
         assert result["records"][0]["reachability"] == "open"
         assert result["records"][1]["reachability"] == "untested"

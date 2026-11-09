@@ -452,10 +452,32 @@ class Violation(Contract):
         return f"{self.rule}:{self.strategy}:{self.case}"
 
 
+class GameMathJob(Contract):
+    """Producer-owned retained input identities, not a workload attestation."""
+
+    job_id: Text
+    terminal_state: Text
+    exit_code: int | None
+    input_refs: dict[Literal["spec", "settlements", "records"], Text]
+    input_digests: dict[Literal["spec", "settlements", "records"], Text]
+
+    @model_validator(mode="after")
+    def _inputs(self):
+        if (
+            "spec" not in self.input_refs
+            or self.input_refs.keys() != self.input_digests.keys()
+        ):
+            raise ValueError(
+                "game math job requires matching retained input identities"
+            )
+        return self
+
+
 class GameMathAssessment(Contract):
     """Theoretical and simulated evidence about one game, never a certification."""
 
     schema_version: Literal["game-math-assessment/v1"] = "game-math-assessment/v1"
+    job: GameMathJob | None = None
     game_ref: Text
     spec_digest: str
     provenance: Provenance

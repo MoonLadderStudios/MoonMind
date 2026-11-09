@@ -101,13 +101,14 @@ class Job(game_jobs.Job):
             )
         return result
 
-    async def assess(self, ref, key):
+    async def assess(self, ref, key, **options):
         return await invoke(
             self.environment.service,
             {
                 "scope": {"assets": [GAME]},
                 "tools": ["retained-report"],
                 "reportRefs": [ref],
+                **options,
                 "credentialRefs": [],
                 "networkRefs": [],
                 "budget": {
