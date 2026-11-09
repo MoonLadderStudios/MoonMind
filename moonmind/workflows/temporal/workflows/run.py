@@ -12075,7 +12075,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if (
                 self._remediation_loop_continuation is None
                 and self._has_recurrence_metadata(parameters)
-                and isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                and (
+                    isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                    or (parameters.get("assessmentScope") is not None and
+                        workflow.patched("run-recurring-assessment-authority-v1"))
+                )
                 and temporal_scheduled_start_time(workflow.info()) is not None
                 and workflow.patched(RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH)
             ):

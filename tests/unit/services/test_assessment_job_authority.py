@@ -803,3 +803,22 @@ async def test_native_allocations_are_durable_across_failed_jobs_and_exact_repla
         assert replay.replayed and replay.job_id == first.job_id
         with pytest.raises(ContainerJobScopeDeniedError, match="native network budget"):
             await jobs.submit(owner=cap.owner, request=fresh("native-next"))
+
+
+@pytest.mark.asyncio
+async def test_recurring_per_run_reservations_and_deadline(session_factory, temporal):
+    auth = authorization(recurring={
+        "minIntervalSeconds": 60, "maxOccurrences": 2,
+        "maxJobsPerOccurrence": 1, "maxJobSecondsPerOccurrence": 300,
+        "maxRunSeconds": 60,
+    })
+    scope = authorization_scope(auth)
+    async with session_factory() as session:
+        await save_scope(session, scope, auth=auth)
+        first = await submit(session, temporal, scope, seconds=300)
+        stored = await session.get(ContainerJobRecord, first.job_id)
+        assert stored.assessment_deadline_at.replace(tzinfo=UTC) <= datetime.now(UTC)+timedelta(seconds=60)
+        with pytest.raises(ContainerJobScopeDeniedError, match="per-occurrence"):
+            await submit(session, temporal, scope, owner="step-2", key="job-2", seconds=1)
+        replay = await submit(session, temporal, scope)
+        assert replay.job_id == first.job_id and replay.replayed

@@ -1,3 +1,4 @@
+import { AssessmentOccurrenceEvidence } from '../components/workflows/AssessmentOccurrenceEvidence';
 import { SecurityFindingsPanel, SecurityEvidenceSchema, SecurityEvidenceSummary } from '../components/workflows/SecurityFindingsPanel';
 import type { SecurityFindingSelection } from '../lib/remediationCreateDraft';
 import { AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
@@ -10892,6 +10893,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             const review = copyAssessmentReview(execution.inputParameters.assessmentReview);
             return review ? <AssessmentEngagementReview review={review} historical /> : null;
           })() : null}
+
+          {detailsTabActive ? <AssessmentOccurrenceEvidence value={execution.inputParameters.assessmentOccurrence} /> : null}
 
           {detailsTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />

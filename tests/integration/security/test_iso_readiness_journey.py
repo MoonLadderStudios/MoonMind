@@ -60,6 +60,39 @@ async def test_catalog_direct_and_retry_keep_same_soa_and_export(environment, tm
     assert again["frameworkRef"] == first["frameworkRef"]
 
 
+async def test_iso_report_preserves_methodology_gaps_and_native_findings(environment):
+    from tests.integration.security.test_web_api_methodology_journey import retain_plan
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service)
+    request["framework"] = selection(systems=["app"]).model_dump(
+        mode="json", by_alias=True
+    )
+    plan_ref, _ = await retain_plan(service)
+    request["methodology"] = {"planRef": plan_ref}
+
+    result = await recurring.invoke(service, request)
+    comparison = await recurring.read(service, result["comparisonRef"])
+    framework = await recurring.read(service, result["frameworkRef"])
+    _, body = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    report = body.decode()
+    assert comparison["coverageStatus"] == "complete"
+    assert result["methodologyStatus"] == "incomplete"
+    assert result["reportBundle"]["report_scope"] == "partial"
+    assert report.splitlines()[2] == "Coverage: partial. Baseline: initial."
+    assert comparison["findings"][0]["findingId"] in report
+    assert comparison["observation"]["observedAt"] in report
+    assert framework["statementOfApplicability"]["version"] in report
+    assert {"9.2", "9.3"} <= set(framework["unresolvedRequirements"])
+    assert framework["certification"] == "Unverified"
+    retry = await recurring.invoke(service, request)
+    for ref in ("scanRef", "comparisonRef", "frameworkRef", "methodologyRef"):
+        assert retry[ref] == result[ref]
+
+
 async def test_revised_scope_preserves_historical_soa_and_current_evidence(environment):
     service = environment.service
     request = payload()

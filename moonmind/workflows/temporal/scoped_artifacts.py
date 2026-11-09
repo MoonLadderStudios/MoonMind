@@ -26,6 +26,12 @@ class ScopedTemporalArtifactService:
             )
             return await getattr(service, method)(**kwargs)
 
+    async def record_assessment_occurrence_evidence(self, **kwargs: Any) -> Any:
+        return await self._invoke("record_assessment_occurrence_evidence", **kwargs)
+
+    async def assessment_occurrence(self, **kwargs: Any) -> Any:
+        return await self._invoke("assessment_occurrence", **kwargs)
+
     async def create(self, **kwargs: Any) -> Any:
         return await self._invoke("create", **kwargs)
 
