@@ -139,6 +139,10 @@ class OmnigentRuntimeScriptService:
         generation_checks: list[str] = []
         for handle in credential_handles:
             for attachment in handle.get("attachments", []):
+                if attachment.get("contentDigest") is not None:
+                    # Read-only preference files are fenced by their sibling
+                    # projection-root marker, not a marker beneath the file.
+                    continue
                 target = str(attachment.get("targetPath") or "")
                 generation = int(handle["credentialGeneration"])
                 if target:

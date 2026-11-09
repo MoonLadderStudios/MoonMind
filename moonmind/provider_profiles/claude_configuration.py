@@ -1,9 +1,10 @@
 """Thin Claude preference adapter over the shared Profile template renderer.
 
-Only the private API-key configuration home is authored here. Authentication,
+Only nonsecret preference files are authored here. Authentication,
 model selection and tools continue to belong to the admitted shared launch.
 This module is portable so hosts run the same validation as admission.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -84,7 +85,9 @@ def configuration_for_profile(profile):
         return None, str(error)
 
 
-def materialize_configuration(configuration, *, runtime_support_dir, workspace_path):
+def materialize_configuration(
+    configuration, *, runtime_support_dir, workspace_path, template_support_dir=None
+):
     """Initialize an attempt's home once; retries never append twice."""
     configuration = validate_configuration(configuration)
     support = Path(runtime_support_dir).resolve()
@@ -99,7 +102,10 @@ def materialize_configuration(configuration, *, runtime_support_dir, workspace_p
     with tempfile.TemporaryDirectory(dir=support) as temporary:
         stage = Path(temporary)
         renderer = ProfileTemplateRenderer(toml_serializer=lambda _: "")
-        context = {"runtime_support_dir": str(support), "workspace_path": workspace_path}
+        context = {
+            "runtime_support_dir": str(template_support_dir or support),
+            "workspace_path": workspace_path,
+        }
         for item in configuration["fileTemplates"]:
             # Render paths into staging but retain the real attempt paths in content.
             rendered = renderer._render_value(item["content_template"], context)
@@ -112,3 +118,93 @@ def materialize_configuration(configuration, *, runtime_support_dir, workspace_p
         (staged_home / marker.name).write_text(digest)
         (staged_home / marker.name).chmod(0o600)
         os.rename(staged_home, home)
+
+
+_ENROLLED_HOME = "/home/app/.claude"
+OAUTH_PROJECTION_PATH = "/run/moonmind-claude-preferences"
+
+
+def validate_oauth_configuration(configuration):
+    """Accept canonical enrollment selectors without moving credential state."""
+    if set(configuration) != {"homePathOverrides", "fileTemplates"}:
+        raise ValueError("unsupported Claude OAuth configuration fields")
+    overrides = configuration["homePathOverrides"]
+    if not isinstance(overrides, dict) or any(
+        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR"} or value != _ENROLLED_HOME
+        for key, value in overrides.items()
+    ):
+        raise ValueError("Claude OAuth preferences require the enrolled home")
+    translated = []
+    for raw in configuration["fileTemplates"]:
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump(by_alias=False, mode="json")
+        if not isinstance(raw, dict) or not str(raw.get("path", "")).startswith(
+            _ENROLLED_HOME + "/"
+        ):
+            raise ValueError("Claude OAuth files require canonical enrolled-home paths")
+        if any(character in raw["path"] for character in (",", '"')):
+            raise ValueError(
+                "Claude OAuth file paths must be representable as Docker mounts"
+            )
+        translated.append({**raw, "path": _HOME + raw["path"][len(_ENROLLED_HOME) :]})
+    validated = validate_configuration(
+        {
+            "homePathOverrides": {"CLAUDE_CONFIG_DIR": _HOME},
+            "fileTemplates": translated,
+        }
+    )
+    return {
+        "homePathOverrides": dict(overrides),
+        "fileTemplates": [
+            {**item, "path": _ENROLLED_HOME + item["path"][len(_HOME) :]}
+            for item in validated["fileTemplates"]
+        ],
+    }
+
+
+def oauth_configuration_for_profile(profile):
+    try:
+        return (
+            validate_oauth_configuration(
+                {
+                    "homePathOverrides": dict(
+                        getattr(profile, "home_path_overrides", None) or {}
+                    ),
+                    "fileTemplates": list(
+                        getattr(profile, "file_templates", None) or []
+                    ),
+                }
+            ),
+            "",
+        )
+    except (ValueError, TypeError) as error:
+        return None, str(error)
+
+
+def render_oauth_files(configuration, *, runtime_support_dir, workspace_path):
+    """Use the same renderer, but return bytes for read-only file mounts.
+
+    The credential directory is never copied or redirected. Docker overlays only
+    these nonsecret files while atomic vendor refreshes retain the enrolled home.
+    """
+    configuration = validate_oauth_configuration(configuration)
+    private = {
+        "homePathOverrides": {"CLAUDE_CONFIG_DIR": _HOME},
+        "fileTemplates": [
+            {**item, "path": _HOME + item["path"][len(_ENROLLED_HOME) :]}
+            for item in configuration["fileTemplates"]
+        ],
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        materialize_configuration(
+            private,
+            runtime_support_dir=directory,
+            template_support_dir=runtime_support_dir,
+            workspace_path=workspace_path,
+        )
+        root = Path(directory) / "claude-home"
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and path.name != ".moonmind-profile-digest"
+        }

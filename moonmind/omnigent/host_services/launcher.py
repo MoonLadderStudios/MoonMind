@@ -42,6 +42,8 @@ def docker_attachment_mount(attachment: Mapping[str, Any]) -> str:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         mount += f",volume-subpath={subpath}"
+    if attachment.get("contentDigest") is not None:
+        mount += ",volume-nocopy"
     if str(attachment.get("accessMode")) == "read-only":
         mount += ",readonly"
     return mount

@@ -51,7 +51,11 @@ _CODEX = {
     "oauthPrivateConfiguration": True,
     "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
 }
-_CLAUDE = {"harness": "claude-native", "oauthTuning": {"API_TIMEOUT_MS": "300000"}}
+_CLAUDE = {
+    "harness": "claude-native",
+    "oauthTuning": {"API_TIMEOUT_MS": "300000"},
+    "claudeOauthFiles": True,
+}
 
 
 @pytest.mark.parametrize(
@@ -87,6 +91,18 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
             return json.loads(
                 journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"]
             )["document"]["developer_instructions"]
+        assert json.loads(journey.docker.claude_preferences["settings.json"])[
+            "language"
+        ] == (
+            "Later language"
+            if journey.docker.launch_env["API_TIMEOUT_MS"] == "100000"
+            else "English"
+        )
+        assert (
+            journey.docker.claude_preferences["CLAUDE.md"]
+            == "Admitted instructions for /workspaces/run.\n"
+        )
+        assert journey.docker.volumes == {"journey_oauth": {}}
         return journey.docker.launch_env["API_TIMEOUT_MS"]
 
     first_now = datetime.now(timezone.utc) - timedelta(seconds=10)
@@ -236,6 +252,9 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
                 )
                 profile.file_templates = templates
             else:
+                templates = deepcopy(profile.file_templates)
+                templates[0]["content_template"]["language"] = "Later language"
+                profile.file_templates = templates
                 profile.env_template = {
                     **profile.env_template,
                     "API_TIMEOUT_MS": edited_setting,
@@ -459,3 +478,19 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
     assert observed_configuration() == expected
     assert observed_saved_bytes == ([native.GENERATED] if same_step else [None])
     assert journey.docker.create_count == 2
+
+
+@pytest.mark.parametrize("native_journey", [_CLAUDE], indirect=True)
+async def test_fixed_serialized_claude_oauth_files_use_the_shared_lifecycle(
+    native_journey,
+    monkeypatch,
+):
+    journey = native_journey
+    await pool.execute_selected_pool_source(journey, monkeypatch, fixed_serialized=True)
+    assert json.loads(journey.docker.claude_preferences["settings.json"]) == {
+        "language": "English"
+    }
+    assert journey.docker.claude_preferences["CLAUDE.md"] == (
+        "Admitted instructions for /workspaces/run.\n"
+    )
+    assert journey.docker.volumes == {"journey_oauth": {}}

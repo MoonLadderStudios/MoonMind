@@ -344,3 +344,233 @@ def test_native_bridged_instructions_are_projected_without_changing_the_source(
     assert (private / relative).stat().st_mode & 0o777 == 0o600
     untouched.write_text("Updated other instructions.\n")
     assert (private / relative).parent.joinpath(untouched.name).read_text() == "Updated other instructions.\n"
+
+
+def claude_oauth_profile():
+    from tests.unit.api_service.test_oauth_profile_launch_options import (
+        profile_and_configuration,
+    )
+    from tests.unit.omnigent.test_claude_profile_configuration import configuration
+
+    profile, _ = profile_and_configuration("claude_code", "v2")
+    profile.volume_mount_path = "/home/app/.claude"
+    profile.home_path_overrides = {
+        "CLAUDE_HOME": "/home/app/.claude",
+        "CLAUDE_CONFIG_DIR": "/home/app/.claude",
+    }
+    profile.file_templates = [
+        {
+            **item,
+            "path": item["path"].replace(
+                "{{runtime_support_dir}}/claude-home", "/home/app/.claude"
+            ),
+        }
+        for item in configuration()["fileTemplates"]
+    ] + [
+        {
+            "path": "/home/app/.claude/rules/project.md",
+            "format": "text",
+            "content_template": "Use focused tests.\n",
+        }
+    ]
+    return profile
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"CLAUDE_HOME": "/home/app/.claude"},
+        {"CLAUDE_CONFIG_DIR": "/home/app/.claude"},
+    ],
+)
+def test_claude_oauth_preferences_freeze_canonical_files_without_auth_state(overrides):
+    import copy
+    import hashlib
+    from types import SimpleNamespace
+    from moonmind.omnigent.harness_platform.materializers import (
+        provider_configuration_snapshot_bytes,
+        load_provider_configuration_snapshot,
+    )
+    from moonmind.provider_profiles.claude_configuration import render_oauth_files
+
+    profile = claude_oauth_profile()
+    profile.home_path_overrides = overrides
+    selected = snapshot_provider_configuration(profile)
+    frozen = copy.deepcopy(selected.claudeConfiguration)
+    bindings = {
+        "primary-model": SimpleNamespace(
+            providerProfileRef=profile.profile_id, materializerRef="claude-oauth-home@1"
+        )
+    }
+    content = provider_configuration_snapshot_bytes(
+        bindings, {"primary-model": selected}
+    )
+    profile.file_templates.clear()
+    loaded = load_provider_configuration_snapshot(
+        content,
+        SimpleNamespace(contentDigest="sha256:" + hashlib.sha256(content).hexdigest()),
+        bindings,
+    )
+    assert loaded["primary-model"].claudeConfiguration == frozen
+    for sibling in ("a", "b"):
+        files = render_oauth_files(
+            frozen,
+            runtime_support_dir="/support/" + sibling,
+            workspace_path="/work/" + sibling,
+        )
+        assert set(files) == {"settings.json", "CLAUDE.md", "rules/project.md"}
+        assert json.loads(files["settings.json"]) == {
+            "outputStyle": "concise",
+            "alwaysThinkingEnabled": True,
+        }
+        assert (
+            files["CLAUDE.md"]
+            == f"Work in /work/{sibling}; support /support/{sibling}".encode()
+        )
+        assert files == render_oauth_files(
+            frozen,
+            runtime_support_dir="/support/" + sibling,
+            workspace_path="/work/" + sibling,
+        )
+
+
+@pytest.mark.parametrize(
+    "path,content",
+    [
+        (".credentials.json", "no"),
+        ("hooks.json", "no"),
+        ("rules/../../CLAUDE.md", "no"),
+        ("rules/with,comma.md", "no"),
+        ("CLAUDE.md", "{{selected_secret}}"),
+    ],
+)
+def test_claude_oauth_unsupported_files_remain_direct(path, content):
+    from moonmind.omnigent.harness_platform.materializers import (
+        untranslated_oauth_launch_options,
+    )
+
+    profile = claude_oauth_profile()
+    profile.file_templates = [
+        {"path": "/home/app/.claude/" + path, "content_template": content}
+    ]
+    assert "file_templates" in untranslated_oauth_launch_options(profile)
+    with pytest.raises(HarnessPlatformError):
+        snapshot_provider_configuration(profile)
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_cleanup(
+    tmp_path,
+):
+    from pathlib import Path
+    from moonmind.omnigent.credential_materializers import (
+        DockerClaudeOauthHomeMaterializer,
+        anticipated_credential_handle,
+    )
+    from moonmind.omnigent.host_services.launcher import docker_attachment_mount
+
+    class ExecutingPreferenceBackend(FakeDockerBackend):
+        async def run(self, argv, **kwargs):
+            if (
+                argv[:3] == ["docker", "volume", "ls"]
+                and '"owned"' not in argv[-1]
+                and "}}owned" in argv[-1]
+            ):
+                self.commands.append(list(argv))
+                self.inputs.append(None)
+                return 0, b"owned", b""
+            if kwargs.get("input_bytes"):
+                script = argv[argv.index("-c") + 1]
+                mount = argv[argv.index("--mount") + 1]
+                volume = mount.split("src=", 1)[1].split(",", 1)[0]
+                root = tmp_path / volume
+                root.mkdir(exist_ok=True)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        script.replace("'/preferences'", repr(str(root))),
+                    ],
+                    input=kwargs["input_bytes"],
+                    capture_output=True,
+                )
+                assert result.returncode == 0, result.stderr
+            return await super().run(argv, **kwargs)
+
+    backend = ExecutingPreferenceBackend()
+    owner = DockerClaudeOauthHomeMaterializer(backend)
+    enrolled = tmp_path / "enrolled"
+    enrolled.mkdir()
+    token = enrolled / ".credentials.json"
+    token.write_text("initial-test-token")
+    original_preferences = enrolled / "CLAUDE.md"
+    original_preferences.write_text("Enrollment instructions stay unchanged.")
+    context = replace(
+        _context(backend, home=_home("claude_enrolled", "/home/app/.claude")),
+        provider_launch_environment=snapshot_provider_configuration(
+            claude_oauth_profile()
+        ),
+    )
+    handle = await owner.materialize(context)
+    assert (
+        handle.attachments
+        == anticipated_credential_handle(
+            context.acquired,
+            owner.ref,
+            profile_credential_home=context.profile_credential_home,
+            provider_launch_environment=context.provider_launch_environment,
+        ).attachments
+    )
+    assert handle.attachments[0].sourceRef == "claude_enrolled"
+    assert handle.attachments[0].accessMode == "read-write"
+    for attachment in handle.attachments[2:]:
+        mount = docker_attachment_mount(attachment.model_dump(mode="json"))
+        assert (
+            "volume-subpath=files/" in mount
+            and ",readonly" in mount
+            and ",volume-nocopy" in mount
+        )
+        root = tmp_path / attachment.sourceRef
+        assert (root / attachment.subPath).is_file()
+    # Native refresh atomically replaces the enrolled file; neither projection
+    # setup nor cleanup reads, redirects, copies or overwrites that credential.
+    replacement = token.with_suffix(".tmp")
+    replacement.write_text("refreshed-test-token")
+    os.replace(replacement, token)
+    again = await owner.materialize(context)
+    assert again.attachments == handle.attachments
+    first_files = {
+        item.subPath: (tmp_path / item.sourceRef / item.subPath).read_bytes()
+        for item in handle.attachments[2:]
+    }
+    assert first_files["files/CLAUDE.md"].count(b"Work in") == 1
+    newer_context = replace(
+        context,
+        acquired=type(context.acquired)(
+            **{**vars(context.acquired), "credential_generation": 5}
+        ),
+    )
+    newer = await owner.materialize(newer_context)
+    assert newer.attachments[1].sourceRef != handle.attachments[1].sourceRef
+    with pytest.raises(HarnessPlatformError, match="fenced"):
+        await owner.cleanup(handle, 5)
+    await owner.cleanup(handle, 4)
+    assert token.read_text() == "refreshed-test-token"
+    assert original_preferences.read_text() == "Enrollment instructions stay unchanged."
+    removed = [
+        argv[-1] for argv in backend.commands if argv[:3] == ["docker", "volume", "rm"]
+    ]
+    assert removed == [handle.attachments[1].sourceRef]
+    assert newer.attachments[1].sourceRef not in removed
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[handle.model_dump(mode="json")],
+        skill_attachment={"targetPath": "/skills"},
+        step_execution_id="workflow:run:step:1",
+        enable_claude_runtime=True,
+        workspace_path="/workspaces/run",
+    )
+    checks = environment["MOONMIND_CREDENTIAL_GENERATION_CHECKS"]
+    assert "CLAUDE.md/.moonmind-generation" not in checks
+    assert "/home/app/.claude/.moonmind-generation:4" in checks
+    assert "CLAUDE_CONFIG_DIR" not in environment
