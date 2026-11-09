@@ -442,3 +442,92 @@ async def test_terminal_report_timeout_keeps_confirmed_result():
     assert result.summary == original.summary
     assert result.publication_state == "published"
     assert result.metadata["terminalSaveIncomplete"] is True
+
+
+def test_absolute_loop_deadline_survives_pause_retry_and_restart():
+    deadline = START + timedelta(seconds=20)
+    first = context(executionDeadline=deadline).suspend(START + timedelta(seconds=2))
+    assert first.remaining_seconds(START + timedelta(seconds=19)) == 1
+    resumed = first.resume(START + timedelta(seconds=19))
+    successor = resumed.successor(now=START + timedelta(seconds=19), attempt_id="retry")
+    restored = models.ExecutionBudgetContext.model_validate_json(
+        successor.model_dump_json(by_alias=True)
+    )
+    assert restored.execution_deadline == deadline
+    assert restored.remaining_seconds(deadline) == 0
+    with pytest.raises(models.ExecutionBudgetExhausted):
+        restored.successor(now=deadline, attempt_id="forbidden")
+    finishing = restored.begin_finishing(deadline)
+    assert finishing.remaining_seconds(deadline, finishing=True) > 0
+    assert finishing.remaining_seconds(deadline) == 0
+
+
+def test_absolute_loop_deadline_clamps_activity_timeout_without_changing_legacy_payload():
+    assert "executionDeadline" not in context().model_dump(by_alias=True)
+    bounded = context(executionDeadline=START + timedelta(seconds=3))
+    assert bounded.activity_timeouts(
+        now=START, start_to_close_seconds=60, schedule_to_close_seconds=90
+    ) == {
+        "start_to_close_timeout": timedelta(seconds=3),
+        "schedule_to_close_timeout": timedelta(seconds=3),
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_pause_wait_expires_without_resume_or_successor(monkeypatch):
+    from moonmind.workflows.temporal.workflows import agent_run
+
+    run = agent_run.MoonMindAgentRun()
+    run._paused = True
+    run._execution_budget = context(
+        executionDeadline=START + timedelta(seconds=3)
+    ).suspend(START)
+    monkeypatch.setattr(agent_run.workflow, "now", lambda: START)
+    wait = AsyncMock(side_effect=TimeoutError)
+    monkeypatch.setattr(agent_run.workflow, "wait_condition", wait)
+    with pytest.raises(TimeoutError):
+        await run._wait_for_budgeted_resume()
+    assert wait.await_args.kwargs["timeout"] == timedelta(seconds=3)
+    run._execution_budget = context()
+    wait.side_effect = None
+    await run._wait_for_budgeted_resume()
+    assert "timeout" not in wait.await_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "activity",
+    ["omnigent.evaluate_session_admission", "integration.resolve_adapter_metadata"],
+)
+async def test_capacity_activities_preserve_exemption_but_obey_loop_deadline(
+    monkeypatch, activity
+):
+    from moonmind.workflows.temporal.workflows import agent_run
+
+    run = agent_run.MoonMindAgentRun()
+    run._execution_budget = context(
+        executionDeadline=START + timedelta(seconds=3)
+    ).suspend(START)
+    execute = AsyncMock(return_value={})
+    monkeypatch.setattr(agent_run, "execute_typed_activity", execute)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_run.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2"),
+    )
+    monkeypatch.setattr(agent_run.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(agent_run.workflow, "now", lambda: START)
+    await run._execute_routed_activity(activity, {})
+    assert execute.await_args.kwargs["schedule_to_close_timeout"] == timedelta(
+        seconds=3
+    )
+    assert execute.await_args.kwargs["start_to_close_timeout"] == timedelta(seconds=3)
+    monkeypatch.setattr(agent_run.workflow, "now", lambda: START + timedelta(seconds=3))
+    with pytest.raises(models.ExecutionBudgetExhausted):
+        await run._execute_routed_activity(activity, {})
+    assert execute.await_count == 1
+    run._execution_budget = context().suspend(START)
+    await run._execute_routed_activity(activity, {})
+    assert execute.await_args.kwargs["schedule_to_close_timeout"] > timedelta(seconds=3)
