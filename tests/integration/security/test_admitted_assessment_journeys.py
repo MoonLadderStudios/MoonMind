@@ -338,13 +338,15 @@ async def assert_retained(environment, refs, published):
         assert json.loads(body)
 
 
-async def assert_assessment_retains(environment, summary_ref, native_refs, assets):
+async def assert_assessment_retains(
+    environment, summary_ref, native_refs, assets, *, exclusions=()
+):
     """A pinned report over the summary keeps its native reports past expiry."""
     service = environment.service
     outputs = await recurring.invoke(
         service,
         {
-            "scope": {"assets": assets},
+            "scope": {"assets": assets, "exclusions": list(exclusions)},
             "tools": ["retained-report"],
             "reportRefs": [summary_ref],
             "credentialRefs": [],
@@ -537,13 +539,19 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     summary_ref = next(
         ref for ref, body in published.items() if b'"repository-scanner/v1"' in body
     )
+    retained_request = repo.retained_assessment(
+        summary_ref,
+        sorted(
+            {f["asset"] for row in summary["results"].values() for f in row["findings"]}
+        ),
+    )
+    retained_request["scope"]["exclusions"] = scan.exclusions
     outputs = await recurring.invoke(
         environment.service,
-        repo.retained_assessment(
-            summary_ref, ["removed.txt", "tracked.txt", "untracked.txt"]
-        ),
+        retained_request,
         key="quality-source-report",
     )
+    assert not outputs["diagnostics"]
     observed = observation(
         (
             "vulnerable"
@@ -588,6 +596,7 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
         sorted(
             {f["asset"] for row in summary["results"].values() for f in row["findings"]}
         ),
+        exclusions=scan.exclusions,
     )
 
 
@@ -715,6 +724,10 @@ async def expand_preset(environment, tmp_path, monkeypatch, slug, assessment):
 
     app.dependency_overrides[mcp_tools.get_async_session] = session_dependency
     native = assessment.model_dump(mode="json", by_alias=True, exclude_none=True)
+    # Native wire compatibility omits false, but a preset defaults omitted
+    # feed policy to fresh. Preserve the fixture's explicit authoring choice.
+    if isinstance(assessment, ImageAssessment):
+        native["requireFreshFeeds"] = assessment.require_fresh_feeds
     async with AsyncClient(
         transport=ASGITransport(app=app, client=("127.0.0.1", 12345)),
         base_url="http://localhost",

@@ -25,6 +25,8 @@ from moonmind.security.frameworks import (
     EvidencePeriod,
     FrameworkAssessmentInput,
     FrameworkPackSelection,
+    OrganisationalEvidenceRequest,
+    OrganisationalEvidenceResult,
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
@@ -471,7 +473,8 @@ class ComparedFinding(Contract):
     state: FindingState
     observed_coverage_key: Text | None
     evidence_expires_at: AwareDatetime
-    # How remediation was verified; set only for remediated_verified.
+    # upstream_fixed remains readable in immutable historical comparisons.
+    # New comparisons verify remediation only through a passing retest.
     verification: Literal["retest_passed", "upstream_fixed"] | None = None
     # Intelligence of the covering tool that differs from the baseline, so a
     # new or absent finding is not attributed to a subject change alone.
@@ -544,6 +547,9 @@ class ControlSupportingEvidence(Contract):
 
 
 class ControlRequirement(Contract):
+    organisational_evidence: Annotated[
+        list[OrganisationalEvidenceRequest], Field(max_length=32)
+    ] = Field(default_factory=list)
     id: Text
     framework_id: Text
     framework_edition: Text
@@ -565,6 +571,9 @@ class ControlRequirement(Contract):
 
     @model_validator(mode="after")
     def validate_objectives(self):
+        request_ids = [item.id for item in self.organisational_evidence]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("duplicate organisational evidence request identity")
         ids = [objective.id for objective in self.objectives]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate control objective identity")
@@ -596,12 +605,29 @@ class ControlAssessmentPlan(Contract):
         )
         if cells > 16384:
             raise ValueError("control assessment check population exceeds the bound")
-        refs = {
-            e.artifact_ref for r in self.requirements for e in r.supporting_evidence
-        }
+        refs = set(self.evidence_refs())
         if len(refs) > 64:
             raise ValueError("control supporting evidence exceeds the reference bound")
         return self
+
+    def evidence_refs(self, *, current_only: bool = False) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    e.artifact_ref
+                    for r in self.requirements
+                    for e in r.supporting_evidence
+                ]
+                + [
+                    revision.artifact_ref
+                    for r in self.requirements
+                    for request in r.organisational_evidence
+                    for revision in (
+                        request.revisions[-1:] if current_only else request.revisions
+                    )
+                ]
+            )
+        )
 
 
 class ControlObjectiveResult(Contract):
@@ -616,6 +642,9 @@ class ControlObjectiveResult(Contract):
 
 
 class ControlRequirementResult(Contract):
+    organisational_evidence: list[OrganisationalEvidenceResult] = Field(
+        default_factory=list
+    )
     requirement: ControlRequirement
     conclusion: Literal["satisfied", "not_satisfied", "inconclusive", "not_assessed"]
     coverage: Literal["complete", "partial", "blocked", "not_assessed"]
@@ -626,10 +655,13 @@ class ControlRequirementResult(Contract):
     methods: Annotated[
         list[
             Literal[
-                "deterministic_check", "agent_interpretation", "management_assertion"
+                "deterministic_check",
+                "agent_interpretation",
+                "management_assertion",
+                "document_review",
             ]
         ],
-        Field(max_length=3),
+        Field(max_length=4),
     ]
     objectives: Annotated[list[ControlObjectiveResult], Field(max_length=32)]
     exceptions: Annotated[list[ComparedDecision], Field(max_length=4096)]
@@ -1132,8 +1164,8 @@ def compare_observations(
 
     A disposition annotates a finding; it never changes the scanner's facts.
     Absence alone is a coverage observation. It becomes verified remediation
-    only with a linked passing fix-retest, or when the source itself reports
-    the finding fixed.
+    only with a linked passing fix-retest and sufficient comparable coverage.
+    Upstream closure records the source's claim independently of verification.
     """
     prior = Comparison.model_validate(previous) if previous is not None else None
     previous_observation = prior.observation if prior else None
@@ -1218,15 +1250,13 @@ def compare_observations(
     for retained in old.values():
         closure = current.upstream_closed.get(retained.finding_id)
         verification = None
-        if closure == "fixed":
-            state, verification = "remediated_verified", "upstream_fixed"
+        comparable = _comparable(retained, current, prior.observation, now)
+        if comparable and retained.finding_id in retest_passed:
+            state, verification = "remediated_verified", "retest_passed"
         elif closure is not None:
             state = "closed_upstream"
-        elif _comparable(retained, current, prior.observation, now):
-            if retained.finding_id in retest_passed:
-                state, verification = "remediated_verified", "retest_passed"
-            else:
-                state = "absent_comparable"
+        elif comparable:
+            state = "absent_comparable"
         else:
             state = "not_reassessed"
         compared.append(

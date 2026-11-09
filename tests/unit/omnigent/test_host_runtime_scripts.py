@@ -162,6 +162,7 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
     projection = home / ".moonmind-provider-config"
     projection.mkdir()
     selected = profile()
+    selected.env_template.update({"REPORT_DIR": "{{workspace_path}}/reports", "CACHE_DIR": "{{ runtime_support_dir }}/cache"})
     if additional_file:
         selected.file_templates.append({
             "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
@@ -182,6 +183,7 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "config=tomllib.loads((pathlib.Path(os.environ['CODEX_HOME'])/'config.toml').read_text())\n"
         "print(json.dumps({'home':os.environ['CODEX_HOME'],'step':os.environ['MOONMIND_STEP_EXECUTION_ID'],"
         "'skills':os.environ['MOONMIND_ACTIVE_SKILLS_DIR'],'model':config['model'],"
+        "'reportDir':os.environ['REPORT_DIR'],'cacheDir':os.environ['CACHE_DIR'],"
         "'retries':config['model_providers']['custom']['request_max_retries'],"
         "'globalInstructions':(pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').read_text() "
         "if (pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').exists() else None}))\n"
@@ -203,6 +205,7 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
                 "credentialGeneration": 3,
                 "materializerRef": "omnigent-provider-config@1",
                 "attachments": [{"targetPath": "/home/app/.moonmind-provider-config"}],
+                "runtimeEnvironmentTemplates": endpoint.environmentTemplates,
                 "runtimeEnvironment": {
                     "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config",
                     "MOONMIND_CODEX_PROFILE_CONFIG_FILE": "/home/app/.moonmind-provider-config/codex-profile.json",
@@ -211,6 +214,8 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         ],
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:node:execution:1",
+        workspace_path="/workspaces/admitted",
+        enable_codex_runtime=True,
     )
     environment = {
         key: value.replace("/home/app", str(home)) for key, value in environment.items()
@@ -234,6 +239,8 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "skills": str(skills),
         "model": "example-model",
         "retries": 4,
+        "reportDir": "/workspaces/admitted/reports",
+        "cacheDir": str(home / ".omnigent/moonmind/runtime-context/cache"),
         "globalInstructions": "Selected global instructions.\n" if additional_file else None,
     }
     assert not (home / ".codex/AGENTS.md").exists()

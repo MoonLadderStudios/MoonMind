@@ -1,8 +1,8 @@
 """Profile template rendering shared by direct and packaged native launches.
 
 The renderer has no application dependencies. Credential resolution, directory
-ownership and cleanup remain with its caller; only template/file semantics live
-here. Packaged hosts provide the same maintained TOML serializer explicitly.
+ownership and cleanup remain with its caller; template/file semantics and the
+shared nonsecret environment guard live here. Packaged hosts provide the same maintained TOML serializer explicitly.
 """
 
 from __future__ import annotations
@@ -14,6 +14,76 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+SENSITIVE_ENVIRONMENT_KEY_PATTERN = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|auth|credential|docker_host|registry_auth)", re.I)
+
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_PROTECTED = re.compile(
+    r"^(?:MOONMIND|OMNIGENT|LD|DYLD|PYTHON|NODE|NPM|BASH|SHELL|ENV|BASH_ENV|"
+    r"GIT|GH|SSH|SSL|CURL|REQUESTS|AWS|AZURE|GOOGLE|DOCKER|CONTAINER|"
+    r"RUBY|PERL|JAVA|JDK|JRE|PHP|LUA|RUST|CARGO|GODEBUG|GOTOOLCHAIN|"
+    r"OPENCODE|CLAUDE|CODEX|OPENAI|ANTHROPIC)|"
+    r"^(?:PATH|HOME|USER|LOGNAME|PWD|OLDPWD|IFS|CDPATH|SHELLOPTS|BASHOPTS|"
+    r"PYTHONPATH|PYTHONHOME|NODE_OPTIONS|TMPDIR|TMP|TEMP|RES_OPTIONS|LOCALDOMAIN|"
+    r"HOSTALIASES|HOSTNAME|TZDIR|LOCPATH|NLSPATH|TERMINFO|TERMINFO_DIRS)$|PROXY$",
+    re.IGNORECASE,
+)
+_SECRET_KEY = re.compile(
+    r"(?:private|signing|encryption|access)[_-]?key", re.IGNORECASE
+)
+
+
+def is_safe_project_environment_entry(key: str, raw_value: str) -> bool:
+    """Whether one literal can use the nonsecret runtime projection."""
+    if not isinstance(raw_value, str) or not isinstance(key, str):
+        return False
+    value = raw_value.strip()
+    safe = bool(_NAME.fullmatch(key)) and not (
+        _PROTECTED.search(key)
+        or SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(key)
+        or _SECRET_KEY.search(key)
+    )
+    safe = safe and bool(value) and not any(
+        ord(c) < 32 or ord(c) == 127 for c in raw_value
+    )
+    if safe and "://" in value:
+        try:
+            parsed = urlsplit(value)
+            safe = not ("@" in parsed.netloc or parsed.query or parsed.fragment)
+        except ValueError:
+            return False
+    return bool(safe)
+
+
+PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
+    {
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "API_TIMEOUT_MS",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    }
+)
+
+
+def validate_provider_literal_launch_environment(
+    values: dict[str, str],
+) -> dict[str, str]:
+    """Validate the non-secret tuning values carried by the shared host."""
+    unknown = set(values) - PROVIDER_LITERAL_LAUNCH_ENV
+    if unknown:
+        unknown = {
+            key for key in unknown
+            if not is_safe_project_environment_entry(key, values[key])
+        }
+    if unknown:
+        raise ValueError(
+            f"unsupported provider launch environment keys: {sorted(unknown)}"
+        )
+    for key, value in values.items():
+        if not isinstance(value, str) or not value or any(c in value for c in "\0\r\n"):
+            raise ValueError(f"invalid provider launch environment {key}")
+    return dict(values)
+
 
 _TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
 

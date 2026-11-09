@@ -142,6 +142,7 @@ def authorization_scope(record: AssessmentAuthorization) -> AdmittedAssessmentSc
         validFrom=record.valid_from,
         validUntil=record.valid_until,
         maxTotalJobSeconds=record.max_total_job_seconds,
+        recurring=record.recurring,
     )
     return record.scope.model_copy(update={"engagement": engagement})
 

@@ -500,3 +500,13 @@ def test_legacy_framework_text_bounds_are_unchanged():
     )
     assert len(choice.not_applicable_reason) == 4096
     assert len(choice.responsibility_reason) == 4096
+
+
+def test_declared_pack_preserves_requirement_local_organisational_requests():
+    from tests.unit.security.test_control_assessments import organisational_request
+
+    evidence = organisational_request()
+    plan, _ = compile(load(), choices={"R1": {"organisationalEvidence": [evidence]}})
+    assert plan.requirements[0].organisational_evidence[0].id == "policy"
+    assert plan.evidence_refs() == ["art_policy"]
+    assert plan.requirements[0].organisational_evidence[0].revisions[0].review.purpose == "design"

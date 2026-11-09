@@ -468,6 +468,14 @@ class ContainerJobService:
                         jobs, seconds, native_reserved, dns_reserved = await assessment_reserved_budget(
                             self._session, scope, include_native=True, include_dns=True
                         )
+                        continuing = scope.engagement.recurring if scope.engagement else None
+                        if continuing is not None:
+                            run_jobs, run_seconds = await assessment_reserved_budget(
+                                self._session, scope, workflow_id=request.source.workflow_id
+                            )
+                            if (run_jobs >= continuing.max_jobs_per_occurrence or
+                                run_seconds + request.spec.timeout_seconds > continuing.max_job_seconds_per_occurrence):
+                                raise AssessmentAuthorizationDenied("assessment per-occurrence job budget is exhausted")
                         profile = request.spec.workload_profile
                         if profile is not None and profile.native_network is not None:
                             authority = next(

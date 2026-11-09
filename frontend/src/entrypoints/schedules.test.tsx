@@ -1181,6 +1181,31 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?limit=50&sort=updatedAt&sortDir=desc");
   });
 
+  it("reviews renewed authority before replacing the scheduled target and rejects stale edited proposals", async () => {
+    const review = { schemaVersion: 'assessment-engagement/v1', authorizationRef: 'payments', authorizationGeneration: 'new-generation', scopeDigest: 'scope', proposalDigest: 'proposal', scope: {}, sections: [{ label: 'Continuing limits', items: ['Four occurrences only'] }], limitations: [] };
+    mockScheduleDetailFetch(fetchSpy, { target: { workflowType: 'MoonMind.UserWorkflow', initialParameters: { workflow: { instructions: 'Inspect' }, assessmentAuthorizationRef: 'payments', assessmentReview: { ...review, authorizationGeneration: 'old-generation' } } } });
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((url, init) => String(url) === '/api/executions/assessment-proposal' ? Promise.resolve(new Response(JSON.stringify(review))) : original(url, init));
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: 'Nightly detail sweep' });
+    expect(screen.getByRole('heading', { name: 'Recorded rules of engagement' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review current assessment authority' }));
+    await screen.findByRole('button', { name: 'Use reviewed authority' });
+    const input = screen.getByLabelText('Target Workflow Parameters');
+    const changed = JSON.parse((input as HTMLTextAreaElement).value);
+    changed.initialParameters.workflow.instructions = 'Changed instructions';
+    fireEvent.change(input, { target: { value: JSON.stringify(changed) } });
+    expect(screen.queryByRole('button', { name: 'Use reviewed authority' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Review current assessment authority' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use reviewed authority' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const patch = JSON.parse(String(fetchSpy.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!.body));
+    expect(patch.target.initialParameters.assessmentReview).toEqual(review);
+    expect(patch.target.initialParameters.workflow.instructions).toBe('Changed instructions');
+  });
+
   it("keeps update requests keyed by the route definition id", async () => {
     mockScheduleDetailFetch(fetchSpy);
 

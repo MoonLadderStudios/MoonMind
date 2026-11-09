@@ -2,6 +2,13 @@ import { responseError } from './api/client';
 import { newRequestId } from './requestId';
 
 export const ASSESSMENT_AUTHORIZATIONS_KEY = 'security.assessment_authorizations';
+export interface RecurringAssessmentTerms {
+  minIntervalSeconds: number;
+  maxOccurrences: number;
+  maxJobsPerOccurrence: number;
+  maxJobSecondsPerOccurrence: number;
+  maxRunSeconds: number;
+}
 export interface AssessmentAuthorization {
   ref: string;
   name: string;
@@ -12,6 +19,7 @@ export interface AssessmentAuthorization {
   validFrom: string;
   validUntil: string;
   maxTotalJobSeconds: number;
+  recurring?: RecurringAssessmentTerms | undefined;
   scope: Record<string, unknown>;
 }
 export interface AssessmentEngagementReview {

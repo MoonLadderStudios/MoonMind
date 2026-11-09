@@ -3,6 +3,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
@@ -202,18 +203,21 @@ with workflow.unsafe.imports_passed_through():
         compile_recovery_entry_policy,
     )
     from moonmind.workflows.temporal.remediation_loop import (
-        apply_continuation_decision,
-        capture_remediation_candidate,
-        decide_remediation_continuation,
         ConsumedRemediationBudgets,
+        RemediationContinuationDecision,
         RemediationLoopPhase,
         RemediationLoopSpec,
         RemediationLoopState,
+        apply_continuation_decision,
+        capture_remediation_candidate,
+        decide_remediation_continuation,
         materialize_attempt_nodes,
         materialize_evidence_retry_node,
         project_remediation_loop,
+        record_remediation_resource_usage,
         record_semantic_progress,
         record_verification_evidence,
+        remediation_resource_stop_reason,
         remediation_step_execution_id,
         resolve_loop_runtime,
         should_continue_as_new,
@@ -1099,6 +1103,11 @@ RUN_REMEDIATION_CURRENT_EVIDENCE_INPUTS_PATCH = (
 # the controller patch so histories that never authored a loop never record the
 # new branch.
 RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = "run-remediation-loop-continue-as-new-v1"
+# Resource receipts and admission change retry/continuation commands. Retained
+# histories keep their recorded decisions until a new run admits this policy.
+RUN_REMEDIATION_AGGREGATE_RESOURCE_BUDGET_PATCH = (
+    "run-remediation-aggregate-resource-budget-v1"
+)
 # Agent/runtime artifact activities return opaque ``art_`` IDs, while the
 # deterministic remediation state stores canonical ``artifact://`` refs.
 # Version the boundary normalization so histories that already evaluated a gate
@@ -4443,6 +4452,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             raise ValueError("remediation loop is not initialized")
         payload = dict(self._original_input_payload)
         state_payload = state.model_dump(by_alias=True, mode="json")
+        if state.resource_usage is None:
+            state_payload.pop("resourceUsage", None)
         if not workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH):
             state_payload.pop("latestProgressSignature", None)
         continuation: dict[str, Any] = {
@@ -4581,6 +4592,192 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             pairs[attempt] for attempt in sorted(pairs)
         ]
         self._publish_context["remediationLoop"] = projection
+
+    def _is_remediation_resource_step(self, logical_step_id: str) -> bool:
+        row = self._step_ledger_row_for(logical_step_id) or {}
+        annotations = row.get("annotations")
+        annotations = annotations if isinstance(annotations, Mapping) else {}
+        return self._remediation_loop_spec is not None and (
+            logical_step_id == self._remediation_loop_controller_node_id
+            or self._remediation_step_plan_source(logical_step_id) is not None
+            or (
+                annotations.get("remediationLoopId")
+                == self._remediation_loop_spec.loop_id
+                and annotations.get("issueImplementRole")
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+            )
+        )
+
+    def _record_remediation_execution_usage(
+        self,
+        logical_step_id: str,
+        *,
+        outputs: Mapping[str, Any],
+        updated_at: datetime,
+    ) -> None:
+        if not self._is_remediation_resource_step(
+            logical_step_id
+        ) or not self._workflow_patch_enabled(
+            RUN_REMEDIATION_AGGREGATE_RESOURCE_BUDGET_PATCH
+        ):
+            return
+        # Flattened metadata may be partial. Inspect the runtime metering blocks
+        # too, so a stale zero cannot hide a greater reported observation.
+        observed = [
+            self._extract_observed_cost(source)
+            for source in (
+                outputs,
+                outputs.get("usage"),
+                outputs.get("turnMetadata"),
+            )
+            if isinstance(source, Mapping)
+        ]
+
+        def number(*keys: str) -> int | float | None:
+            values = [source.get(key) for source in observed for key in keys]
+            return max(
+                (
+                    value
+                    for value in values
+                    if isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and value >= 0
+                ),
+                default=None,
+            )
+
+        tokens = number("totalTokens", "total_tokens")
+        input_tokens = number(
+            "inputTokens", "input_tokens", "promptTokens", "prompt_tokens"
+        )
+        output_tokens = number(
+            "outputTokens", "output_tokens", "completionTokens", "completion_tokens"
+        )
+        if input_tokens is not None and output_tokens is not None:
+            tokens = max(tokens or 0, input_tokens + output_tokens)
+        cost = number(
+            "costEstimateUsd",
+            "cost_estimate_usd",
+            "estimatedCostUsd",
+            "estimated_cost_usd",
+            "costUsd",
+            "cost_usd",
+            "totalCostUsd",
+            "total_cost_usd",
+        )
+        state = self._remediation_loop_state
+        if state is None:
+            return
+        self._remediation_loop_state = record_remediation_resource_usage(
+            state,
+            now=updated_at,
+            execution_id=f"{logical_step_id}:execution:{self._step_execution_for(logical_step_id) or 1}",
+            tokens=(
+                int(tokens) if tokens is not None and int(tokens) == tokens else None
+            ),
+            cost=cost,
+        )
+        self._sync_remediation_loop_projection()
+
+    async def _write_remediation_resource_budget(
+        self, state: RemediationLoopState
+    ) -> str:
+        return await self._write_json_artifact(
+            name=f"reports/remediation_resources_{state.loop_id}_{len(state.resource_usage.executions) if state.resource_usage else 0}.json",
+            payload={
+                "loopId": state.loop_id,
+                "budgets": self._remediation_loop_spec.budgets.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "resourceUsage": (
+                    state.resource_usage.model_dump(by_alias=True, mode="json")
+                    if state.resource_usage
+                    else None
+                ),
+                "workspaceHeadRef": state.workspace_head_ref,
+                "latestVerificationRef": state.latest_verification_ref,
+                "remainingWorkRef": state.latest_progress_ref,
+                "stepCheckpointRefs": dict(self._step_checkpoint_refs),
+            },
+        )
+
+    async def _admit_remediation_resource_execution(
+        self,
+        logical_step_id: str,
+        *,
+        execution_ordinal: int | None = None,
+    ) -> bool:
+        """Reserve a runtime execution before dispatch, including infrastructure retries."""
+
+        if self._cancel_requested:
+            return False
+        if not self._is_remediation_resource_step(
+            logical_step_id
+        ) or not self._workflow_patch_enabled(
+            RUN_REMEDIATION_AGGREGATE_RESOURCE_BUDGET_PATCH
+        ):
+            return True
+        state = record_remediation_resource_usage(
+            self._remediation_loop_state, now=workflow.now()
+        )
+        execution_id = f"{logical_step_id}:execution:{execution_ordinal or self._step_execution_for(logical_step_id) or 1}"
+        # Reconcile an already reserved effect under its existing identity.
+        # A successor Step Execution has its own ordinal and must pass admission.
+        if execution_id in state.resource_usage.executions:
+            self._remediation_loop_state = state
+            return True
+        reason = remediation_resource_stop_reason(
+            spec=self._remediation_loop_spec, state=state
+        )
+        if reason:
+            self._remediation_loop_state = state
+            budget_ref = await self._write_remediation_resource_budget(state)
+            decision = RemediationContinuationDecision(
+                loopId=state.loop_id,
+                currentAttempt=state.attempt_ordinal,
+                verdict=state.latest_verdict or "NO_DETERMINATION",
+                continueLoop=False,
+                reason=reason,
+                nextPhase=RemediationLoopPhase.STOPPED_REMAINING_WORK,
+                workspaceHeadRef=state.workspace_head_ref,
+                gateResultRef=state.latest_verification_ref or budget_ref,
+                remainingWorkRef=state.latest_progress_ref,
+                budgetRef=budget_ref,
+            )
+            decision_ref = await self._write_json_artifact(
+                name=f"reports/remediation_resource_stop_{state.loop_id}.json",
+                payload=decision.model_dump(by_alias=True, mode="json"),
+            )
+            decision_ref = self._bounded_story_loop_artifact_ref(decision_ref)
+            if decision_ref is None:
+                raise ValueError(
+                    "remediation resource stop requires an artifact continuation decision"
+                )
+            self._remediation_loop_state = apply_continuation_decision(
+                state.model_copy(
+                    update={"phase": RemediationLoopPhase.CONTINUATION_DECIDING}
+                ),
+                decision=decision,
+                decision_ref=decision_ref,
+            )
+            self._sync_remediation_loop_projection()
+            self._plan_blocked_message = (
+                f"Remediation stopped: {reason}. Saved candidate and evidence retained."
+            )
+            self._summary = self._plan_blocked_message
+            self._publish_context["publicationBlockedBy"] = (
+                "remediation_resource_budget"
+            )
+            self._update_memo()
+            return False
+        self._remediation_loop_state = record_remediation_resource_usage(
+            state,
+            now=workflow.now(),
+            execution_id=execution_id,
+        )
+        self._sync_remediation_loop_projection()
+        return True
 
     def _materialize_remediation_attempt(
         self,
@@ -4930,6 +5127,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         state = self._remediation_loop_state
         if spec is None or state is None:
             return False
+        resource_enforcement_enabled = workflow.patched(
+            RUN_REMEDIATION_AGGREGATE_RESOURCE_BUDGET_PATCH
+        )
+        if resource_enforcement_enabled:
+            state = record_remediation_resource_usage(state, now=workflow.now())
         verifier_evidence_fallback = workflow.patched(
             RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
         )
@@ -5025,6 +5227,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     else None
                 ),
             )
+        budget_ref = None
+        if resource_enforcement_enabled and any(
+            value is not None
+            for value in (
+                spec.budgets.max_wall_clock_seconds,
+                spec.budgets.provider_budget,
+                spec.budgets.token_budget,
+                spec.budgets.cost_budget,
+            )
+        ):
+            budget_ref = await self._write_remediation_resource_budget(state)
         decision = decide_remediation_continuation(
             spec=spec,
             state=state,
@@ -5032,6 +5245,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             gate_result_ref=gate_result_ref,
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
+            budget_ref=budget_ref,
+            resource_enforcement_enabled=resource_enforcement_enabled,
             recoverable_evidence=recoverable_evidence,
             evidence_recovery_enabled=workflow.patched("run-materialize-evidence-retry-v1"),
             recommended_next_action=(
@@ -6389,6 +6604,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         updated_at: datetime,
     ) -> None:
         outputs = self._effective_result_outputs(execution_result)
+        self._record_remediation_execution_usage(
+            logical_step_id,
+            outputs=outputs if isinstance(outputs, Mapping) else {},
+            updated_at=updated_at,
+        )
         if not isinstance(outputs, Mapping):
             return
 
@@ -12075,7 +12295,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if (
                 self._remediation_loop_continuation is None
                 and self._has_recurrence_metadata(parameters)
-                and isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                and (
+                    isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                    or (parameters.get("assessmentScope") is not None and
+                        workflow.patched("run-recurring-assessment-authority-v1"))
+                )
                 and temporal_scheduled_start_time(workflow.info()) is not None
                 and workflow.patched(RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH)
             ):
@@ -13772,6 +13996,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     await self._wait_if_paused_at_safe_boundary()
                     if self._cancel_requested:
                         return
+                    if not await self._admit_remediation_resource_execution(node_id):
+                        self._mark_remaining_plan_steps_skipped(
+                            ordered_nodes=ordered_nodes,
+                            completed_index=index - 2,
+                            summary=self._plan_blocked_message,
+                        )
+                        self._refresh_step_readiness(updated_at=workflow.now())
+                        return
                     await self._record_canonical_step_checkpoint(
                         node_id,
                         boundary="before_execution",
@@ -14820,6 +15052,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     workflow.now()
                                 )
                             if self._cancel_requested:
+                                return
+                            if not await self._admit_remediation_resource_execution(
+                                node_id,
+                                execution_ordinal=(
+                                    self._step_execution_for(node_id)
+                                    or current_step_execution
+                                )
+                                + 1,
+                            ):
+                                self._mark_remaining_plan_steps_skipped(
+                                    ordered_nodes=ordered_nodes,
+                                    completed_index=index - 2,
+                                    summary=self._plan_blocked_message,
+                                )
+                                self._refresh_step_readiness(updated_at=workflow.now())
                                 return
                             if omnigent_step and workflow.patched(
                                 RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH

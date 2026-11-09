@@ -2484,6 +2484,7 @@ class TemporalExecutionService:
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
         _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
         _admitted_execution_plan: PersistedOmnigentExecutionPlan | None = None,
+        _assessment_evidence_access: ArtifactAccessContext | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2905,6 +2906,34 @@ class TemporalExecutionService:
         if remediation_link is not None:
             self._session.add(remediation_link)
         try:
+            if _assessment_evidence_access is not None:
+                from moonmind.security.organisational_evidence import (
+                    organisational_evidence_refs,
+                )
+
+                # Exact Tool inputs and trusted request access, never agent-image
+                # attachments or model-delivery grants. Win the create identity
+                # before adding any rights, in the same caller-owned transaction.
+                await self._session.flush()
+                evidence_refs = organisational_evidence_refs(_workflow_payload(params))
+                artifacts = TemporalArtifactService(
+                    TemporalArtifactRepository(self._session),
+                    transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                )
+                try:
+                    await artifacts.delegate_read_access(
+                        artifact_ids=evidence_refs,
+                        workflow_id=workflow_id,
+                        namespace=self._namespace,
+                        access=_assessment_evidence_access,
+                    )
+                except TemporalArtifactError:
+                    raise TemporalExecutionValidationError(
+                        "Organisational evidence could not be admitted. Verify current artifact access and retry."
+                    ) from None
+                record.artifact_refs = list(
+                    dict.fromkeys([*record.artifact_refs, *evidence_refs])
+                )
             if remediation_link is not None and getattr(remediation_link, "security_evidence", None):
                 # The existing create identity wins before any input grant.
                 # The selected evidence confers read rights only, not mutation,
@@ -2951,6 +2980,41 @@ class TemporalExecutionService:
                 except (OmnigentArtifactError, TemporalArtifactError) as exc:
                     raise TemporalExecutionValidationError(str(exc)) from exc
             if _recovery_artifact_source is not None:
+                from moonmind.security.organisational_evidence import (
+                    organisational_evidence_refs,
+                )
+
+                # A fresh rerun carries only still-authorized recorded evidence,
+                # including restricted raw rights that input.recovery alone
+                # cannot convey. Neither an edited ref nor a revoked source
+                # grant can manufacture new access.
+                await self._session.flush()
+                source_evidence = set(
+                    organisational_evidence_refs(
+                        _workflow_payload(_recovery_artifact_source.parameters or {})
+                    )
+                )
+                requested_evidence = set(
+                    organisational_evidence_refs(_workflow_payload(params))
+                )
+                if inherited_evidence := source_evidence & requested_evidence:
+                    artifacts = TemporalArtifactService(
+                        TemporalArtifactRepository(self._session),
+                        transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                    )
+                    try:
+                        await artifacts.delegate_read_access(
+                            artifact_ids=inherited_evidence,
+                            workflow_id=workflow_id,
+                            namespace=self._namespace,
+                            access=ArtifactAccessContext.for_execution(
+                                _recovery_artifact_source.workflow_id
+                            ),
+                        )
+                    except TemporalArtifactError:
+                        raise TemporalExecutionValidationError(
+                            "Organisational evidence recovery requires current source read access."
+                        ) from None
                 # Recovery inherits the admitted source inputs and retained step
                 # evidence, but has a new execution identity. Commit their links
                 # with the destination record before Temporal can launch it.
@@ -3607,7 +3671,7 @@ class TemporalExecutionService:
                 # Temporal-authoritative projection is the durable control-plane
                 # record used for ownership and parent-runtime inheritance.
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
+                return await self._with_assessment_occurrence(projection)
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
@@ -3620,8 +3684,24 @@ class TemporalExecutionService:
             )
             if projection is not None:
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
-        return await self._sync_projection_best_effort(record)
+                return await self._with_assessment_occurrence(projection)
+        return await self._with_assessment_occurrence(await self._sync_projection_best_effort(record))
+
+    async def _with_assessment_occurrence(self, projection):
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import project_assessment_occurrence
+
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        if not (projection.parameters or {}).get("assessmentScope") and not scheduled_definition_id(projection.workflow_id):
+            return projection
+        row = await self._session.get(AssessmentOccurrenceRecord, projection.workflow_id)
+        parameters = {key: value for key, value in (projection.parameters or {}).items() if key != "assessmentOccurrence"}
+        if row is not None:
+            parameters["assessmentOccurrence"] = project_assessment_occurrence(row.authority_json)
+        # Projection only; this never creates or changes authority/reservations.
+        projection.parameters = parameters
+        return projection
 
     def canonicalize_workflow_id(self, workflow_id: str) -> str:
         candidate = TemporalExecutionRecord.canonicalize_identifier(workflow_id)
@@ -5254,6 +5334,24 @@ class TemporalExecutionService:
                 raise TemporalExecutionTargetRunChangedError(
                     "Target run changed before control dispatch"
                 )
+
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import _authorization_row
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        scoped = (record.parameters or {}).get("assessmentScope")
+        continuing = isinstance(scoped, Mapping) and (scoped.get("engagement") or {}).get("recurring")
+        if continuing or scheduled_definition_id(workflow_id):
+            # Serialize cancellation with first native admission as well as
+            # existing reservations. A deny-only marker never supplies scope.
+            await _authorization_row(self._session, for_update=True, ensure_legacy_lock=True)
+            occurrence = await self._session.get(AssessmentOccurrenceRecord, workflow_id, populate_existing=True, with_for_update=True)
+            marker = {"cancelRequestedAt": datetime.now(UTC).isoformat()}
+            if occurrence is None:
+                self._session.add(AssessmentOccurrenceRecord(workflow_id=workflow_id, authority_json=marker))
+            else:
+                occurrence.authority_json = {**occurrence.authority_json, **marker}
+            await self._session.commit()
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -7606,7 +7704,9 @@ class TemporalExecutionService:
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,
-            "parameters": dict(source.parameters or {}),
+            "parameters": {
+                **{key: value for key, value in (source.parameters or {}).items() if key != "assessmentOccurrence"},
+            },
             "integration_state": (
                 dict(source.integration_state)
                 if isinstance(source.integration_state, dict)

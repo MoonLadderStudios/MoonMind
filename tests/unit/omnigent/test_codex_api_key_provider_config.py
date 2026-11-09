@@ -373,9 +373,12 @@ class _VolumeDocker:
 
     def __init__(self) -> None:
         self.volumes: set[str] = set()
+        self.payloads = []
 
     async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
         argv = list(argv)
+        if input_bytes:
+            self.payloads.append(json.loads(input_bytes))
         if argv[:3] == ["docker", "volume", "create"]:
             self.volumes.add(argv[-1])
         elif argv[:3] == ["docker", "volume", "ls"]:
@@ -410,6 +413,10 @@ class _AnySecret:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_id", sorted(_SHAPES))
 async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
+    await _assert_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id)
+
+
+async def _assert_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id, profile_values=None):
     """An interrupted step's new attempt gets its own provider config.
 
     Re-admission (a new ``admission_epoch`` on the same capacity lease) is how
@@ -426,6 +433,12 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
     )
 
     shape = _SHAPES[runtime_id]
+    selected_values = {
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": shape["secret_refs"],
+        "env_template": shape["env_template"],
+        **(profile_values or {}),
+    }
     templates = {"REPORT_DIR": "{{workspace_path}}/reports"}
     profile_id = f"{runtime_id}_api"
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/attempts.db")
@@ -440,9 +453,7 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
                 provider_id=shape["provider_id"],
                 credential_generation=4,
                 credential_source="secret_ref",
-                runtime_materialization_mode="api_key_env",
-                secret_refs=shape["secret_refs"],
-                env_template={**shape["env_template"], **templates},
+                **{**selected_values, "env_template": {**selected_values["env_template"], **templates}},
             )
         )
         await session.commit()
@@ -525,6 +536,10 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
         (restarted,) = await provision(2)
         assert interrupted.runtimeEnvironmentTemplates == templates
         assert restarted.runtimeEnvironmentTemplates == templates
+        if admitted.codexConfiguration:
+            assert len(docker.payloads) == 2
+            for payload in docker.payloads:
+                assert payload["_moonmind_codex_configuration"] == admitted.codexConfiguration
         interrupted_volume = interrupted.attachments[0].sourceRef
         restarted_volume = restarted.attachments[0].sourceRef
         assert interrupted.credentialRuntimeRef != restarted.credentialRuntimeRef
