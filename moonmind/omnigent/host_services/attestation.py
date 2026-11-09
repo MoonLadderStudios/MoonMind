@@ -1119,6 +1119,48 @@ class DockerOmnigentHostAttestor:
                     )
                 generation = int(handle["credentialGeneration"])
                 target = str(attachment["targetPath"])
+                if attachment.get("contentDigest") is not None:
+                    # A nested read-only file mount must expose the exact frozen
+                    # bytes. The root projection attachment separately proves
+                    # the same attempt's generation and ownership.
+                    verify_file = (
+                        'test ! -L "$1"; test -f "$1"; '
+                        'test "$(stat -c %u:%g "$1")" = 1000:1000; '
+                        'test "$(stat -c %a "$1")" = 600; '
+                        'observed=$(sha256sum "$1"); observed=${observed%% *}; '
+                        'test "sha256:$observed" = "$2"; printf verified'
+                    )
+                    _code, observed, _err = await self._backend.run(
+                        [
+                            "docker",
+                            "exec",
+                            launch_result["containerName"],
+                            "/bin/sh",
+                            "-ceu",
+                            verify_file,
+                            "--",
+                            target,
+                            attachment["contentDigest"],
+                        ],
+                        failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    )
+                    if observed.strip() != "verified":
+                        raise HarnessPlatformError(
+                            "Claude preference file differs on the exact host",
+                            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                        )
+                    credential_mount_evidence.append(
+                        {
+                            "credentialRuntimeRef": handle["credentialRuntimeRef"],
+                            "targetPath": target,
+                            "accessMode": "read-only",
+                            "owner": "1000:1000",
+                            "fileMode": "0600",
+                            "generation": generation,
+                            "contentDigest": attachment["contentDigest"],
+                        }
+                    )
+                    continue
                 verify_credential_script = "".join(
                     (
                         'test "$(stat -c %u:%g "$1")" = 1000:1000; ',

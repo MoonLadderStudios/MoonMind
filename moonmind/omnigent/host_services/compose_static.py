@@ -121,6 +121,8 @@ def compose_service_from_create(argv):
             }
             if "volume-subpath" in parts:
                 mount["volume"] = {"subpath": parts["volume-subpath"]}
+            if parts.get("volume-nocopy") is True:
+                mount.setdefault("volume", {})["nocopy"] = True
             if mount["type"] == "volume":
                 volumes[mount["source"]] = {"external": True, "name": mount["source"]}
             service["volumes"].append(mount)
@@ -324,6 +326,15 @@ class ComposeStaticHostService:
                     "staticComposeProject": command[3],
                     "staticPreviousContainerId": current["Id"] if current else None,
                     "staticHostName": host_name,
+                    "previousClaudePreferenceVolumes": [
+                        mount["Name"]
+                        for mount in (current or {}).get("Mounts", [])
+                        if mount.get("Destination")
+                        == "/run/moonmind-claude-preferences"
+                        and mount.get("Name", "").startswith(
+                            "mm-omnigent-claude-preferences-"
+                        )
+                    ],
                     "previousGithubVolumes": [
                         mount["Name"]
                         for mount in (current or {}).get("Mounts", [])
@@ -361,6 +372,25 @@ class ComposeStaticHostService:
             ],
             input_bytes=json.dumps(_literal_compose_values(model)).encode(),
         )
+        for volume in spec.runtime.get("previousClaudePreferenceVolumes", []):
+            if volume in volumes:
+                continue
+            code, owner, _error = await self._backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "inspect",
+                    "--format",
+                    '{{ index .Labels "moonmind.owner" }}',
+                    volume,
+                ],
+                check=False,
+            )
+            if code == 0 and owner.strip() == "generic-omnigent-claude-preferences":
+                # Docker refuses removal if another consumer still has a mount.
+                # These files contain no credential state; the enrolled home
+                # is never a candidate for this retirement.
+                await self._backend.run(["docker", "volume", "rm", volume], check=False)
         for volume in spec.runtime.get("previousGithubVolumes", []):
             if volume in volumes:
                 continue
