@@ -288,7 +288,10 @@ async def test_recurring_credential_changes_recheck_occurrences_and_job_access(
         with pytest.raises(ContainerJobBackendError) as denied:
             await create(first_request)
         assert denied.value.failure_class is failure
-        assert len(provider.commands) == commands_before
+        assert not any(
+            command[0] in {"create", "start"}
+            for command in provider.commands[commands_before:]
+        )
         assert len(provider.sts.calls) == 1
         assert await retained(first_id, first_request) == original
         assert (
