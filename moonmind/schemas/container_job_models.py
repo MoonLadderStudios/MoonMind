@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.provider_profiles.template_renderer import SENSITIVE_ENVIRONMENT_KEY_PATTERN
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
     FeedRefresh,
@@ -50,7 +51,6 @@ MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
 MAX_LOG_PAGE_ENTRIES = 500
 MAX_ARTIFACT_PAGE_ENTRIES = 200
 _JOB_ID = re.compile(r"^container-job:[0-9a-f]{32}$")
-SENSITIVE_ENVIRONMENT_KEY_PATTERN = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|auth|credential|docker_host|registry_auth)", re.I)
 _FORBIDDEN_KEYS = {
     "dockerhost", "dockerurl", "socketpath", "tlspath", "hostpath", "sourcepath",
     "privileged", "devices", "pidmode", "ipcmode", "utsmode", "usernsmode",

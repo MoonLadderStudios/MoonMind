@@ -351,6 +351,12 @@ class ProviderConfigEndpoint(BaseModel):
             launchEnvironment=self.launchEnvironment,
             environmentTemplates=self.environmentTemplates,
         )
+        if self.codexConfiguration is not None:
+            from moonmind.provider_profiles.codex_configuration import validate_private_environment
+
+            private = validate_private_environment(self.codexConfiguration)
+            if set(private) & (set(self.launchEnvironment) | set(self.environmentTemplates or {})):
+                raise ValueError("Profile environment value has conflicting private-HOME ownership")
         return self
 
 
@@ -808,7 +814,7 @@ def codex_provider_config_endpoint(
                     baseUrl=base_url,
                     defaultModel=configuration["document"].get("model"),
                     launchEnvironment=configuration.pop("launchEnvironment", {}),
-                    environmentTemplates=configuration.pop("environmentTemplates", None),
+                    environmentTemplates=configuration.pop("genericEnvironmentTemplates", None),
                     codexConfiguration=configuration,
                 ),
                 "",

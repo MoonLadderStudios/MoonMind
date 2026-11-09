@@ -388,7 +388,8 @@ def configuration_for_profile(profile):
 
         environment_templates = {key: value for key, value in launch_environment.items() if "{{" in value}
         environment_templates = validate_environment_template_context(environment_templates)
-        for value in environment_templates.values():
+        private_templates = {}
+        for key, value in environment_templates.items():
             normalized = re.sub(r"{{\s*runtime_support_dir\s*}}", "{{runtime_support_dir}}", value)
             # Keep ambiguous support paths on the direct route rather than
             # treating an alternate spelling of the relocated HOME as generic.
@@ -400,8 +401,12 @@ def configuration_for_profile(profile):
             # Native sessions relocate the declared HOME. Generic runtime paths
             # are equivalent, but references into that HOME need its own owner.
             if re.search(re.escape(parsed["homePath"].rstrip("/")) + r"(?=/|$)", normalized):
-                return None, "Codex HOME-relative environment requires native delivery"
+                translated = _translate_private_home_context(normalized, parsed["homePath"])
+                if translated not in {item["path"] for item in additional_files}:
+                    return None, "Codex HOME-relative environment requires an admitted nonsecret file"
+                private_templates[key] = translated
         launch_environment = {key: value for key, value in launch_environment.items() if key not in environment_templates}
+        environment_templates = {key: value for key, value in environment_templates.items() if key not in private_templates}
         value = environment[key_name]
         if not isinstance(value, dict) or set(value) != {"from_secret_ref"}:
             return None, "Codex config key must come from a SecretRef"
@@ -427,12 +432,35 @@ def configuration_for_profile(profile):
             "providerName": provider_name,
             "secretRole": role,
             "managedRecipeRepaired": repaired,
-            **({"environmentTemplates": environment_templates} if environment_templates else {}),
+            **({"genericEnvironmentTemplates": environment_templates} if environment_templates else {}),
+            **({"environmentTemplates": private_templates} if private_templates else {}),
             **({"additionalFiles": additional_files} if additional_files else {}),
             **({"launchEnvironment": launch_environment} if launch_environment else {}),
         }, ""
     except (TypeError, ValueError, KeyError):
         return None, "Codex file templates contain invalid configuration"
+
+
+def validate_private_environment(configuration):
+    """Revalidate late-bound values at admission and in the portable launcher."""
+    if __package__:
+        from .template_renderer import validate_environment_template_context, validate_provider_literal_launch_environment
+    else:
+        from template_renderer import validate_environment_template_context, validate_provider_literal_launch_environment
+    environment = configuration.get("environmentTemplates") or {}
+    if not isinstance(environment, dict):
+        raise ValueError("private Codex environment templates must be an object")
+    environment = validate_environment_template_context(validate_provider_literal_launch_environment(environment))
+    if not configuration.get("privateHomeOnly"):
+        files = configuration.get("additionalFiles") or []
+        paths = {_additional_file(_template(item), "{{runtime_support_dir}}")["path"] for item in files}
+        for value in environment.values():
+            if value not in paths or "//" in value or re.search(r"/\.{1,2}(?:/|$)", value):
+                raise ValueError("private Codex environment requires a canonical admitted file")
+    for owner in ("launchEnvironment", "genericEnvironmentTemplates"):
+        if set(environment) & set(configuration.get(owner) or {}):
+            raise ValueError("conflicting private Codex environment ownership")
+    return environment
 
 
 def validate_oauth_configuration(configuration):
@@ -453,14 +481,7 @@ def validate_oauth_configuration(configuration):
     if not isinstance(files, list):
         raise ValueError("OAuth Codex file configuration must be an array")
     files = [_additional_file(_template(item), "{{runtime_support_dir}}") for item in files]
-    environment = configuration.get("environmentTemplates") or {}
-    if not isinstance(environment, dict):
-        raise ValueError("private Codex environment templates must be an object")
-    if __package__:
-        from .template_renderer import validate_environment_template_context
-    else:
-        from template_renderer import validate_environment_template_context
-    environment = validate_environment_template_context(environment)
+    environment = validate_private_environment(configuration)
     result = {
         "document": copy.deepcopy(document), "privateHomeOnly": True,
         **({"additionalFiles": files} if files else {}),
@@ -758,8 +779,10 @@ if __name__ == "__main__":
     configuration = (
         json.loads(Path(config_path).read_text()) if config_path != "-" else None
     )
-    if configuration is not None and configuration.get("privateHomeOnly"):
-        configuration = validate_oauth_configuration(configuration)
+    if configuration is not None:
+        validate_private_environment(configuration)
+        if configuration.get("privateHomeOnly"):
+            configuration = validate_oauth_configuration(configuration)
     if action == "prepare":
         if configuration is not None and not configuration.get("privateHomeOnly"):
             configure_home(configuration, os.environ["CODEX_HOME"])

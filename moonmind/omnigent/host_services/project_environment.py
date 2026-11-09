@@ -10,50 +10,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from collections.abc import Mapping
-from urllib.parse import urlsplit
 
-from moonmind.schemas.container_job_models import SENSITIVE_ENVIRONMENT_KEY_PATTERN
+from moonmind.provider_profiles.template_renderer import is_safe_project_environment_entry
 
 _SETTING = "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS"
-_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-_PROTECTED = re.compile(
-    r"^(?:MOONMIND|OMNIGENT|LD|DYLD|PYTHON|NODE|NPM|BASH|SHELL|ENV|BASH_ENV|"
-    r"GIT|GH|SSH|SSL|CURL|REQUESTS|AWS|AZURE|GOOGLE|DOCKER|CONTAINER|"
-    r"RUBY|PERL|JAVA|JDK|JRE|PHP|LUA|RUST|CARGO|GODEBUG|GOTOOLCHAIN|"
-    r"OPENCODE|CLAUDE|CODEX|OPENAI|ANTHROPIC)|"
-    r"^(?:PATH|HOME|USER|LOGNAME|PWD|OLDPWD|IFS|CDPATH|SHELLOPTS|BASHOPTS|"
-    r"PYTHONPATH|PYTHONHOME|NODE_OPTIONS|TMPDIR|TMP|TEMP|RES_OPTIONS|LOCALDOMAIN|"
-    r"HOSTALIASES|HOSTNAME|TZDIR|LOCPATH|NLSPATH|TERMINFO|TERMINFO_DIRS)$|PROXY$",
-    re.IGNORECASE,
-)
-_SECRET_KEY = re.compile(
-    r"(?:private|signing|encryption|access)[_-]?key", re.IGNORECASE
-)
 _LOG = logging.getLogger(__name__)
-
-
-def is_safe_project_environment_entry(key: str, raw_value: str) -> bool:
-    """Whether one literal can use the nonsecret runtime projection."""
-    if not isinstance(raw_value, str) or not isinstance(key, str):
-        return False
-    value = raw_value.strip()
-    safe = bool(_NAME.fullmatch(key)) and not (
-        _PROTECTED.search(key)
-        or SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(key)
-        or _SECRET_KEY.search(key)
-    )
-    safe = safe and bool(value) and not any(
-        ord(c) < 32 or ord(c) == 127 for c in raw_value
-    )
-    if safe and "://" in value:
-        try:
-            parsed = urlsplit(value)
-            safe = not ("@" in parsed.netloc or parsed.query or parsed.fragment)
-        except ValueError:
-            return False
-    return bool(safe)
 
 
 def deployment_project_environment() -> dict[str, str]:

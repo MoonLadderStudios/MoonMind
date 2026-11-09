@@ -7,40 +7,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
-
-PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
-    {
-        "ANTHROPIC_SMALL_FAST_MODEL",
-        "API_TIMEOUT_MS",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    }
+from moonmind.provider_profiles.template_renderer import (
+    PROVIDER_LITERAL_LAUNCH_ENV,
+    validate_provider_literal_launch_environment,
 )
 
-
-def validate_provider_literal_launch_environment(
-    values: dict[str, str],
-) -> dict[str, str]:
-    """Validate the non-secret tuning values carried by the shared host."""
-    unknown = set(values) - PROVIDER_LITERAL_LAUNCH_ENV
-    if unknown:
-        from moonmind.omnigent.host_services.project_environment import (
-            is_safe_project_environment_entry,
-        )
-
-        unknown = {
-            key for key in unknown
-            if not is_safe_project_environment_entry(key, values[key])
-        }
-    if unknown:
-        raise ValueError(
-            f"unsupported provider launch environment keys: {sorted(unknown)}"
-        )
-    for key, value in values.items():
-        if not isinstance(value, str) or not value or any(c in value for c in "\0\r\n"):
-            raise ValueError(f"invalid provider launch environment {key}")
-    return dict(values)
-
+OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
