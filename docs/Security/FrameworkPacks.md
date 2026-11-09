@@ -2,8 +2,8 @@
 
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
-There is no registry, scheduler or source download. The three bundled gaming
-preparation packs still use `framework`; declared packs use `frameworkPack` and
+There is no registry, scheduler or source download. Bundled readiness
+packs use `framework`; declared packs use `frameworkPack` and
 the existing requirement evaluator.
 
 ## Selecting a pack
@@ -137,3 +137,50 @@ role system or approval engine. Sensitivity labels describe evidence; existing
 artifact authorization and model-delivery admission still govern access and use.
 Real organisation evidence and external assessor conclusions remain Unverified
 unless independently obtained; controlled synthetic evidence tests this journey.
+
+## ISO/IEC 27001 ISMS readiness
+
+The contextual `security-iso-27001` preset and `framework.packId:
+iso-27001-readiness` use the existing assessment/API and retained report path.
+Ordinary Create remains Steps-first. Save `system_inputs` in an instance preset
+when reusing an ISMS scope. The pack identifies ISO/IEC 27001:2022 and its published
+Amd 1:2024 climate changes, using original readiness summaries and reference
+identifiers rather than redistributing licensed standard text. Consult an
+appropriately licensed copy for the complete normative requirements.
+
+`systemInputs` records `systems`, `scopeStatement`, `context`, `interestedParties`,
+`climateRelevance`, `risks`, `controls` and `requirementEvidence`. Management-system
+clauses remain distinct from the 93 Annex A references. A risk has an `id`,
+`version`, description, owner, assessment, treatment, `treatmentPlan`, `controlIds`
+and `residualRiskApproval`; accepting a risk also needs `acceptanceReason`.
+Missing treatment and approval records remain actions rather than inferred success.
+
+Key controls by reference such as `A.8.8`; necessary additional controls use an
+`EXTRA.` identifier and a title. Each decision retains `decision` (include,
+exclude or undetermined), rationale, `riskIds`, owner and declared
+`implementationStatus`. An exclusion without rationale, or of a control linked
+to current risk treatment, stays unresolved. A scanner mapping is never needed
+to retain a necessary control. Requirement choices may narrow systems and periods,
+not expand them or exclude management-system requirements.
+
+`requirementEvidence` maps clause/control IDs to the shared organisational evidence
+requests described above. These preserve purpose-specific reviews and historical
+revisions, but only current revisions are read, admitted and retained as evidence.
+Internal audits, management reviews, training and corrective actions need records
+of occurrence; a policy draft or management assertion does not prove they happened.
+Control evidence covers design, adoption and occurrence separately. Missing,
+denied, expired, out-of-population or wrong-purpose evidence remains a gap.
+`evidenceRefs` can reuse scoped technical records for several requirement IDs,
+without transferring one requirement's conclusion to another. Technical context
+never replaces the organisational record review.
+
+The structured framework artifact and primary report export the draft Statement
+of Applicability with a content-derived version, inclusion/exclusion rationale,
+implementation assertions, evidence coverage and risk links. Link a previous
+framework artifact using `previousAssessmentRef`: changed risk, scope, period or
+edition identifies affected controls and evidence for review without editing the
+old artifact. The current report retains the prior reference and SoA version.
+
+Readiness describes recorded evidence only. Generated policies and SoAs remain
+drafts, a passed vulnerability retest cannot close missing ISMS process evidence,
+and actual organisational operation and certification remain **Unverified**.
