@@ -392,40 +392,6 @@ def test_workflow_fleet_composition_is_helpers_plus_compat_persistence():
     assert names == set(HELPER_TYPES) | set(PERSISTENCE_TYPES)
 
 
-def test_deployment_spec_pins_each_fleet_mount_boundary():
-    """Compose check: workflow fleet mounts workspaces, artifacts does not."""
-
-    import yaml
-
-    compose = yaml.safe_load(COMPOSE_SPEC.read_text())
-    workflow_worker = compose["services"]["temporal-worker-workflow"]
-    artifacts_worker = compose["services"]["temporal-worker-artifacts"]
-
-    def env_value(service: dict, key: str) -> str:
-        for entry in service["environment"]:
-            if isinstance(entry, str) and entry.startswith(f"{key}="):
-                return entry.split("=", 1)[1]
-        raise AssertionError(f"{key} missing from worker spec")
-
-    assert env_value(workflow_worker, "TEMPORAL_WORKER_FLEET") == "workflow"
-    assert env_value(artifacts_worker, "TEMPORAL_WORKER_FLEET") == "artifacts"
-
-    workflow_volumes = list(workflow_worker.get("volumes", []))
-    artifacts_volumes = list(artifacts_worker.get("volumes", []))
-    assert any(str(volume).startswith("agent_workspaces:") for volume in workflow_volumes)
-    assert not any(
-        str(volume).startswith("agent_workspaces:") for volume in artifacts_volumes
-    ), "artifacts fleet must not mount agent workspaces"
-    assert any("moonmind_secrets" in str(volume) for volume in workflow_volumes)
-    assert any("moonmind_secrets" in str(volume) for volume in artifacts_volumes)
-    # The retained workflow-queue handlers still need artifact authority, so
-    # the consolidated workflow worker intentionally carries the S3 backend
-    # config; queue separation is not privilege separation.
-    assert "TEMPORAL_ARTIFACT_S3_ENDPOINT" in "".join(
-        str(entry) for entry in workflow_worker["environment"]
-    )
-
-
 # --- 3. Service failure matrix (single mutator) -------------------------------
 
 
@@ -881,59 +847,30 @@ def _effective_env_keys(service: dict) -> set[str]:
     return keys
 
 
-def test_fleet_credentials_and_mounts_match_retained_handler_needs():
-    """Effective compose rights (declared env plus env_file) keep handler needs."""
-
+def test_core_credentials_and_mounts_match_retained_handler_needs():
+    """The shared container retains workflow and artifact persistence authority."""
     import yaml
 
     compose = yaml.safe_load(COMPOSE_SPEC.read_text())
-    workflow_worker = compose["services"]["temporal-worker-workflow"]
-    artifacts_worker = compose["services"]["temporal-worker-artifacts"]
-
-    workflow_env = _effective_env_keys(workflow_worker)
-    artifacts_env = _effective_env_keys(artifacts_worker)
-    workflow_volumes = [str(volume) for volume in workflow_worker.get("volumes", [])]
-    artifacts_volumes = [str(volume) for volume in artifacts_worker.get("volumes", [])]
-
-    # The retained workflow-queue handlers still need artifact retention, so
-    # the workflow fleet intentionally keeps the S3 backend config alongside
-    # the artifacts fleet.
+    core = compose["services"]["temporal-worker-core"]
+    environment = _effective_env_keys(core)
+    volumes = [str(volume) for volume in core.get("volumes", [])]
     for key in (
         "TEMPORAL_ARTIFACT_S3_ENDPOINT",
         "TEMPORAL_ARTIFACT_S3_BUCKET",
         "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
         "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
     ):
-        assert key in workflow_env, f"workflow fleet must retain {key} while compat is retained"
-        assert key in artifacts_env, f"artifacts fleet must carry {key}"
-    assert any("moonmind_secrets" in volume for volume in workflow_volumes)
-    assert any("moonmind_secrets" in volume for volume in artifacts_volumes)
-
-    # The artifacts fleet serves persistence without agent workspaces; the
-    # workflow fleet's mount belongs to the AgentRun managed-run store.
-    assert not any(
-        volume.startswith("agent_workspaces:") for volume in artifacts_volumes
-    ), "artifacts fleet must not mount agent workspaces"
-    assert "agent_workspaces:/work/agent_jobs" in workflow_volumes
-
-    # Neither worker mounts the Docker socket. Credentials are not asserted
-    # absent: both workers load the operator .env, which can supply provider
-    # keys, so this composition makes no per-fleet credential claim.
-    for volume in workflow_volumes + artifacts_volumes:
-        assert "docker.sock" not in volume
-
-    # Network rights: both workers join only the control-plane network
-    # (Temporal, Postgres, MinIO and the API). The Docker API proxy is
-    # reachable only on the internal docker-proxy network, which neither
-    # worker joins, so neither has Docker API reach. The control-plane
-    # network is not internal, so this is no egress-confinement claim.
+        assert key in environment, f"retained handlers require {key}"
+    assert "moonmind_secrets:/app/var/secrets" in volumes
+    assert "agent_workspaces:/work/agent_jobs" in volumes
+    assert not any("docker.sock" in volume for volume in volumes)
     networks = compose["networks"]
     assert networks["docker-proxy-network"].get("internal") is True
     assert compose["services"]["docker-proxy"]["networks"] == ["docker-proxy-network"]
     assert not networks["control-plane-network"].get("internal")
-    for worker in (workflow_worker, artifacts_worker):
-        assert "network_mode" not in worker
-        assert worker["networks"] == ["control-plane-network"]
+    assert "network_mode" not in core
+    assert core["networks"] == ["control-plane-network"]
 
 
 @pytest.mark.asyncio

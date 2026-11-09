@@ -304,6 +304,15 @@ def build_assessment_proposal(
             ],
         ),
     ]
+    if record.recurring is not None:
+        terms = record.recurring
+        sections.append(("Continuing assessment", [
+            f"At most {terms.max_occurrences} occurrences; at least {terms.min_interval_seconds} seconds between admissions, including missed/catch-up runs.",
+            f"Each occurrence expires within {terms.max_run_seconds} seconds and may reserve {terms.max_jobs_per_occurrence} jobs / {terms.max_job_seconds_per_occurrence} job seconds.",
+            "Aggregate job limits and validity above remain binding across schedules, edits, renewal and retries. Newly discovered targets are not admitted.",
+            "Each run rechecks current authority and resolves credentials through the existing workload owner. Secret rotation requires a reviewed secret revision, never a policy revision.",
+            "Renew or revoke in Assessment authorizations. Material changes require review before a new occurrence; equivalent authorized runs need no further confirmation.",
+        ]))
     if realtime_operations:
         sections.insert(3, ("Real-time operations", realtime_operations))
     return {

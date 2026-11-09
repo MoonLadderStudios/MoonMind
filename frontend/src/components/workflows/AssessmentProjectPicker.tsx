@@ -83,7 +83,7 @@ export function AssessmentProjectPicker({ value, onChange, onStatusChange }: {
       <p className="small">{value.purpose} · Boundaries: {value.boundaries}</p>
       <p className="small">Assets: {value.configuration.assets.join(', ') || 'None'} · Exclusions: {value.configuration.exclusions.join(', ') || 'None'}</p>
       <p className="small">Budget: {value.configuration.budget.baseSeconds}/{value.configuration.budget.maxSeconds} seconds, stall {value.configuration.budget.progressStallSeconds} seconds. Retained evidence: {value.configuration.artifactRefs.join(', ') || 'None'}.</p>
-      <p className="small">Changes in Settings do not change this draft. Review tool inputs below; explicit input values take priority.</p>
+      <p className="small">Changes in Settings do not change this draft. Review tool inputs; explicit input values take priority.</p>
       <details><summary>Review all frozen context</summary><pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(value, null, 2)}</pre></details>
     </div> : null}
     {catalog.isLoading ? <p role="status">Loading saved assessment choices…</p> : null}

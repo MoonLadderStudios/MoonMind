@@ -33,8 +33,11 @@ RUNNER_FILES = (
     "security/image_assessment_runner.py",
     "security/image_assessments.py",
     "security/assessments.py",
+    "security/web_api_methodology.py",
     "security/assessment_projects.py",
     "security/evidence_exports.py",
+    "security/dns_assessments.py",
+    "security/dns_assessment_runner.py",
     "security/tls_assessments.py",
     "security/tls_assessment_runner.py",
     "security/egress_policy.py",
@@ -54,6 +57,7 @@ RUNNER_FILES = (
     "schemas/temporal_payload_policy.py",
     "schemas/_validation.py",
     "provider_profiles/model_tiers.py",
+    "provider_profiles/template_renderer.py",
     "utils/logging.py",
 )
 

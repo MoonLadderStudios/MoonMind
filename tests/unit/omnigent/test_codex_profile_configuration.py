@@ -72,6 +72,18 @@ def test_custom_codex_configuration_has_an_exact_shared_translation():
     assert configured["document"]["model_reasoning_effort"] == "high"
 
 
+def test_custom_provider_preserves_nonsecret_path_templates():
+    selected = profile()
+    selected.env_template.update({"REPORT_DIR": "{{workspace_path}}/reports", "CACHE_DIR": "{{ runtime_support_dir }}/cache"})
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is not None, reason
+    assert endpoint.environmentTemplates == {"REPORT_DIR": "{{workspace_path}}/reports", "CACHE_DIR": "{{ runtime_support_dir }}/cache"}
+    assert endpoint.launchEnvironment == {}
+    assert endpoint.codexConfiguration["providerName"] == "custom"
+    assert endpoint.codexConfiguration["provider"]["env_key"] == "CUSTOM_MODEL_KEY"
+    assert "environmentTemplates" not in endpoint.codexConfiguration
+
+
 def test_custom_provider_keeps_safe_project_values_without_another_key():
     selected = profile()
     selected.env_template["PROJECT_RUNTIME_STYLE"] = "  exact $(not-executed) literal  "
@@ -86,7 +98,8 @@ def test_custom_provider_keeps_safe_project_values_without_another_key():
 @pytest.mark.parametrize("extra", [
     {"HOME": "/another-home"},
     {"PROJECT_RUNTIME_STYLE": {"from_secret_ref": "another_key"}},
-    {"PROJECT_RUNTIME_STYLE": "{{workspace_path}}"},
+    {"PROJECT_RUNTIME_STYLE": "{{unknown}}"},
+    {"PROJECT_RUNTIME_STYLE": "{{ runtime_support_dir }}/codex-home/reports"},
 ])
 def test_custom_provider_cannot_smuggle_other_authority_as_project_values(extra):
     selected = profile()
@@ -276,7 +289,7 @@ async def test_custom_configuration_uses_the_existing_private_credential_volume(
     import json
     from tests.unit.omnigent.test_codex_api_key_provider_config import _KEY, _provision
 
-    selected = vars(profile())
+    selected = vars(private_file_profile())
     for key in ("profile_id", "runtime_id", "provider_id"):
         selected.pop(key)
     selected["secret_refs"] = {"provider_api_key": "env://OPENAI_API_KEY"}
@@ -292,6 +305,8 @@ async def test_custom_configuration_uses_the_existing_private_credential_volume(
     (payload,) = [json.loads(data) for _argv, data in backend.calls if data]
     native = payload.pop("_moonmind_codex_configuration")
     assert native["provider"]["stream_max_retries"] == 10
+    assert native["environmentTemplates"] == {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md"}
+    assert handle.runtimeEnvironmentTemplates == {"REPORT_DIR": "{{workspace_path}}/reports"}
     assert payload["providers"]["moonmind"]["openai"]["api_key"] == _KEY
     (writer,) = [argv for argv, data in backend.calls if data]
     assert writer[writer.index("--entrypoint") + 1] == "python3"
@@ -331,7 +346,7 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
     from pathlib import Path
     from moonmind.provider_profiles import codex_configuration
 
-    selected = profile()
+    selected = private_file_profile()
     selected.file_templates[0]["content_template"].update(session_settings)
     endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is not None, reason
@@ -347,6 +362,8 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
     binary = tmp_path / "native-binary"
     binary.write_text(
         '#!/bin/sh\ncp "$CODEX_HOME/config.toml" "$CAPTURED_CONFIG"\nprintf "%s\\n" "$@" > "$CAPTURED_ARGS"\n'
+        'test "$INSTRUCTIONS_FILE" = "$CODEX_HOME/AGENTS.md" || exit 42\n'
+        'cat "$INSTRUCTIONS_FILE" > "$CAPTURED_FILE"\n'
     )
     binary.chmod(0o700)
     environment = {
@@ -354,6 +371,7 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
         "CODEX_HOME": str(home),
         "CAPTURED_CONFIG": str(tmp_path / "captured.toml"),
         "CAPTURED_ARGS": str(tmp_path / "args"),
+        "CAPTURED_FILE": str(tmp_path / "file"),
     }
     subprocess.run(
         [
@@ -396,6 +414,17 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
         check=True,
         capture_output=True,
     )
+    assert (tmp_path / "file").read_text() == f"Frozen instructions for {Path.cwd()}.\n"
+    # Retry after native child filtering and verify a sibling HOME is untouched.
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (sibling / "AGENTS.md").write_text("Sibling instructions")
+    subprocess.run(
+        [str(wrapper), "app-server", "-c", 'model_provider="generated"'],
+        env={**environment, "CODEX_HOME": str(private_home)}, check=True, capture_output=True,
+    )
+    assert (sibling / "AGENTS.md").read_text() == "Sibling instructions"
+    assert not (home / "AGENTS.md").exists()
     captured = tomllib.loads((tmp_path / "captured.toml").read_text())
     for key, value in session_settings.items():
         assert captured[key] == value
@@ -605,3 +634,150 @@ def test_profile_file_projection_cannot_follow_a_sibling_home_symlink(tmp_path):
     with pytest.raises(ValueError, match="within runtime_support_dir"):
         configure_profile_files(configuration, home, tmp_path)
     assert original.read_text() == "Keep sibling instructions."
+
+
+@pytest.mark.parametrize("home", ["codex-home", "operator-home"])
+@pytest.mark.parametrize("suffix", ["", "/reports"])
+@pytest.mark.parametrize("prefix", ["/", "/./", "//", "/cache/../"])
+def test_custom_provider_home_references_keep_direct_routing(home, suffix, prefix):
+    selected = profile()
+    selected.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/" + home}
+    selected.file_templates[0]["path"] = "{{runtime_support_dir}}/" + home + "/config.toml"
+    selected.env_template["REPORT_DIR"] = "{{ runtime_support_dir }}" + prefix + home + suffix
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "HOME-relative" in reason
+
+
+def test_custom_provider_path_templates_do_not_expand_endpoint_authority():
+    selected = profile()
+    selected.env_template["REPORT_DIR"] = "{{workspace_path}}/reports"
+    selected.file_templates[0]["content_template"]["model_providers"]["custom"]["base_url"] = "https://unapproved.invalid/v1"
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "egress" in reason
+
+
+def test_instruction_file_home_alias_keeps_file_and_environment_on_direct_route():
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "format": "text", "merge_strategy": "replace",
+        "content_template": "Preserve the selected instructions.", "permissions": "0600",
+    })
+    selected.env_template["INSTRUCTIONS_FILE"] = "{{runtime_support_dir}}/./codex-home/AGENTS.md"
+    before = copy.deepcopy(vars(selected))
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "HOME-relative" in reason
+    assert vars(selected) == before
+
+
+def private_file_profile():
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "format": "text", "merge_strategy": "replace",
+        "content_template": "Frozen instructions for {{workspace_path}}.\n", "permissions": "0600",
+    })
+    selected.env_template.update({
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "REPORT_DIR": "{{workspace_path}}/reports",
+    })
+    return selected
+
+
+def test_canonical_private_file_reference_uses_selected_home():
+    selected = private_file_profile()
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is not None, reason
+    assert endpoint.codexConfiguration["environmentTemplates"] == {
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md",
+    }
+    assert endpoint.environmentTemplates == {"REPORT_DIR": "{{workspace_path}}/reports"}
+    assert endpoint.launchEnvironment == {}
+
+
+@pytest.mark.parametrize("key,value", [
+    ("HOME", "{{runtime_support_dir}}/AGENTS.md"),
+    ("INSTRUCTIONS_FILE", "{{unknown}}/AGENTS.md"),
+    ("INSTRUCTIONS_FILE", "{{runtime_support_dir}}/missing.md"),
+    ("INSTRUCTIONS_FILE", "{{runtime_support_dir}}/./AGENTS.md"),
+])
+def test_custom_snapshot_rejects_invalid_private_environment(key, value):
+    from moonmind.omnigent.harness_platform.materializers import ProviderConfigEndpoint
+    endpoint, reason = codex_provider_config_endpoint(profile())
+    assert endpoint is not None, reason
+    data = endpoint.model_dump()
+    data["codexConfiguration"]["environmentTemplates"] = {key: value}
+    with pytest.raises(ValueError):
+        ProviderConfigEndpoint.model_validate(data)
+
+
+@pytest.mark.parametrize("owner", ["launchEnvironment", "environmentTemplates"])
+def test_custom_snapshot_rejects_duplicate_private_environment(owner):
+    from moonmind.omnigent.harness_platform.materializers import ProviderConfigEndpoint
+    endpoint, reason = codex_provider_config_endpoint(private_file_profile())
+    assert endpoint is not None, reason
+    data = endpoint.model_dump()
+    data[owner] = {"INSTRUCTIONS_FILE": "{{workspace_path}}/other"}
+    with pytest.raises(ValueError, match="conflicting"):
+        ProviderConfigEndpoint.model_validate(data)
+
+
+@pytest.mark.parametrize("mutation", ["protected", "unknown", "alias", "missing", "literal-owner", "generic-owner"])
+def test_portable_launch_rejects_tampered_private_environment(tmp_path, mutation):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from moonmind.provider_profiles import codex_configuration
+
+    endpoint, reason = codex_provider_config_endpoint(private_file_profile())
+    assert endpoint is not None, reason
+    configuration = endpoint.codexConfiguration
+    if mutation == "protected":
+        configuration["environmentTemplates"] = {"HOME": "{{runtime_support_dir}}/AGENTS.md"}
+    elif mutation == "unknown":
+        configuration["environmentTemplates"]["INSTRUCTIONS_FILE"] = "{{selected_secret}}/AGENTS.md"
+    elif mutation in {"alias", "missing"}:
+        configuration["environmentTemplates"]["INSTRUCTIONS_FILE"] = (
+            "{{runtime_support_dir}}/./AGENTS.md" if mutation == "alias" else "{{runtime_support_dir}}/missing.md"
+        )
+    else:
+        configuration["launchEnvironment" if mutation == "literal-owner" else "genericEnvironmentTemplates"] = {
+            "INSTRUCTIONS_FILE": "{{workspace_path}}/other",
+        }
+    config = tmp_path / "profile.json"
+    config.write_text(json.dumps(configuration))
+    home = tmp_path / "home"
+    home.mkdir()
+    # Package only the same maintained stdlib helpers, with no application imports.
+    helper = tmp_path / "codex-configuration.py"
+    helper.write_text(Path(codex_configuration.__file__).read_text())
+    (tmp_path / "template_renderer.py").write_text(Path(codex_configuration.__file__).with_name("template_renderer.py").read_text())
+    result = subprocess.run(
+        [sys.executable, str(helper), "launch", str(config), "/bin/true", "app-server"],
+        env={"PATH": os.environ["PATH"], "CODEX_HOME": str(home)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "ValueError" in result.stderr
+    assert list(home.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", [
+    "{{runtime_support_dir}}/codex-home/AGENTS.md:{{runtime_support_dir}}/cache",
+    "{{runtime_support_dir}}/codex-home/AGENTS.md{{unknown}}",
+    "{{runtime_support_dir}}/codex-home/../AGENTS.md",
+    "{{runtime_support_dir}}/codex-home//AGENTS.md",
+    "{{runtime_support_dir}}/codex-home/./AGENTS.md",
+    "{{runtime_support_dir}}/codex-home/auth.json",
+])
+def test_private_references_do_not_expand_supported_paths(value):
+    selected = private_file_profile()
+    selected.env_template["INSTRUCTIONS_FILE"] = value
+    before = copy.deepcopy(vars(selected))
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None, reason
+    assert vars(selected) == before

@@ -160,6 +160,21 @@ async def _remediation_context_input_ref(workflow_id: str) -> str | None:
     return f"artifact://{_artifact_id(ref)}" if ref else None
 
 
+async def _remediation_security_input_refs(workflow_id: str) -> list[str]:
+    """Deliver only evidence pinned in the immutable admitted context artifact."""
+    context_ref = await _remediation_context_input_ref(workflow_id)
+    if not context_ref:
+        raise ValueError("Security remediation requires its admitted context artifact")
+    context = await _read_json_artifact(
+        context_ref,
+        access=ArtifactAccessContext.for_service("service:remediation-context"),
+    )
+    if context.get("remediationWorkflowId") != workflow_id:
+        raise ValueError("Security remediation context identity does not match")
+    evidence = context.get("securityEvidence") or {}
+    return [f"artifact://{ref}" for ref in evidence.get("evidenceArtifactRefs", [])]
+
+
 async def _read_json_artifact(
     ref: str, *, access: ArtifactAccessContext
 ) -> dict[str, Any]:
@@ -1091,6 +1106,10 @@ async def _reconstruct_plan_bound_request(
         context_ref = await _remediation_context_input_ref(workflow_id)
         if context_ref and context_ref not in attachment_refs:
             attachment_refs.append(context_ref)
+        if (workflow.get("remediation") or {}).get("target", {}).get("securityFinding"):
+            for ref in await _remediation_security_input_refs(workflow_id):
+                if ref not in attachment_refs:
+                    attachment_refs.append(ref)
     workspace_spec = (
         dict(workflow.get("workspace") or {})
         if isinstance(workflow.get("workspace"), Mapping)

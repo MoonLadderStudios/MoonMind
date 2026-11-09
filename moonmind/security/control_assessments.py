@@ -34,6 +34,85 @@ def _in_period(window, period, now):
     return fresh, period.start == period.end == observed.date()
 
 
+def review_organisational_evidence(request, requirement, availability, now):
+    """Review the current immutable revision for this requirement, never globally."""
+    from moonmind.security.frameworks import OrganisationalEvidenceResult
+
+    refs = [item.artifact_ref for item in request.revisions]
+    result = OrganisationalEvidenceResult(
+        request_id=request.id,
+        state="requested",
+        current_ref=refs[-1] if refs else None,
+        superseded_refs=refs[:-1],
+    )
+    limits = result.limitations
+    if not refs:
+        limits.append("Requested evidence has not been supplied.")
+        return result
+    current = request.revisions[-1]
+    review = current.review
+    if availability.get(current.artifact_ref, "unavailable"):
+        limits.append(
+            "Current evidence is missing, denied, or unreadable; restore authorized access and retry."
+        )
+    if not current.collected_at <= now < current.expires_at:
+        limits.append(
+            "Evidence is expired, future-dated, or has conflicting freshness dates."
+        )
+    if (
+        current.kind == "operational_record"
+        and current.period.end > current.collected_at.date()
+    ):
+        limits.append("Operational records cannot establish events after collection.")
+    if not current.period.covers(requirement.period):
+        limits.append("Evidence does not cover the requirement period.")
+    if not set(requirement.scope.assets) <= set(current.population):
+        limits.append("Evidence does not cover the required population.")
+    if current.kind in {"management_assertion", "generated_draft"}:
+        limits.append(
+            "Assertions and generated drafts cannot establish adoption or real occurrence, or replace documentary evidence."
+        )
+    elif request.purpose != "design" and current.kind != "operational_record":
+        limits.append(
+            "A design document does not establish adoption or real occurrence; supply operational records."
+        )
+    if review:
+        if review.outcome != "accepted":
+            limits.append("The attributed review found this evidence insufficient.")
+        if review.purpose != request.purpose:
+            limits.append("Review acceptance is for a different purpose.")
+        if not current.collected_at <= review.reviewed_at <= now:
+            limits.append(
+                "Review dates conflict with collection or the assessment time."
+            )
+        if not review.period.covers(requirement.period) or not current.period.covers(
+            review.period
+        ):
+            limits.append(
+                "The review period is incomplete or exceeds the supplied evidence period."
+            )
+        if (
+            not set(requirement.scope.assets)
+            <= set(review.population)
+            <= set(current.population)
+        ):
+            limits.append(
+                "The review population is incomplete or exceeds the supplied evidence population."
+            )
+    else:
+        limits.append(
+            "Supplied evidence awaits a purpose-specific, evidence-citing review."
+        )
+    result.state = (
+        "accepted"
+        if not limits
+        else "supplied"
+        if not review and len(limits) == 1
+        else "insufficient"
+    )
+    return result
+
+
 def assess_controls(
     plan: ControlAssessmentPlan,
     comparison: Comparison,
@@ -217,6 +296,30 @@ def assess_controls(
                 limits.append("Supporting evidence has expired.")
             if applicable and covers and fresh and evidence.position == "contradicts":
                 contradiction = True
+        organisation_results = []
+        for request in requirement.organisational_evidence:
+            reviewed = review_organisational_evidence(
+                request, requirement, evidence_availability, now
+            )
+            organisation_results.append(reviewed)
+            methods.add("document_review")
+            for revision in request.revisions[-1:]:
+                if evidence_availability.get(revision.artifact_ref, "unavailable"):
+                    unavailable.append(revision.artifact_ref)
+                else:
+                    evidence_refs.append(revision.artifact_ref)
+            if reviewed.superseded_refs:
+                limits.append(
+                    f"{request.id}: Superseded revisions are historical references, not current evidence; their availability is not evaluated."
+                )
+            if reviewed.state != "accepted":
+                supporting_incomplete = True
+                limits.extend(
+                    f"{request.id}: {value}" for value in reviewed.limitations
+                )
+                actions.append(
+                    f"Supply or review {request.id} for {request.purpose} within the selected scope and period, then reassess."
+                )
         if review_ref:
             methods.add("agent_interpretation")
             if review_status == "completed":
@@ -290,6 +393,7 @@ def assess_controls(
         results.append(
             ControlRequirementResult(
                 requirement=requirement,
+                organisational_evidence=organisation_results,
                 conclusion=conclusion,
                 coverage=coverage,
                 evidence_sufficiency=sufficiency,
@@ -365,6 +469,24 @@ def render_control_assessment(report: ControlAssessment) -> str:
             *[f"- Limitation: {clean(value)}" for value in result.limitations],
             *[f"- Next: {clean(value)}" for value in result.next_actions],
         ]
+        for request, reviewed in zip(
+            row.organisational_evidence, result.organisational_evidence
+        ):
+            lines += [
+                f"- Evidence request {clean(request.id)} ({request.category}, {request.purpose}): **{reviewed.state}**. Owner: {clean(request.owner)}. {clean(request.description)}",
+                f"  Current reference: {clean(reviewed.current_ref or 'not supplied')}. Superseded references: {clean(', '.join(reviewed.superseded_refs) or 'none')}; prior reviews remain in the structured assessment.",
+            ]
+            if request.revisions:
+                revision = request.revisions[-1]
+                lines.append(
+                    f"  Source: {clean(revision.source)}; type: {revision.kind}; sensitivity: {revision.sensitivity}; collected: {revision.collected_at.isoformat()}; expires: {revision.expires_at.isoformat()}; period: {revision.period.start} to {revision.period.end}; population: {clean(', '.join(revision.population))}."
+                )
+                if revision.review:
+                    review = revision.review
+                    lines.append(
+                        f"  Attributed review by {clean(review.reviewer)} for {review.purpose}, {review.period.start} to {review.period.end}: {clean(review.reason)}. Acceptance is purpose-specific, not independent verification of real-world events."
+                    )
+            lines.extend(f"  Gap: {clean(value)}" for value in reviewed.limitations)
         if row.owner or row.reviewer:
             lines.append(
                 f"Attributed owner: {clean(row.owner or 'unspecified')}; reviewer: {clean(row.reviewer or 'unspecified')}. These are evidence metadata, not platform roles."

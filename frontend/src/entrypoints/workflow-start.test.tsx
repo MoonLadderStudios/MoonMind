@@ -482,7 +482,7 @@ describe("WorkflowStartPage loading placeholders", () => {
           },
         });
 
-    expect(screen.getByText("Repository scanners · Unverified")).toBeTruthy();
+    expect(screen.queryByText("Repository scanners · Unverified")).toBeNull();
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
@@ -19393,6 +19393,73 @@ describe("Task Create governed Tool authoring", () => {
     fetchSpy.mockRestore();
   });
 
+  function optInAssessmentSetup() {
+    const advanced = screen.getByLabelText('Advanced mode') as HTMLInputElement;
+    const wasAdvanced = advanced.checked;
+    if (!wasAdvanced) fireEvent.click(advanced);
+    fireEvent.click(screen.getByRole('button', { name: 'Add assessment setup' }));
+    if (!wasAdvanced) fireEvent.click(advanced);
+  }
+
+  it('keeps ordinary Create focused on steps without assessment or scanner controls', async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await screen.findByText('Step 1');
+    expect(screen.queryByText(/Repository scanners/)).toBeNull();
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    expect(screen.queryByLabelText('Assessment authorization')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add assessment setup' })).toBeNull();
+    fireEvent.click(screen.getByLabelText('Advanced mode'));
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add assessment setup' }));
+    const context = await screen.findByLabelText('Assessment context');
+    expect(document.activeElement?.textContent).toContain('Security assessment setup');
+    const step = screen.getByText('Step 1');
+    expect(step.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Advanced mode'));
+    expect(screen.getByLabelText('Assessment context')).toBe(context);
+  });
+
+  it('reveals setup for an assessment Tool and hides it again when an untouched selection changes', async () => {
+    toolDiscoveryResponse = new Response(JSON.stringify({ tools: [
+      { name: 'security.assess', inputSchema: { type: 'object', 'x-assessment-project-defaults': true } },
+      { name: 'jira.get_issue', inputSchema: { type: 'object' } },
+    ] }));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText('Step 1')).closest('section')!;
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'jira.get_issue' }));
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    fireEvent.click(within(step).getByRole('button', { name: 'security.assess' }));
+    expect(await screen.findByLabelText('Assessment context')).toBeTruthy();
+    expect(screen.getByLabelText('Assessment authorization')).toBeTruthy();
+    fireEvent.click(within(step).getByRole('button', { name: 'jira.get_issue' }));
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+  });
+
+  it('reveals setup only for a selected assessment preset, including after expansion', async () => {
+    toolDiscoveryResponse = new Response(JSON.stringify({ tools: [{ name: 'security.assess', inputSchema: { type: 'object', 'x-assessment-project-defaults': true } }] }));
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/presets') return Promise.resolve(new Response(JSON.stringify({ items: [
+        { slug: 'ordinary', title: 'Ordinary preset', description: '', tags: [], inputs: [] },
+        { slug: 'review', title: 'Readiness assessment', description: '', tags: ['assessment'], inputs: [] },
+      ] })));
+      if (String(input) === '/api/presets/review:expand') return Promise.resolve(new Response(JSON.stringify({ slug: 'review', steps: [{ type: 'tool', tool: { id: 'security.assess', inputs: {} } }] })));
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText('Step 1')).closest('section')!;
+    selectStepType(step, 'Preset');
+    await screen.findByRole('option', { name: 'Readiness assessment' });
+    fireEvent.change(within(step).getByLabelText('Preset Template'), { target: { value: 'ordinary' } });
+    expect(screen.queryByLabelText('Assessment context')).toBeNull();
+    fireEvent.change(within(step).getByLabelText('Preset Template'), { target: { value: 'review' } });
+    expect(await screen.findByLabelText('Assessment context')).toBeTruthy();
+    fireEvent.click(within(step).getByRole('button', { name: 'Expand' }));
+    await screen.findByRole('button', { name: 'security.assess' });
+    expect(screen.getByLabelText('Assessment context')).toBeTruthy();
+  });
+
   describe('assessment engagement review', () => {
     const review = {
       schemaVersion: 'assessment-engagement/v1', authorizationRef: 'payments-review', authorizationGeneration: 'generation-3',
@@ -19412,6 +19479,7 @@ describe("Task Create governed Tool authoring", () => {
     }
     async function prepareReview(instructions = 'Inspect only the admitted targets.') {
       const view = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      optInAssessmentSetup();
       await screen.findByRole('option', { name: 'Payments authorization' });
       fireEvent.change(screen.getByLabelText('Assessment authorization'), { target: { value: 'payments-review' } });
       fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: instructions } });
@@ -19423,6 +19491,8 @@ describe("Task Create governed Tool authoring", () => {
       setupReview(); await prepareReview();
       await screen.findByText('Only payments.example.test; exclude /admin');
       expect(launches()).toHaveLength(0);
+      document.querySelector<HTMLDetailsElement>('[data-create-disclosure="assessment"]')!.open = false;
+      expect(screen.getByLabelText('Rules of engagement')).toBeTruthy();
       expect(screen.queryByRole('checkbox', { name: /authoriz/i })).toBeNull();
       const proposal = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/assessment-proposal'));
       const proposed = JSON.parse(String(proposal?.[1]?.body));
@@ -19588,6 +19658,7 @@ describe("Task Create governed Tool authoring", () => {
       return original(input, init);
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    optInAssessmentSetup();
     await screen.findByRole('option', { name: 'Payments' });
     fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
     fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
@@ -19644,17 +19715,51 @@ describe("Task Create governed Tool authoring", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ updateName, parametersPatch: { assessmentProject: null } });
   });
 
+  it('retains pending context overrides when switching away from an assessment Tool and collapsing setup', async () => {
+    toolDiscoveryResponse = new Response(JSON.stringify({ tools: [
+      { name: 'security.assess', inputSchema: { type: 'object' } },
+      { name: 'jira.get_issue', inputSchema: { type: 'object' } },
+    ] }));
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => String(input).includes('/settings/catalog')
+      ? Promise.resolve(new Response(JSON.stringify({ categories: { security: [{ key: 'security.assessment_projects', value_version: 1, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: 'Review', boundaries: 'API', environments: [{ ...createAssessmentEnvironment(), id: 'prod', name: 'Production' }] }] } }] } })))
+      : original(input, init));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText('Step 1')).closest('section')!;
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+    await screen.findByRole('option', { name: 'Payments' });
+    fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
+    fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
+    fireEvent.change(screen.getByLabelText('Assets'), { target: { value: 'draft-api' } });
+    const disclosure = document.querySelector<HTMLDetailsElement>('[data-create-disclosure="assessment"]')!;
+    disclosure.open = false;
+    fireEvent.click(within(step).getByRole('button', { name: 'jira.get_issue' }));
+    expect(document.querySelector('[data-create-disclosure="assessment"]')).toBe(disclosure);
+    expect(screen.getByLabelText('Assets')).toHaveProperty('value', 'draft-api');
+    expect(screen.getByLabelText('Assessment environment')).toHaveProperty('value', 'prod');
+    expect(disclosure.open).toBe(false);
+    fireEvent.submit(document.querySelector('#queue-submit-form')!);
+    await screen.findByText('Load the selected assessment context before starting the workflow.');
+    expect(disclosure.open).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === '/api/executions' && options?.method === 'POST')).toBe(false);
+  });
+
   it('blocks workflow submission while an assessment environment selection is unresolved', async () => {
     const original = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => String(input).includes('/settings/catalog')
       ? Promise.resolve({ ok: true, json: async () => ({ categories: { security: [{ key: 'security.assessment_projects', value_version: 1, effective_value: { projects: [{ id: 'payments', name: 'Payments', purpose: 'Review', boundaries: 'API', environments: [{ ...createAssessmentEnvironment(), id: 'prod', name: 'Production' }] }] } }] } }) } as Response)
       : original(input, init));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    optInAssessmentSetup();
     await screen.findByRole('option', { name: 'Payments' });
     fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
     fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Review assessment.' } });
+    const disclosure = document.querySelector<HTMLDetailsElement>('[data-create-disclosure="assessment"]')!;
+    disclosure.open = false;
     fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
     await screen.findByText('Load the selected assessment context before starting the workflow.');
+    expect(disclosure.open).toBe(true);
     expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === '/api/executions' && options?.method === 'POST')).toBe(false);
   });
 
@@ -19669,6 +19774,7 @@ describe("Task Create governed Tool authoring", () => {
       return original(input, init);
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    optInAssessmentSetup();
     await screen.findByRole('option', { name: 'Payments' });
     fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
     fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });
@@ -19682,6 +19788,38 @@ describe("Task Create governed Tool authoring", () => {
     expect((within(step).getByRole('button', { name: 'Apply assessment defaults' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove assessment context' }));
     expect((within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement).value).toBe('{"scope": {"assets": [');
+  });
+
+  it('exposes organisational evidence only for the selected assessment Tool and preserves requests in submitted inputs', async () => {
+    toolDiscoveryResponse = { ok: true, json: async () => ({ tools: [{ name: 'security.assess', inputSchema: { type: 'object', properties: { controlAssessment: { type: 'object' } } } }] }) } as Response;
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    expect(screen.queryByText('Organisational evidence requests and review')).toBeNull();
+    const step = (await screen.findByText('Step 1')).closest('section') as HTMLElement;
+    fireEvent.change(within(step).getByLabelText('Instructions'), { target: { value: 'Review organisational evidence.' } });
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+    fireEvent.click(within(step).getByText('Edit JSON'));
+    const editor = within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: JSON.stringify({ controlAssessment: { requirements: [{ id: 'policy', organisationalEvidence: [] }] } }) } });
+    fireEvent.click(within(step).getByText('Organisational evidence requests and review'));
+    fireEvent.change(within(step).getByLabelText('Import organisational evidence'), { target: { files: [new File(['Synthetic policy'], 'policy.txt', { type: 'text/plain' })] } });
+    fireEvent.click(within(step).getByRole('button', { name: 'Upload evidence' }));
+    await within(step).findByText('art_01ACTIVEIMAGE00000000000');
+    fireEvent.click(within(step).getByRole('button', { name: 'Upload evidence' }));
+    await waitFor(() => expect(within(step).getByRole('button', { name: 'Upload evidence' })).toBeTruthy());
+    expect(fetchSpy.mock.calls.filter(([url, init]) => String(url) === '/api/artifacts' && init?.method === 'POST')).toHaveLength(1);
+    fireEvent.change(within(step).getByLabelText('Evidence requirement'), { target: { value: '0' } });
+    fireEvent.click(within(step).getByRole('button', { name: 'Add evidence request' }));
+    expect(JSON.parse(editor.value).controlAssessment.requirements[0].organisationalEvidence[0].revisions).toEqual([]);
+    const completeInputs = editor.value;
+    fireEvent.change(editor, { target: { value: '{"controlAssessment":' } });
+    expect(within(step).getByText('Correct the Tool input JSON before editing evidence. Existing inputs are preserved.')).toBeTruthy();
+    expect((within(step).getByRole('button', { name: 'Add evidence request' }).closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+    expect(editor.value).toBe('{"controlAssessment":');
+    fireEvent.change(editor, { target: { value: completeInputs } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) => String(url) === '/api/executions' && init?.method === 'POST')).toBe(true));
+    expect(latestCreateRequest()).toMatchObject({ payload: { task: { steps: [{ tool: { inputs: { controlAssessment: { requirements: [{ id: 'policy', organisationalEvidence: [{ id: 'evidence-1', revisions: [] }] }] } } } }] } } });
   });
 
   describe('assessment reference aliases in Advanced JSON', () => {
@@ -19702,6 +19840,7 @@ describe("Task Create governed Tool authoring", () => {
         return original(input, init);
       });
       renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      optInAssessmentSetup();
       await screen.findByRole('option', { name: 'Payments' });
       fireEvent.change(screen.getByLabelText('Assessment system'), { target: { value: 'payments' } });
       fireEvent.change(screen.getByLabelText('Assessment environment'), { target: { value: 'prod' } });

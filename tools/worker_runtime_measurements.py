@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 FLEETS = ("workflow", "artifacts", "llm", "integrations")
+CORE_SERVICE = "temporal-worker-core"
+# Separate names exist only in the disposable pre-consolidation comparison.
 SERVICES = tuple(f"temporal-worker-{fleet}" for fleet in FLEETS)
 PHASES = (
     "startup",
@@ -48,57 +50,32 @@ INSPECT_FORMAT = (
 
 
 def comparison_override(model, *, combined, debug):
-    """Keep the ordinary topology, or host its four fleets on the workflow service."""
-    definitions = model["services"]
-    specs = [definitions[service] for service in SERVICES]
+    """Compare the canonical core with separate processes on the same image.
+
+    The split is an isolated measurement baseline, not an installed topology.
+    Copy all resources and workflow-read settings so only process sharing changes.
+    """
     debug_env = {"PYTHONASYNCIODEBUG": "1" if debug else ""}
-    if not combined:
-        return {
-            "services": {
-                service: {"environment": debug_env.copy()} for service in SERVICES
-            }
-        }
-    first = specs[0]
-    environment, dependencies, volumes = {}, {}, {}
-    for spec in specs:
-        for key in ("image", "networks", "entrypoint", "stop_grace_period", "env_file"):
-            if spec.get(key) != first.get(key):
-                raise ValueError(f"worker comparison cannot merge conflicting {key}")
-        for key, value in spec.get("environment", {}).items():
-            if key in {"TEMPORAL_WORKER_FLEET", "TEMPORAL_WORKER_FLEETS"}:
-                continue
-            if key in environment and environment[key] != value:
-                raise ValueError(
-                    "worker comparison cannot merge conflicting environment values"
-                )
-            environment[key] = value
-        for key, value in spec.get("depends_on", {}).items():
-            if key in dependencies and dependencies[key] != value:
-                raise ValueError(
-                    "worker comparison cannot merge conflicting startup dependencies"
-                )
-            dependencies[key] = value
-        for volume in spec.get("volumes", []):
-            target = volume["target"]
-            if target in volumes and volumes[target] != volume:
-                raise ValueError(
-                    "worker comparison cannot merge conflicting volume targets"
-                )
-            volumes[target] = copy.deepcopy(volume)
-    environment.update(debug_env)
-    environment.update(
-        TEMPORAL_WORKER_FLEET="artifacts", TEMPORAL_WORKER_FLEETS=json.dumps(FLEETS)
-    )
-    result = {
-        service: {"profiles": ["separate-worker-comparison"]}
-        for service in SERVICES[1:]
-    }
-    result[SERVICES[0]] = {
-        "environment": environment,
-        "depends_on": dependencies,
-        "volumes": list(volumes.values()),
-        "labels": {"moonmind.journal-consumer": "true"},
-    }
+    if combined:
+        return {"services": {CORE_SERVICE: {"environment": debug_env}}}
+    core = model["services"][CORE_SERVICE]
+    result = {CORE_SERVICE: {"profiles": ["combined-worker-comparison"]}}
+    for fleet, service in zip(FLEETS, SERVICES):
+        spec = copy.deepcopy(core)
+        spec.pop("profiles", None)
+        spec["environment"].update(
+            **debug_env, TEMPORAL_WORKER_FLEET=fleet, TEMPORAL_WORKER_FLEETS=None
+        )
+        spec.setdefault("labels", {})["moonmind.journal-consumer"] = (
+            "true" if fleet == "artifacts" else "false"
+        )
+        if fleet == "workflow":
+            # Keep the canonical readiness URL reachable without changing any
+            # workflow-read environment in this disposable split baseline.
+            for name, network in spec["networks"].items():
+                network = spec["networks"][name] = network or {}
+                network.setdefault("aliases", []).append(CORE_SERVICE)
+        result[service] = spec
     return {"services": result}
 
 
@@ -239,7 +216,7 @@ def compare_reports(baseline, candidate):
     conditions = []
     for report, topology, expected in (
         (baseline, "separate", set(SERVICES)),
-        (candidate, "combined", set(SERVICES[:1])),
+        (candidate, "combined", {CORE_SERVICE}),
     ):
         workers = list(report.get("workers", {}).values())
         if (
@@ -344,11 +321,11 @@ def observe_sample(project, phase, *, combined, metadata, runner=_docker):
         not re.fullmatch(r"[a-f0-9]{12,64}", cid) for cid in containers
     ):
         raise ValueError("no valid running project containers")
-    expected = set(SERVICES[:1] if combined else SERVICES)
+    expected = {CORE_SERVICE} if combined else set(SERVICES)
     if not expected <= set(containers.values()):
         raise ValueError("not every measured worker is running")
     observed_workers = [
-        service for service in containers.values() if service in SERVICES
+        service for service in containers.values() if service in (*SERVICES, CORE_SERVICE)
     ]
     if set(observed_workers) != expected or len(observed_workers) != len(expected):
         raise ValueError(

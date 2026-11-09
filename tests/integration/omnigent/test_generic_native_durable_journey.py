@@ -2714,6 +2714,7 @@ async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
 
 @pytest.mark.parametrize("native_journey", [{
     "harness": "codex-native-file-config",
+    "apiKeyTuning": {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md"},
     "additionalFiles": [{
         "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
         "format": "text", "merge_strategy": "append", "permissions": "0600",
@@ -2766,4 +2767,5 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
     expected = "Later edited instructions.\n" if refresh else "Use the admitted global instructions.\n"
     assert configuration["additionalFiles"][0]["content_template"] == expected
     assert configuration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert configuration["environmentTemplates"] == {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md"}
     assert expected not in journey.plan.payload.model_dump_json()

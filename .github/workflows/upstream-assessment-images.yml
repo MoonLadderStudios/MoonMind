@@ -12,8 +12,10 @@ on:
     branches: [main]
     paths:
       - "moonmind/security/web_assessments.py"
+      - "moonmind/security/known_issue_templates.py"
       - "moonmind/security/cloud_assessments.py"
       - "moonmind/security/tls_assessment*.py"
+      - "moonmind/security/dns_assessment*.py"
       - "moonmind/security/service_inventory*.py"
       - "moonmind/security/native_tcp_gateway.py"
       - "moonmind/security/egress_policy.py"
@@ -28,8 +30,10 @@ on:
   pull_request:
     paths:
       - "moonmind/security/web_assessments.py"
+      - "moonmind/security/known_issue_templates.py"
       - "moonmind/security/cloud_assessments.py"
       - "moonmind/security/tls_assessment*.py"
+      - "moonmind/security/dns_assessment*.py"
       - "moonmind/security/service_inventory*.py"
       - "moonmind/security/native_tcp_gateway.py"
       - "moonmind/security/egress_policy.py"

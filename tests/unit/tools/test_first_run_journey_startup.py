@@ -106,7 +106,8 @@ if startup:
             time.sleep(0.01)
     raise SystemExit(status)
 if "config" in command[:3]:
-    print(json.dumps(config.get("compose_config", {"services": {"minio": {"image": "test-minio"}}})))
+    model_phase = (directory / "fixture-release").read_text().strip()
+    print(json.dumps(config.get("compose_models", {}).get(model_phase, config.get("compose_config", {"services": {"minio": {"image": "test-minio"}, "api": {}, "temporal-worker-core": {}}}))))
 elif command[:1] == ["top"]:
     print(footprint.get("top", ""))
     if footprint.get("top_stderr"):
@@ -470,7 +471,7 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
         "generate",
         "generated_verify",
     ]
-    assert any(call["command"][:1] == ["restart"] for call in journey.calls())
+    assert any(call["command"] == ["restart", "temporal-worker-core"] for call in journey.calls())
     output = _startup_log(journey, "fresh", "candidate", 1)
     assert "phase=candidate attempt=1" in output and "exit_status=0" in output
     journey.assert_cleaned()
@@ -657,11 +658,16 @@ def test_worker_comparison_runs_same_journey_with_measured_topology(journey, top
         entry for entry in startup["overrides"] if "PYTHONASYNCIODEBUG" in str(entry)
     ]
     assert len(overrides) == 1
-    workflow = overrides[0]["services"]["temporal-worker-workflow"]
+    service = "temporal-worker-core" if topology == "combined" else "temporal-worker-workflow"
+    workflow = overrides[0]["services"][service]
     assert workflow["environment"]["PYTHONASYNCIODEBUG"] == "1"
     if topology == "combined":
-        assert workflow["environment"]["TEMPORAL_WORKER_FLEET"] == "artifacts"
-        assert "integrations" in workflow["environment"]["TEMPORAL_WORKER_FLEETS"]
+        environment = {
+            **model()["services"]["temporal-worker-core"]["environment"],
+            **workflow["environment"],
+        }
+        assert environment["TEMPORAL_WORKER_FLEET"] == "artifacts"
+        assert "integrations" in environment["TEMPORAL_WORKER_FLEETS"]
     report = json.loads(
         (journey.logs / "fresh/worker-runtime-measurements.json").read_text()
     )
@@ -687,7 +693,7 @@ def test_worker_comparison_runs_same_journey_with_measured_topology(journey, top
         for call in journey.calls()
         if call["command"][:1] == ["up"]
         and "300" in call["command"]
-        and call["command"][-1] == "temporal-worker-workflow"
+        and call["command"][-1] == service
     ]
     assert restarted_wait and all(
         call["measurement_phase"] == "restart" for call in restarted_wait
@@ -830,4 +836,29 @@ def test_upgrade_uses_source_preset_contract_only_before_replacement(
         ("populate", False),
         ("verify", False),
     ]
+    journey.assert_cleaned()
+
+
+def test_upgrade_isolation_uses_each_releases_actual_workers(journey):
+    source = {"services": {
+        "api": {}, "minio": {"image": "test-minio"},
+        "temporal-worker-workflow": {}, "temporal-worker-artifacts": {},
+    }}
+    candidate = {"services": {
+        "api": {}, "minio": {"image": "test-minio"}, "temporal-worker-core": {},
+    }}
+    result = journey.run(
+        upgrade=True, source_statuses=[0], candidate_statuses=[0], lines=1,
+        compose_models={"source": source, "candidate": candidate},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    source_overlays = journey.startups()[0]["overrides"]
+    assert any(
+        "temporal-worker-artifacts" in overlay.get("services", {})
+        for overlay in source_overlays
+    )
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert set(receipt["isolation"]["services"]) == {"api", "temporal-worker-core"}
     journey.assert_cleaned()

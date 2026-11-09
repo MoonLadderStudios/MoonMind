@@ -68,7 +68,7 @@ services:
       # Stale worker-code admission (MoonLadderStudios/MoonMind#4224) runs in
       # the API: it needs the same default workflow readiness target as the
       # workflow worker itself, otherwise the gate silently disables itself.
-      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-core:8080/readyz}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       # `ContainerJobService.submit()` resolves the deployment's declared image
       # sources before it creates durable job identity, so the API must see the
@@ -407,11 +407,12 @@ services:
       - control-plane-network
     restart: unless-stopped
 
-  temporal-worker-workflow:
+  temporal-worker-core:
     stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
+      moonmind.journal-consumer: "true"
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
@@ -421,7 +422,10 @@ services:
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-      - TEMPORAL_WORKER_FLEET=workflow
+      # Recognition for supported pre-label rollback readers; remove when those
+      # releases leave the rollback window. The plural list controls startup.
+      - TEMPORAL_WORKER_FLEET=artifacts
+      - TEMPORAL_WORKER_FLEETS=["workflow","artifacts","llm","integrations"]
       - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
       - TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE=${TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE:-mm.workflow.user.v2}
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}
@@ -430,7 +434,7 @@ services:
       - MOONMIND_BUILD_SHA=${MOONMIND_BUILD_SHA:-}
       - MOONMIND_IMAGE_DIGEST=${MOONMIND_IMAGE_DIGEST:-}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
-      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-core:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       # integration.resolve_adapter_metadata runs on this fleet; without the
@@ -444,6 +448,19 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      - TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE=${TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE:-mm.activity.artifacts}
+      - TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY=${TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY:-8}
+      - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      - TEMPORAL_ACTIVITY_LLM_TASK_QUEUE=${TEMPORAL_ACTIVITY_LLM_TASK_QUEUE:-mm.activity.llm}
+      - TEMPORAL_LLM_WORKER_CONCURRENCY=${TEMPORAL_LLM_WORKER_CONCURRENCY:-4}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE=${TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE:-mm.activity.integrations}
+      - TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY=${TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY:-4}
+      # When unset, integrations persist one identity on moonmind_secrets.
+      - MOONMIND_INSTALLATION_ID=${MOONMIND_INSTALLATION_ID:-}
     env_file:
       - path: .env
         required: false
@@ -474,126 +491,8 @@ services:
         condition: service_started
       temporal-namespace-init:
         condition: service_completed_successfully
-    networks:
-      - control-plane-network
-    restart: unless-stopped
-
-  temporal-worker-artifacts:
-    stop_grace_period: 6m
-    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
-    init: true
-    labels:
-      moonmind.journal-consumer: "true"
-      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
-    environment:
-      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
-      - PYTHONPATH=/app
-      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
-      - MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-      - TEMPORAL_WORKER_FLEET=artifacts
-      - TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE=${TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE:-mm.activity.artifacts}
-      - TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY=${TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY:-8}
-      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
-      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
-      - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
-      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
-      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
-      - moonmind_secrets:/app/var/secrets
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    healthcheck:
-      test: [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request;
-          urllib.request.urlopen('http://localhost:8080/healthz')",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
       minio:
         condition: service_started
-    networks:
-      - control-plane-network
-    restart: unless-stopped
-
-  temporal-worker-llm:
-    stop_grace_period: 6m
-    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
-    init: true
-    labels:
-      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
-    environment:
-      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
-      - PYTHONPATH=/app
-      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
-      - MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-      - TEMPORAL_WORKER_FLEET=llm
-      - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
-      - TEMPORAL_ACTIVITY_LLM_TASK_QUEUE=${TEMPORAL_ACTIVITY_LLM_TASK_QUEUE:-mm.activity.llm}
-      - TEMPORAL_LLM_WORKER_CONCURRENCY=${TEMPORAL_LLM_WORKER_CONCURRENCY:-4}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
-      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
-      - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
-      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
-      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
-      - moonmind_secrets:/app/var/secrets
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    healthcheck:
-      test: [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request;
-          urllib.request.urlopen('http://localhost:8080/healthz')",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
     networks:
       - control-plane-network
     restart: unless-stopped
@@ -915,7 +814,7 @@ services:
       # this worker: it needs the same default workflow readiness target as
       # the workflow worker itself, otherwise recovery silently keeps
       # image-only behavior.
-      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-core:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
@@ -1001,69 +900,6 @@ services:
       - control-plane-network
       - docker-proxy-network
       - deployment-controller-network
-    restart: unless-stopped
-
-  temporal-worker-integrations:
-    stop_grace_period: 6m
-    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
-    init: true
-    labels:
-      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
-    environment:
-      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
-      - PYTHONPATH=/app
-      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
-      - MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
-      - TEMPORAL_WORKER_FLEET=integrations
-      - TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE=${TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE:-mm.activity.integrations}
-      - TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY=${TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY:-4}
-      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
-      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
-      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
-      - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
-      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
-      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
-      # Canonical deployment identity shared by all integrations replicas.
-      # When unset, the worker persists one ID on the moonmind_secrets volume
-      # (/app/var/secrets/moonmind-installation-id) and reuses it across
-      # restarts; set it explicitly to pin the identity.
-      - MOONMIND_INSTALLATION_ID=${MOONMIND_INSTALLATION_ID:-}
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
-      - moonmind_secrets:/app/var/secrets
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    healthcheck:
-      test: [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request;
-          urllib.request.urlopen('http://localhost:8080/healthz')",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-    networks:
-      - control-plane-network
     restart: unless-stopped
 
   # MoonLadderStudios/MoonMind#4110: the native Qdrant service and its

@@ -356,3 +356,20 @@ async def test_combined_process_retains_release_and_agent_backend_probes(
     )
     assert "agent_runtime" in metadata["taskQueues"]
     assert "agent_runtime.execute" in metadata["activityTypes"]
+
+
+@pytest.mark.asyncio
+async def test_colocated_fleets_report_the_canonical_process_service(process, monkeypatch):
+    from moonmind.observability import telemetry
+
+    for topology in process.topologies:
+        topology.service_name = "temporal-worker-core"
+    monkeypatch.setenv("MOONMIND_ENABLE_OPENTELEMETRY", "1")
+    initialized = MagicMock()
+    monkeypatch.setattr(telemetry, "initialize_telemetry", initialized)
+    monkeypatch.setattr(runtime, "Runtime", MagicMock())
+    logging = MagicMock()
+    monkeypatch.setattr(runtime, "_configure_worker_logging", logging)
+    await runtime.main_async()
+    assert initialized.call_args.args[0].service_name == "temporal-worker-core"
+    assert logging.call_args.kwargs["default_fields"]["service"] == "temporal-worker-core"

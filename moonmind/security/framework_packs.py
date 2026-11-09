@@ -25,6 +25,7 @@ from moonmind.security.frameworks import (
     FrameworkSource,
     Text,
 )
+from moonmind.security.web_api_methodology import AssessmentProcedure
 
 if TYPE_CHECKING:
     from moonmind.security.assessments import AssessmentScope, ControlAssessmentPlan
@@ -82,10 +83,14 @@ class PackRequirement(FrameworkRequirement):
     )
     objectives_complete: bool = False
     objective_basis: AssessmentText
+    procedures: Annotated[list[AssessmentProcedure], Field(max_length=16)] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def unique_objectives(self):
         _unique([item.id for item in self.objectives], "objective")
+        _unique([item.id for item in self.procedures], "procedure")
         if self.objectives_complete and not self.objectives:
             raise ValueError("complete objectives require explicit checks")
         return self
@@ -156,6 +161,9 @@ class VersionedFrameworkPack(FrameworkContract):
     provenance: Text
     license: Text
     distribution: Literal["redistributable", "restricted", "prohibited"]
+    methodology_editions: Annotated[
+        dict[AssessmentText, Identifier], Field(max_length=16)
+    ] = Field(default_factory=dict)
     requirements: Annotated[list[PackRequirement], Field(min_length=1, max_length=64)]
     mapping_targets: Annotated[list[MappingTarget], Field(max_length=64)] = Field(
         default_factory=list
@@ -335,6 +343,7 @@ def compile_framework_plan(
                     )
                     for item in requirement.objectives
                 ],
+                organisational_evidence=choice.organisational_evidence,
                 owner=choice.responsible_entity,
                 responsibility_reason=choice.responsibility_reason,
             )

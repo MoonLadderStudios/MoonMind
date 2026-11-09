@@ -15,6 +15,12 @@ references, exclusions and remaining budget from the admitted request. Selecting
 this Skill grants no additional authority. Keep these constraints in subsequent
 steps and stop on cancellation; do not launch another provider or reset a budget.
 
+For selected web/API objectives, retain the edition-specific
+[procedure plan and coverage](references/report.md) before executing tests.
+Use the delivered [procedure pack](references/web-api.json), existing admitted
+ZAP/application-access jobs and these review methods. Never replace unperformed
+logic or identity cases with a clean scanner result.
+
 For a direct review, follow entrypoints to the checks they depend on. Map assets,
 principals, resources, trust crossings and security invariants. Examine who can
 invoke each action on which resource, including object ownership, replay,

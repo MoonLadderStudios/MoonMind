@@ -404,6 +404,54 @@ identity includes chain, pinned resolution, trust content, probe configuration
 and assessment time. Changed inputs and unobserved backends do not prove
 remediation.
 
+### Bounded DNS observations
+
+`moonmind container dns-assessment --admission dns.json` reads a typed
+workload-profile selection: `profileRef`, mode `query`, `assessmentRef`, and
+`dnsAssessment`. The assessment contains exact `questions` (`name`, `recordType`),
+optional `allowedFollowups`, selected `checks`, and query, duration, rate, depth,
+response-size and combined artifact-size limits. The admitted scope must contain
+that DNS selection, profile, `dns-observation` action and resolver network policy.
+Queries cannot expand the original exact name/type set. DKIM requires supplied
+selectors; DMARC organizational fallback requires an explicitly supplied ancestor
+and its admitted question. No selector or subdomain discovery is performed.
+
+Configure the deployment workload profile with entrypoint `["python"]`, query
+mode argv `["-I", "-m", "moonmind.security.dns_assessment_runner"]`, action class
+`dns-observation`, `dnsResolver.endpoint` set to the approved credential-free
+HTTPS resolver URL, bridge networking and its restricted `egressPolicyRef`.
+Declare exactly two outputs: `execution` at `dns-assessment/execution.json` and
+`summary` at `dns-assessment/summary.json`. Use the `repository-security` image
+source. The profile permits no arguments, credentials, environment, caches or
+configuration exceptions. Its egress policy admits only the resolver HTTPS host
+and port; queried domain names are separate assessment authority, not network
+destinations. There is deliberately no public resolver default.
+
+The runner sends RFC 8484 wire-format POST requests to the configured path over
+the enforced CONNECT proxy with verified TLS. It never redirects, downgrades,
+uses system DNS for queries, follows arbitrary record URLs, or contacts observed
+nameservers, mail servers or report recipients. HTTP rate limits and denial are
+recorded; transient failures receive at most one retry within the same reserved
+query and job ceilings. Every attempt is checkpointed before dispatch. A repeated
+invocation recovers retained evidence without granting new queries. Cancellation,
+lease expiry and malformed or oversized replies preserve completed observations.
+
+Evidence distinguishes NXDOMAIN, NODATA, SERVFAIL, timeout, denied queries and
+cache age/expiry. An absent or invalid HTTP Age value leaves freshness unverified.
+DNSSEC AD is an identified resolver assertion, never independent validation.
+Delegation checks observe the resolver view, not an authoritative parent-child
+survey; dangling-looking aliases remain hypotheses. SPF, explicit DKIM and
+DMARC checks report policy syntax and incomplete evidence without sending mail.
+Native artifacts retain bounded sanitized answer sections, TTLs, timestamps,
+resolver identity and validation provenance. Collection recomputes the summary
+from execution evidence and the admitted fixed invocation. `security.assess`
+uses `dns://<name>` assets for queried names and check subjects, rereads native
+evidence, and retains native references in reports and exports. Comparisons
+require the same resolver, questions, types and selected checks; expired or
+incomplete observations cannot prove remediation. External resolver checks are
+Unverified unless separately run under admitted authority; local HTTPS/CONNECT
+fixtures exercise the transport and limits without external scanning.
+
 ## Lifecycle and evidence
 
 Before readiness or a networked launch, the worker verifies:

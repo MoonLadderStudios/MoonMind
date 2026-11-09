@@ -31,6 +31,9 @@ describe('assessment engagement browser journeys', () => {
   it('reviews, cancels, edits, and explicitly starts with no launch during preview', async () => {
     window.history.replaceState({}, '', '/workflows/new');
     renderWithClient(<WorkflowStartPage payload={payload} />);
+    await page.getByLabelText('Advanced mode', { exact: true }).click();
+    await page.getByRole('button', { name: 'Add assessment setup', exact: true }).click();
+    await page.getByLabelText('Advanced mode', { exact: true }).click();
     await screen.findByRole('option', { name: 'Payments authorization' });
     await userEvent.selectOptions(screen.getByLabelText('Assessment authorization'), 'payments');
     await userEvent.type(screen.getByLabelText('Instructions'), 'Inspect admitted targets only.');

@@ -567,7 +567,8 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         artifact_link = (
             await session.execute(
                 select(TemporalArtifactLink).where(
-                    TemporalArtifactLink.artifact_id == result.artifact.artifact_id
+                    TemporalArtifactLink.artifact_id == result.artifact.artifact_id,
+                    TemporalArtifactLink.link_type == "remediation.context",
                 )
             )
         ).scalar_one()
@@ -575,6 +576,10 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert artifact_link.run_id == remediation.run_id
         assert artifact_link.link_type == "remediation.context"
         assert artifact_link.label == "reports/remediation_context.json"
+        grant_types = {
+            link.link_type for link in await artifact_service._repository.list_links(result.artifact.artifact_id)
+        }
+        assert {"remediation.context", "input.artifact.raw", "output.artifact.operator"} == grant_types
 
         remediation_source = await session.get(
             TemporalExecutionCanonicalRecord, remediation.workflow_id
