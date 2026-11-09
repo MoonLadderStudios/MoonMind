@@ -3190,6 +3190,61 @@ class TemporalArtifactService:
             purge_after=timedelta(seconds=max(0, int(purge_after_seconds))),
         )
 
+    async def assessment_occurrence(self, *, access: ArtifactAccessContext):
+        """Recheck continuing limits for passive evidence work without network rights."""
+        from api_service.db.models import AssessmentOccurrenceRecord, TemporalExecutionCanonicalRecord
+        from api_service.services.assessment_authorizations import admit_assessment_occurrence
+
+        access = ArtifactAccessContext.require(access)
+        if not access.execution_principal:
+            raise TemporalArtifactAuthorizationError("assessment requires execution admission")
+        workflow_id = access.execution_principal.removeprefix("workflow:")
+        source = await self._repository._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        if source is None:
+            occurrence = await self._repository._session.get(AssessmentOccurrenceRecord, workflow_id)
+            if occurrence is None:
+                return None
+        elif not (source.parameters or {}).get("assessmentScope"):
+            return None
+        result = await admit_assessment_occurrence(self._repository._session, workflow_id=workflow_id)
+        await self._finish_mutation()
+        return result
+
+    async def record_assessment_occurrence_evidence(self, *, access: ArtifactAccessContext, comparison_ref: str):
+        """Attach the existing typed comparison, never infer success from disappearance."""
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from moonmind.security.assessments import Comparison
+
+        access = ArtifactAccessContext.require(access)
+        if not access.execution_principal:
+            raise TemporalArtifactAuthorizationError("assessment requires execution admission")
+        workflow_id = access.execution_principal.removeprefix("workflow:")
+        source = await self._repository._session.get(AssessmentOccurrenceRecord, workflow_id)
+        if source is None:
+            return
+        _, payload = await self.read(artifact_id=comparison_ref, access=access)
+        comparison = Comparison.model_validate_json(payload)
+        # Lock only after the read owner has completed any standalone mutation.
+        source = await self._repository._session.get(
+            AssessmentOccurrenceRecord, workflow_id, populate_existing=True, with_for_update=True,
+        )
+        occurrence = dict(source.authority_json)
+        evidence = dict(occurrence.get("observations") or {})
+        evidence[comparison_ref] = {
+            "scanRef": comparison.scan_ref,
+            "observedAt": comparison.observation.observed_at.isoformat(),
+            "expiresAt": comparison.observation.expires_at.isoformat(),
+            "coverage": comparison.coverage_status,
+            "baselineStatus": comparison.baseline_status,
+            "counts": comparison.counts,
+            "intelligenceChanges": list(comparison.intelligence_changes),
+        }
+        occurrence.update(observations=evidence, evidenceRefs=list(evidence),
+                          coverage=comparison.coverage_status,
+                          comparisonDisposition=comparison.baseline_status)
+        source.authority_json = occurrence
+        await self._finish_mutation()
+
     async def _finish_mutation(self) -> None:
         """Flush borrowed work; only a standalone owner may publish it."""
         if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
@@ -6067,7 +6122,7 @@ class TemporalArtifactService:
         *,
         artifact_ids: Iterable[str] | None,
         execution: ExecutionRef,
-    ) -> None:
+    ) -> Mapping[str, Any]:
         """Delegate exact saved-revision inputs to the actual scheduled Activity.
 
         A dependency seal is integrity/retention, never raw-read permission.
@@ -6132,7 +6187,7 @@ class TemporalArtifactService:
         if root_id is None:
             # Retained starts predating revision grants gain no new rights.
             # Existing admitted execution rights remain usable as before.
-            return
+            return admitted
         if not isinstance(root_id, str) or not ARTIFACT_ID_PATTERN.fullmatch(root_id):
             raise TemporalArtifactAuthorizationError(
                 "scheduled input revision authority is unavailable"
@@ -6197,6 +6252,7 @@ class TemporalArtifactService:
             namespace=execution.namespace,
             access=source_access,
         )
+        return admitted
 
     async def delegate_read_access(
         self,
