@@ -14,10 +14,10 @@ from moonmind.security.assessment_authorizations import (
     SETTINGS_KEY,
     authorization_scope,
 )
-from tests.integration.test_execution_input_admission_postgres import (
-    sessions,
-    conversion_postgres_url,
-)  # noqa: F401
+from tests.integration import test_execution_input_admission_postgres as admission_fixtures
+
+sessions = admission_fixtures.sessions
+conversion_postgres_url = admission_fixtures.conversion_postgres_url
 from tests.unit.services.test_assessment_job_authority import authorization
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]

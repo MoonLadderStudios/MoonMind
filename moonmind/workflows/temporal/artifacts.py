@@ -3206,7 +3206,7 @@ class TemporalArtifactService:
 
     async def record_assessment_occurrence_evidence(self, *, access: ArtifactAccessContext, comparison_ref: str):
         """Attach the existing typed comparison, never infer success from disappearance."""
-        from api_service.db.models import AssessmentOccurrenceRecord, TemporalExecutionCanonicalRecord
+        from api_service.db.models import AssessmentOccurrenceRecord
         from moonmind.security.assessments import Comparison
 
         access = ArtifactAccessContext.require(access)

@@ -1,8 +1,8 @@
 """Current assessment authority and durable reservations in existing owners.
 
-Settings owns reusable authorization. Canonical execution inputs prove legacy
-admission. ContainerJob rows retain reservations and the original deadline;
-worker payloads never grant authority.
+Settings owns reusable authorization. Canonical inputs or verified original
+schedule starts supply scope. Occurrence records retain run admission; ContainerJob
+rows retain resource reservations and deadlines. Worker payloads grant no authority.
 """
 
 from __future__ import annotations

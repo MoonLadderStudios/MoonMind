@@ -145,7 +145,7 @@ source-revision pin.
 Use existing overlap/catch-up policy and idempotent manual runs. Assessment
 authorizations optionally bound continuing work by minimum interval, occurrence
 count, per-occurrence jobs/seconds and run lifetime. Original validity, scope
-and aggregate limits still apply. Canonical reservations survive schedule edits,
+and aggregate limits still apply. Occurrence reservations survive schedule edits,
 retries and restarts; catch-up cannot compress cadence. Worker launch and passive
 reassessment recheck authority. Credential resolution stays with its workload
 owner: `CredentialGrant.revision` identifies the secret, not a policy revision.

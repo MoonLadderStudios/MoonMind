@@ -15,7 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from temporalio import activity
+from temporalio import activity, workflow
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.security.operator_admission import OperatorAdmission
@@ -45,6 +45,19 @@ from tests.unit.services.test_recurring_workflows_service import recurring_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 SCOPE = {"assets": ["app"], "exclusions": [], "repositoryExceptions": []}
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class ContinuingAssessmentFixture:
+    """Real Temporal histories; production admission must ignore wider CAN input."""
+
+    @workflow.run
+    async def run(self, request: dict) -> None:
+        if not workflow.info().continued_run_id:
+            successor = copy.deepcopy(request)
+            successor["initial_parameters"]["assessmentScope"]["targets"].append({"artifactRef": "art_unadmitted"})
+            workflow.continue_as_new(successor)
+        await workflow.wait_condition(lambda: False)
 
 
 @pytest_asyncio.fixture
@@ -1675,7 +1688,7 @@ async def test_cancellation_starts_no_successor_and_retains_completed_work(
     assert (await read(service, first["scanRef"]))["scanOutcome"] == "completed"
 
 
-@pytest.mark.parametrize("bounded", [False, True])
+@pytest.mark.parametrize("bounded", [False, True, "cancel_before_admission"])
 @pytest.mark.parametrize("authored_runtime", ["codex_cli", None])
 async def test_product_api_security_schedule_lifecycle(
     environment, temporal_environment, monkeypatch, authored_runtime, bounded
@@ -1821,25 +1834,54 @@ async def test_product_api_security_schedule_lifecycle(
             )
             parameters = recorded["initial_parameters"]
             assert parameters["workflow"]["steps"][0]["tool"]["inputs"] == request
+            overlap = await http.post(
+                endpoint, headers={"Idempotency-Key": str(uuid4())}
+            )
+            assert overlap.status_code == 201, overlap.text
+            assert overlap.json()["outcome"] == "skipped"
             if bounded:
                 from api_service.db import base
                 from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_admit_scheduled_occurrence_plan_activity
                 monkeypatch.setattr(base, "async_session_maker", environment.sessions)
                 monkeypatch.setattr(TemporalArtifactService, "_build_store_from_settings", staticmethod(lambda: LocalTemporalArtifactStore(environment.storage_root)))
                 assert await environment.session.get(TemporalExecutionCanonicalRecord, action.workflow_id) is None
+                from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+                async with Worker(client, task_queue=queue, workflows=[ContinuingAssessmentFixture], workflow_runner=UnsandboxedWorkflowRunner()):
+                    for _ in range(100):
+                        current = await handle.describe()
+                        if current.run_id != action.first_execution_run_id:
+                            break
+                        await asyncio.sleep(0.05)
+                    assert current.run_id != action.first_execution_run_id
+                successor = await adapter.read_workflow_start_input(action.workflow_id, run_id=current.run_id)
+                assert successor["initial_parameters"]["assessmentScope"] != parameters["assessmentScope"]
                 native_env = ActivityEnvironment()
-                native_env.info = replace(native_env.info, namespace="default", workflow_id=action.workflow_id, workflow_run_id=action.first_execution_run_id)
+                native_env.info = replace(native_env.info, namespace="default", workflow_id=action.workflow_id, workflow_run_id=current.run_id)
                 payload = {"workflowId": action.workflow_id, "initialParameters": parameters}
+                if bounded == "cancel_before_admission":
+                    from moonmind.workflows.temporal.service import TemporalExecutionService
+                    from temporalio.exceptions import ApplicationError
+                    control = TemporalExecutionService(environment.session, client_adapter=adapter)
+                    await control.describe_execution(action.workflow_id)
+                    await control.cancel_execution(workflow_id=action.workflow_id, reason="Cancel before first assessment admission", graceful=True)
+                    with pytest.raises(ApplicationError, match="canceled"):
+                        await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                    marker = await environment.session.get(AssessmentOccurrenceRecord, action.workflow_id)
+                    assert marker.assessment_ref is None and "scope" not in marker.authority_json
+                    return
                 await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
+                from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+                changed = copy.deepcopy(successor["initial_parameters"])
+                for remove in (False, True):
+                    if remove:
+                        changed.pop("assessmentScope")
+                    with pytest.raises(RecurringWorkflowValidationError):
+                        await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity,
+                                             {"workflowId": action.workflow_id, "initialParameters": changed})
                 await native_env.run(omnigent_admit_scheduled_occurrence_plan_activity, payload)
                 occurrence = await environment.session.get(AssessmentOccurrenceRecord, action.workflow_id)
                 assert occurrence.authority_json["ordinal"] == 1
                 assert await environment.session.get(TemporalExecutionCanonicalRecord, action.workflow_id) is None
-            overlap = await http.post(
-                endpoint, headers={"Idempotency-Key": str(uuid4())}
-            )
-            assert overlap.status_code == 201, overlap.text
-            assert overlap.json()["outcome"] == "skipped"
 
             execution = {
                 "namespace": "default",

@@ -3557,6 +3557,10 @@ class TemporalExecutionService:
         from api_service.db.models import AssessmentOccurrenceRecord
         from api_service.services.assessment_authorizations import project_assessment_occurrence
 
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        if not (projection.parameters or {}).get("assessmentScope") and not scheduled_definition_id(projection.workflow_id):
+            return projection
         row = await self._session.get(AssessmentOccurrenceRecord, projection.workflow_id)
         parameters = {key: value for key, value in (projection.parameters or {}).items() if key != "assessmentOccurrence"}
         if row is not None:
@@ -5201,8 +5205,9 @@ class TemporalExecutionService:
         from api_service.services.assessment_authorizations import _authorization_row
         from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
-        occurrence = await self._session.get(AssessmentOccurrenceRecord, workflow_id)
-        if occurrence is not None or scheduled_definition_id(workflow_id):
+        scoped = (record.parameters or {}).get("assessmentScope")
+        continuing = isinstance(scoped, Mapping) and (scoped.get("engagement") or {}).get("recurring")
+        if continuing or scheduled_definition_id(workflow_id):
             # Serialize cancellation with first native admission as well as
             # existing reservations. A deny-only marker never supplies scope.
             await _authorization_row(self._session, for_update=True, ensure_legacy_lock=True)
