@@ -41,7 +41,8 @@ def validate_configuration(configuration):
         }
         path = str(item["path"] or "")
         relative = path.removeprefix(_HOME + "/")
-        if not path.startswith(_HOME + "/") or ".." in Path(relative).parts:
+        if (not path.startswith(_HOME + "/") or ".." in Path(relative).parts
+            or any(ord(character) < 32 or ord(character) == 127 for character in path)):
             raise ValueError("Claude file templates must remain within the private home")
         # These are declarative preferences/instructions, not authentication,
         # hooks, plugins, persisted session state or another launch policy.

@@ -46,6 +46,7 @@ def test_shared_renderer_initializes_once_and_isolates_siblings(tmp_path):
 
 @pytest.mark.parametrize("path,content,format", [
     ("../sibling/CLAUDE.md", "escape", "text"),
+    ("rules/\0.md", "invalid path", "text"),
     (".credentials.json", {}, "json"),
     ("settings.json", {"apiKeyHelper": "cat /secret"}, "json"),
     ("settings.json", {"env": {"ANTHROPIC_API_KEY": "secret"}}, "json"),
