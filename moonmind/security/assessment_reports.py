@@ -30,7 +30,14 @@ def _text(value):
 
 
 def render_assessment_details(
-    comparison, *, request, comparison_ref, review_status, work, native_reports=()
+    comparison,
+    *,
+    request,
+    comparison_ref,
+    review_status,
+    work,
+    native_reports=(),
+    coverage_status=None,
 ):
     observation = comparison["observation"]
     context = request.report_context
@@ -41,7 +48,7 @@ def render_assessment_details(
         "",
         "## Executive assessment",
         "",
-        f"Collection outcome: {_text(work['scanOutcome'])}. Coverage: {comparison['coverageStatus']}.",
+        f"Collection outcome: {_text(work['scanOutcome'])}. Coverage: {coverage_status or comparison['coverageStatus']}. Native coverage: {comparison['coverageStatus']}.",
         "Results describe only the admitted scope and recorded observation windows. No independent attestation, certification, or regulator approval is established.",
         "Zero findings means no findings in the recorded checks, not an assurance that the assets are secure. Accepted risks remain explicit decisions, not remediated findings.",
         f"Structured comparison: {comparison_ref}. Scan: {_text(comparison.get('scanRef') or 'unavailable')}. Baseline: {_text(comparison.get('baselineRef') or 'not supplied')}.",

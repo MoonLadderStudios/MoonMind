@@ -3138,6 +3138,7 @@ class AssessmentExecution:
                 comparison_ref=comparison_ref,
                 review_status=review_status,
                 work=work,
+                coverage_status=report_scope,
                 native_reports=[
                     (row["summaryRef"], inputs[row["summaryRef"]][1])
                     for row in work.get("scannerSummaries", [])
@@ -3212,7 +3213,7 @@ class AssessmentExecution:
                 [
                     report_key,
                     "summary",
-                    "professional-report/v3",
+                    "professional-report/v4",
                     (
                         request.report_context.model_dump(mode="json", by_alias=True)
                         if request.report_context

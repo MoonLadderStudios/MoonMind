@@ -420,3 +420,27 @@ def test_final_report_pipeline_preserves_cumulative_omission_count(line):
     assert text.count("## Presentation limit") == 1
     assert text.count(presentation_provenance()) == 1
     assert len(body) <= 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_executive_coverage_preserves_incomplete_methodology(environment):
+    from tests.integration.security.test_web_api_methodology_journey import retain_plan
+
+    service = environment.service
+    request, _, _ = await recurring.inputs(service, rules=False)
+    plan_ref, _ = await retain_plan(service)
+    request["methodology"] = {"planRef": plan_ref}
+    result = await recurring.invoke(service, request)
+    comparison = await recurring.read(service, result["comparisonRef"])
+    assert comparison["coverageStatus"] == "complete"
+    assert result["methodologyStatus"] == "incomplete"
+    assert result["reportBundle"]["report_scope"] == "partial"
+    _, body = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    executive = (
+        body.decode().split("## Executive assessment", 1)[1].split("## Scope", 1)[0]
+    )
+    assert "Coverage: partial." in executive
+    assert "Coverage: complete." not in executive
