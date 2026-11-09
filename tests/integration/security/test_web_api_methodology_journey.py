@@ -420,7 +420,7 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
         assert outputs["reportBundle"]["report_scope"] == "partial"
         comparison = await recurring.read(service, outputs["comparisonRef"])
         assert comparison["coverageStatus"] == (
-            "complete" if gap == "endpoint" else "partial"
+            "complete" if gap == "endpoint" else "stale_or_partial"
         )
         for objective in report["objectives"]:
             assert f"- {objective['id']} — {objective['status']};" in summary
