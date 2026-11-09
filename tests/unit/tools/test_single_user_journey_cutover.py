@@ -476,8 +476,9 @@ def test_real_runner_redaction_composes_without_leaking_header_values(tmp_path, 
     assert "helper stalled" in captured["helpers"][helper_id]["logs"]
 
 
+@pytest.mark.parametrize("consolidate_fleets", [False, True])
 def test_upgrade_faults_resume_the_submitted_operation_once(
-    checkout, monkeypatch, record_property
+    checkout, monkeypatch, record_property, consolidate_fleets
 ):
     import json
     import threading
@@ -486,7 +487,15 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
     # Keep WSGI admission, production_apply, journal preparation, the stack
     # lock and durable recovery intact. Docker and release-helper responses
     # are controlled transports; this is not qualification of a running stack.
-    services = ("api", "postgres", "temporal-worker-agent-runtime")
+    writer = "temporal-worker-agent-runtime"
+    source_services = ("api", "postgres", writer)
+    services = source_services
+    if consolidate_fleets:
+        source_services += tuple(
+            f"temporal-worker-{fleet}"
+            for fleet in ("workflow", "artifacts", "llm", "integrations")
+        )
+        services += ("temporal-worker-core",)
     applied = []
     storage_starts = []
     helper_phases = []
@@ -547,7 +556,7 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
                             "Env": [],
                             "Labels": {
                                 "com.docker.compose.project": "moonmind-test-upgrade",
-                                "com.docker.compose.service": services[-1],
+                                "com.docker.compose.service": writer,
                             },
                         },
                     }
@@ -556,7 +565,7 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
                     row = {
                         "Image": worker_image,
                         "Worker": True,
-                        "Service": services[-1],
+                        "Service": writer,
                         "OneOff": "False",
                     }
                 return {"exit": 0, "output": json.dumps(row)}
@@ -581,7 +590,7 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
                                     else "healthy"
                                 ),
                             }
-                            for service in services
+                            for service in (services if applied else source_services)
                         ]
                     ),
                 }

@@ -34,14 +34,17 @@ This document covers the **Temporal-managed worker model** only.
 
 ### Process fleet selection
 
-Compose keeps its separate worker services by default. An optional
-`TEMPORAL_WORKER_FLEETS` JSON array (or comma-separated list) selects multiple
-fleets in one worker process. Names are normalized and deduplicated in order;
+Compose hosts the workflow, artifacts, LLM and integrations fleets in one
+`temporal-worker-core` process. Agent-runtime, sandbox and deployment-control
+remain separate services. `TEMPORAL_WORKER_FLEETS=["workflow","artifacts","llm","integrations"]`
+selects the core fleets; a JSON array or comma-separated list also works for
+custom worker processes. Names are normalized and deduplicated in order;
 blank lists and unknown names fail startup. When set, this list is authoritative
 over `TEMPORAL_WORKER_FLEET`. The singular variable remains the fallback and may
-retain `artifacts` as the legacy deployment-journal discovery marker in a combined
-process; it does not restrict the plural selection. An explicit `--fleet` on the
-worker runtime or topology CLI selects only that fleet.
+retain `artifacts` as the legacy deployment-journal discovery marker until
+rollback to pre-label readers is unsupported; it does not restrict the plural
+selection. An explicit `--fleet` on the worker runtime or topology CLI selects
+only that fleet.
 
 Each selected fleet retains its own executable specification, task queues,
 registrations and concurrency limits. The topology CLI emits its existing object
@@ -62,6 +65,15 @@ Both health endpoints expose `eventLoopLagSeconds` and the process-lifetime
 readiness thresholds. Samples of at least 250 ms also emit a numeric warning,
 separate from asyncio debug slow-callback warnings. The health listener owns and
 stops the sampler.
+
+Async activities share an event loop and default executor; workflow activations
+use the SDK workflow-task executor. Blocking activity code can delay every
+fleet, and CPU/GIL contention can also affect workflows. Loop lag and
+`TMPRL1101` activation deadlocks are separate signals. A crash, OOM or config
+change restarts all four fleets. Journal transitions fence the whole core,
+including orchestration, LLM and integrations, for up to its six-minute drain
+allowance. Compare cold-start and warmed measurements separately using the
+same workload, image, host limits and debug state.
 
 ### Executable worker specification and readiness
 
@@ -341,19 +353,16 @@ privilege separation. The four `agent_run.py` metadata helpers do not
 reference that authority; this is established by source inspection and
 in-process tests, not by process confinement.
 
-Effective container rights come from `docker-compose.yaml`. Both
-`temporal-worker-workflow` and `temporal-worker-artifacts` load the operator
-`.env` through `env_file`, so any credential placed there (including provider
-keys) reaches both processes; queue separation is not credential separation,
-and no per-fleet least-privilege claim is made. Neither worker mounts the
-Docker socket. Both join only `control-plane-network`, which reaches Temporal,
-Postgres, MinIO and the API and does not confine outbound access; neither
-joins the internal `docker-proxy-network`, so neither can reach the Docker API
-proxy. The workflow worker's `agent_workspaces:/work/agent_jobs` mount exists
-because the workflow side of `MoonMind.AgentRun` (`ManagedAgentAdapter`,
-`CodexSessionAdapter`) saves and loads `ManagedRunStore` records under
-`/work/agent_jobs/managed_runs`, not for checkpoint compatibility. The
-artifacts worker mounts no agent workspaces.
+Effective container rights come from `docker-compose.yaml`. The core loads the
+operator `.env`, mounts `moonmind_secrets` and retains the workflow fleet's
+`agent_workspaces:/work/agent_jobs` for `ManagedRunStore` records. Per-fleet
+catalog privileges (`artifact_store`, `llm_provider_secrets`, `provider_tokens`)
+remain routing declarations, without container isolation. The former workers
+already loaded the full `.env`; consolidation gives up the option of enforcing
+these fleets' privileges in separate containers. Core mounts no Docker socket
+and joins only `control-plane-network`, reaching Temporal, Postgres, object
+storage and the API. That network does not confine outbound access; core cannot
+reach the Docker API proxy on its separate internal network.
 
 The adapter metadata helpers read registry/settings/catalog metadata and do not reference checkpoint persistence authority. Retained checkpoint handlers write durable turn state and, for terminal persistence, artifact-retention and result evidence. Those differing handler responsibilities do not isolate permissions within their shared process.
 
@@ -620,7 +629,12 @@ If using OpenTelemetry:
 
 2. **Worker fleet integration tests**
  - verify activity-to-fleet routing
- - verify helper activities remain narrow and intentional
+ - `tests/integration/temporal/test_core_worker_upgrade.py` runs an admitted
+   production workflow across separate fleets, core replacement and core process
+   loss. It checks the original run completes with its accepted step and plan
+   artifacts preserved, and exercises the real artifact/integration pollers.
+   Its local Temporal/SQLite/filesystem substrate does not qualify Docker journal
+   transitions; those remain in `tests/integration/host_update/test_journal_transition.py`.
 
 3. **Load tests**
  - sandbox concurrency and isolation

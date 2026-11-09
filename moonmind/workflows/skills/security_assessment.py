@@ -39,6 +39,11 @@ from moonmind.security.cloud_assessments import (
     CloudAssessmentSummary,
     review_cloud_mappings,
 )
+from moonmind.security.dns_assessments import (
+    DNSAssessmentSummary,
+    build_dns_query_plan,
+    summarize_dns_assessment,
+)
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
@@ -64,7 +69,6 @@ from moonmind.security.tls_assessments import (
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import (
     EVIDENCE_TRANSFORMATION_VERSION,
-    redact_evidence_text,
     redact_sensitive_text,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -518,6 +522,75 @@ def _service_inventory_observation(request, summary, ref, created_at):
             "serviceInventoryNativeReport": summary.evidence_ref,
             "serviceInventoryAttestation": summary.attestation_ref or "unavailable",
             "serviceInventoryInterpretation": summary.interpretation,
+        },
+    )
+
+
+def _verify_dns_report(summary, native_body):
+    """Only retained native observations determine DNS coverage and findings."""
+    if not summary.evidence_ref.startswith("art_"):
+        raise ValueError("DNS summary must reference retained native evidence")
+    plan = build_dns_query_plan(summary.settings, summary.resolver)
+    normalized = summarize_dns_assessment(
+        plan, json.loads(native_body), summary.evidence_ref
+    )
+    if normalized != summary:
+        raise ValueError("DNS summary differs from retained execution evidence")
+    return normalized
+
+
+def _dns_observation(request, summary, ref):
+    """Resolver-view policy observations are not independent DNS validation."""
+    assets = sorted(
+        {
+            "dns://" + q.name
+            for q in (*summary.settings.questions, *summary.settings.allowed_followups)
+        }
+        | {"dns://" + check.subject for check in summary.settings.checks}
+    )
+    if set(assets) - set(request.scope.assets) or set(assets) & set(
+        request.scope.exclusions
+    ):
+        raise ValueError("DNS names outside admitted assessment scope")
+    findings = [
+        Finding(
+            source="dns",
+            tool="https-resolver",
+            rule_id=item.code,
+            asset="dns://" + item.subject,
+            native_id=content_key([item.check, item.subject, item.selector, item.code]),
+            evidence_refs=[summary.evidence_ref],
+        )
+        for item in summary.checks
+        if item.status in {"missing", "malformed", "revoked"}
+        or item.code == "cname_loop_observed"
+    ]
+    # A finding can occur in overlapping explicit check selections. Preserve
+    # one semantic identity while retaining all selected coverage in the plan.
+    findings = list({finding.finding_id: finding for finding in findings}.values())
+    return Observation(
+        scope=request.scope,
+        observed_at=summary.execution.checkpoint_at,
+        expires_at=summary.coverage_expires_at or summary.execution.checkpoint_at,
+        findings=findings,
+        coverage=[
+            Coverage(
+                source="dns",
+                tool="https-resolver",
+                assets=assets,
+                rule_ids=[],
+                all_rules=True,
+                config_ref=summary.comparison_key,
+                status="complete" if summary.status == "complete" else "partial",
+                evidence_method="deterministic_check",
+            )
+        ],
+        provenance={
+            "dnsSummary": ref,
+            "dnsNativeReport": summary.evidence_ref,
+            "dnsResolver": summary.resolver.endpoint,
+            "dnsInterpretation": summary.interpretation,
+            "dnsValidation": "Resolver assertions only; independent cryptographic validation unverified.",
         },
     )
 
@@ -1918,6 +1991,46 @@ class AssessmentExecution:
                                     "interpretation": inventory_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "dns-assessment/v1":
+                            dns_summary = DNSAssessmentSummary.model_validate(payload)
+                            _, native_body = await self.read(dns_summary.evidence_ref)
+                            dns_summary = _verify_dns_report(dns_summary, native_body)
+                            observation = _dns_observation(request, dns_summary, ref)
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "dns",
+                                    "summaryRef": ref,
+                                    "nativeRefs": {"execution": dns_summary.evidence_ref},
+                                    "coverage": dns_summary.status,
+                                    "execution": dns_summary.execution.model_dump(
+                                        mode="json", by_alias=True
+                                    ),
+                                    "checks": [
+                                        check.model_dump(mode="json", by_alias=True)
+                                        for check in dns_summary.checks
+                                    ],
+                                    "coveredQuestions": [
+                                        q.model_dump(mode="json", by_alias=True)
+                                        for q in dns_summary.covered_questions
+                                    ],
+                                    "uncoveredQuestions": [
+                                        q.model_dump(mode="json", by_alias=True)
+                                        for q in dns_summary.uncovered_questions
+                                    ],
+                                    "coverageExpiresAt": dns_summary.coverage_expires_at.isoformat()
+                                    if dns_summary.coverage_expires_at
+                                    else None,
+                                    "limitations": sorted(
+                                        {
+                                            check.code
+                                            for check in dns_summary.checks
+                                            if check.status in {"incomplete", "unsupported"}
+                                        }
+                                    ),
+                                    "verification": "resolver_observation",
+                                    "interpretation": dns_summary.interpretation,
+                                }
+                            )
                         elif payload.get("schemaVersion") == "tls-assessment/v1":
                             tls_summary = TLSAssessmentSummary.model_validate(payload)
                             # Recompute normalized findings and identity from the retained
@@ -2681,8 +2794,43 @@ class AssessmentExecution:
                     f"Exact configuration: {project_ref}. These are reusable inputs, not execution authority. "
                     "Candidate targets and retention intent do not establish tested coverage, grants, or retention policy.\n"
                 )
+            from moonmind.security.assessment_reports import render_assessment_details
+
+            details = render_assessment_details(
+                comparison,
+                request=request,
+                comparison_ref=comparison_ref,
+                review_status=review_status,
+                work=work,
+                native_reports=[
+                    (row["summaryRef"], inputs[row["summaryRef"]][1])
+                    for row in work.get("scannerSummaries", [])
+                    if row["summaryRef"] in inputs
+                ],
+            )
+            if request.report_context:
+                context_body = _json(
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                )
+                context_key = content_key([context_body.decode("utf-8")])
+                saved_context = await self.saved(
+                    kind="security.report-context", key=context_key
+                )
+                context_ref = (
+                    saved_context[0]
+                    if saved_context
+                    else await self.write(
+                        context_body,
+                        kind="security.report-context",
+                        key=context_key,
+                    )
+                )
+                evidence.append(context_ref)
+                outputs["reportContextRef"] = context_ref
+                details += f"\nAttributed report context: {context_ref}.\n"
             summary = (
                 _summary(comparison)
+                + details
                 + project_summary
                 + _scanner_summary(work.get("scannerSummaries", []))
                 + _github_summary(github)
@@ -2710,18 +2858,20 @@ class AssessmentExecution:
                 summary += render_control_assessment(control_report).encode()
             elif request.control_assessment is not None:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
-            from moonmind.security.evidence_exports import presentation_provenance
+            from moonmind.security.assessment_reports import bound_report_presentation
 
-            summary = (
-                redact_evidence_text(summary.decode("utf-8"))
-                + "\n"
-                + presentation_provenance()
-                + "\n"
-            ).encode("utf-8")
+            structured_refs = [comparison_ref, *evidence]
+            if review_readable:
+                structured_refs.append(request.review_ref)
+            summary = bound_report_presentation(summary, structured_refs=structured_refs)
             summary_key = content_key(
                 [
                     report_key,
                     "summary",
+                    "professional-report/v3",
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                    if request.report_context
+                    else None,
                     EVIDENCE_TRANSFORMATION_VERSION,
                     request.review_ref,
                     review_status,
@@ -3189,6 +3339,11 @@ def _scanner_summary(summaries: list[dict]) -> str:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
+        if summary["scanner"] == "dns":
+            lines.append("DNS checks: " + json.dumps(summary["checks"], sort_keys=True) + ".")
+            lines.append("Covered questions: " + json.dumps(summary["coveredQuestions"], sort_keys=True) + ".")
+            lines.append("Uncovered questions: " + json.dumps(summary["uncoveredQuestions"], sort_keys=True) + ".")
+            lines.append("Coverage expires: " + str(summary["coverageExpiresAt"]) + ".")
         if summary["scanner"] == "service-inventory":
             lines.append(summary["attribution"])
             lines.append(

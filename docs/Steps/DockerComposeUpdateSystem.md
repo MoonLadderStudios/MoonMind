@@ -196,9 +196,13 @@ not repeated.
 Renames require all target consumers and surviving installed consumers selected
 together. Label-aware helpers prepare them. Before installation, handoff requires
 a topology-capable controller; rollback to an older controller waits until
-installation is confirmed. Keep the artifacts fleet marker on a combined
-worker while rollback to them is supported. Helpers refuse label-only consumers
-when their controller lacks topology support.
+installation is confirmed. The labeled core and agent-runtime services are
+journal consumers. Core retains the artifacts fleet marker until rollback to
+pre-label readers is unsupported; the plural list still controls startup. The
+marker allows recognition, while capable controller/helper code owns the
+source-to-target rename and recovery before handing off. Core fencing also
+pauses workflow, LLM and integrations, with a six-minute drain allowance.
+Helpers refuse label-only consumers when their controller lacks topology support.
 
 Partial apply fences consumers again; retry recompacts new chunks. Exhausted
 retries restore target consumers and surviving former consumers; removed names

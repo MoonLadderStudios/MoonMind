@@ -17,7 +17,7 @@ services:
       - ./services:/app/services:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
-  temporal-worker-workflow:
+  temporal-worker-core:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -25,20 +25,6 @@ services:
       - ./services:/app/services:ro
     environment: &development-worker-environment
       - MOONMIND_DEPLOYMENT_MODE=development
-  temporal-worker-artifacts:
-    environment: *development-worker-environment
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
-  temporal-worker-llm:
-    environment: *development-worker-environment
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
   temporal-worker-sandbox:
     environment: *development-worker-environment
     volumes:
@@ -63,13 +49,6 @@ services:
       - ./docs:/app/docs:ro
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
-  temporal-worker-integrations:
-    environment: *development-worker-environment
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
   omnigent-runtime-bootstrap:
     volumes:
       - ./moonmind:/app/moonmind:ro

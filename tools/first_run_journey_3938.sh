@@ -269,9 +269,11 @@ prepare_isolation_override() {
   # Keep the override on that mount and outside Git so the upgrade preserves it.
   ISOLATION_OVERRIDE="$DEPLOY_DIR/var/first-run-journey/isolation.json"
   mkdir -p "$(dirname "$ISOLATION_OVERRIDE")"
-  # Compose creates the scoped networks above; their consumers must receive the
-  # same names rather than resolve production defaults inside their containers.
-  python3 - "$ISOLATION_OVERRIDE" <<'EOF'
+  # Render only this release's base: a source-name overlay must never add
+  # removed workers to the candidate during an upgrade. Rebuild after checkout.
+  "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" -f "$DEPLOY_DIR/docker-compose.yaml" \
+    --project-directory "$DEPLOY_DIR" --profile '*' config --format json | \
+    python3 -c '
 import json, os, sys
 from pathlib import Path
 keys = (
@@ -280,14 +282,12 @@ keys = (
     "MOONMIND_OMNIGENT_EGRESS_NETWORK",
 )
 environment = {key: os.environ[key] for key in keys}
-services = ("api", "temporal-worker-agent-runtime", "temporal-worker-sandbox",
-            "temporal-worker-deployment-control", "temporal-worker-workflow",
-            "temporal-worker-artifacts", "temporal-worker-llm",
-            "temporal-worker-integrations", "omnigent-runtime-bootstrap")
+services = json.load(sys.stdin)["services"]
 Path(sys.argv[1]).write_text(json.dumps({"services": {
     name: {"environment": environment} for name in services
+    if name in ("api", "omnigent-runtime-bootstrap") or name.startswith("temporal-worker-")
 }}))
-EOF
+' "$ISOLATION_OVERRIDE"
 }
 
 prepare_worker_measurement() {
@@ -425,6 +425,21 @@ EOF
   record_resource_footprint "$phase" || echo "Note: resource footprint capture failed for $phase." >&2
 }
 
+# Older upgrade sources and the isolated split measurement still use the old
+# workflow service; remove this lookup when those source topologies retire.
+workflow_worker_service() {
+  if [[ "${FIRST_RUN_3938_WORKER_TOPOLOGY:-}" == separate ]]; then
+    echo temporal-worker-workflow
+    return
+  fi
+  compose config --format json | python3 -c '
+import json, sys
+services = json.load(sys.stdin)["services"]
+print("temporal-worker-workflow" if "temporal-worker-workflow" in services
+      and "temporal-worker-core" not in services else "temporal-worker-core")
+'
+}
+
 # MoonLadderStudios/MoonMind#3937: a bounded account of what the ready
 # installation keeps running, so a change's idle cost is measured rather than
 # assumed. The upgrade journey records its old release as "source" and the
@@ -442,14 +457,15 @@ record_resource_footprint() {
     docker stats --no-stream --format '{{json .}}' $(cut -f1 "$scratch/ps.txt") \
       > "$scratch/stats.jsonl" 2>/dev/null || true
   fi
-  local top_status=0
-  compose top temporal-worker-workflow > "$scratch/top.txt" 2> "$scratch/top.err" || top_status=$?
+  local top_status=0 workflow_service
+  workflow_service="$(workflow_worker_service)"
+  compose top "$workflow_service" > "$scratch/top.txt" 2> "$scratch/top.err" || top_status=$?
   echo "$top_status" > "$scratch/top.status"
-  python3 - "$phase" "$scratch" <<'EOF' 2>&1 | redact > "$output"
+  python3 - "$phase" "$scratch" "$workflow_service" <<'EOF' 2>&1 | redact > "$output"
 import json, re, sys
 from pathlib import Path
 
-phase, scratch = sys.argv[1], Path(sys.argv[2])
+phase, scratch, workflow_service = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
 units = {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9,
          "kib": 2**10, "mib": 2**20, "gib": 2**30}
 
@@ -507,7 +523,7 @@ for line in top.splitlines():
         processes.append(line.split(None, columns - 1)[-1])
 python = [command for command in processes
           if command.split()[0].rsplit("/", 1)[-1].startswith("python")]
-print("temporal-worker-workflow processes (compose top):")
+print(f"{workflow_service} processes (compose top):")
 print(top.rstrip() or "  (no output)")
 top_status = read("top.status").strip() or "unknown"
 print(f"compose top exit_status={top_status}", read("top.err").strip())
@@ -518,7 +534,7 @@ print(
     f"workflow_worker_processes={counted(processes)} "
     f"workflow_worker_python_processes={counted(python)} "
     f"workflow_worker_memory_mib="
-    f"{round(sum(row['mib'] for row in stats if row['service'] == 'temporal-worker-workflow'))}"
+    f"{round(sum(row['mib'] for row in stats if row['service'] == workflow_service))}"
 )
 EOF
   rm -rf "$scratch"
@@ -659,6 +675,7 @@ upgrade_source_to_candidate() {
 {"services":{"api":{"command":["sh","-c","while [ ! -f /tmp/moonmind-journey-start ]; do sleep 1; done; exec sh /app/api_service/entrypoint.sh"]}}}
 EOF
   COMPOSE_OVERRIDES=(-f "$gate")
+  prepare_isolation_override
 }
 
 # A local registry supplies the CI-built image to the ordinary pull/apply path,
@@ -713,8 +730,10 @@ require_controller_conversion() {
 restart_workflow_worker() {
   echo "Restarting the workflow worker with work in flight..."
   worker_measurement_phase restart
-  compose restart temporal-worker-workflow 2>&1 | redact | tail -n 5
-  compose up -d --wait --wait-timeout 300 temporal-worker-workflow 2>&1 | redact | tail -n 5
+  local workflow_service
+  workflow_service="$(workflow_worker_service)"
+  compose restart "$workflow_service" 2>&1 | redact | tail -n 5
+  compose up -d --wait --wait-timeout 300 "$workflow_service" 2>&1 | redact | tail -n 5
   worker_measurement_phase post_restart_workload
 }
 
@@ -758,7 +777,9 @@ fresh_journey() {
   operator_host="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).netloc)' "$API_BASE")"
   # Reuse an existing workload's network and the same checker. No test proxy or
   # additional admission service stands in for the direct-backend boundary.
-  compose exec -T temporal-worker-workflow python - access_denied \
+  local workflow_service
+  workflow_service="$(workflow_worker_service)"
+  compose exec -T "$workflow_service" python - access_denied \
     --api-base http://api:8000 --operator-host "$operator_host" \
     --state-file /tmp/moonmind-journey-access.json \
     < "$SCRIPT_DIR/single_user_journey_checks.py" 2>&1 | redact \

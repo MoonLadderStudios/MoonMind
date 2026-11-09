@@ -783,6 +783,68 @@ class GitHubChangeControl(Contract):
         return self
 
 
+class FindingReportAnnotation(Contract):
+    """Attributed report commentary; never changes native identity or severity."""
+
+    finding_id: Text
+    author: Text
+    annotation: Text
+    reproduction: Text | None = None
+    remediation: Text | None = None
+    management_response: Text | None = None
+    priority: Text | None = None
+    business_risk: Text | None = None
+    severity: Text | None = None
+    cvss_vector: (
+        Annotated[
+            str,
+            StringConstraints(
+                pattern=r"^CVSS:(3\.1|4\.0)/[A-Za-z0-9:/]+$", max_length=256
+            ),
+        ]
+        | None
+    ) = None
+    risk_rationale: Text | None = None
+    environment_inputs: Annotated[dict[Text, Text], Field(max_length=32)] = Field(
+        default_factory=dict
+    )
+
+    @model_validator(mode="after")
+    def risk_basis(self):
+        if any(
+            (self.cvss_vector, self.priority, self.business_risk, self.severity)
+        ) and not (self.risk_rationale and self.environment_inputs):
+            raise ValueError(
+                "risk commentary requires rationale and explicit environment/threat inputs"
+            )
+        return self
+
+
+class AssessmentReportContext(Contract):
+    """Optional attributed handoff metadata, not execution authority or attestation."""
+
+    schema_version: Literal["assessment-report-context/v1"] = (
+        "assessment-report-context/v1"
+    )
+    author: Text
+    reviewer: Text | None = None
+    review_status: Literal["not_requested", "pending", "reviewed"] = "not_requested"
+    methodology_versions: Annotated[dict[Text, Text], Field(max_length=32)] = Field(
+        default_factory=dict
+    )
+    annotations: Annotated[list[FindingReportAnnotation], Field(max_length=128)] = (
+        Field(default_factory=list)
+    )
+
+    @model_validator(mode="after")
+    def attribution(self):
+        if self.review_status == "reviewed" and not self.reviewer:
+            raise ValueError("reviewed report requires attributed reviewer")
+        if len({row.finding_id for row in self.annotations}) != len(self.annotations):
+            raise ValueError("duplicate report annotation")
+        return self
+
+
 class AssessmentRequest(Contract):
     model_config = {
         **Contract.model_config,
@@ -821,6 +883,7 @@ class AssessmentRequest(Contract):
     framework_pack: FrameworkPackSelection | None = None
     oscal_export: OscalExportRequest | None = None
     evidence_export: EvidenceExportSelection | None = None
+    report_context: AssessmentReportContext | None = None
     product_baseline_ref: Text | None = None
 
     @model_validator(mode="after")
