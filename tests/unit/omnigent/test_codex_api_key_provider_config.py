@@ -373,9 +373,12 @@ class _VolumeDocker:
 
     def __init__(self) -> None:
         self.volumes: set[str] = set()
+        self.payloads = []
 
     async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
         argv = list(argv)
+        if input_bytes:
+            self.payloads.append(json.loads(input_bytes))
         if argv[:3] == ["docker", "volume", "create"]:
             self.volumes.add(argv[-1])
         elif argv[:3] == ["docker", "volume", "ls"]:
@@ -533,6 +536,10 @@ async def _assert_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id,
         (restarted,) = await provision(2)
         assert interrupted.runtimeEnvironmentTemplates == templates
         assert restarted.runtimeEnvironmentTemplates == templates
+        if admitted.codexConfiguration:
+            assert len(docker.payloads) == 2
+            for payload in docker.payloads:
+                assert payload["_moonmind_codex_configuration"] == admitted.codexConfiguration
         interrupted_volume = interrupted.attachments[0].sourceRef
         restarted_volume = restarted.attachments[0].sourceRef
         assert interrupted.credentialRuntimeRef != restarted.credentialRuntimeRef

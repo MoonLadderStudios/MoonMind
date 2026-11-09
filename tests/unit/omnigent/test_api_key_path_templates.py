@@ -223,7 +223,8 @@ def test_key_host_rejects_unavailable_context_and_authority(
         )
 
 
-def test_retained_key_snapshot_keeps_literal_interpretation_and_bytes():
+@pytest.mark.parametrize("custom", [False, True])
+def test_retained_key_snapshot_keeps_literal_interpretation_and_bytes(custom):
     import json
 
     binding = SimpleNamespace(
@@ -240,7 +241,8 @@ def test_retained_key_snapshot_keeps_literal_interpretation_and_bytes():
                     "baseUrl": "https://api.openai.com/v1",
                     "defaultModel": None,
                     "modelPins": {},
-                    "launchEnvironment": {"REPORT_DIR": "{{workspace_path}}/literal"},
+                    "launchEnvironment": {"REPORT_DIR": "{{workspace_path}}/literal", "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md"},
+                    **({"codexConfiguration": provider_config_endpoint(profile("custom_codex"))[0].codexConfiguration} if custom else {}),
                 },
             }
         },
@@ -255,7 +257,8 @@ def test_retained_key_snapshot_keeps_literal_interpretation_and_bytes():
     )
     assert restored["model"].environmentTemplates is None
     assert restored["model"].launchEnvironment == {
-        "REPORT_DIR": "{{workspace_path}}/literal"
+        "REPORT_DIR": "{{workspace_path}}/literal",
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
     }
     assert (
         provider_configuration_snapshot_bytes({"model": binding}, restored) == content
@@ -299,9 +302,36 @@ async def test_custom_provider_queued_launch_and_retry_keep_admitted_templates(t
     from tests.unit.omnigent.test_codex_api_key_provider_config import (
         _assert_sibling_attempt_credentials_are_isolated,
     )
-    selected = vars(profile("custom_codex"))
+    from tests.unit.omnigent.test_codex_profile_configuration import private_file_profile
+    selected = vars(private_file_profile())
     for key in ("profile_id", "runtime_id", "provider_id", "credential_source"):
         selected.pop(key)
     await _assert_sibling_attempt_credentials_are_isolated(
         tmp_path, "codex_cli", profile_values=selected,
     )
+
+
+def test_private_file_snapshot_stays_frozen_and_rejects_tampering():
+    import json
+    from tests.unit.omnigent.test_codex_profile_configuration import private_file_profile
+
+    selected = private_file_profile()
+    bindings = {"primary-model": SimpleNamespace(
+        providerProfileRef=selected.profile_id, materializerRef="omnigent-provider-config@1",
+    )}
+    admitted = snapshot_provider_configuration(selected)
+    content = provider_configuration_snapshot_bytes(bindings, {"primary-model": admitted})
+    selected.env_template["INSTRUCTIONS_FILE"] = "{{unknown}}"
+    selected.file_templates[-1]["content_template"] = "Later edit"
+    snapshot = SimpleNamespace(contentDigest="sha256:" + hashlib.sha256(content).hexdigest())
+    restored = load_provider_configuration_snapshot(content, snapshot, bindings)
+    config = restored["primary-model"].codexConfiguration
+    assert config["environmentTemplates"] == {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md"}
+    assert config["additionalFiles"][0]["content_template"] == "Frozen instructions for {{workspace_path}}.\n"
+    assert provider_configuration_snapshot_bytes(bindings, restored) == content
+    data = json.loads(content)
+    data["primary-model"]["endpoint"]["codexConfiguration"]["environmentTemplates"] = {"HOME": "{{runtime_support_dir}}/AGENTS.md"}
+    tampered = json.dumps(data).encode()
+    snapshot.contentDigest = "sha256:" + hashlib.sha256(tampered).hexdigest()
+    with pytest.raises(ValueError):
+        load_provider_configuration_snapshot(tampered, snapshot, bindings)

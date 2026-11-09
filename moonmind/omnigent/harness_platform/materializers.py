@@ -351,6 +351,12 @@ class ProviderConfigEndpoint(BaseModel):
             launchEnvironment=self.launchEnvironment,
             environmentTemplates=self.environmentTemplates,
         )
+        if self.codexConfiguration is not None:
+            from moonmind.provider_profiles.codex_configuration import validate_private_environment
+
+            private = validate_private_environment(self.codexConfiguration)
+            if set(private) & (set(self.launchEnvironment) | set(self.environmentTemplates or {})):
+                raise ValueError("Profile environment value has conflicting private-HOME ownership")
         return self
 
 
@@ -718,7 +724,7 @@ def claude_provider_config_endpoint(
     if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
         return None, "file templates and home path overrides are direct-launch only"
 
-    from moonmind.omnigent.host_services.runtime_scripts import (
+    from moonmind.provider_profiles.template_renderer import (
         PROVIDER_LITERAL_LAUNCH_ENV,
         validate_provider_literal_launch_environment,
     )
@@ -808,7 +814,7 @@ def codex_provider_config_endpoint(
                     baseUrl=base_url,
                     defaultModel=configuration["document"].get("model"),
                     launchEnvironment=configuration.pop("launchEnvironment", {}),
-                    environmentTemplates=configuration.pop("environmentTemplates", None),
+                    environmentTemplates=configuration.pop("genericEnvironmentTemplates", None),
                     codexConfiguration=configuration,
                 ),
                 "",
