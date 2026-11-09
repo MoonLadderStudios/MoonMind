@@ -228,7 +228,7 @@ def render_native_admission(native_reports):
                 lines.append(f"  {field}: {_text(document[field])}.")
         if schema == "game-math-assessment/v1":
             lines.append(
-                "  Imported game mathematics is unclassified control evidence: a specification digest alone does not prove retained source inputs, actual execution, or deployed-game behavior."
+                "  Imported game mathematics alone is unclassified control evidence: a specification digest does not prove retained inputs or execution. Only the assessed coverage above identifies verified checks of retained job inputs; neither source declarations nor reference-model replay prove deployed-game behavior."
             )
     return "\n".join(lines) + "\n"
 

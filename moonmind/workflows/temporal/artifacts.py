@@ -1615,6 +1615,10 @@ class TemporalArtifactRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def container_job_evidence_record(self, job_id: str):
+        """Read the worker-persisted publication, never artifact-authored labels."""
+        return await self._session.get(db_models.ContainerJobRecord, job_id)
+
     @_artifact_authority_boundary
     async def continuation_attachment_admission(self, workflow_id: str):
         """Load the existing destination and continuation receipt as one owner."""
@@ -5675,6 +5679,44 @@ class TemporalArtifactService:
             artifact.artifact_id,
         )
         return artifact, data
+
+    async def verify_game_math_job_output(
+        self, *, artifact_id: str, job, access: ArtifactAccessContext
+    ) -> str:
+        """Verify retained math output against its durable Container Job manifest.
+
+        All byte reads still require current artifact authority. A copied JSON
+        envelope or caller-authored metadata cannot join a job's publication.
+        """
+        from moonmind.schemas.container_job_models import ContainerJobArtifactPage
+
+        artifact, body = await self.read(artifact_id=artifact_id, access=access)
+        record = await self._repository.container_job_evidence_record(job.job_id)
+        metadata = artifact.metadata_json or {}
+        if (
+            record is None
+            or not record.artifacts_ref
+            or metadata.get("container_job_id") != job.job_id
+            or metadata.get("evidence_producer") != "game-math"
+            or record.state != job.terminal_state
+            or (record.terminal_outcome_json or {}).get("exitCode") != job.exit_code
+        ):
+            raise ValueError("game math output lacks matching job publication")
+        _, manifest_body = await self.read(
+            artifact_id=record.artifacts_ref, access=access
+        )
+        if len(manifest_body) > 1024 * 1024:
+            raise ValueError("game math job manifest exceeds bound")
+        manifest = ContainerJobArtifactPage.model_validate_json(manifest_body)
+        if manifest.job_id != job.job_id or not any(
+            row.name == "assessment"
+            and row.artifact_ref == artifact_id
+            and row.sha256 == hashlib.sha256(body).hexdigest()
+            and row.collection_status == "collected"
+            for row in manifest.artifacts
+        ):
+            raise ValueError("game math output differs from job manifest")
+        return record.artifacts_ref
 
     async def read_chunks(
         self,
