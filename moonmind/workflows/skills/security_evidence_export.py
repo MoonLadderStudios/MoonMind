@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from moonmind.security.evidence_exports import (
     EVIDENCE_TRANSFORMATION_LIMITATIONS,
@@ -99,6 +100,7 @@ async def export_selected_evidence(execution, *, selection, associated):
         "limitations": list(EVIDENCE_TRANSFORMATION_LIMITATIONS),
     }
     entries, members, dependencies = [], {}, {}
+    cited_refs = set()
     source_bytes = emitted_bytes = 0
     for index, ref in enumerate(selection.artifact_refs):
         entry = {"sourceArtifactId": ref, "status": "withheld"}
@@ -164,6 +166,13 @@ async def export_selected_evidence(execution, *, selection, associated):
                 memberSha256=hashlib.sha256(prepared).hexdigest(),
                 memberBytes=len(prepared),
             )
+            # Inspect only the already-authorized transformed copy. This never
+            # fetches, discloses, or selects a recursive dependency body.
+            citations = sorted(set(re.findall(rb"\bart_[A-Za-z0-9_-]+\b", prepared)))
+            entry["referencedArtifactIds"] = [
+                value.decode("ascii") for value in citations
+            ]
+            cited_refs.update(entry["referencedArtifactIds"])
             members[name] = prepared
             dependencies[ref] = source.sha256
             dependencies[observed.artifact_id] = observed_digest
@@ -178,6 +187,10 @@ async def export_selected_evidence(execution, *, selection, associated):
             )
     if not members:
         return result
+    included_refs = {
+        entry["sourceArtifactId"] for entry in entries if entry["status"] == "included"
+    }
+    missing_refs = sorted(cited_refs - included_refs)
     manifest = {
         "schemaVersion": "assessment-evidence-export/v1",
         "transformationVersion": EVIDENCE_TRANSFORMATION_VERSION,
@@ -187,6 +200,16 @@ async def export_selected_evidence(execution, *, selection, associated):
             "The source digest comes from artifact metadata; the observed digest hashes only the authorized returned representation. Preview bytes may be incomplete and are not original native evidence.",
         ],
         "entries": entries,
+        "offlineReview": {
+            "status": "incomplete"
+            if missing_refs or len(included_refs) != len(entries)
+            else "selected_material_available",
+            "missingArtifactRefs": missing_refs,
+            "limitations": [
+                "Referenced artifacts not included in this selection are unavailable for offline review. No automatic disclosure of dependencies occurs.",
+                "Reference discovery covers artifact identifiers in included sanitized representations, not external URLs or withheld bodies. Availability is not a sufficiency or certification conclusion.",
+            ],
+        },
     }
     try:
         package, manifest_body = build_evidence_archive(
