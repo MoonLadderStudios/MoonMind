@@ -215,7 +215,7 @@ it('cancels an interrupted preset submission on navigation without leaking it in
     await userEvent.click(screen.getByRole('link', { name: 'MoonMind workflows' }));
     await expect.poll(() => window.location.pathname).toBe('/workflows');
     finishExpansion(jsonResponse({ steps: [{ id: 'late', instructions: 'Do not submit this abandoned plan.' }], appliedTemplate: { slug: preset.slug, inputs: {} }, capabilities: [], warnings: [] }));
-    await userEvent.click(await screen.findByRole('link', { name: 'Create' }));
+    await userEvent.click(await screen.findByRole('link', { name: 'Create', exact: true }));
     await screen.findByLabelText('Instructions', {}, { timeout: 10_000 });
     expect(admissions).toBe(0);
     expect(screen.queryByDisplayValue('repo/abandoned')).toBeNull();
