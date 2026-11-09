@@ -1,0 +1,41 @@
+{
+  "scope": {
+    "assets": [
+      "api"
+    ]
+  },
+  "tools": [],
+  "budget": {
+    "baseSeconds": 60,
+    "maxSeconds": 120,
+    "progressStallSeconds": 60
+  },
+  "credentialRefs": [],
+  "networkRefs": [],
+  "framework": {
+    "packId": "soc2-readiness",
+    "systemInputs": {
+      "entityName": "Synthetic service",
+      "systems": [
+        "api"
+      ],
+      "serviceBoundary": "API and supporting operations",
+      "serviceCommitments": [
+        "Protected requests"
+      ],
+      "categories": [
+        "security"
+      ],
+      "assessmentType": "type2",
+      "boundaryReviewed": true
+    },
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-10-31"
+    },
+    "requirementChoices": {},
+    "evidenceRefs": [],
+    "auditRef": null,
+    "previousAssessmentRef": null
+  }
+}

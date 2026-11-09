@@ -2,9 +2,10 @@
 
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
-There is no registry, scheduler or source download. Bundled readiness
-packs use `framework`; declared packs use `frameworkPack` and
-the existing requirement evaluator.
+There is no remote registry, scheduler or source download. Bundled preparation
+packs use `framework`; declared packs use `frameworkPack` and the existing
+requirement evaluator. [SOC 2 readiness](SOC2Readiness.md) uses the shared preset
+catalog, documentary evidence owner and private reports.
 
 ## Selecting a pack
 

@@ -101,8 +101,9 @@ async def test_read_bytes_must_match_comparison_digest():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_kind", ["native", "review"])
+@pytest.mark.parametrize("document_input", [False, True])
 async def test_admission_context_and_repeated_submission_pin_real_sealed_comparison(
-    tmp_path, monkeypatch, source_kind
+    tmp_path, monkeypatch, source_kind, document_input
 ):
     from unittest.mock import MagicMock
     from uuid import uuid4
@@ -301,8 +302,27 @@ async def test_admission_context_and_repeated_submission_pin_real_sealed_compari
                 },
             }
         }
+        document_ref = None
+        admission_kwargs = {}
+        if document_input:
+            from tests.unit.security.test_organisational_evidence_admission import task
+
+            document, _ = await artifacts.create(
+                principal="operator", content_type="text/plain"
+            )
+            document_ref = document.artifact_id
+            await artifacts.write_complete(
+                artifact_id=document_ref,
+                principal="operator",
+                payload=b"Synthetic current documentary record",
+            )
+            params["workflow"]["steps"] = task(document_ref)["steps"]
+            admission_kwargs["_assessment_evidence_access"] = (
+                ArtifactAccessContext.for_operator(OperatorAdmission(via="loopback"))
+            )
         repair = await executions.create_execution(
             **base,
+            **admission_kwargs,
             title="Investigate finding",
             initial_parameters=params,
             idempotency_key="repair",
@@ -311,6 +331,16 @@ async def test_admission_context_and_repeated_submission_pin_real_sealed_compari
         evidence = stored.parameters["workflow"]["remediation"]["securityEvidence"]
         assert evidence == {**selected, "sourceAssessmentScope": None}
         assert "assessmentScope" not in stored.parameters
+        if document_ref:
+            assert document_ref in stored.artifact_refs
+            assert document_ref not in evidence["evidenceArtifactRefs"]
+            _, content = await artifacts.read(
+                artifact_id=document_ref,
+                access=ArtifactAccessContext.for_execution(
+                    repair.workflow_id, principal="service:host"
+                ),
+            )
+            assert content == b"Synthetic current documentary record"
         for ref in evidence["evidenceArtifactRefs"]:
             # The actual host input reader can read each admitted native input,
             # without acquiring source-workflow or mutation authority.
@@ -400,6 +430,7 @@ async def test_admission_context_and_repeated_submission_pin_real_sealed_compari
         # reruns scanners or creates a second repair/publication candidate.
         again = await executions.create_execution(
             **base,
+            **admission_kwargs,
             title="Investigate finding",
             initial_parameters=params,
             idempotency_key="repair",

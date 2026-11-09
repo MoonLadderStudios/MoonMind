@@ -1307,6 +1307,7 @@ class AssessmentExecution:
         selection = request.framework
         if selection.pack_id in {"iso-27001-readiness", "soc2-readiness"}:
             from importlib import import_module
+
             from moonmind.security.builtin_frameworks import prepare_builtin_framework
 
             module = import_module(
