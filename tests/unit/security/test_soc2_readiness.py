@@ -202,3 +202,18 @@ def test_type_two_incidents_and_changes_need_real_period_records():
     assert any(
         "Operating evidence" in gap for gap in criterion(report, "DC9")["limitations"]
     )
+
+
+def test_readable_report_retains_service_and_review_context():
+    from moonmind.security.soc2_readiness import render_assessment
+
+    request = complete_requirement()
+    report = evaluate(
+        request, evidence_availability={"art_design": None, "art_operating": None}
+    )
+    rendered = render_assessment(report)
+    assert "API and supporting operations" in rendered
+    assert "Protected requests" in rendered
+    assert "Synthetic reviewer" in rendered
+    assert "Synthetic fixture" in rendered
+    assert "published" in rendered

@@ -418,6 +418,13 @@ def render_assessment(report):
         f"Edition: {_text(report['pack']['edition'])}",
         f"Readiness: {_text(report['readiness'])}",
         *_text_lines(report["limitations"]),
+        "### Service boundary and published source",
+        f"Service: {_text(report['systemInputs']['entityName'])}; boundary: {_text(report['systemInputs']['serviceBoundary'])}.",
+        f"Commitments: {_text(report['systemInputs']['serviceCommitments'])}; categories: {_text(report['systemInputs']['categories'])}.",
+        f"Type: {_text(report['systemInputs']['assessmentType'])}; period: {_text(report['period'])}.",
+        f"Subservices: {_text(report['systemInputs']['subserviceOrganisations'])}; complementary responsibilities: {_text(report['systemInputs']['complementaryResponsibilities'])}.",
+        f"Source context: {_text(report['sourceContext'])}.",
+        f"Reassessment: {_text(report.get('reassessment', 'Initial assessment'))}.",
         "### Assessed and unassessed requirements",
     ]
     for row in report["requirements"]:
@@ -428,6 +435,14 @@ def render_assessment(report):
             f"  Sampling and exceptions: {_text(row['sampling'])}.",
             *_text_lines(row["limitations"]),
         ]
+        for request in report["systemInputs"]["requirementEvidence"].get(row["id"], []):
+            lines.append(
+                f"  Documentary request {_text(request['id'])}: {_text(request['purpose'])}; owner {_text(request['owner'])}."
+            )
+            for revision in request["revisions"][-1:]:
+                lines.append(
+                    f"  Current source: {_text(revision['source'])}; collected {_text(revision['collectedAt'])}; expires {_text(revision['expiresAt'])}; sensitivity {_text(revision['sensitivity'])}; attributed review {_text(revision['review'])}."
+                )
     lines += ["### Evidence requests and remediation"]
     lines += [
         f"- {_text(r['id'])}: {_text(r['prompt'])}" for r in report["evidenceRequests"]

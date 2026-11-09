@@ -126,3 +126,65 @@ async def test_fixed_technical_finding_leaves_organisational_gap(environment):
     report = await recurring.read(environment.service, after["frameworkRef"])
     assert criterion(report)["status"] == "unassessed"
     assert after["frameworkReadiness"] == "incomplete"
+
+
+async def test_supporting_document_export_is_current_only_and_access_checked(
+    environment,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+    from tests.unit.security.test_soc2_readiness import documentary_request
+
+    service = environment.service
+    artifact, _ = await service.create(
+        principal="operator",
+        content_type="text/plain",
+        link={
+            "namespace": "default",
+            "workflow_id": "assessment",
+            "run_id": "run",
+            "link_type": "input.security",
+        },
+    )
+    current = artifact.artifact_id
+    await service.write_complete(
+        artifact_id=current,
+        principal="operator",
+        payload=b"Synthetic approved policy record",
+    )
+    old = await recurring.put(service, {"superseded": True})
+    documentary = documentary_request(ref=current)
+    documentary["revisions"].insert(
+        0, {**documentary["revisions"][0], "artifactRef": old}
+    )
+    selected = selection(requirementEvidence={"CC6.1": [documentary]})
+    payload = {
+        "scope": {"assets": ["api"]},
+        "tools": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+        "credentialRefs": [],
+        "networkRefs": [],
+        "framework": selected.model_dump(mode="json", by_alias=True),
+        "evidenceExport": {"artifactRefs": [current, old]},
+    }
+    result = await recurring.invoke(service, payload)
+    archive, manifest = await unpack(service, result)
+    assert any(
+        b"Synthetic approved policy record" in archive.read(name)
+        for name in archive.namelist()
+    )
+    entries = {row["sourceArtifactId"]: row for row in manifest["entries"]}
+    assert entries[old]["status"] == "withheld"
+    assert entries[old]["reason"] == "unassociated_evidence"
+    proof = await service.verified_dependencies(
+        root_artifact_id=result["frameworkRef"],
+        access=access_for_test("workflow:assessment"),
+    )
+    assert current in {d.artifact_id for d in proof.dependencies}
+    assert old not in {d.artifact_id for d in proof.dependencies}
+    row = criterion(await recurring.read(service, result["frameworkRef"]))
+    assert row["organisationalEvidence"][0]["supersededRefs"] == [old]
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service.read(
+            artifact_id=result["frameworkRef"],
+            access=access_for_test("workflow:unrelated"),
+        )
