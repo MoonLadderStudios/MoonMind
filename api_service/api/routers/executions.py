@@ -388,6 +388,10 @@ from moonmind.workflows.temporal.publication_recovery import (
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.remediation_context import (
+    RemediationContextError,
+    read_security_remediation_findings,
+)
 from moonmind.workflows.temporal.service import (
     UPDATE_REQUEST_DIGEST_KEY,
     reject_historical_control,
@@ -998,6 +1002,7 @@ class RemediationLinkSummaryModel(BaseModel):
     authoredContract: dict[str, Any] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    securityEvidence: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     selectedStepEvidence: list[dict[str, Any]] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -1049,6 +1054,7 @@ class RemediationCollectionItemModel(BaseModel):
     latestActionSummary: str | None = None
     deliveryStatus: str | None = None
     resolution: str | None = None
+    securityFinding: dict[str, str] | None = Field(default=None, exclude_if=lambda value: value is None)
     createdAt: datetime
     updatedAt: datetime
 
@@ -13891,6 +13897,40 @@ async def _resolve_schedule_routing(
     return _ScheduleRouteResult()
 
 
+@router.get("/{workflow_id}/remediation-security-findings")
+async def preview_security_remediation_findings(
+    workflow_id: str,
+    comparison_artifact_ref: str | None = Query(None, alias="comparisonArtifactRef", max_length=255),
+    review_artifact_ref: str | None = Query(None, alias="reviewArtifactRef", max_length=255),
+    run_id: str = Query(..., alias="runId", min_length=1, max_length=255),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: OperatorAdmission = Depends(get_instance_access),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+) -> dict[str, Any]:
+    """Preview exact retained findings without launching or granting repair work."""
+    await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user, allow_historical=True,
+    )
+    try:
+        return await read_security_remediation_findings(
+            service=get_temporal_artifact_service(
+                session, transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            ),
+            workflow_id=workflow_id, run_id=run_id,
+            comparison_artifact_ref=comparison_artifact_ref, review_artifact_ref=review_artifact_ref, access=access,
+        )
+    except (RemediationContextError, ValidationError, TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError, TemporalArtifactStateError,
+            TemporalArtifactValidationError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "security_remediation_evidence_unavailable",
+                    "message": "The selected run's sealed security comparison is unavailable or invalid."},
+        ) from exc
+
+
 @router.post(
     "/{workflow_id}/remediation",
     response_model=ExecutionModel | ScheduleCreatedResponse,
@@ -14159,6 +14199,7 @@ def _serialize_remediation_link_summary(
             getattr(link, "checkpoint_branch_links", None)
         ),
         authoredContract=getattr(link, "authored_contract", None),
+        securityEvidence=getattr(link, "security_evidence", None),
         selectedStepEvidence=getattr(link, "selected_step_evidence", None),
         contextGeneratedAt=getattr(link, "context_generated_at", None),
         contextEvidenceAvailability=getattr(
@@ -14449,6 +14490,8 @@ async def _attach_remediation_capability_projection(
     )
     policy = remediation_workflow.get("remediation") or {}
     policy = policy if isinstance(policy, Mapping) else {}
+    # Only the immutable admission context can present a security verdict.
+    link.security_evidence = None
     actions = _build_action_capabilities(remediation)
     link.operator_controls = {
         "canCancel": bool(actions.can_cancel),
@@ -14493,6 +14536,7 @@ async def _attach_remediation_capability_projection(
             link.evidence_degraded = True
             link.unavailable_evidence_classes = ("remediation_context",)
         else:
+            link.security_evidence = context.get("securityEvidence")
             selected_steps = context.get("selectedSteps")
             if isinstance(selected_steps, list):
                 link.selected_step_evidence = _bounded_remediation_projection(
@@ -14698,26 +14742,31 @@ async def list_remediation_collection(
         for link in await service.list_remediation_links()
     ]
 
-    async def describe(workflow_id: str) -> tuple[str, bool]:
+    async def describe(workflow_id: str) -> tuple[str, bool, dict[str, str] | None]:
         record = await _get_owned_execution(
             service=service, workflow_id=workflow_id, user=user, allow_historical=True
         )
         title = (getattr(record, "memo", None) or {}).get("title") or workflow_id
-        return str(title), bool(getattr(record, "attention_required", False))
+        parameters = getattr(record, "parameters", None) or {}
+        workflow = parameters.get("workflow") or parameters.get("task") or {}
+        remediation = workflow.get("remediation") or {}
+        selection = (remediation.get("target") or {}).get("securityFinding")
+        return str(title), bool(getattr(record, "attention_required", False)), selection
 
     items: list[RemediationCollectionItemModel] = []
     unavailable: list[RemediationCollectionUnavailableItemModel] = []
     unavailable_count = 0
     for fields in links:
         try:
-            title, attention_required = await describe(fields["remediationWorkflowId"])
-            target_title, _ = await describe(fields["targetWorkflowId"])
+            title, attention_required, security_finding = await describe(fields["remediationWorkflowId"])
+            target_title, _, _ = await describe(fields["targetWorkflowId"])
             items.append(
                 RemediationCollectionItemModel(
                     **fields,
                     title=title,
                     attentionRequired=attention_required,
                     targetTitle=target_title,
+                    securityFinding=security_finding,
                 )
             )
         except Exception as exc:

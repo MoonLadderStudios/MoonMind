@@ -378,6 +378,45 @@ afterEach(async () => {
 });
 
 describe('routed remediation operator journey', () => {
+  it.each(['native', 'review'])('opens %s finding investigation from a successful assessment and preserves it on reload and discard', async (kind) => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/executions/source-workflow/remediation-security-findings?') && kind === 'review') return jsonResponse({ reviewArtifactRef: 'art_comparison', findings: [{
+        sourceKind: 'agent_review', reviewArtifactRef: 'art_comparison', reviewDigest: 'digest', interpretationId: 'ownership', candidateRef: 'git:original', scope: { assets: ['app'] },
+        interpretation: { id: 'ownership', hypothesis: 'Owner check missing', disposition: 'confirmed', evidenceStatus: 'supported', evidenceRefs: ['art_original'], limitations: ['Controlled application'], subject: { asset: 'app', locator: 'get_invoice', identity: 'alice', resource: 'invoice-bob' } },
+        threatModel: { entryPoints: ['get_invoice'], trustBoundaries: ['owner'], invariants: ['owner-only'] }, limitations: ['No live target'], retests: [],
+      }] });
+      if (url.includes('/executions/source-workflow/remediation-security-findings?')) return jsonResponse({ comparisonArtifactRef: 'art_comparison', findings: [{
+        comparisonArtifactRef: 'art_comparison', comparisonDigest: 'verified-digest', findingId: 'ownership', coverageStatus: 'complete', intelligenceChanges: [],
+        finding: { findingId: 'ownership', state: 'new', evidenceExpiresAt: '2027-01-01T00:00:00Z', finding: { nativeId: 'ownership', asset: 'app', ruleId: 'owner-check', evidenceRefs: ['art_original'] } }, decisions: [],
+      }] });
+      if (url === '/api/executions/default/source-workflow/source-run/artifacts?link_type=report.primary&latest_only=true') return jsonResponse({ artifacts: [] });
+      if (url === '/api/executions/default/source-workflow/source-run/artifacts') return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: kind === 'review' ? 'security.review' : 'security.comparison' }] }] });
+      if (/\/executions\/source-workflow(?:\?|$)/.test(url)) return jsonResponse({ ...sourceExecution, title: 'Successful security assessment', state: 'succeeded', rawState: 'succeeded', status: 'succeeded', attentionRequired: false });
+      return fallback(input, init);
+    });
+    window.history.replaceState({}, '', '/workflows/source-workflow/artifacts');
+    cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    // Detail is a lazy route; wait for its actual source identity before
+    // querying evidence controls rather than timing the initial loading shell.
+    await screen.findByText('Successful security assessment', {}, { timeout: 10_000 });
+    await screen.findByLabelText('Security evidence');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/default/source-workflow/source-run/artifacts');
+    await userEvent.selectOptions(screen.getByLabelText('Security evidence'), 'art_comparison');
+    await userEvent.click(await screen.findByRole('button', { name: 'Investigate ownership' }));
+    expect(await screen.findByText('Remediation Draft')).toBeTruthy();
+    expect((screen.getByLabelText('Original security finding') as HTMLInputElement).value).toBe('ownership');
+    expect((screen.getByLabelText('Pinned security evidence') as HTMLInputElement).value).toBe('art_comparison');
+    expect(createRequests).toHaveLength(0);
+    cleanupRender();
+    cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    expect(await screen.findByLabelText('Original security finding')).toBeTruthy();
+    expect(createRequests).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Discard remediation draft' }));
+    expect(createRequests).toHaveLength(0);
+  });
+
   it.each(['', '/steps', '/artifacts'])('opens editable Create from source detail %s without starting a run', async (tab) => {
     window.history.replaceState({}, '', `/workflows/source-workflow${tab}?source=temporal`);
     cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
