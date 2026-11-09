@@ -11,12 +11,24 @@ Implementation reference: MoonLadderStudios/MoonMind#3475.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from enum import StrEnum
+from math import fsum
 from typing import Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas.agent_runtime_models import AUTO_RUNTIME_SENTINEL
+from moonmind.workflows.temporal.bounded_story_loop import (
+    resource_budget_exhaustion_reason,
+)
 
 
 _SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -162,6 +174,30 @@ class ConsumedRemediationBudgets(_Contract):
     )
 
 
+class RemediationResourceReceipt(_Contract):
+    # One provider execution is reserved before dispatch, even if its result is
+    # lost. Missing metering is unknown, never a reported zero.
+    tokens: int | None = Field(default=None, ge=0)
+    cost: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class RemediationResourceUsage(_Contract):
+    started_at: AwareDatetime = Field(alias="startedAt")
+    elapsed_seconds: float = Field(
+        default=0, alias="elapsedSeconds", ge=0, allow_inf_nan=False
+    )
+    executions: dict[str, RemediationResourceReceipt] = Field(default_factory=dict)
+    complete_history: bool = Field(default=True, alias="completeHistory")
+
+    def totals(self) -> dict[str, int | float]:
+        return {
+            "elapsedSeconds": self.elapsed_seconds,
+            "provider": len(self.executions),
+            "tokens": sum(row.tokens or 0 for row in self.executions.values()),
+            "cost": fsum(row.cost or 0 for row in self.executions.values()),
+        }
+
+
 class RemediationLoopState(_Contract):
     loop_id: str = Field(alias="loopId")
     attempt_ordinal: int = Field(default=0, alias="attemptOrdinal", ge=0)
@@ -188,6 +224,9 @@ class RemediationLoopState(_Contract):
         default=None, alias="continuationReason"
     )
     continue_as_new_count: int = Field(default=0, alias="continueAsNewCount", ge=0)
+    resource_usage: RemediationResourceUsage | None = Field(
+        default=None, alias="resourceUsage"
+    )
 
     @model_validator(mode="after")
     def _attempt_counter_matches_ordinal(self) -> "RemediationLoopState":
@@ -206,6 +245,90 @@ class RemediationLoopState(_Contract):
         if value is not None and not value.startswith("artifact://"):
             raise ValueError("loop evidence must use an artifact:// reference")
         return value
+
+
+def record_remediation_resource_usage(
+    state: RemediationLoopState,
+    *,
+    now: datetime,
+    execution_id: str | None = None,
+    tokens: int | None = None,
+    cost: float | None = None,
+) -> RemediationLoopState:
+    """Retain monotonic runtime receipts, keyed by the admitted execution.
+
+    Redelivery and later partial reports can increase a receipt, never erase or
+    double-charge it. Workflow time and these receipts survive Continue-As-New.
+    """
+
+    usage = state.resource_usage or RemediationResourceUsage(
+        startedAt=now,
+        completeHistory=not (
+            state.continue_as_new_count > 0 and state.attempt_ordinal > 0
+        ),
+    )
+    executions = dict(usage.executions)
+    if execution_id is not None:
+        old = executions.get(execution_id, RemediationResourceReceipt())
+        executions[execution_id] = RemediationResourceReceipt(
+            tokens=max(tokens, old.tokens or 0) if tokens is not None else old.tokens,
+            cost=max(cost, old.cost or 0) if cost is not None else old.cost,
+        )
+    return state.model_copy(
+        update={
+            "resource_usage": usage.model_copy(
+                update={
+                    "elapsed_seconds": max(
+                        usage.elapsed_seconds, (now - usage.started_at).total_seconds()
+                    ),
+                    "executions": executions,
+                }
+            )
+        }
+    )
+
+
+def remediation_resource_stop_reason(
+    *,
+    spec: RemediationLoopSpec,
+    state: RemediationLoopState,
+) -> str | None:
+    usage = state.resource_usage
+    if (
+        usage is not None
+        and not usage.complete_history
+        and any(
+            value is not None
+            for value in (
+                spec.budgets.max_wall_clock_seconds,
+                spec.budgets.provider_budget,
+                spec.budgets.token_budget,
+                spec.budgets.cost_budget,
+            )
+        )
+    ):
+        return "prior_resource_usage_unavailable"
+    reason = resource_budget_exhaustion_reason(
+        limits={
+            "elapsedSeconds": spec.budgets.max_wall_clock_seconds,
+            "provider": spec.budgets.provider_budget,
+            "tokens": spec.budgets.token_budget,
+            "cost": spec.budgets.cost_budget,
+        },
+        consumed=usage.totals() if usage else {},
+    )
+    if reason:
+        return reason
+    if usage:
+        for field, limit in (
+            ("tokens", spec.budgets.token_budget),
+            ("cost", spec.budgets.cost_budget),
+        ):
+            if limit is not None and any(
+                getattr(row, field) is None for row in usage.executions.values()
+            ):
+                return f"{field}_usage_unavailable"
+    return None
 
 
 class RemediationContinuationDecision(_Contract):
@@ -428,7 +551,7 @@ def project_remediation_loop(
 ) -> dict[str, object]:
     """Return the compact API/UI projection; never include evidence bodies."""
 
-    return {
+    projection = {
         "loopId": state.loop_id,
         "status": state.phase.value,
         "attemptOrdinal": state.attempt_ordinal,
@@ -444,6 +567,19 @@ def project_remediation_loop(
             by_alias=True, mode="json"
         ),
     }
+    if state.resource_usage is not None:
+        usage = state.resource_usage
+        projection["resourceUsage"] = {
+            **usage.totals(),
+            "completeHistory": usage.complete_history,
+            **{
+                field: None
+                for field in ("tokens", "cost")
+                if not usage.complete_history
+                or any(getattr(row, field) is None for row in usage.executions.values())
+            },
+        }
+    return projection
 
 
 def resolve_loop_runtime(
@@ -584,6 +720,7 @@ def decide_remediation_continuation(
     recoverable_evidence: bool = False,
     recommended_next_action: str | None = None,
     evidence_recovery_enabled: bool = True,
+    resource_enforcement_enabled: bool = True,
 ) -> RemediationContinuationDecision:
     """Return the one deterministic routing decision for verifier evidence."""
 
@@ -635,6 +772,20 @@ def decide_remediation_continuation(
                 "continueLoop": False,
                 "reason": f"verification_requested_{recommended_next_action}",
                 "nextPhase": recommended_next_action,
+            }
+        )
+    resource_reason = (
+        remediation_resource_stop_reason(spec=spec, state=state)
+        if resource_enforcement_enabled
+        else None
+    )
+    if resource_reason:
+        return RemediationContinuationDecision.model_validate(
+            {
+                **common,
+                "continueLoop": False,
+                "reason": resource_reason,
+                "nextPhase": "stopped_remaining_work",
             }
         )
     if normalized == "NO_DETERMINATION" or retryable_block:

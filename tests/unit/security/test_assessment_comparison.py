@@ -603,7 +603,7 @@ def test_invalidated_retest_never_verifies_later_absence():
 @pytest.mark.parametrize(
     ("closure", "state", "verification"),
     [
-        ("fixed", "remediated_verified", "upstream_fixed"),
+        ("fixed", "closed_upstream", None),
         ("dismissed", "closed_upstream", None),
         ("resolved", "closed_upstream", None),
     ],
@@ -618,6 +618,52 @@ def test_upstream_closure_is_distinct_from_absence(closure, state, verification)
     assert result["findings"][0]["state"] == state
     assert result["findings"][0]["verification"] == verification
     assert result["counts"][state] == 1
+
+
+@pytest.mark.parametrize("closure", ["fixed", "dismissed", "resolved"])
+@pytest.mark.parametrize(
+    "coverage", ["complete", "missing", "partial", "source", "config"]
+)
+@pytest.mark.parametrize("outcome", [None, "failed", "inconclusive", "passed"])
+def test_upstream_closure_requires_a_passing_comparable_retest(
+    closure, coverage, outcome
+):
+    previous = compare(report())
+    finding_id = previous["findings"][0]["findingId"]
+    current = report(findings=False, upstreamClosed={finding_id: closure})
+    if coverage == "missing":
+        current["coverage"][0]["ruleIds"] = ["different-rule"]
+    elif coverage == "partial":
+        current["coverage"][0]["status"] = "partial"
+    elif coverage in {"source", "config"}:
+        current["coverage"][0][
+            "source" if coverage == "source" else "configRef"
+        ] = "changed"
+    decisions = (
+        [] if outcome is None else [_decision(finding_id, retestOutcome=outcome)]
+    )
+    result = compare(current, previous, decisions=decisions)
+    verified = coverage == "complete" and outcome == "passed"
+    assert result["findings"][0]["state"] == (
+        "remediated_verified" if verified else "closed_upstream"
+    )
+    assert result["findings"][0]["verification"] == (
+        "retest_passed" if verified else None
+    )
+    assert result["observation"]["upstreamClosed"] == {finding_id: closure}
+
+
+def test_historical_upstream_fixed_is_reconciled_without_rewriting_history():
+    previous = compare(report())
+    previous["findings"][0].update(
+        state="remediated_verified", verification="upstream_fixed"
+    )
+    previous["counts"].update(new=0, remediated_verified=1)
+    historical = copy.deepcopy(previous)
+    result = compare(report(findings=False), previous)
+    assert result["findings"][0]["state"] == "absent_comparable"
+    assert result["findings"][0]["verification"] is None
+    assert previous == historical
 
 
 def test_an_observed_finding_cannot_also_be_closed_upstream():
