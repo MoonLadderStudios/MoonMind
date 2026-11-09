@@ -95,6 +95,16 @@ For a criterion, `requirementSamples` records:
 - `selectedRecordIds`: identifiers within that retained population;
 - `exceptions` and `managementResponse`, where applicable.
 
+The current population revision's existing attributed `review` must also contain
+`samplingContext`: `requirementId`, `populationArtifactRef`, `populationSize`,
+`samplingRationale`, `selectedRecordIds` and `exceptions`. These must match the
+criterion, current artifact and selected sampling facts exactly. Changing the
+selection, zero-event assertion, rationale, exceptions or population revision
+requires a matching review; old occurrence acceptance alone is insufficient.
+The existing review still must cover the purpose, service population and period,
+with valid attribution and dates. This records what was reviewed, not independent
+validation of document contents or a new artifact access grant.
+
 Record identifiers are operator-supplied, not generated audit samples. A
 non-empty population needs selected records. A zero-event population still needs
 an accepted period occurrence record supporting that conclusion; an empty list

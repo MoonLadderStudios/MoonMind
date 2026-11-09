@@ -303,10 +303,25 @@ def prepare_assessment(
                 gaps.append(
                     "Supply an accepted period population record and a sampling rationale with selected record identifiers; a scan cannot invent events or populations."
                 )
-            elif sample.population_size and not sample.selected_record_ids:
-                gaps.append(
-                    "The declared non-empty population has no selected records."
-                )
+            else:
+                current = population.revisions[-1]
+                sampling = current.review.sampling_context
+                expected = {
+                    "requirement_id": requirement.id,
+                    "population_artifact_ref": current.artifact_ref,
+                    "population_size": sample.population_size,
+                    "sampling_rationale": sample.sampling_rationale,
+                    "selected_record_ids": sample.selected_record_ids,
+                    "exceptions": sample.exceptions,
+                }
+                if sampling is None or sampling.model_dump() != expected:
+                    gaps.append(
+                        "The attributed population review does not cover this exact sampling context and current revision; obtain a review of the population size, selected records, rationale and exceptions."
+                    )
+                if sample.population_size and not sample.selected_record_ids:
+                    gaps.append(
+                        "The declared non-empty population has no selected records."
+                    )
         if sample and sample.exceptions:
             gaps.append(
                 "Recorded exceptions remain unresolved readiness gaps; a management response is not a retest."

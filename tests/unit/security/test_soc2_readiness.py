@@ -104,7 +104,7 @@ def documentary_request(purpose="design", kind="document", ref="art_design"):
 
 
 def complete_requirement():
-    return selection(
+    request = selection(
         requirementEvidence={
             "CC6.1": [
                 documentary_request(),
@@ -122,6 +122,27 @@ def complete_requirement():
             }
         },
     )
+
+    review_sampling(request)
+    return request
+
+
+def review_sampling(request, identifier="CC6.1"):
+    sample = request.system_inputs["requirementSamples"][identifier]
+    population = next(
+        row
+        for row in request.system_inputs["requirementEvidence"][identifier]
+        if row["id"] == sample["populationRequestId"]
+    )
+    current = population["revisions"][-1]
+    current["review"]["samplingContext"] = {
+        "requirementId": identifier,
+        "populationArtifactRef": current["artifactRef"],
+        "populationSize": sample["populationSize"],
+        "samplingRationale": sample["samplingRationale"],
+        "selectedRecordIds": list(sample["selectedRecordIds"]),
+        "exceptions": list(sample.get("exceptions", [])),
+    }
 
 
 def criterion(report, identifier="CC6.1"):
@@ -217,3 +238,87 @@ def test_readable_report_retains_service_and_review_context():
     assert "Synthetic reviewer" in rendered
     assert "Synthetic fixture" in rendered
     assert "published" in rendered
+
+
+@pytest.mark.parametrize("change", ["records", "zero", "rationale"])
+def test_changed_sampling_context_requires_a_new_attributed_review(change):
+    request = complete_requirement()
+    sample = request.system_inputs["requirementSamples"]["CC6.1"]
+    if change == "records":
+        sample["selectedRecordIds"] = ["never-supplied-record"]
+    elif change == "zero":
+        sample.update(populationSize=0, selectedRecordIds=[])
+    else:
+        sample["samplingRationale"] = "Unreviewed selection change"
+    row = criterion(
+        evaluate(
+            request, evidence_availability={"art_design": None, "art_operating": None}
+        )
+    )
+    assert row["status"] == "unassessed"
+    assert any("sampling" in gap for gap in row["limitations"])
+
+
+def test_zero_event_population_requires_exact_review_and_current_revision():
+    request = complete_requirement()
+    sample = request.system_inputs["requirementSamples"]["CC6.1"]
+    sample.update(populationSize=0, selectedRecordIds=[])
+    availability = {"art_design": None, "art_operating": None, "art_replacement": None}
+    assert (
+        criterion(evaluate(request, evidence_availability=availability))["status"]
+        == "unassessed"
+    )
+    review_sampling(request)
+    assert (
+        criterion(evaluate(request, evidence_availability=availability))["status"]
+        == "evidence_recorded"
+    )
+    population = request.system_inputs["requirementEvidence"]["CC6.1"][1]
+    import copy
+
+    replacement = copy.deepcopy(population["revisions"][-1])
+    replacement["artifactRef"] = "art_replacement"
+    population["revisions"].append(replacement)
+    assert (
+        criterion(evaluate(request, evidence_availability=availability))["status"]
+        == "unassessed"
+    )
+    review_sampling(request)
+    assert (
+        criterion(evaluate(request, evidence_availability=availability))["status"]
+        == "evidence_recorded"
+    )
+
+
+def test_sampling_review_cannot_be_missing_or_clear_reviewed_exceptions():
+    request = complete_requirement()
+    review = request.system_inputs["requirementEvidence"]["CC6.1"][1]["revisions"][-1][
+        "review"
+    ]
+    review.pop("samplingContext")
+    availability = {"art_design": None, "art_operating": None}
+    assert (
+        criterion(evaluate(request, evidence_availability=availability))["status"]
+        == "unassessed"
+    )
+    request.system_inputs["requirementSamples"]["CC6.1"]["exceptions"] = [
+        "Late offboarding"
+    ]
+    review_sampling(request)
+    request.system_inputs["requirementSamples"]["CC6.1"]["exceptions"] = []
+    row = criterion(evaluate(request, evidence_availability=availability))
+    assert row["status"] == "unassessed"
+    assert any("exact sampling context" in gap for gap in row["limitations"])
+
+
+def test_type_one_design_does_not_require_operating_sampling_review():
+    request = selection(
+        assessmentType="type1", requirementEvidence={"CC6.1": [documentary_request()]}
+    )
+    request.period.start = request.period.end
+    assert (
+        criterion(evaluate(request, evidence_availability={"art_design": None}))[
+            "status"
+        ]
+        == "evidence_recorded"
+    )

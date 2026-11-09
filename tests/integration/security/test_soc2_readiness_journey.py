@@ -14,6 +14,7 @@ from tests.unit.security.test_assessment_evidence_exports import unpack
 from tests.unit.security.test_soc2_readiness import (
     complete_requirement,
     criterion,
+    review_sampling,
     selection,
 )
 
@@ -76,6 +77,7 @@ async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environm
         ref = await recurring.put(environment.service, {"synthetic": item["purpose"]})
         item["revisions"][0]["artifactRef"] = ref
         refs.append(ref)
+    review_sampling(request)
     payload = {
         "scope": {"assets": ["api"]},
         "tools": [],
@@ -93,6 +95,26 @@ async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environm
         access=access_for_test("workflow:assessment"),
     )
     assert set(refs) <= {d.artifact_id for d in proof.dependencies}
+    changed_selection = copy.deepcopy(payload)
+    changed_selection["framework"]["systemInputs"]["requirementSamples"]["CC6.1"][
+        "selectedRecordIds"
+    ] = ["never-supplied-record"]
+    changed_selection["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    tampered = await recurring.invoke(
+        environment.service, changed_selection, key="sample-change"
+    )
+    changed_report = await recurring.read(environment.service, tampered["frameworkRef"])
+    assert criterion(changed_report)["status"] == "unassessed"
+    primary = recurring.report_ref(tampered)
+    changed_selection["evidenceExport"] = {"artifactRefs": [primary]}
+    exported = await recurring.invoke(
+        environment.service, changed_selection, key="sample-export"
+    )
+    archive, _manifest = await unpack(environment.service, exported)
+    contents = b"\n".join(archive.read(name) for name in archive.namelist())
+    assert b"exact sampling context" in contents
+    assert b"never-supplied-record" in contents
+    assert await recurring.read(environment.service, first["frameworkRef"]) == original
     payload["framework"]["period"]["start"] = "2025-01-01"
     payload["framework"]["previousAssessmentRef"] = first["frameworkRef"]
     later = await recurring.invoke(environment.service, payload, key="period-change")

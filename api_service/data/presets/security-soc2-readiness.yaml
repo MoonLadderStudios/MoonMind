@@ -53,7 +53,7 @@ annotations:
           and complementaryResponsibilities, including explicit absence. requirementEvidence
           maps criteria to organisational evidence requests and immutable revisions;
           requirementSamples records populationRequestId, populationSize, samplingRationale,
-          selectedRecordIds, exceptions and managementResponse. See docs/Security/SOC2Readiness.md
+          selectedRecordIds, exceptions and managementResponse. The current population revision review must include matching samplingContext (requirementId, populationArtifactRef, populationSize, samplingRationale, selectedRecordIds, exceptions). See docs/Security/SOC2Readiness.md
           and the synthetic fixture for runnable inputs.
       period:
         type: object
