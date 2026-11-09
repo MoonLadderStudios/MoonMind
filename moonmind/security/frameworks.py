@@ -264,6 +264,10 @@ class FrameworkEvidence(FrameworkContract):
 
 
 def load_framework_pack(pack_id: str) -> FrameworkPack:
+    if pack_id == "soc2-readiness":
+        from moonmind.security.soc2_readiness import SOC2_PACK
+
+        return SOC2_PACK.model_copy(deep=True)
     if pack_id == "ukgc-rts-security":
         from moonmind.security.ukgc_rts import UKGC_RTS_PACK
 
@@ -280,6 +284,10 @@ def load_framework_pack(pack_id: str) -> FrameworkPack:
 
 
 def render_framework_preparation(report: dict) -> str:
+    if report["pack"]["id"] == "soc2-readiness":
+        from moonmind.security.soc2_readiness import render_assessment
+
+        return render_assessment(report)
     if report["pack"]["id"] == "gli-19-readiness":
         from moonmind.security.gli_readiness import render_assessment
 
