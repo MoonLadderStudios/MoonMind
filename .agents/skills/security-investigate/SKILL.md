@@ -21,6 +21,10 @@ within the admitted environment and scope, through registered operations and
 the existing scoped ContainerJob interface; do not install a scanner collection
 or invent missing network/credential authority.
 
+When a web/API methodology plan is selected, retain its objective/procedure IDs,
+case references and original oracle in each reproduction and retest. Missing
+identities, source or skipped cases stay incomplete in the coverage result.
+
 Test the smallest counterexample and a relevant negative case. A title, model
 assertion or matching pattern is insufficient confirmation. Record confirmed,
 likely or unresolved dispositions with supporting refs, examined subjects and
