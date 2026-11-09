@@ -280,9 +280,9 @@ Comparisons distinguish `new`, `still_observed`, `absent_comparable`,
 `remediated_verified`, `closed_upstream` and `not_reassessed`. Absence requires
 fresh, completed coverage of the original asset/rule under comparable scope,
 exclusions and configuration. Comparable absence becomes `remediated_verified`
-only with a passing `fix_retest` decision for the finding; a source's own fixed
-state (a GitHub alert GitHub reports fixed) also counts, while dismissed or
-resolved alerts are `closed_upstream`. Coverage rows record the feed, rule and
+only with a passing `fix_retest` decision for the finding. Upstream fixed,
+dismissed or resolved claims remain `closed_upstream` until then, with their
+original source states retained. Coverage rows record the feed, rule and
 tool identity that interpreted the inputs (`intelligence`). New or absent
 findings whose covering tool's intelligence changed list the keys in
 `changedIntelligence`, and the comparison lists them in `intelligenceChanges`.

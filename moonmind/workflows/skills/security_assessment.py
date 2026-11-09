@@ -3510,9 +3510,9 @@ def _summary(comparison: dict, *, coverage_status: str | None = None) -> str:
             "",
             "Absence describes comparable completed coverage only; it is not a confirmed fix.",
             (
-                "Remediated verified requires a linked passing retest or the "
-                "source's own fixed state; closed upstream is a source decision, "
-                "not a fix."
+                "Remediated verified requires comparable absence and a linked "
+                "passing fix_retest. Upstream fixed, dismissed or resolved "
+                "states remain attributable closure claims until then."
             ),
             *(
                 [
