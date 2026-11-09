@@ -724,7 +724,7 @@ def claude_provider_config_endpoint(
     if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
         return None, "file templates and home path overrides are direct-launch only"
 
-    from moonmind.omnigent.host_services.runtime_scripts import (
+    from moonmind.provider_profiles.template_renderer import (
         PROVIDER_LITERAL_LAUNCH_ENV,
         validate_provider_literal_launch_environment,
     )

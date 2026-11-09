@@ -759,7 +759,7 @@ def test_portable_launch_rejects_tampered_private_environment(tmp_path, mutation
     result = subprocess.run(
         [sys.executable, str(helper), "launch", str(config), "/bin/true", "app-server"],
         env={"PATH": os.environ["PATH"], "CODEX_HOME": str(home)},
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     assert result.returncode != 0
     assert "ValueError" in result.stderr

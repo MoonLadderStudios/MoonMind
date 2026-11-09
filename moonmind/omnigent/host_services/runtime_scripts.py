@@ -7,10 +7,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from moonmind.provider_profiles.template_renderer import (
-    PROVIDER_LITERAL_LAUNCH_ENV,
-    validate_provider_literal_launch_environment,
-)
+def validate_provider_literal_launch_environment(values: dict[str, str]) -> dict[str, str]:
+    # Keep the base entrypoint builder importable without application packages.
+    from moonmind.provider_profiles.template_renderer import (
+        validate_provider_literal_launch_environment as validate,
+    )
+
+    return validate(values)
+
 
 OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 
