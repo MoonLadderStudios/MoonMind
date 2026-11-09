@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
-from moonmind.security.assessments import MAX_RETAINED_REPORT_BYTES, Comparison
+from moonmind.security.assessments import MAX_RETAINED_REPORT_BYTES, Comparison, SecurityReview
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -180,31 +180,67 @@ class RemediationContextError(RuntimeError):
 
 async def read_security_remediation_findings(
     *, service: TemporalArtifactService, workflow_id: str, run_id: str,
-    comparison_artifact_ref: str, access: ArtifactAccessContext,
+    access: ArtifactAccessContext,
+    comparison_artifact_ref: str | None = None,
+    review_artifact_ref: str | None = None,
 ) -> dict[str, Any]:
-    """Read sealed comparison evidence belonging to the exact selected run.
+    """Read sealed security evidence belonging to the exact selected run.
 
     This is a presentation/admission projection of the assessment owner, not
     a new security verdict or authority grant. Completed scans are never rerun.
     """
+    if bool(comparison_artifact_ref) == bool(review_artifact_ref):
+        raise RemediationContextError("Select exactly one comparison or review artifact.")
+    root_ref = comparison_artifact_ref or review_artifact_ref
+    link_type = "security.review" if review_artifact_ref else "security.comparison"
     artifact, links, _pinned, _policy = await service.get_metadata(
-        artifact_id=comparison_artifact_ref, access=access,
+        artifact_id=root_ref, access=access,
     )
     if not any(link.workflow_id == workflow_id and link.run_id == run_id
-               and link.link_type == "security.comparison" for link in links):
-        raise RemediationContextError("Comparison must belong to the source workflow/run.")
+               and link.link_type == link_type for link in links):
+        raise RemediationContextError("Security evidence must belong to the source workflow/run.")
     if int(artifact.size_bytes or 0) > MAX_RETAINED_REPORT_BYTES:
-        raise RemediationContextError("Security comparison exceeds the input bound.")
-    artifact, body = await service.read(artifact_id=comparison_artifact_ref, access=access)
+        raise RemediationContextError("Security evidence exceeds the input bound.")
+    artifact, body = await service.read(artifact_id=root_ref, access=access)
     if len(body) > MAX_RETAINED_REPORT_BYTES:
-        raise RemediationContextError("Security comparison exceeds the input bound.")
+        raise RemediationContextError("Security evidence exceeds the input bound.")
     digest = hashlib.sha256(body).hexdigest()
     if digest != artifact.sha256:
-        raise RemediationContextError("Security comparison digest does not match its artifact.")
-    comparison = Comparison.model_validate_json(body)
-    closure = await service.verified_dependencies(root_artifact_id=comparison_artifact_ref, access=access)
+        raise RemediationContextError("Security evidence digest does not match its artifact.")
+    closure = await service.verified_dependencies(root_artifact_id=root_ref, access=access)
     if closure is None:
-        raise RemediationContextError("Security comparison must have sealed evidence dependencies.")
+        raise RemediationContextError("Security evidence must have sealed dependencies.")
+    if review_artifact_ref:
+        review = SecurityReview.model_validate_json(body)
+        required = {entry.artifact_id for entry in closure.dependencies if entry.required and entry.sha256}
+        citations = set(review.evidence_refs())
+        if review.candidate_ref.startswith("art_"):
+            citations.add(review.candidate_ref)
+        if not citations <= required:
+            raise RemediationContextError("Security review seal does not cover its original evidence.")
+        rows = []
+        for interpretation in review.interpretations:
+            retests = [retest for retest in review.retests if retest.hypothesis_id == interpretation.id]
+            selected_refs = {review_artifact_ref, *interpretation.evidence_refs}
+            if review.candidate_ref.startswith("art_"):
+                selected_refs.add(review.candidate_ref)
+            for retest in retests:
+                selected_refs.update([*retest.original_evidence_refs, *retest.current_evidence_refs])
+            rows.append({
+                "sourceKind": "agent_review", "reviewArtifactRef": review_artifact_ref,
+                "reviewDigest": digest, "sourceWorkflowId": workflow_id, "sourceRunId": run_id,
+                "interpretationId": interpretation.id,
+                "interpretation": interpretation.model_dump(mode="json", by_alias=True),
+                "candidateRef": review.candidate_ref,
+                "scope": review.scope.model_dump(mode="json", by_alias=True),
+                "threatModel": review.threat_model.model_dump(mode="json", by_alias=True),
+                "limitations": review.limitations,
+                "retests": [retest.model_dump(mode="json", by_alias=True) for retest in retests],
+                "evidenceArtifactRefs": sorted(selected_refs),
+            })
+        return {"reviewArtifactRef": review_artifact_ref, "findings": rows}
+
+    comparison = Comparison.model_validate_json(body)
     from moonmind.workflows.skills.security_assessment import _comparison_citations
 
     document = comparison.model_dump(mode="json", by_alias=True)
@@ -223,6 +259,7 @@ async def read_security_remediation_findings(
             decision.model_dump(mode="json", by_alias=True)
         )
     common = {
+        "sourceKind": "native_comparison",
         "comparisonArtifactRef": comparison_artifact_ref,
         "comparisonDigest": digest,
         "sourceWorkflowId": workflow_id,
@@ -367,6 +404,10 @@ class RemediationContextBuilder:
                 "targetRunId": link.target_run_id,
             },
             redaction_level=db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        await self._artifact_service.grant_remediation_context_output_read(
+            artifact_id=artifact.artifact_id,
+            access=ArtifactAccessContext.for_service(principal),
         )
         artifact = await self._artifact_service.write_complete(
             artifact_id=artifact.artifact_id,

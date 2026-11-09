@@ -1354,12 +1354,14 @@ class TemporalExecutionService:
         if security_selection is not None:
             if (
                 not isinstance(security_selection, Mapping)
-                or set(security_selection) != {"comparisonArtifactRef", "findingId"}
+                or set(security_selection) not in ({"comparisonArtifactRef", "findingId"}, {"reviewArtifactRef", "interpretationId"})
                 or not all(isinstance(value, str) and value.strip() for value in security_selection.values())
             ):
                 raise TemporalExecutionValidationError(
-                    "workflow.remediation.target.securityFinding requires comparisonArtifactRef and findingId only."
+                    "workflow.remediation.target.securityFinding requires one comparison/finding or review/interpretation pair."
                 )
+            is_review = "reviewArtifactRef" in security_selection
+            identity_key = "interpretationId" if is_review else "findingId"
             artifact_service = TemporalArtifactService(
                 TemporalArtifactRepository(self._session),
                 transaction_ownership=ArtifactTransactionOwnership.CALLER,
@@ -1369,14 +1371,15 @@ class TemporalExecutionService:
                     service=artifact_service,
                     workflow_id=target_record.workflow_id,
                     run_id=target_record.run_id,
-                    comparison_artifact_ref=security_selection["comparisonArtifactRef"],
+                    comparison_artifact_ref=security_selection.get("comparisonArtifactRef"),
+                    review_artifact_ref=security_selection.get("reviewArtifactRef"),
                     access=ArtifactAccessContext.for_execution(
                         target_record.workflow_id,
                         principal="service:remediation-admission",
                     ),
                 )
                 security_evidence = next(
-                    (row for row in findings["findings"] if row["findingId"] == security_selection["findingId"]),
+                    (row for row in findings["findings"] if row[identity_key] == security_selection[identity_key]),
                     None,
                 )
                 if security_evidence is None:

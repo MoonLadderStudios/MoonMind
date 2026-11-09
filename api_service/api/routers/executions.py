@@ -13900,7 +13900,8 @@ async def _resolve_schedule_routing(
 @router.get("/{workflow_id}/remediation-security-findings")
 async def preview_security_remediation_findings(
     workflow_id: str,
-    comparison_artifact_ref: str = Query(..., alias="comparisonArtifactRef", max_length=255),
+    comparison_artifact_ref: str | None = Query(None, alias="comparisonArtifactRef", max_length=255),
+    review_artifact_ref: str | None = Query(None, alias="reviewArtifactRef", max_length=255),
     run_id: str = Query(..., alias="runId", min_length=1, max_length=255),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
@@ -13918,7 +13919,7 @@ async def preview_security_remediation_findings(
                 session, transaction_ownership=ArtifactTransactionOwnership.CALLER,
             ),
             workflow_id=workflow_id, run_id=run_id,
-            comparison_artifact_ref=comparison_artifact_ref, access=access,
+            comparison_artifact_ref=comparison_artifact_ref, review_artifact_ref=review_artifact_ref, access=access,
         )
     except (RemediationContextError, ValidationError, TemporalArtifactAuthorizationError,
             TemporalArtifactNotFoundError, TemporalArtifactStateError,

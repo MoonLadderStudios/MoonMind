@@ -378,26 +378,31 @@ afterEach(async () => {
 });
 
 describe('routed remediation operator journey', () => {
-  it('opens pinned finding investigation from a successful assessment and preserves it on reload and discard', async () => {
+  it.each(['native', 'review'])('opens %s finding investigation from a successful assessment and preserves it on reload and discard', async (kind) => {
     const fallback = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/executions/source-workflow/remediation-security-findings?') && kind === 'review') return jsonResponse({ reviewArtifactRef: 'art_comparison', findings: [{
+        sourceKind: 'agent_review', reviewArtifactRef: 'art_comparison', reviewDigest: 'digest', interpretationId: 'ownership', candidateRef: 'git:original', scope: { assets: ['app'] },
+        interpretation: { id: 'ownership', hypothesis: 'Owner check missing', disposition: 'confirmed', evidenceStatus: 'supported', evidenceRefs: ['art_original'], limitations: ['Controlled application'], subject: { asset: 'app', locator: 'get_invoice', identity: 'alice', resource: 'invoice-bob' } },
+        threatModel: { entryPoints: ['get_invoice'], trustBoundaries: ['owner'], invariants: ['owner-only'] }, limitations: ['No live target'], retests: [],
+      }] });
       if (url.includes('/executions/source-workflow/remediation-security-findings?')) return jsonResponse({ comparisonArtifactRef: 'art_comparison', findings: [{
         comparisonArtifactRef: 'art_comparison', comparisonDigest: 'verified-digest', findingId: 'ownership', coverageStatus: 'complete', intelligenceChanges: [],
         finding: { findingId: 'ownership', state: 'new', evidenceExpiresAt: '2027-01-01T00:00:00Z', finding: { nativeId: 'ownership', asset: 'app', ruleId: 'owner-check', evidenceRefs: ['art_original'] } }, decisions: [],
       }] });
-      if (url.includes('/executions/source-workflow/artifacts')) return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: 'security.comparison' }] }] });
+      if (url.includes('/executions/source-workflow/artifacts')) return jsonResponse({ artifacts: [{ artifactId: 'art_comparison', contentType: 'application/json', metadata: {}, links: [{ linkType: kind === 'review' ? 'security.review' : 'security.comparison' }] }] });
       if (/\/executions\/source-workflow(?:\?|$)/.test(url)) return jsonResponse({ ...sourceExecution, state: 'succeeded', rawState: 'succeeded', status: 'succeeded', attentionRequired: false });
       return fallback(input, init);
     });
     window.history.replaceState({}, '', '/workflows/source-workflow/artifacts');
     cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
-    await screen.findByLabelText('Security comparison');
-    await userEvent.selectOptions(screen.getByLabelText('Security comparison'), 'art_comparison');
+    await screen.findByLabelText('Security evidence');
+    await userEvent.selectOptions(screen.getByLabelText('Security evidence'), 'art_comparison');
     await userEvent.click(await screen.findByRole('button', { name: 'Investigate ownership' }));
     expect(await screen.findByText('Remediation Draft')).toBeTruthy();
     expect((screen.getByLabelText('Original security finding') as HTMLInputElement).value).toBe('ownership');
-    expect((screen.getByLabelText('Pinned security comparison') as HTMLInputElement).value).toBe('art_comparison');
+    expect((screen.getByLabelText('Pinned security evidence') as HTMLInputElement).value).toBe('art_comparison');
     expect(createRequests).toHaveLength(0);
     cleanupRender();
     cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;

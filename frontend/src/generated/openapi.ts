@@ -18066,7 +18066,8 @@ export interface operations {
     preview_security_remediation_findings_api_executions__workflow_id__remediation_security_findings_get: {
         parameters: {
             query: {
-                comparisonArtifactRef: string;
+                comparisonArtifactRef?: string | null;
+                reviewArtifactRef?: string | null;
                 runId: string;
             };
             header?: never;

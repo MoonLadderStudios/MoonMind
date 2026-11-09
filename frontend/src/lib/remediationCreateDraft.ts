@@ -17,7 +17,17 @@ export type RemediationCreateDraftReadResult =
       draft: null;
     };
 
-export type SecurityFindingSelection = { comparisonArtifactRef: string; findingId: string };
+export type SecurityFindingSelection =
+  | { comparisonArtifactRef: string; findingId: string }
+  | { reviewArtifactRef: string; interpretationId: string };
+
+export function securitySelectionIdentity(selection: SecurityFindingSelection): string {
+  return 'findingId' in selection ? selection.findingId : selection.interpretationId;
+}
+
+export function securitySelectionArtifact(selection: SecurityFindingSelection): string {
+  return 'comparisonArtifactRef' in selection ? selection.comparisonArtifactRef : selection.reviewArtifactRef;
+}
 
 export type RemediationCreateDraft = {
   source: 'remediation';
@@ -321,7 +331,7 @@ export function buildRemediationCreateDraft(
     instructions:
       options.instructions ||
       (options.securityFinding
-        ? `Investigate security finding ${options.securityFinding.findingId} from the pinned comparison and original evidence in the remediation context. Preserve the hypothesis, scope, expected behavior and selected candidate. Assessment authority does not authorize edits, publication or cloud mutation. Use existing separately admitted authority for any fix and comparable retest; CI success alone is not a verified security fix. Infrastructure-as-code uses the ordinary code path; direct infrastructure mutation is unsupported.`
+        ? `Investigate security finding ${securitySelectionIdentity(options.securityFinding)} from the pinned report and original evidence in the remediation context. Preserve the hypothesis, scope, expected behavior and selected candidate. Assessment authority does not authorize edits, publication or cloud mutation. Use existing separately admitted authority for any fix and comparable retest; CI success alone is not a verified security fix. Infrastructure-as-code uses the ordinary code path; direct infrastructure mutation is unsupported.`
         : `Diagnose why workflow ${title || workflowId} failed using the remediation context in the workspace, fix the cause where it is safe to, and report how to keep it from recurring.`),
     skill: options.securityFinding ? 'security-investigate' : REMEDIATION_SKILL_ID,
     remediation: {
@@ -385,9 +395,10 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 }
 
 function securityFindingIsValid(value: unknown): boolean {
-  return value === undefined || (isRecordValue(value) &&
-    isNonEmptyText(value.comparisonArtifactRef) && value.comparisonArtifactRef.startsWith('art_') &&
-    isNonEmptyText(value.findingId));
+  if (value === undefined) return true;
+  if (!isRecordValue(value) || Object.keys(value).length !== 2) return false;
+  return (isNonEmptyText(value.comparisonArtifactRef) && value.comparisonArtifactRef.startsWith('art_') && isNonEmptyText(value.findingId)) ||
+    (isNonEmptyText(value.reviewArtifactRef) && value.reviewArtifactRef.startsWith('art_') && isNonEmptyText(value.interpretationId));
 }
 
 function optionalRecordIsValid(value: unknown): boolean {

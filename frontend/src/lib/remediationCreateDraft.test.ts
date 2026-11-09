@@ -412,3 +412,12 @@ it('replays an authored security selection unchanged after an uncertain admissio
   expect(readRemediationCreateDraft(id)?.authoring).toEqual(authored.authoring);
   expect(() => updateRemediationCreateDraft(id, { ...authored, target: { ...authored.target, securityFinding: { comparisonArtifactRef: 'art_replacement', findingId: 'original' } }, remediation: { ...authored.remediation, target: { ...authored.remediation.target, securityFinding: { comparisonArtifactRef: 'art_replacement', findingId: 'original' } } } })).toThrow(/changed/);
 });
+
+it('retains a review-only hypothesis without substituting a native finding', () => {
+  const selection = { reviewArtifactRef: 'art_review', interpretationId: 'invoice-owner' };
+  const draft = buildRemediationCreateDraft({ workflowId: 'assessment', runId: 'run' }, { securityFinding: selection });
+  expect(draft.skill).toBe('security-investigate');
+  expect(draft.publishMode).toBe('none');
+  expect(readRemediationCreateDraft(storeRemediationCreateDraft(draft))?.target.securityFinding).toEqual(selection);
+  expect(draft.instructions).toContain('invoice-owner');
+});
