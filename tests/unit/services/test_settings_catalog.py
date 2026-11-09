@@ -3251,11 +3251,17 @@ async def test_catalog_reset_value_matches_actual_inheritance(settings_session_m
         assert reset.value == descriptor.reset_value
 
 
-def test_catalog_redacts_sensitive_reset_values():
+@pytest.mark.parametrize("sensitive,audit,value", [
+    (True, False, "private-reset-value"),
+    (False, True, "private-reset-value"),
+    (False, False, "secret=hidden"),
+    (False, False, {"path": "/run/secrets/token"}),
+])
+def test_catalog_redacts_sensitive_reset_values(sensitive, audit, value):
     entry = SettingRegistryEntry(
-        key="test.secret", title="Secret", category="Test", section="user-workspace",
+        key="workflow.default_provider_profile_ref", title="Profile", category="Test", section="user-workspace",
         value_type="string", ui="text", order=1, apply_mode="immediate",
-        sensitive=True, default_value="private-reset-value",
+        sensitive=sensitive, audit=SettingAuditPolicy(redact=audit), default_value=value,
     )
     service = SettingsCatalogService(env={}, registry=(entry,))
     assert service.catalog().categories["Test"][0].reset_value is None

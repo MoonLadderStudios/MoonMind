@@ -1399,20 +1399,29 @@ async def test_mm655_diagnostics_endpoint_reports_distinct_states(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_catalog_reset_preview_matches_delete_and_reloaded_value(settings_api_db, monkeypatch):
-    monkeypatch.setenv("WORKFLOW_DEFAULT_RUNTIME", "claude_code")
+@pytest.mark.parametrize("inherited", ["claude_code", "omnigent", "codex", " codex_cli "])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_catalog_reset_preview_matches_delete_and_reloaded_value(settings_api_db, monkeypatch, inherited, legacy):
+    monkeypatch.setenv("WORKFLOW_DEFAULT_RUNTIME", inherited)
+    if legacy:
+        async with settings_api_db() as session:
+            session.add(SettingsOverride(key="workflow.default_task_runtime", value_json="claude_code", value_version=1))
+            await session.commit()
     key = "workflow.default_runtime"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
         saved = await client.patch("/api/v1/settings", json={"changes": {key: "omnigent"}})
         assert saved.status_code == 200
+        counts = (await _settings_audit_count(settings_api_db), await _settings_override_count(settings_api_db))
         catalog = await client.get("/api/v1/settings/catalog?section=user-workspace")
+        assert counts == (await _settings_audit_count(settings_api_db), await _settings_override_count(settings_api_db))
         descriptor = next(d for d in catalog.json()["categories"]["Workflow"] if d["key"] == key)
         assert descriptor["default_value"] == "omnigent"
-        assert descriptor["reset_value"] == "claude_code"
+        assert descriptor["reset_value"] == ("claude_code" if legacy else "codex_cli" if inherited.strip() in {"codex", "codex_cli"} else inherited)
+        assert not any(d["code"] == "setting_renamed_override" for d in descriptor["diagnostics"])
         reset = await client.delete(f"/api/v1/settings/{key}")
         assert reset.status_code == 200
         assert reset.json()["value"] == descriptor["reset_value"]
         refreshed = await client.get("/api/v1/settings/catalog?section=user-workspace")
         restored = next(d for d in refreshed.json()["categories"]["Workflow"] if d["key"] == key)
         assert restored["effective_value"] == descriptor["reset_value"]
-        assert restored["source"] == "environment"
+        assert restored["source"] == ("instance_override" if legacy else "environment")

@@ -1028,7 +1028,17 @@ class SettingsCatalogService:
             override_present,
             diagnostics,
         )
-        reset_value, _ = self._resolve_value(entry)
+        reset_value = None
+        if entry.key in {_DEFAULT_RUNTIME_KEY, "workflow.default_provider_profile_ref"}:
+            # Preview only the compact Defaults card's resets. Resolve the state
+            # after removing this override, retaining renamed-key fallbacks.
+            reset_value = self._resolve_value_from_overrides(
+                entry,
+                overrides={
+                    key: row for key, row in (overrides or {}).items() if key != entry.key
+                },
+                record_diagnostics=False,
+            )[0]
         return SettingDescriptor(
             key=entry.key,
             title=entry.title,
@@ -2295,15 +2305,17 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry,
         *,
         overrides: dict[str, SettingsOverride],
+        record_diagnostics: bool = True,
     ) -> tuple[Any, str, int, bool]:
-        self._migration_diagnostics_by_key.pop(entry.key, None)
+        diagnostics = self._migration_diagnostics_by_key if record_diagnostics else {}
+        diagnostics.pop(entry.key, None)
         if self._is_operator_locked(entry):
             return entry.operator_locked_value, "operator_lock", 1, False
         override = overrides.get(entry.key)
         if override is not None:
             type_migration = self._type_migration_diagnostic(entry, override)
             if type_migration is not None:
-                self._migration_diagnostics_by_key[entry.key] = type_migration
+                diagnostics[entry.key] = type_migration
                 return None, "instance_override", override.value_version, True
             return (
                 _canonical_setting_value(entry.key, override.value_json),
@@ -2314,7 +2326,7 @@ class SettingsCatalogService:
         migrated = self._resolve_migrated_override(entry, overrides=overrides)
         if migrated is not None:
             row, rule = migrated
-            self._migration_diagnostics_by_key[entry.key] = SettingDiagnostic(
+            diagnostics[entry.key] = SettingDiagnostic(
                 code="setting_renamed_override",
                 message=rule.message,
                 severity="warning",
