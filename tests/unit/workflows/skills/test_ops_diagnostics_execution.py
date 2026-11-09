@@ -250,22 +250,16 @@ async def test_ops_diagnosis_allows_real_worker_service_names() -> None:
         _inputs(
             include=["container_health"],
             services=[
-                "temporal-worker-workflow",
-                "temporal-worker-artifacts",
-                "temporal-worker-llm",
+                "temporal-worker-core",
                 "temporal-worker-sandbox",
-                "temporal-worker-integrations",
             ],
         ),
         context=_context(),
     )
 
     assert runner.calls[0]["services"] == (
-        "temporal-worker-workflow",
-        "temporal-worker-artifacts",
-        "temporal-worker-llm",
+        "temporal-worker-core",
         "temporal-worker-sandbox",
-        "temporal-worker-integrations",
     )
 
 

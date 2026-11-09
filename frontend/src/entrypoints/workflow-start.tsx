@@ -1,4 +1,5 @@
 import { OrganisationalEvidenceEditor } from '../components/OrganisationalEvidenceEditor';
+import { securitySelectionIdentity, securitySelectionArtifact } from '../lib/remediationCreateDraft';
 import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
 import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
@@ -12298,6 +12299,11 @@ function WorkflowStartPageContent({
                 Pinned run
                 <input value={remediationDraft.target.runId} readOnly />
               </label>
+              {remediationDraft.target.securityFinding ? <>
+                <label>Original security finding<input readOnly value={securitySelectionIdentity(remediationDraft.target.securityFinding)} /></label>
+                <label>Pinned security evidence<input readOnly value={securitySelectionArtifact(remediationDraft.target.securityFinding)} /></label>
+                <p>Assessment authority does not authorize edits or publication. The server verifies and preserves original evidence; fixes and comparable retests use separately admitted authority.</p>
+              </> : null}
               {remediationDraft.target.state ? (
                 <label>
                   Original target outcome

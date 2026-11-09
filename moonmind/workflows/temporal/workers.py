@@ -54,11 +54,11 @@ ALLOWED_TEMPORAL_WORKER_FLEETS = (
 )
 
 _FLEET_SERVICE_NAMES = {
-    WORKFLOW_FLEET: "temporal-worker-workflow",
-    ARTIFACTS_FLEET: "temporal-worker-artifacts",
-    LLM_FLEET: "temporal-worker-llm",
+    WORKFLOW_FLEET: "temporal-worker-core",
+    ARTIFACTS_FLEET: "temporal-worker-core",
+    LLM_FLEET: "temporal-worker-core",
     SANDBOX_FLEET: "temporal-worker-sandbox",
-    INTEGRATIONS_FLEET: "temporal-worker-integrations",
+    INTEGRATIONS_FLEET: "temporal-worker-core",
     AGENT_RUNTIME_FLEET: "temporal-worker-agent-runtime",
     DEPLOYMENT_FLEET: "temporal-worker-deployment-control",
 }

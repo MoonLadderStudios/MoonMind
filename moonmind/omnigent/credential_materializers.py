@@ -895,6 +895,7 @@ finally:
                     ),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
+                "runtimeEnvironmentTemplates": endpoint.environmentTemplates if endpoint is not None else None,
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
             }

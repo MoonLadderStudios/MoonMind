@@ -377,7 +377,7 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     ) in services["api"]["volumes"]
     for worker_name in (
         "temporal-worker-agent-runtime",
-        "temporal-worker-integrations",
+        "temporal-worker-core",
     ):
         worker_env = _env_map(services[worker_name]["environment"])
         assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
@@ -390,7 +390,7 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     )
 
     runtime_service_names = [
-        "temporal-worker-workflow",
+        "temporal-worker-core",
         "temporal-worker-agent-runtime",
     ]
     for service_name in runtime_service_names:
@@ -515,10 +515,10 @@ def test_workflow_worker_service_serves_every_workflow_lane_in_one_process():
     compose = _load_compose()
     services = compose["services"]
 
-    assert "temporal-worker-workflow" in services
+    assert "temporal-worker-core" in services
     assert "temporal-worker-workflow-merge-automation" not in services
 
-    workflow_worker = services["temporal-worker-workflow"]
+    workflow_worker = services["temporal-worker-core"]
     # MoonMind#3937: the merge-automation lane is a second SDK Worker in the
     # one worker_runtime process, not a supervised second interpreter.
     assert workflow_worker["entrypoint"] == [
@@ -549,12 +549,77 @@ def test_workflow_worker_service_serves_every_workflow_lane_in_one_process():
         "${MOONMIND_DEPLOYMENT_MODE:-auto}"
     )
     assert workflow_env["TEMPORAL_WORKFLOW_READINESS_URL"] == (
-        "${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}"
+        "${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-core:8080/readyz}"
     )
     healthcheck = " ".join(
         str(part) for part in workflow_worker["healthcheck"]["test"]
     )
     assert "http://localhost:8080/readyz" in healthcheck
+
+
+@pytest.mark.parametrize("combined", [False, True], ids=["separate", "combined"])
+def test_worker_measurement_renders_the_canonical_queue_and_resource_contracts(
+    tmp_path, combined
+):
+    from tools.worker_runtime_measurements import (
+        CORE_SERVICE,
+        FLEETS,
+        comparison_override,
+    )
+
+    _require_docker_compose()
+    base = tmp_path / "compose.yaml"
+    base.write_bytes((REPO_ROOT / "docker-compose.yaml").read_bytes())
+    command = [
+        "docker", "compose", "--env-file", "/dev/null",
+        "--project-name", "moonmind-test-worker-measurement", "-f", str(base),
+    ]
+    environment = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
+
+    def render(extra=()):
+        result = subprocess.run(
+            [*command, *extra, "config", "--format", "json"],
+            env=environment, check=False, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    model = render()
+    core = model["services"][CORE_SERVICE]
+    overlay = tmp_path / "workers.json"
+    overlay.write_text(
+        json.dumps(comparison_override(model, combined=combined, debug=True))
+    )
+    services = render(("-f", str(overlay)))["services"]
+    worker_names = {CORE_SERVICE, *(f"temporal-worker-{fleet}" for fleet in FLEETS)}
+    active = {
+        name for name, spec in services.items()
+        if name in worker_names and not spec.get("profiles")
+    }
+    expected = {CORE_SERVICE} if combined else worker_names - {CORE_SERVICE}
+    assert active == expected
+    for name in active:
+        worker = services[name]
+        env = worker["environment"]
+        assert env["PYTHONASYNCIODEBUG"] == "1"
+        if combined:
+            assert tuple(json.loads(env["TEMPORAL_WORKER_FLEETS"])) == FLEETS
+        else:
+            assert not env.get("TEMPORAL_WORKER_FLEETS")
+            assert env["TEMPORAL_WORKER_FLEET"] == name.removeprefix("temporal-worker-")
+        for key, value in core["environment"].items():
+            if key not in {
+                "TEMPORAL_WORKER_FLEET", "TEMPORAL_WORKER_FLEETS", "PYTHONASYNCIODEBUG"
+            }:
+                assert env[key] == value, key
+        for key in ("image", "volumes", "depends_on", "stop_grace_period"):
+            assert worker[key] == core[key], key
+    if not combined:
+        workflow = services["temporal-worker-workflow"]
+        assert CORE_SERVICE in workflow["networks"]["control-plane-network"]["aliases"]
+        assert services["temporal-worker-artifacts"]["labels"][
+            "moonmind.journal-consumer"
+        ] == "true"
 
 
 def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
