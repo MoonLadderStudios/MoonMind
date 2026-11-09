@@ -2979,6 +2979,12 @@ class AssessmentExecution:
                 outputs["diagnostics"].append(
                     {"boundary": "methodology", "error": type(exc).__name__}
                 )
+        report_scope = (
+            "partial"
+            if request.methodology is not None
+            and outputs.get("methodologyStatus") != "complete"
+            else comparison["coverageStatus"]
+        )
         try:
             project_summary = ""
             project_digest = None
@@ -3009,7 +3015,7 @@ class AssessmentExecution:
                     "Candidate targets and retention intent do not establish tested coverage, grants, or retention policy.\n"
                 )
             summary = (
-                _summary(comparison)
+                _summary(comparison, coverage_status=report_scope)
                 + project_summary
                 + _scanner_summary(work.get("scannerSummaries", []))
                 + _github_summary(github)
@@ -3063,6 +3069,8 @@ class AssessmentExecution:
                     [
                         outputs.get("methodologyStatus"),
                         methodology_ref if methodology else None,
+                        # Refresh changed presentations without repeating native work.
+                        hashlib.sha256(summary).hexdigest(),
                     ]
                     if request.methodology is not None
                     else []
@@ -3171,12 +3179,7 @@ class AssessmentExecution:
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",
-                report_scope=(
-                    "partial"
-                    if request.methodology is not None
-                    and outputs.get("methodologyStatus") != "complete"
-                    else comparison["coverageStatus"]
-                ),
+                report_scope=report_scope,
                 sensitivity="restricted",
                 counts=comparison["counts"],
             )
@@ -3433,13 +3436,18 @@ async def _record(service, root, entries, access) -> None:
     )
 
 
-def _summary(comparison: dict) -> str:
+def _summary(comparison: dict, *, coverage_status: str | None = None) -> str:
     counts = comparison["counts"]
     return "\n".join(
         [
             "# Security assessment",
             "",
-            f"Coverage: {comparison['coverageStatus']}. Baseline: {comparison['baselineStatus']}.",
+            f"Coverage: {coverage_status or comparison['coverageStatus']}. Baseline: {comparison['baselineStatus']}.",
+            *(
+                [f"Native comparison coverage: {comparison['coverageStatus']}."]
+                if coverage_status and coverage_status != comparison["coverageStatus"]
+                else []
+            ),
             *[f"- {key.replace('_', ' ')}: {value}" for key, value in counts.items()],
             "",
             "Absence describes comparable completed coverage only; it is not a confirmed fix.",

@@ -67,7 +67,14 @@ async def retain_plan(service, *, asset="app", payload=None):
 
 
 async def coverage(
-    service, plan_ref, *, native_ref=None, runs=(), baseline=None, key="methodology"
+    service,
+    plan_ref,
+    *,
+    native_ref=None,
+    runs=(),
+    baseline=None,
+    key="methodology",
+    reviewer_notes=(),
 ):
     request = request_payload()
     plan = await recurring.read(service, plan_ref)
@@ -75,7 +82,7 @@ async def coverage(
     request["methodology"] = {"planRef": plan_ref}
     if native_ref:
         request.update(tools=["retained-report"], reportRefs=[native_ref])
-    if runs:
+    if runs or reviewer_notes:
         request["methodology"]["resultsRef"] = await recurring.put(
             service,
             {
@@ -83,7 +90,8 @@ async def coverage(
                 "runs": list(runs),
                 "reviewStatus": "pending",
                 "reviewerNotes": [
-                    "Assess comparable methods before closing follow-ups."
+                    "Assess comparable methods before closing follow-ups.",
+                    *reviewer_notes,
                 ],
                 "followUpTasks": [
                     "Review remaining selected objectives in the existing workflow."
@@ -99,6 +107,14 @@ async def coverage(
     assert outputs.get("methodologyRef"), outputs
     report = await recurring.read(service, outputs["methodologyRef"])
     return outputs, report
+
+
+async def primary_report(service, outputs):
+    _, raw = await service.read(
+        artifact_id=recurring.report_ref(outputs),
+        access=recurring.access_for_test("workflow:assessment"),
+    )
+    return raw.decode()
 
 
 def access_runs(plan, native_ref, source_ref):
@@ -346,7 +362,7 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
         await finish(job.backend, job.request, tmp_path)
         runs = access_runs(plan, native_ref, plan["sourceRefs"][0])
         if vulnerable:
-            _, control = await coverage(
+            control_outputs, control = await coverage(
                 service,
                 control_ref,
                 native_ref=native_ref,
@@ -354,6 +370,17 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
                 key="fully-covered",
             )
             assert control["complete"]
+            control_summary = await primary_report(service, control_outputs)
+            (evidence_dir / "complete-report.md").write_text(control_summary)
+            assert (
+                control_summary.splitlines()[2]
+                == "Coverage: complete. Baseline: initial."
+            )
+            assert control_outputs["reportBundle"]["report_scope"] == "complete"
+            for objective in control["objectives"]:
+                assert (
+                    f"- {objective['id']} — {objective['status']};" in control_summary
+                )
         else:
             plan["candidateRef"] = "fixture:repaired"
         plan_ref = await recurring.put(service, plan)
@@ -388,6 +415,15 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
         )
         assert not report["complete"]
         assert outputs["methodologyStatus"] == "incomplete"
+        summary = await primary_report(service, outputs)
+        assert summary.splitlines()[2] == "Coverage: partial. Baseline: initial."
+        assert outputs["reportBundle"]["report_scope"] == "partial"
+        comparison = await recurring.read(service, outputs["comparisonRef"])
+        assert comparison["coverageStatus"] == (
+            "complete" if gap == "endpoint" else "partial"
+        )
+        for objective in report["objectives"]:
+            assert f"- {objective['id']} — {objective['status']};" in summary
         assert (missing_asset if gap == "asset" else missing_path).encode() in (
             evidence_dir / (state + "-report.md")
         ).read_bytes()
@@ -396,6 +432,69 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
         retained.append(outputs["methodologyRef"])
     assert len(access_target["calls"]) == 6
     assert not any(path == "/unexecuted" for _, path, *_ in access_target["calls"])
+
+
+@pytest.mark.parametrize(
+    "state", ["partially_tested", "blocked", "untested", "not_applicable"]
+)
+async def test_primary_report_preserves_objective_states_and_redacts_credentials(
+    environment, state
+):
+    service = environment.service
+    _, plan = await retain_plan(service)
+    if state == "not_applicable":
+        for objective in plan["objectives"]:
+            objective.update(
+                applicability="not_applicable",
+                reason="Excluded from this controlled review.",
+                procedures=[],
+            )
+    plan_ref = await recurring.put(service, plan)
+    runs = (
+        [
+            {
+                "objectiveId": "authorization",
+                "procedureId": "ownership-review",
+                "status": {
+                    "partially_tested": "partial",
+                    "blocked": "blocked",
+                }[state],
+                "reason": "Selected review coverage only.",
+                "outcome": "clear",
+                "evidenceKind": "review_judgment",
+                "evidenceRefs": plan["sourceRefs"],
+            }
+        ]
+        if state in {"partially_tested", "blocked"}
+        else []
+    )
+    outputs, report = await coverage(
+        service,
+        plan_ref,
+        runs=runs,
+        reviewer_notes=[
+            "Authorization: Bearer controlled-report-credential",
+            "password=controlled-report-password",
+            "Reviewer can read public objective coverage states.",
+        ],
+    )
+    summary = await primary_report(service, outputs)
+    evidence_dir = Path(
+        "artifacts/integration-ci/security-quality/methodology-presentation"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / (state + "-report.md")).write_text(summary)
+    (evidence_dir / (state + "-coverage.json")).write_text(json.dumps(report))
+    assert "controlled-report-credential" not in summary
+    assert "controlled-report-password" not in summary
+    assert "[REDACTED" in summary
+    assert "Reviewer can read public objective coverage states." in summary
+    assert (
+        next(o for o in report["objectives"] if o["id"] == "authorization")["status"]
+        == state
+    )
+    for objective in report["objectives"]:
+        assert f"- {objective['id']} — {objective['status']};" in summary
 
 
 @pytest.mark.parametrize("mode", ["baseline", "api"])
@@ -527,6 +626,18 @@ async def test_reporting_retry_preserves_completed_native_work_and_reuses_covera
     failed = await recurring.invoke(service, request)
     assert failed["methodologyStatus"] == "unavailable"
     assert failed["scanOutcome"] == "completed"
+    failed_summary = await primary_report(service, failed)
+    evidence_dir = Path(
+        "artifacts/integration-ci/security-quality/methodology-report-retry"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "unavailable-report.md").write_text(failed_summary)
+    assert failed_summary.splitlines()[2] == "Coverage: partial. Baseline: initial."
+    assert "coverage unavailable" in failed_summary
+    assert failed["reportBundle"]["report_scope"] == "partial"
+    assert (await recurring.read(service, failed["comparisonRef"]))[
+        "coverageStatus"
+    ] == "complete"
     monkeypatch.setattr(AssessmentExecution, "prepare_methodology", original)
 
     def no_rescan(*args):
@@ -539,6 +650,15 @@ async def test_reporting_retry_preserves_completed_native_work_and_reuses_covera
     assert recovered["methodologyRef"] == replayed["methodologyRef"]
     assert recovered["methodologyStatus"] == "incomplete"
     assert recovered["reportBundle"]["report_scope"] == "partial"
+    recovered_summary = await primary_report(service, recovered)
+    (evidence_dir / "recovered-report.md").write_text(recovered_summary)
+    (evidence_dir / "replayed-report.md").write_text(
+        await primary_report(service, replayed)
+    )
+    assert recovered_summary.splitlines()[2] == "Coverage: partial. Baseline: initial."
+    assert "coverage unavailable" not in recovered_summary
+    assert recurring.report_ref(recovered) == recurring.report_ref(replayed)
+    assert recurring.report_ref(failed) != recurring.report_ref(recovered)
     assert (await recurring.read(service, recovered["methodologyRef"]))[
         "planRef"
     ] == plan_ref
@@ -565,3 +685,37 @@ async def test_one_readable_file_does_not_replace_missing_source_context(environ
     assert authorization["status"] == "blocked"
     assert any("Source is unavailable" in item for item in authorization["limitations"])
     assert any("source_refs" in item for item in result["limitations"])
+
+
+async def test_report_retry_refreshes_presentation_without_repeating_completed_work(
+    environment, monkeypatch
+):
+    from moonmind.security import web_api_methodology
+
+    service = environment.service
+    plan_ref, _ = await retain_plan(service)
+    request, _, _ = await recurring.inputs(service)
+    request["methodology"] = {"planRef": plan_ref}
+    original = await recurring.invoke(service, request)
+    render = web_api_methodology.render_methodology
+
+    def revised_presentation(report):
+        return render(report) + "\nUpdated methodology presentation.\n"
+
+    def no_rescan(*args):
+        raise AssertionError("Presentation recovery repeated completed native work")
+
+    monkeypatch.setattr(web_api_methodology, "render_methodology", revised_presentation)
+    monkeypatch.setattr(recurring.security_assessment, "observe_inventory", no_rescan)
+    refreshed = await recurring.invoke(service, request)
+    replayed = await recurring.invoke(service, request)
+    for key in ("scanRef", "comparisonRef", "methodologyRef"):
+        assert original[key] == refreshed[key] == replayed[key]
+    assert recurring.report_ref(original) != recurring.report_ref(refreshed)
+    assert recurring.report_ref(refreshed) == recurring.report_ref(replayed)
+    assert "Updated methodology presentation." in await primary_report(
+        service, refreshed
+    )
+    assert "Updated methodology presentation." not in await primary_report(
+        service, original
+    )

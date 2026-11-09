@@ -66,3 +66,7 @@ Record limitations, review status, reviewer attribution when reviewed, reviewer
 notes and follow-up tasks. Automated coverage does not imply an independent
 professional engagement. Missing methods, identities or evidence remain visible;
 comparable retests require the original cases, methods, oracle and coverage.
+The primary report and bundle show overall selected coverage; native comparison
+coverage stays separate. Public objective states remain readable after credential
+redaction, and reporting retries refresh changed presentations while retaining
+completed native work.

@@ -559,7 +559,7 @@ def render_methodology(report):
     ]
     for row in report["objectives"]:
         lines.append(
-            f"- {safe(row['id'])}: {row['status']}; {safe(row['reason'] or '')}"
+            f"- {safe(row['id'])} — {row['status']}; {safe(row['reason'] or '')}"
         )
         for method in row["methods"]:
             lines.append(
