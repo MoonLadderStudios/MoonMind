@@ -194,3 +194,55 @@ async def test_exported_corpus_survives_ci_redaction(
     assert retained["bytes"] == len(body)
     assert json.loads(body)["token"] != "fixture-sensitive-value"
     assert b"fixture-sensitive-value" not in body
+
+
+def test_historical_findings_require_comparable_scope_and_criteria():
+    context = dict(
+        build="synthetic-a",
+        configuration="default",
+        edition="4.0",
+        criteria=["GLI-19:4"],
+        period=["2026-11-04", "2026-11-07"],
+        systems=["casino"],
+    )
+    historical = {"context": context, "findings": ["missed-rule"]}
+    actual = {"context": copy.deepcopy(context), "findings": []}
+    assert quality.reconcile_historical(historical, actual) == {
+        "status": "comparable",
+        "differences": [],
+        "missedRequirements": ["missed-rule"],
+    }
+    for field in context:
+        changed = copy.deepcopy(actual)
+        changed["context"].pop(field)
+        result = quality.reconcile_historical(historical, changed)
+        assert result["status"] == "Unverified"
+        assert result["differences"] == [field]
+        assert result["missedRequirements"] == []
+        changed["context"][field] = (
+            ["different"] if isinstance(context[field], list) else "different"
+        )
+        result = quality.reconcile_historical(historical, changed)
+        assert result["status"] == "Unverified"
+        assert result["differences"] == [field]
+        assert result["missedRequirements"] == []
+
+
+def test_gaming_metrics_do_not_confuse_unknowns_with_verified_fixes(case, observed):
+    observed.update(unknowns=["approval", "sampling"], verifiedRemediations=[])
+    case.update(unknowns=["approval", "sampling"], verifiedRemediations=[])
+    result = evaluate(case, observed, {"native": b"{}"})
+    assert result["metrics"]["unknownCoverage"] == 2
+    assert result["metrics"]["verifiedRemediations"] == 0
+    assert result["metrics"]["detectedDefects"] == 1
+    observed["unknowns"] = []
+    observed["verifiedRemediations"] = ["owner@app/routes.py"]
+    assert not evaluate(case, observed, {"native": b"{}"})["passed"]
+
+
+def test_gaming_reproducibility_includes_gaps_and_fixes(observed):
+    observed.update(unknowns=["approval"], verifiedRemediations=[])
+    for key in ("unknowns", "verifiedRemediations"):
+        changed = copy.deepcopy(observed)
+        changed[key] = ["different"]
+        assert observation_digest(changed) != observation_digest(observed)

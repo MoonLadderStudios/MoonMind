@@ -1,0 +1,16 @@
+{
+  "license": "Apache-2.0",
+  "origin": "First-party synthetic redacted archive shape. No customer or laboratory report was imported.",
+  "historical": {
+    "context": {
+      "build": "synthetic-release-a",
+      "configuration": "synthetic-default",
+      "edition": "4.0",
+      "criteria": ["GLI-19:6.6"],
+      "period": ["2026-11-04", "2026-11-07"],
+      "systems": ["casino"]
+    },
+    "findings": ["mapping-bias"]
+  },
+  "limits": "A reference report is evidence, not an exhaustive inventory of defects. Import only authorized redacted metadata and artifacts. Missing comparison dimensions are Unverified, not product defects."
+}
