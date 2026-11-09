@@ -243,6 +243,7 @@ it('cancels an interrupted preset submission on navigation without leaking it in
     await waitFor(() => expect(within(select).getByRole('option', { name: preset.title })).toBeTruthy());
     await userEvent.selectOptions(select, preset.slug);
     await userEvent.fill(await within(step).findByRole('textbox', { name: 'Target' }), 'repo/abandoned');
+    await userEvent.click(within(step).getByText('Advanced Assessment options'));
     await userEvent.fill(within(step).getByRole('textbox', { name: 'Evidence path' }), 'abandoned/report.json');
     await userEvent.click(within(step).getByRole('button', { name: 'Omit Optional evidence' }));
     await userEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
