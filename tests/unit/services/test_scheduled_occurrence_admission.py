@@ -1539,3 +1539,63 @@ async def test_disabled_processing_retains_native_tool_only_occurrence(monkeypat
     )
     assert admitted["disposition"] == "recorded"
     readmit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("widen", "differs from its original authority"),
+        ("discard", "cannot discard its original authority"),
+        ("malformed", "execution-plan authority is invalid"),
+    ],
+)
+async def test_scheduled_assessment_denial_preserves_validation_reason(
+    monkeypatch, change, reason
+):
+    from unittest.mock import AsyncMock
+
+    from temporalio import activity
+
+    from api_service.services import assessment_authorizations
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+    )
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from tests.unit.services.test_assessment_job_authority import authorization
+
+    original = {
+        "assessmentScope": authorization_scope(authorization()).model_dump(
+            mode="json", by_alias=True
+        )
+    }
+    changed = deepcopy(original)
+    if change == "discard":
+        changed.pop("assessmentScope")
+    elif change == "widen":
+        changed["assessmentScope"]["targets"].append({"artifactRef": "art_unadmitted"})
+    else:
+        changed["assessmentScope"] = {"invalid": True}
+    readmit = AsyncMock(return_value={"initial_parameters": original})
+    reserve = AsyncMock()
+    plan = AsyncMock()
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(namespace="default", workflow_run_id="run-1"),
+    )
+    monkeypatch.setattr(assessment_authorizations, "admit_assessment_occurrence", reserve)
+    monkeypatch.setattr(plan_service, "readmit_frozen_execution_plan", plan)
+
+    with pytest.raises(RecurringWorkflowValidationError, match=reason):
+        await RecurringWorkflowsService(
+            None, artifact_service=SimpleNamespace(readmit_scheduled_inputs=readmit)
+        ).admit_occurrence_execution_plan(
+            workflow_id="mm:11111111-1111-4111-8111-111111111111-2026-11-09T00:00:00Z",
+            initial_parameters=changed,
+        )
+
+    readmit.assert_awaited_once()
+    reserve.assert_not_awaited()
+    plan.assert_not_awaited()

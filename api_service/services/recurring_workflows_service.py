@@ -1489,6 +1489,8 @@ class RecurringWorkflowsService:
         except TemporalArtifactAuthorizationError as exc:
             # The shared model admission owner supplies a bounded policy reason.
             raise RecurringWorkflowValidationError(str(exc)) from None
+        except RecurringWorkflowValidationError:
+            raise
         except ValueError as exc:
             raise RecurringWorkflowValidationError(
                 "scheduled Omnigent execution-plan authority is invalid"
