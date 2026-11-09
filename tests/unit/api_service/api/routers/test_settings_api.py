@@ -1396,3 +1396,23 @@ async def test_mm655_diagnostics_endpoint_reports_distinct_states(monkeypatch):
     value = response.json()["values"]["test.policy_blocked"]
     assert value["diagnostics"][0]["code"] == "policy_blocked"
     assert value["source"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_catalog_reset_preview_matches_delete_and_reloaded_value(settings_api_db, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_DEFAULT_RUNTIME", "claude_code")
+    key = "workflow.default_runtime"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        saved = await client.patch("/api/v1/settings", json={"changes": {key: "omnigent"}})
+        assert saved.status_code == 200
+        catalog = await client.get("/api/v1/settings/catalog?section=user-workspace")
+        descriptor = next(d for d in catalog.json()["categories"]["Workflow"] if d["key"] == key)
+        assert descriptor["default_value"] == "omnigent"
+        assert descriptor["reset_value"] == "claude_code"
+        reset = await client.delete(f"/api/v1/settings/{key}")
+        assert reset.status_code == 200
+        assert reset.json()["value"] == descriptor["reset_value"]
+        refreshed = await client.get("/api/v1/settings/catalog?section=user-workspace")
+        restored = next(d for d in refreshed.json()["categories"]["Workflow"] if d["key"] == key)
+        assert restored["effective_value"] == descriptor["reset_value"]
+        assert restored["source"] == "environment"

@@ -22,10 +22,10 @@ function catalog(): { section: string; categories: { Workflow: SettingDescriptor
   };
   return { section: 'user-workspace', categories: { Workflow: [
     { ...common, key: runtimeKey, title: 'Default Harness', type: 'enum', ui: 'select',
-      default_value: 'omnigent', effective_value: 'codex_cli', value_version: 3,
+      default_value: 'omnigent', reset_value: 'omnigent', effective_value: 'codex_cli', value_version: 3,
       options: [{ value: 'omnigent', label: 'OpenCode' }, { value: 'codex_cli', label: 'Codex' }, { value: 'claude_code', label: 'Claude Code' }] },
     { ...common, key: profileKey, title: 'Default Provider Profile', type: 'string', ui: 'provider_profile_picker',
-      default_value: null, effective_value: null, value_version: 4 },
+      default_value: null, reset_value: null, effective_value: null, value_version: 4 },
   ] } };
 }
 let current = catalog();
@@ -262,26 +262,28 @@ describe('NewWorkDefaultsCard', () => {
     await screen.findByText('No audit events were found for this setting.');
     changeHarness();
     fireEvent.click(screen.getByRole('button', { name: 'Harness actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to default' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reset to default (OpenCode)' }));
     await screen.findByText('Harness reset to default');
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => url)).toEqual([`/api/v1/settings/${runtimeKey}`]);
     expect((screen.getByLabelText('Provider profile') as HTMLSelectElement).value).toBe('claude-team');
     expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('omnigent');
   });
   it.each([
-    { key: runtimeKey, title: 'Harness', inherited: 'claude_code', proposed: 'omnigent' },
-    { key: profileKey, title: 'Provider profile', inherited: 'claude-team', proposed: 'disabled' },
-  ])('resets $title to inherited configuration without advertising the registry default', async ({ key, title, inherited, proposed }) => {
+    { key: runtimeKey, title: 'Harness', inherited: 'claude_code', label: 'Claude Code', proposed: 'omnigent' },
+    { key: profileKey, title: 'Provider profile', inherited: 'claude-team', label: /Reset to default \(claude-team.*Claude Code/, proposed: 'disabled' },
+    { key: profileKey, title: 'Provider profile', inherited: null, label: 'Not set', proposed: 'claude-team' },
+  ])('resets $title to inherited configuration without advertising the registry default', async ({ key, title, inherited, label, proposed }) => {
     inheritedValues[key] = inherited;
+    Object.assign(current.categories.Workflow.find((item) => item.key === key)!, { reset_value: inherited });
     renderCard(); await screen.findByLabelText('Harness');
     await screen.findByRole('option', { name: /claude-team/ });
     fireEvent.change(screen.getByLabelText(title), { target: { value: proposed } });
     fireEvent.click(screen.getByRole('button', { name: `${title} actions` }));
-    const reset = screen.getByRole('menuitem', { name: 'Reset to default' });
+    const reset = screen.getByRole('menuitem', { name: typeof label === 'string' ? `Reset to default (${label})` : label });
     fireEvent.click(reset);
     await screen.findByText(`${title} reset to default`);
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => url)).toEqual([`/api/v1/settings/${key}`]);
-    expect((screen.getByLabelText(title) as HTMLSelectElement).value).toBe(inherited);
+    expect((screen.getByLabelText(title) as HTMLSelectElement).value).toBe(inherited ?? '');
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
   it('protects a dirty draft on departure', async () => {

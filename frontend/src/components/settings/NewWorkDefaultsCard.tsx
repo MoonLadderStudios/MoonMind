@@ -203,7 +203,8 @@ export function NewWorkDefaultsCard() {
               </fieldset>
               <WorkflowActionsMenu triggerContent="⋯" triggerAriaLabel={`${descriptor.title} actions`} items={[
                 { id: 'history', label: 'View history', onSelect: () => setAuditKey(auditKey === descriptor.key ? null : descriptor.key) },
-                ...(canReset(descriptor) ? [{ id: 'reset', label: 'Reset to default',
+                ...(canReset(descriptor) ? [{ id: 'reset', label: Object.hasOwn(descriptor, 'reset_value')
+                  ? `Reset to default (${valueLabel(descriptor, descriptor.reset_value)})` : 'Reset to default',
                   disabledReason: busy ? 'Saving defaults' : descriptor.read_only ? descriptor.read_only_reason || 'Read-only setting' : null,
                   onSelect: () => { void reset(descriptor); } }] : []),
               ]} />

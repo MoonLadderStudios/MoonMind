@@ -250,6 +250,7 @@ class SettingDescriptor(BaseModel):
     type: str
     ui: str
     default_value: Any = None
+    reset_value: Any = None
     effective_value: Any = None
     override_value: Any = None
     source: str
@@ -1027,6 +1028,7 @@ class SettingsCatalogService:
             override_present,
             diagnostics,
         )
+        reset_value, _ = self._resolve_value(entry)
         return SettingDescriptor(
             key=entry.key,
             title=entry.title,
@@ -1036,6 +1038,9 @@ class SettingsCatalogService:
             type=entry.value_type,
             ui=entry.ui,
             default_value=entry.default_value,
+            reset_value=(
+                None if self._should_redact_preview_value(entry, reset_value) else reset_value
+            ),
             effective_value=value,
             override_value=None,
             source=metadata["source"],
