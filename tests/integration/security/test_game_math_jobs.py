@@ -273,7 +273,8 @@ class Job:
             stderr=subprocess.PIPE,
         )
 
-    async def publish(self, *, terminal_state: str, exit_code: int | None) -> str:
+    async def publish_evidence(self, *, terminal_state: str, exit_code: int | None):
+        """Publish terminal evidence under the job Activity, even without a result."""
         self.request.container_ref = "fixture-container"
         self.request.terminal_state = terminal_state
         self.request.exit_code = exit_code
@@ -286,6 +287,10 @@ class Job:
         result = await activity.run(self.backend.publish_evidence, self.request)
         self.request.artifacts_ref = result.artifacts_ref
         await _container_job_projection_writer("docker", "fixture")(self.request)
+        return result
+
+    async def publish(self, *, terminal_state: str, exit_code: int | None) -> str:
+        await self.publish_evidence(terminal_state=terminal_state, exit_code=exit_code)
         return next(
             ref for ref, body in self.published.items() if self.result_schema in body
         )
