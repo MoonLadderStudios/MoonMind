@@ -415,6 +415,11 @@ def prepare_assessment(
             MANAGEMENT[key][1:] if is_management else ("policy", "occurrence")
         )
         supplied = system.requirement_evidence.get(key, [])
+        if is_management and any(item.category != category for item in supplied):
+            reasons.append(
+                f"Supply {category} evidence for this management-system requirement; "
+                "a review of another evidence category does not establish it."
+            )
         required = [purpose] if is_management else ["design", "adoption", "occurrence"]
         reviewed = review_requirement(
             requirement_id=key,
@@ -503,6 +508,8 @@ def prepare_assessment(
                     "riskIds": risk_links,
                     "systems": systems,
                     "period": row["period"],
+                    "responsibleEntity": choice.responsible_entity,
+                    "responsibilityReason": choice.responsibility_reason,
                     "evidenceStatus": status,
                     "verification": "Unverified",
                 }
@@ -618,7 +625,7 @@ def prepare_assessment(
             report["evidenceRequests"].append(
                 {
                     "id": "reassessment.applicability",
-                    "prompt": "Review applicability and evidence after changed risk, scope, period or pack edition.",
+                    "prompt": "Review applicability and evidence after changed risk, scope, period, responsibility agreement or pack edition.",
                     "affectedControlIds": affected,
                     "affectedRequirementIds": affected_requirements,
                 }

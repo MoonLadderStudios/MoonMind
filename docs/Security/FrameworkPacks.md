@@ -169,8 +169,10 @@ requests described above. These preserve purpose-specific reviews and historical
 revisions, but only current revisions are read, admitted and retained as evidence.
 Internal audits, management reviews, training and corrective actions need records
 of occurrence; a policy draft or management assertion does not prove they happened.
-Control evidence covers design, adoption and occurrence separately. Missing,
-denied, expired, out-of-population or wrong-purpose evidence remains a gap.
+Management-clause evidence must match the clause’s documentary category; an
+internal audit does not establish management review. Control evidence covers
+design, adoption and occurrence separately. Missing, denied, expired,
+out-of-population or wrong-purpose evidence remains a gap.
 `evidenceRefs` can reuse scoped technical records for several requirement IDs,
 without transferring one requirement's conclusion to another. Technical context
 never replaces the organisational record review.
@@ -178,9 +180,10 @@ never replaces the organisational record review.
 The structured framework artifact and primary report export the draft Statement
 of Applicability with a content-derived version, inclusion/exclusion rationale,
 implementation assertions, evidence coverage and risk links. Link a previous
-framework artifact using `previousAssessmentRef`: changed risk, scope, period or
-edition identifies affected controls and evidence for review without editing the
-old artifact. The current report retains the prior reference and SoA version.
+framework artifact using `previousAssessmentRef`: changed risk, scope, period,
+responsibility agreement or edition identifies affected controls and evidence for
+review without editing the old artifact. The current report retains the prior
+reference and SoA version.
 
 Readiness describes recorded evidence only. Generated policies and SoAs remain
 drafts, a passed vulnerability retest cannot close missing ISMS process evidence,

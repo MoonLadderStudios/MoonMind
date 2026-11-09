@@ -252,3 +252,59 @@ def test_reordered_management_scope_is_not_a_changed_requirement():
         evaluate(request, previous=previous)["reassessment"]["affectedRequirementIds"]
         == []
     )
+
+
+@pytest.mark.parametrize("category", ["internal_audit", "management_review"])
+def test_management_review_requires_its_own_evidence_category(category):
+    item = reviewed_evidence()
+    item["category"] = category
+    report = evaluate(
+        selection(requirementEvidence={"9.3": [item]}),
+        evidence_availability={"art_audit": None},
+    )
+    row = next(r for r in report["requirements"] if r["id"] == "9.3")
+    assert row["status"] == (
+        "evidence_reviewed" if category == "management_review" else "incomplete"
+    )
+    if category == "internal_audit":
+        assert any(r.get("requirementId") == "9.3" for r in report["evidenceRequests"])
+
+
+@pytest.mark.parametrize("control", ["A.8.8", "EXTRA.1"])
+@pytest.mark.parametrize("reason_only", [False, True])
+def test_control_responsibility_changes_version_and_requests_review(control, reason_only):
+    import copy
+
+    from moonmind.security.frameworks import RequirementChoice
+
+    documents = [
+        reviewed_evidence(purpose) for purpose in ("design", "adoption", "occurrence")
+    ]
+    for document in documents:
+        document["id"] = document["purpose"]
+    request = selection(requirementEvidence={control: documents})
+    availability = {"art_audit": None}
+    if reason_only:
+        request.requirement_choices[control] = RequirementChoice(
+            responsible_entity="partner", responsibility_reason="Previous agreement"
+        )
+    previous = evaluate(request, evidence_availability=availability)
+    prior_row = next(r for r in previous["requirements"] if r["id"] == control)
+    assert prior_row["status"] == "evidence_reviewed"
+    preserved = copy.deepcopy(previous)
+    request.requirement_choices[control] = RequirementChoice(
+        responsible_entity="partner", responsibility_reason="New provider agreement"
+    )
+    report = evaluate(request, previous=previous, evidence_availability=availability)
+    assert report["statementOfApplicability"]["version"] != previous[
+        "statementOfApplicability"
+    ]["version"]
+    assert report["reassessment"]["affectedControlIds"] == [control]
+    assert report["reassessment"]["affectedRequirementIds"] == [control]
+    prompt = next(
+        r for r in report["evidenceRequests"] if r["id"] == "reassessment.applicability"
+    )
+    assert prompt["affectedRequirementIds"] == [control]
+    assert previous == preserved
+    repeated = evaluate(request, previous=report, evidence_availability=availability)
+    assert repeated["reassessment"]["affectedRequirementIds"] == []
