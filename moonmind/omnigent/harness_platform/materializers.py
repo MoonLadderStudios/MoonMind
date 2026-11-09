@@ -808,6 +808,7 @@ def codex_provider_config_endpoint(
                     baseUrl=base_url,
                     defaultModel=configuration["document"].get("model"),
                     launchEnvironment=configuration.pop("launchEnvironment", {}),
+                    environmentTemplates=configuration.pop("environmentTemplates", None),
                     codexConfiguration=configuration,
                 ),
                 "",

@@ -410,6 +410,10 @@ class _AnySecret:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_id", sorted(_SHAPES))
 async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
+    await _assert_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id)
+
+
+async def _assert_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id, profile_values=None):
     """An interrupted step's new attempt gets its own provider config.
 
     Re-admission (a new ``admission_epoch`` on the same capacity lease) is how
@@ -426,6 +430,12 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
     )
 
     shape = _SHAPES[runtime_id]
+    selected_values = {
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": shape["secret_refs"],
+        "env_template": shape["env_template"],
+        **(profile_values or {}),
+    }
     templates = {"REPORT_DIR": "{{workspace_path}}/reports"}
     profile_id = f"{runtime_id}_api"
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/attempts.db")
@@ -440,9 +450,7 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
                 provider_id=shape["provider_id"],
                 credential_generation=4,
                 credential_source="secret_ref",
-                runtime_materialization_mode="api_key_env",
-                secret_refs=shape["secret_refs"],
-                env_template={**shape["env_template"], **templates},
+                **{**selected_values, "env_template": {**selected_values["env_template"], **templates}},
             )
         )
         await session.commit()
