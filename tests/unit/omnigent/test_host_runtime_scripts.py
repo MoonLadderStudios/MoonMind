@@ -40,10 +40,11 @@ def test_profile_owned_literal_environment_reaches_the_native_runner(materialize
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
-def test_recorded_literal_environment_does_not_gain_template_interpretation():
+@pytest.mark.parametrize("materializer", ["codex-oauth-home@1", "omnigent-provider-config@1"])
+def test_recorded_literal_environment_does_not_gain_template_interpretation(materializer):
     _script, environment = OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[{
-            "credentialGeneration": 3, "materializerRef": "codex-oauth-home@1",
+            "credentialGeneration": 3, "materializerRef": materializer,
             "attachments": [], "runtimeEnvironment": {"PROJECT_REPORT_ROOT": "{{workspace_path}}/reports"},
         }],
         skill_attachment={"targetPath": "/opt/skills"},
@@ -90,7 +91,7 @@ def test_profile_environment_template_cannot_replace_an_existing_value():
 @pytest.mark.parametrize("harness", ["codex", "claude"])
 @pytest.mark.parametrize("deployment_setting", [False, True])
 @pytest.mark.parametrize("delivery", ["oauth-home", "provider-config"])
-@pytest.mark.parametrize("literal", ["exact value; $(not-executed)", "  exact value; $(not-executed)  "])
+@pytest.mark.parametrize("literal", ["exact value; $(not-executed)", "  exact value; $(not-executed)  ", "{{workspace_path}}/reports", "{{ runtime_support_dir }}/cache"])
 def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, delivery, literal, monkeypatch):
     if deployment_setting:
         monkeypatch.setenv("MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_RUNTIME_STYLE")
@@ -116,14 +117,17 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
         "'CODEX_HOME':'/private/native-codex-home'})\n"
     )
     omnigent.chmod(0o700)
+    templated = "{{" in literal
     script, environment = OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[{
             "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1" if delivery == "oauth-home" else "omnigent-provider-config@1",
-            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": literal},
+            "attachments": [],
+            "runtimeEnvironmentTemplates" if templated else "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": literal},
         }],
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:work:execution:1",
         enable_codex_runtime=harness == "codex", enable_claude_runtime=harness == "claude",
+        workspace_path="/workspaces/admitted",
         control_credential_available=False,
         runtime_environment={"PROJECT_RUNTIME_STYLE": "deployment-default"} if deployment_setting else None,
     )
@@ -135,7 +139,7 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "value":literal,
+        "value": literal.replace("{{workspace_path}}", "/workspaces/admitted").replace("{{ runtime_support_dir }}", str(home / ".omnigent/moonmind/runtime-context")),
         "home":"/private/native-home", "codex_home":"/private/native-codex-home",
     }
     assert "exact value" not in script

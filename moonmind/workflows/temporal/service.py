@@ -149,6 +149,8 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
     load_remediation_target,
+    read_security_remediation_findings,
+    RemediationContextError,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -1347,6 +1349,53 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "workflow.remediation.target.runId must match the current target runId."
             )
+        security_evidence = None
+        security_selection = target.get("securityFinding")
+        if security_selection is not None:
+            if (
+                not isinstance(security_selection, Mapping)
+                or set(security_selection) not in ({"comparisonArtifactRef", "findingId"}, {"reviewArtifactRef", "interpretationId"})
+                or not all(isinstance(value, str) and value.strip() for value in security_selection.values())
+            ):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.securityFinding requires one comparison/finding or review/interpretation pair."
+                )
+            is_review = "reviewArtifactRef" in security_selection
+            identity_key = "interpretationId" if is_review else "findingId"
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(self._session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            )
+            try:
+                findings = await read_security_remediation_findings(
+                    service=artifact_service,
+                    workflow_id=target_record.workflow_id,
+                    run_id=target_record.run_id,
+                    comparison_artifact_ref=security_selection.get("comparisonArtifactRef"),
+                    review_artifact_ref=security_selection.get("reviewArtifactRef"),
+                    access=ArtifactAccessContext.for_execution(
+                        target_record.workflow_id,
+                        principal="service:remediation-admission",
+                    ),
+                )
+                security_evidence = next(
+                    (row for row in findings["findings"] if row[identity_key] == security_selection[identity_key]),
+                    None,
+                )
+                if security_evidence is None:
+                    raise RemediationContextError("Selected finding is not in the comparison.")
+            except (RemediationContextError, ValidationError, TemporalArtifactAuthorizationError,
+                    TemporalArtifactNotFoundError, TemporalArtifactStateError,
+                    TemporalArtifactValidationError) as exc:
+                raise TemporalExecutionValidationError(
+                    f"Security remediation evidence unavailable: {exc}"
+                ) from exc
+            # Retain original admission as evidence only. Never install its
+            # scope/authorization as the remediation workflow's authority.
+            security_evidence["sourceAssessmentScope"] = (target_record.parameters or {}).get("assessmentScope")
+        if remediation.get("securityEvidence") is not None and remediation["securityEvidence"] != security_evidence:
+            raise TemporalExecutionValidationError("Security remediation evidence is server-owned and cannot be changed.")
+
         agent_run_ids = (
             target.get("agentRunIds")
             if "agentRunIds" in target
@@ -1583,7 +1632,7 @@ class TemporalExecutionService:
                 f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
-        return TemporalExecutionRemediationLink(
+        link = TemporalExecutionRemediationLink(
             remediation_workflow_id=new_workflow_id,
             remediation_run_id=new_run_id,
             target_workflow_id=target_record.workflow_id,
@@ -1593,6 +1642,8 @@ class TemporalExecutionService:
             status="created",
             trigger_type=trigger_type,
         )
+        link.security_evidence = security_evidence
+        return link
 
     @classmethod
     def _target_agent_run_ids(
@@ -2620,6 +2671,8 @@ class TemporalExecutionService:
                 pinned_target["workflowId"] = remediation_link.target_workflow_id
                 pinned_target["runId"] = remediation_link.target_run_id
                 pinned_remediation["target"] = pinned_target
+                if getattr(remediation_link, "security_evidence", None) is not None:
+                    pinned_remediation["securityEvidence"] = remediation_link.security_evidence
                 task_params["remediation"] = pinned_remediation
                 params["workflow"] = task_params
         # Re-promote the normalized task payload under the canonical
@@ -2880,6 +2933,23 @@ class TemporalExecutionService:
                     ) from None
                 record.artifact_refs = list(
                     dict.fromkeys([*record.artifact_refs, *evidence_refs])
+                )
+            if remediation_link is not None and getattr(remediation_link, "security_evidence", None):
+                # The existing create identity wins before any input grant.
+                # The selected evidence confers read rights only, not mutation,
+                # publication or deployment authority.
+                await self._session.flush()
+                artifact_service = TemporalArtifactService(
+                    TemporalArtifactRepository(self._session),
+                    transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                )
+                await artifact_service.delegate_read_access(
+                    artifact_ids=remediation_link.security_evidence["evidenceArtifactRefs"],
+                    workflow_id=workflow_id, namespace=self._namespace,
+                    access=ArtifactAccessContext.for_execution(
+                        remediation_link.target_workflow_id,
+                        principal="service:remediation-admission",
+                    ),
                 )
             if _admitted_execution_plan is not None:
                 # The canonical unique create identity chooses the winner

@@ -13,6 +13,7 @@ a new ``stable`` release is qualified when it arrives.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -33,6 +34,7 @@ from moonmind.security.cloud_assessments import (
 )
 from moonmind.security.web_assessments import (
     build_web_assessment_job,
+    path_admitted,
     render_web_assessment_plan,
     sanitize_messages,
     sanitize_report,
@@ -111,12 +113,34 @@ def _read(path: Path) -> bytes | None:
 
 
 @pytest.mark.parametrize(
-    ("route", "expected"), [("/search", "findings"), ("/fixed/search", "clean")]
+    ("route", "expected"),
+    [
+        ("/search", "findings"),
+        ("/fixed/search", "clean"),
+        ("/middleware", "general"),
+        ("/middleware", "general-active"),
+        ("/middleware", "match"),
+        ("/fixed/middleware", "negative"),
+        ("/middleware/redirect", "incomplete"),
+    ],
 )
 def test_zap_image_assesses_vulnerable_and_hardened_routes(tmp_path, route, expected):
     web = WebAssessment.model_validate(
         {
-            "mode": "baseline",
+            "mode": (
+                "known-issues"
+                if expected in {"match", "negative", "incomplete"}
+                else ("active" if expected == "general-active" else "baseline")
+            ),
+            "activeStrength": "low" if expected == "general-active" else None,
+            "templateIds": (
+                ["nextjs-middleware-bypass"]
+                if expected in {"match", "negative", "incomplete"}
+                else []
+            ),
+            "discovery": (
+                [] if expected in {"match", "negative", "incomplete"} else ["spider"]
+            ),
             "assessmentRef": "upstream-zap",
             "origin": f"http://app.example.test:{APP_PORT}",
             "routes": [{"path": route, "methods": ["GET"]}],
@@ -161,14 +185,56 @@ def test_zap_image_assesses_vulnerable_and_hardened_routes(tmp_path, route, expe
         exit_code=code,
         terminal_state="succeeded" if code == 0 else "failed",
         native_ref="art_upstream_zap_report",
+        messages_ref="art_upstream_zap_messages",
     )
     print(f"ZAP {summary.execution.version}: {summary.model_dump_json()[:2000]}")
     assert summary.execution.version, "ZAP report did not name its version"
-    assert (summary.execution.plan, summary.coverage.tested_routes) == (
-        "completed",
-        [f"GET {route}"],
-    )
-    if expected == "clean":
+    expected_routes = [f"GET {route}"]
+    if expected in {"general", "general-active"}:
+        # A real 307 redirects the general spider to a local, admitted login
+        # page. The curated requestor must still send only its exact pair.
+        expected_routes.append("GET /middleware/login")
+    assert summary.execution.plan == "completed", summary.model_dump(mode="json")
+    if expected == "general-active":
+        # The existing general scanner can probe additional admitted children,
+        # including randomized not-found checks. That is not template expansion.
+        assert set(expected_routes) <= set(summary.coverage.tested_routes)
+        assert all(
+            method == "GET" and path_admitted(web, path, method)
+            for method, path in (
+                route.split(" ", 1) for route in summary.coverage.tested_routes
+            )
+        )
+    else:
+        assert summary.coverage.tested_routes == expected_routes
+    if expected in {"match", "negative", "incomplete"}:
+        assert summary.coverage.templates[0].outcome == expected
+        assert summary.status == ("partial" if expected == "incomplete" else "complete")
+        assert bool([f for f in summary.findings if f.rule_id == "CVE-2025-29927"]) == (
+            expected == "match"
+        )
+        har = json.loads((out / WEB_OUTPUT_FILES["messages"]).read_bytes())
+        exchanged = [e for e in har["log"]["entries"] if e["response"].get("status")]
+        assert len(exchanged) == 2
+        assert {(e["request"]["url"], e["request"]["method"]) for e in exchanged} == {
+            (web.origin + route, "GET")
+        }
+        assert not any(
+            h["name"].lower() in {"authorization", "cookie"}
+            for e in exchanged
+            for h in e["request"]["headers"]
+        )
+    elif expected in {"general", "general-active"}:
+        # Existing general discovery has no curated middleware probe. This is
+        # a differential coverage observation, not a claim about every ZAP rule.
+        assert not [f for f in summary.findings if f.rule_id == "CVE-2025-29927"]
+        har = json.loads((out / WEB_OUTPUT_FILES["messages"]).read_bytes())
+        assert not any(
+            h["name"].lower() == "x-middleware-subrequest"
+            for e in har["log"]["entries"]
+            for h in e["request"]["headers"]
+        )
+    elif expected == "clean":
         assert (summary.status, summary.findings, summary.limitations) == (
             "complete",
             [],

@@ -657,7 +657,10 @@ def _web_observation(
 ) -> Observation:
     """ZAP findings as web coverage of one origin, mode and identity."""
     result, admission = summary.result, summary.admission
-    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in result.findings):
+    allowed_evidence = {summary.native_ref}
+    if admission.mode == "known-issues":
+        allowed_evidence.add(summary.messages_ref)
+    if any(not set(f.evidence_refs) <= allowed_evidence for f in result.findings):
         raise ValueError("finding evidence differs from retained native records")
     if any(f.asset not in request.scope.assets for f in result.findings):
         raise ValueError("web finding outside admitted assessment scope")
@@ -688,6 +691,17 @@ def _web_observation(
                         admission.exclusions,
                         sorted(summary.coverage.tested_routes),
                     ]
+                    + (
+                        [
+                            [p.sha256 for p in summary.template_provenance],
+                            [
+                                (t.template_id, t.route)
+                                for t in summary.coverage.templates
+                            ],
+                        ]
+                        if admission.mode == "known-issues"
+                        else []
+                    )
                 ),
                 status=(
                     "complete"
@@ -2146,8 +2160,19 @@ class AssessmentExecution:
                             )
                         elif payload.get("schemaVersion") == "web-assessment/v1":
                             web_summary = WebAssessmentSummary.model_validate(payload)
-                            if web_summary.native_ref:
-                                await self.read(web_summary.native_ref)
+                            web_native_refs = {"report": web_summary.native_ref}
+                            if web_summary.admission.mode == "known-issues":
+                                web_native_refs.update(
+                                    messages=web_summary.messages_ref,
+                                    plan=web_summary.plan_ref,
+                                )
+                            web_native_refs = {
+                                key: value
+                                for key, value in web_native_refs.items()
+                                if value
+                            }
+                            for native_ref in web_native_refs.values():
+                                await self.read(native_ref)
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
@@ -2159,11 +2184,7 @@ class AssessmentExecution:
                                     "scanner": "zap",
                                     "target": web_summary.admission.origin,
                                     "summaryRef": ref,
-                                    "nativeRefs": (
-                                        {"report": web_summary.native_ref}
-                                        if web_summary.native_ref
-                                        else {}
-                                    ),
+                                    "nativeRefs": web_native_refs,
                                     "coverage": observation.coverage[0].status,
                                     "execution": {
                                         "report": web_summary.result.execution
@@ -2677,6 +2698,40 @@ class AssessmentExecution:
                     total += len(body)
                     if total > _MAX_INPUT_BYTES:
                         raise ValueError("review evidence exceeds the input bound")
+                review_refs = review.evidence_refs()
+                if (
+                    review.candidate_ref.startswith("art_")
+                    and review.candidate_ref not in review_refs
+                ):
+                    _, body = await self.read(review.candidate_ref)
+                    total += len(body)
+                    if total > _MAX_INPUT_BYTES:
+                        raise ValueError("review evidence exceeds the input bound")
+                    review_refs.append(review.candidate_ref)
+
+                async def review_dependencies():
+                    return [
+                        ArtifactDependency(
+                            ref, self.digests[ref], True, "security.review.evidence"
+                        )
+                        for ref in review_refs
+                    ]
+
+                await self.seal(request.review_ref, review_dependencies)
+                _root, links, _pinned, _policy = await self.service.get_metadata(
+                    artifact_id=request.review_ref, access=self.access
+                )
+                if not any(
+                    link.link_type == "security.review"
+                    and link.workflow_id == self.execution["workflow_id"]
+                    and link.run_id == self.execution["run_id"]
+                    for link in links
+                ):
+                    await self.service.link_artifact(
+                        artifact_id=request.review_ref,
+                        principal=self.principal,
+                        execution_ref={**self.execution, "link_type": "security.review"},
+                    )
                 review_status = "completed"
             except Exception as exc:
                 review = None
