@@ -33,6 +33,7 @@ RUNNER_FILES = (
     "security/image_assessment_runner.py",
     "security/image_assessments.py",
     "security/assessments.py",
+    "security/web_api_methodology.py",
     "security/assessment_projects.py",
     "security/evidence_exports.py",
     "security/dns_assessments.py",

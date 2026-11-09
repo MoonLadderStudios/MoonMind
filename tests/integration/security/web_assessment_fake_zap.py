@@ -91,11 +91,14 @@ class Zap:
             p.fullmatch(url) for p in self.exclude
         )
 
-    def send(self, method: str, url: str, *, user=None, body: str = "") -> dict:
+    def send(
+        self, method: str, url: str, *, user=None, body: str = "", extra_headers=()
+    ) -> dict:
         if user is not None:
             self.ensure_session(user)
         url = self.guarded(method, url)
         headers = {"host": urlsplit(url).netloc}
+        headers.update(h.split(":", 1) for h in extra_headers)
         if user is not None and user in self.sessions:
             headers["Cookie"] = self.sessions[user]
         bearer = os.environ.get("ZAP_AUTH_HEADER_VALUE")
@@ -300,7 +303,10 @@ class Zap:
             if kind == "requestor":
                 for request in job["requests"]:
                     self.send(
-                        request["method"], request["url"], user=params.get("user")
+                        request["method"],
+                        request["url"],
+                        user=params.get("user"),
+                        extra_headers=request.get("headers", []),
                     )
             elif kind == "spider":
                 self.spider(params)

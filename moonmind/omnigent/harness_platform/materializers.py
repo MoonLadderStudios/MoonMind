@@ -341,14 +341,17 @@ class ProviderConfigEndpoint(BaseModel):
         exclude_if=lambda value: not value,
     )
 
-    @field_validator("launchEnvironment")
-    @classmethod
-    def _validate_launch_environment(cls, value):
-        from moonmind.omnigent.host_services.runtime_scripts import (
-            validate_provider_literal_launch_environment,
-        )
+    environmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
-        return validate_provider_literal_launch_environment(value)
+    @model_validator(mode="after")
+    def _validate_environment_delivery(self):
+        ProviderLaunchEnvironment(
+            launchEnvironment=self.launchEnvironment,
+            environmentTemplates=self.environmentTemplates,
+        )
+        return self
 
 
 class ProviderLaunchEnvironment(BaseModel):
@@ -651,35 +654,45 @@ def _declared_key_launch(
     harness_label: str,
     key_env: frozenset[str],
     carried_literal_env: frozenset[str],
-) -> tuple[str, dict[str, str], str]:
-    """Split an API-key Profile's launch environment into key role and literals.
+) -> tuple[str, dict[str, str], dict[str, str], str]:
+    """Split an API-key Profile into key role, literals and path templates.
 
-    Returns ``(key_role, literals, "")`` when the declared environment is one
-    key SecretRef plus provider fields and validated nonsecret project values, or
-    ``("", {}, reason)`` naming why it cannot be carried exactly.
+    Returns ``(key_role, literals, templates, "")`` for one key SecretRef
+    plus provider fields and validated nonsecret project values, or
+    ``("", {}, {}, reason)`` naming why it cannot be carried exactly.
     """
 
     if str(getattr(profile, "runtime_id", "") or "").strip() != runtime_id:
-        return "", {}, f"not a {harness_label} Provider Profile"
+        return "", {}, {}, f"not a {harness_label} Provider Profile"
     if _enum_value(getattr(profile, "credential_source", None)) != "secret_ref":
-        return "", {}, "not a SecretRef Provider Profile"
+        return "", {}, {}, "not a SecretRef Provider Profile"
     secret_refs = dict(getattr(profile, "secret_refs", None) or {})
     key_role = ""
     literals: dict[str, str] = {}
+    templates: dict[str, str] = {}
     for name, value in dict(getattr(profile, "env_template", None) or {}).items():
         if isinstance(value, dict) and set(value) == {"from_secret_ref"}:
             role = str(value["from_secret_ref"] or "").strip()
             if name not in key_env or key_role:
-                return "", {}, f"{name} cannot carry a secret on the shared path"
+                return "", {}, {}, f"{name} cannot carry a secret on the shared path"
             if not str(secret_refs.get(role) or "").strip():
-                return "", {}, f"secret role {role!r} has no SecretRef"
+                return "", {}, {}, f"secret role {role!r} has no SecretRef"
             key_role = role
         elif isinstance(value, str) and value.strip() and "{{" not in value:
             literals[name] = value.strip() if name in carried_literal_env else value
+        elif isinstance(value, str) and "{{" in value:
+            # Provider/model selectors retain their literal-only translation.
+            if name in carried_literal_env:
+                return "", {}, {}, f"{name} is not a literal value"
+            try:
+                validated = ProviderLaunchEnvironment(environmentTemplates={name: value})
+            except ValueError:
+                return "", {}, {}, f"{name} cannot carry a nonsecret path template"
+            templates.update(validated.environmentTemplates or {})
         else:
-            return "", {}, f"{name} is not a literal value"
+            return "", {}, {}, f"{name} is not a literal value"
     if not key_role:
-        return "", {}, f"no {' or '.join(sorted(key_env))} SecretRef"
+        return "", {}, {}, f"no {' or '.join(sorted(key_env))} SecretRef"
     uncarried = sorted(set(literals) - carried_literal_env)
     if uncarried:
         from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
@@ -687,8 +700,8 @@ def _declared_key_launch(
         try:
             validate_provider_literal_launch_environment({key: literals[key] for key in uncarried})
         except ValueError:
-            return "", {}, f"launch environment {uncarried} cannot use nonsecret delivery"
-    return key_role, literals, ""
+            return "", {}, {}, f"launch environment {uncarried} cannot use nonsecret delivery"
+    return key_role, literals, templates, ""
 
 
 def claude_provider_config_endpoint(
@@ -710,7 +723,7 @@ def claude_provider_config_endpoint(
         validate_provider_literal_launch_environment,
     )
 
-    key_role, literals, reason = _declared_key_launch(
+    key_role, literals, templates, reason = _declared_key_launch(
         profile,
         runtime_id="claude_code",
         harness_label="Claude Code",
@@ -745,6 +758,7 @@ def claude_provider_config_endpoint(
                 if name in literals
             },
             launchEnvironment=launch_environment,
+            environmentTemplates=templates or None,
         ),
         "",
     )
@@ -798,7 +812,7 @@ def codex_provider_config_endpoint(
                 ),
                 "",
             )
-    key_role, literals, reason = _declared_key_launch(
+    key_role, literals, templates, reason = _declared_key_launch(
         profile,
         runtime_id="codex_cli",
         harness_label="Codex CLI",
@@ -814,6 +828,7 @@ def codex_provider_config_endpoint(
         ProviderConfigEndpoint(
             family="openai", secretRole=key_role, baseUrl=base_url,
             codexConfiguration=private_preferences,
+            environmentTemplates=templates or None,
             launchEnvironment={key: value for key, value in literals.items() if key not in _CODEX_CARRIED_LITERAL_ENV},
         ),
         "",

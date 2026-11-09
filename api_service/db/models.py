@@ -405,6 +405,16 @@ class RecurringWorkflowRun(Base):
     )
 
 
+class AssessmentOccurrenceRecord(Base):
+    """Assessment admission only; Temporal remains the workflow-state owner."""
+
+    __tablename__ = "assessment_occurrences"
+
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    assessment_ref: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    authority_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class OmnigentBridgeSession(Base):
     """Canonical Omnigent bridge session, idempotency, and evidence-ref store.
 

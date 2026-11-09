@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { AssessmentAuthorizationsSettings } from '../settings/AssessmentAuthorizationsSettings';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCatalog } from '../settings/GeneratedSettingsSection';
 import { ASSESSMENT_AUTHORIZATIONS_KEY, readAssessmentAuthorizations, type AssessmentEngagementReview as Review } from '../../lib/assessmentEngagement';
@@ -19,6 +21,7 @@ export function AssessmentAuthorizationPicker({ value, onChange }: { value: stri
 }
 
 export function AssessmentEngagementReview({ review, historical = false }: { review: Review; historical?: boolean }) {
+  const [managing, setManaging] = useState(false);
   return <section className="card stack" aria-label={historical ? 'Recorded rules of engagement' : 'Rules of engagement'}>
     <h2>{historical ? 'Recorded rules of engagement' : 'Rules of engagement'}</h2>
     <p><strong>Authorization:</strong> {review.authorizationRef} · Generation {review.authorizationGeneration}</p>
@@ -26,6 +29,10 @@ export function AssessmentEngagementReview({ review, historical = false }: { rev
     {review.sections.map((section, index) => <section key={`${section.label}-${index}`}><h3>{section.label}</h3><ul>{section.items.map((item, i) => <li className="whitespace-pre-wrap break-words" key={i}>{item}</li>)}</ul></section>)}
     {review.limitations.length ? <div><h3>Limitations</h3><ul>{review.limitations.map((item, i) => <li key={i}>{item}</li>)}</ul></div> : null}
     <p className="small">Cancellation and revocation stop new work. Retained evidence remains available. Use the workflow's existing Cancel action to stop an active run.</p>
+    {historical ? <details onToggle={event => event.currentTarget.open && setManaging(true)}><summary>Renew or revoke authorization</summary>
+      <p className="small">Changes apply to current authority, not this recorded evidence. Renewal requires reviewing the new proposal in the Recurring editor or workflow rerun screen. Saving does not start an occurrence.</p>
+      {managing ? <AssessmentAuthorizationsSettings authorizationRef={review.authorizationRef} /> : null}
+    </details> : null}
     <details><summary>Review scope and proposal identifiers</summary><p className="small break-all">Scope: {review.scopeDigest}</p><p className="small break-all">Proposal: {review.proposalDigest}</p><pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(review.scope, null, 2)}</pre></details>
   </section>;
 }
