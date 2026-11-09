@@ -748,6 +748,16 @@ class CredentialGrant(_Model):
         return self
 
 
+class RecurringAssessmentTerms(_Model):
+    """Explicit continuing limits; secret revisions remain credential-owned."""
+
+    min_interval_seconds: int = Field(alias="minIntervalSeconds", ge=60, le=31536000)
+    max_occurrences: int = Field(alias="maxOccurrences", ge=1, le=10000)
+    max_jobs_per_occurrence: int = Field(alias="maxJobsPerOccurrence", ge=1, le=1000)
+    max_job_seconds_per_occurrence: int = Field(alias="maxJobSecondsPerOccurrence", ge=1, le=86400000)
+    max_run_seconds: int = Field(alias="maxRunSeconds", ge=60, le=86400)
+
+
 class AssessmentEngagementTerms(_Model):
     """Reusable authority description and absolute testing limits."""
 
@@ -760,6 +770,7 @@ class AssessmentEngagementTerms(_Model):
     valid_from: datetime = Field(alias="validFrom")
     valid_until: datetime = Field(alias="validUntil")
     max_total_job_seconds: int = Field(alias="maxTotalJobSeconds", ge=1, le=86400000)
+    recurring: RecurringAssessmentTerms | None = None
 
     @model_validator(mode="after")
     def _window(self) -> "AssessmentEngagementTerms":

@@ -3607,7 +3607,7 @@ class TemporalExecutionService:
                 # Temporal-authoritative projection is the durable control-plane
                 # record used for ownership and parent-runtime inheritance.
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
+                return await self._with_assessment_occurrence(projection)
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
@@ -3620,8 +3620,24 @@ class TemporalExecutionService:
             )
             if projection is not None:
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
-        return await self._sync_projection_best_effort(record)
+                return await self._with_assessment_occurrence(projection)
+        return await self._with_assessment_occurrence(await self._sync_projection_best_effort(record))
+
+    async def _with_assessment_occurrence(self, projection):
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import project_assessment_occurrence
+
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        if not (projection.parameters or {}).get("assessmentScope") and not scheduled_definition_id(projection.workflow_id):
+            return projection
+        row = await self._session.get(AssessmentOccurrenceRecord, projection.workflow_id)
+        parameters = {key: value for key, value in (projection.parameters or {}).items() if key != "assessmentOccurrence"}
+        if row is not None:
+            parameters["assessmentOccurrence"] = project_assessment_occurrence(row.authority_json)
+        # Projection only; this never creates or changes authority/reservations.
+        projection.parameters = parameters
+        return projection
 
     def canonicalize_workflow_id(self, workflow_id: str) -> str:
         candidate = TemporalExecutionRecord.canonicalize_identifier(workflow_id)
@@ -5254,6 +5270,24 @@ class TemporalExecutionService:
                 raise TemporalExecutionTargetRunChangedError(
                     "Target run changed before control dispatch"
                 )
+
+        from api_service.db.models import AssessmentOccurrenceRecord
+        from api_service.services.assessment_authorizations import _authorization_row
+        from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
+
+        scoped = (record.parameters or {}).get("assessmentScope")
+        continuing = isinstance(scoped, Mapping) and (scoped.get("engagement") or {}).get("recurring")
+        if continuing or scheduled_definition_id(workflow_id):
+            # Serialize cancellation with first native admission as well as
+            # existing reservations. A deny-only marker never supplies scope.
+            await _authorization_row(self._session, for_update=True, ensure_legacy_lock=True)
+            occurrence = await self._session.get(AssessmentOccurrenceRecord, workflow_id, populate_existing=True, with_for_update=True)
+            marker = {"cancelRequestedAt": datetime.now(UTC).isoformat()}
+            if occurrence is None:
+                self._session.add(AssessmentOccurrenceRecord(workflow_id=workflow_id, authority_json=marker))
+            else:
+                occurrence.authority_json = {**occurrence.authority_json, **marker}
+            await self._session.commit()
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -7606,7 +7640,9 @@ class TemporalExecutionService:
             "input_ref": source.input_ref,
             "plan_ref": source.plan_ref,
             "manifest_ref": source.manifest_ref,
-            "parameters": dict(source.parameters or {}),
+            "parameters": {
+                **{key: value for key, value in (source.parameters or {}).items() if key != "assessmentOccurrence"},
+            },
             "integration_state": (
                 dict(source.integration_state)
                 if isinstance(source.integration_state, dict)
