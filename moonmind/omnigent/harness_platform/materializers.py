@@ -330,6 +330,9 @@ class ProviderConfigEndpoint(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+    claudeConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     codexConfiguration: dict[str, Any] | None = Field(
         None,
         alias="codexConfiguration",
@@ -351,6 +354,12 @@ class ProviderConfigEndpoint(BaseModel):
             launchEnvironment=self.launchEnvironment,
             environmentTemplates=self.environmentTemplates,
         )
+        if self.claudeConfiguration is not None:
+            from moonmind.provider_profiles.claude_configuration import validate_configuration
+
+            if self.family != "anthropic":
+                raise ValueError("Claude configuration requires the Anthropic family")
+            validate_configuration(self.claudeConfiguration)
         if self.codexConfiguration is not None:
             from moonmind.provider_profiles.codex_configuration import validate_private_environment
 
@@ -721,8 +730,13 @@ def claude_provider_config_endpoint(
     there with that reason.
     """
 
+    configuration = None
     if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
-        return None, "file templates and home path overrides are direct-launch only"
+        from moonmind.provider_profiles.claude_configuration import configuration_for_profile
+
+        configuration, reason = configuration_for_profile(profile)
+        if configuration is None:
+            return None, reason
 
     from moonmind.provider_profiles.template_renderer import (
         PROVIDER_LITERAL_LAUNCH_ENV,
@@ -755,6 +769,7 @@ def claude_provider_config_endpoint(
     return (
         ProviderConfigEndpoint(
             family="anthropic",
+            claudeConfiguration=configuration,
             secretRole=key_role,
             baseUrl=base_url,
             defaultModel=literals.get("ANTHROPIC_MODEL"),

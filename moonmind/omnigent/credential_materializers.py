@@ -707,6 +707,10 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     if endpoint is not None and endpoint.codexConfiguration is not None
                     else {}
                 ),
+                **(
+                    {"_moonmind_claude_configuration": endpoint.claudeConfiguration}
+                    if endpoint is not None and endpoint.claudeConfiguration is not None else {}
+                ),
                 "providers": {
                     "moonmind": {
                         "kind": "key",
@@ -742,10 +746,13 @@ root = pathlib.Path('/credential')
 root.mkdir(mode=0o700, exist_ok=True)
 os.chown(root, 1000, 1000); root.chmod(0o700)
 payload = json.load(sys.stdin)
+claude_configuration = payload.pop('_moonmind_claude_configuration', None)
 configuration = payload.pop('_moonmind_codex_configuration', None)
 files = {'config.yaml': json.dumps(payload)}
 if configuration is not None:
     files['codex-profile.json'] = json.dumps(configuration)
+if claude_configuration is not None:
+    files['claude-profile.json'] = json.dumps(claude_configuration)
 files['.moonmind-generation'] = sys.argv[-1] + '\n'
 for name, content in files.items():
     descriptor, staged = tempfile.mkstemp(prefix='.' + name + '.', dir=root)
@@ -771,17 +778,20 @@ finally:
                     'assert d["providers"]["moonmind"]["kind"]=="key"\'',
                 )
             )
-            if endpoint is not None and endpoint.codexConfiguration is not None:
-                expected_config = json.dumps(
-                    endpoint.codexConfiguration, sort_keys=True
-                )
+            for harness, configuration in (
+                ("codex", endpoint.codexConfiguration if endpoint else None),
+                ("claude", endpoint.claudeConfiguration if endpoint else None),
+            ):
+                if configuration is None:
+                    continue
+                config_path = f"/credential/{harness}-profile.json"
                 verify_config_script += (
-                    '; test "$(stat -c %u:%g /credential/codex-profile.json)" = 1000:1000; '
-                    'test "$(stat -c %a /credential/codex-profile.json)" = 600; '
+                    f'; test "$(stat -c %u:%g {config_path})" = 1000:1000; '
+                    f'test "$(stat -c %a {config_path})" = 600; '
                     "python3 -c "
                     + shlex.quote(
-                        "import json; assert json.load(open('/credential/codex-profile.json')) == "
-                        + repr(json.loads(expected_config))
+                        f"import json; assert json.load(open({config_path!r})) == "
+                        + repr(configuration)
                     )
                 )
             writer_ref = await self._resolve_writer_ref(
@@ -893,6 +903,8 @@ finally:
                         and endpoint.codexConfiguration is not None
                         else {}
                     ),
+                    **({"MOONMIND_CLAUDE_PROFILE_CONFIG_FILE": self._TARGET + "/claude-profile.json"}
+                       if endpoint is not None and endpoint.claudeConfiguration is not None else {}),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
                 "runtimeEnvironmentTemplates": endpoint.environmentTemplates if endpoint is not None else None,
