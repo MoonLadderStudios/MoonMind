@@ -1,3 +1,4 @@
+import { OrganisationalEvidenceEditor } from '../components/OrganisationalEvidenceEditor';
 import { securitySelectionIdentity, securitySelectionArtifact } from '../lib/remediationCreateDraft';
 import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
 import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
@@ -12923,6 +12924,23 @@ function WorkflowStartPageContent({
                             })}>Apply assessment defaults</Button>
                             <p className="small">Fill missing scope, budget, and retained evidence from the frozen context. Existing values, including empty lists, stay unchanged. Review the inputs before starting.</p>
                           </div> : null}
+                          {step.toolId === 'security.assess' ? <OrganisationalEvidenceEditor
+                            disabled={Boolean(assessmentDefaultsProblem)}
+                            values={selectedToolAuthoredInputs.values}
+                            onChange={(name, value) => updateToolInputValue(step.localId, name, value)}
+                            onImport={async file => {
+                              const context = { kind: 'step' as const, stepLabel: `Step ${index + 1}` };
+                              const cacheKey = JSON.stringify([artifactCreateEndpoint, repository.trim(), context]);
+                              const cache = attachmentUploadsRef.current.get(file) ?? new Map<string, StepAttachmentRef>();
+                              let ref = cache.get(cacheKey);
+                              if (!ref) {
+                                ref = await createInputAttachmentArtifact(artifactCreateEndpoint, file, repository.trim(), context);
+                                cache.set(cacheKey, ref);
+                                attachmentUploadsRef.current.set(file, cache);
+                              }
+                              return ref.artifactId;
+                            }}
+                          /> : null}
                           <SchemaCapabilityFields
                             fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}

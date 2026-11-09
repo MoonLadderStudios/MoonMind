@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 Text = Annotated[
@@ -84,6 +91,72 @@ class EvidencePeriod(FrameworkContract):
         return self.start <= other.start and self.end >= other.end
 
 
+class OrganisationalEvidenceReview(FrameworkContract):
+    """Attributed, purpose-specific review, never an independent attestation."""
+
+    outcome: Literal["accepted", "insufficient"]
+    purpose: Literal["design", "adoption", "occurrence"]
+    reviewer: AssessmentText
+    reason: AssessmentText
+    reviewed_at: AwareDatetime
+    period: EvidencePeriod
+    population: Annotated[list[AssessmentText], Field(min_length=1, max_length=256)]
+
+
+class OrganisationalEvidenceRevision(FrameworkContract):
+    artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    kind: Literal[
+        "document", "operational_record", "management_assertion", "generated_draft"
+    ]
+    source: AssessmentText
+    collected_at: AwareDatetime
+    expires_at: AwareDatetime
+    period: EvidencePeriod
+    population: Annotated[list[AssessmentText], Field(min_length=1, max_length=256)]
+    sensitivity: Literal["public", "internal", "confidential", "restricted"]
+    review: OrganisationalEvidenceReview | None = None
+
+
+class OrganisationalEvidenceRequest(FrameworkContract):
+    id: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+    ]
+    category: Literal[
+        "risk_register",
+        "risk_treatment",
+        "statement_of_applicability",
+        "policy",
+        "training",
+        "access_review",
+        "incident",
+        "supplier",
+        "internal_audit",
+        "management_review",
+        "corrective_action",
+    ]
+    purpose: Literal["design", "adoption", "occurrence"]
+    description: AssessmentText
+    owner: AssessmentText
+    revisions: Annotated[list[OrganisationalEvidenceRevision], Field(max_length=8)] = (
+        Field(default_factory=list)
+    )
+
+    @model_validator(mode="after")
+    def unique_revisions(self):
+        refs = [item.artifact_ref for item in self.revisions]
+        if len(refs) != len(set(refs)):
+            raise ValueError("replacement must have a new immutable artifact reference")
+        return self
+
+
+class OrganisationalEvidenceResult(FrameworkContract):
+    request_id: AssessmentText
+    state: Literal["requested", "supplied", "insufficient", "accepted"]
+    current_ref: str | None = None
+    superseded_refs: list[str] = Field(default_factory=list)
+    limitations: list[AssessmentText] = Field(default_factory=list)
+
+
 class RequirementChoice(FrameworkContract):
     systems: Strings | None = None
     period: EvidencePeriod | None = None
@@ -93,6 +166,9 @@ class RequirementChoice(FrameworkContract):
 
 
 class DeclaredRequirementChoice(RequirementChoice):
+    organisational_evidence: Annotated[
+        list[OrganisationalEvidenceRequest], Field(max_length=32)
+    ] = Field(default_factory=list)
     applicability: Literal["applicable", "not_applicable", "undetermined"] = (
         "undetermined"
     )

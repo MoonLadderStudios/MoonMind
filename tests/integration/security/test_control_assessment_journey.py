@@ -302,3 +302,111 @@ async def test_future_feed_cannot_supply_current_requirement_evidence(environmen
     row = await result_row(service, outputs)
     assert row["conclusion"] == "inconclusive"
     assert row["evidenceSufficiency"] == "stale"
+
+
+async def test_organisational_import_review_replacement_and_access_retry(
+    environment, monkeypatch
+):
+    """Synthetic mixed assessment through admission, reads, seals and publication."""
+    from tests.unit.security.test_control_assessments import organisational_request
+
+    service = environment.service
+    request = await inputs(service)
+    now = datetime.now(UTC)
+    row = request["controlAssessment"]["requirements"][0]
+    policy = await recurring.put(
+        service, {"policy": "Synthetic access policy, not real organisation evidence"}
+    )
+    assertion = await recurring.put(
+        service, {"assertion": "Synthetic claim that training occurred"}
+    )
+    evidence = organisational_request()
+    revision = evidence["revisions"][0]
+    revision.update(
+        artifactRef=policy,
+        collectedAt=now.isoformat(),
+        expiresAt=(now + timedelta(days=30)).isoformat(),
+        period=row["period"],
+    )
+    revision["review"].update(reviewedAt=now.isoformat(), period=row["period"])
+    claim = {
+        **evidence,
+        "id": "assertion",
+        "purpose": "occurrence",
+        "revisions": [
+            {**revision, "artifactRef": assertion, "kind": "management_assertion"}
+        ],
+    }
+    missing = organisational_request(
+        id="audit", category="internal_audit", purpose="occurrence", revisions=[]
+    )
+    row["organisationalEvidence"] = [evidence, claim, missing]
+    first = await recurring.invoke(service, request)
+    original = await result_row(service, first)
+    assert original["conclusion"] == "inconclusive"
+    assert [item["state"] for item in original["organisationalEvidence"]] == [
+        "accepted",
+        "insufficient",
+        "requested",
+    ]
+    assert original["objectives"][0]["outcome"] == "passed"
+    assert set(original["evidenceRefs"]) >= {policy, assertion}
+    assert "document_review" in original["methods"]
+    proof = await recurring.required(service, first["controlAssessmentRef"])
+    assert {policy, assertion} <= proof
+    from tests.artifact_access import access_for_test
+
+    _, readable = await service.read(
+        artifact_id=recurring.report_ref(first),
+        access=access_for_test("workflow:assessment"),
+    )
+    readable = readable.decode("utf-8")
+    assert policy in readable
+    assert "requested" in readable and "insufficient" in readable
+    assert "Policy design" in readable or "policy design" in readable
+    assert "not independent verification" in readable
+
+    replacement = await recurring.put(
+        service, {"policy": "Replacement synthetic policy"}
+    )
+    evidence["revisions"].append(
+        {**revision, "artifactRef": replacement}
+    )
+    original_read = service.read
+
+    async def deny_history(**kwargs):
+        if kwargs["artifact_id"] == policy:
+            raise TemporalArtifactAuthorizationError("superseded record denied")
+        return await original_read(**kwargs)
+
+    monkeypatch.setattr(service, "read", deny_history)
+    second = await recurring.invoke(service, request)
+    replaced = await result_row(service, second)
+    assert replaced["organisationalEvidence"][0]["state"] == "accepted"
+    assert replaced["organisationalEvidence"][0]["supersededRefs"] == [policy]
+    assert second["scanRef"] == first["scanRef"]
+    assert {assertion, replacement} <= await recurring.required(
+        service, second["controlAssessmentRef"]
+    )
+    assert policy not in await recurring.required(
+        service, second["controlAssessmentRef"]
+    )
+    assert policy in await recurring.required(service, first["controlAssessmentRef"])
+    assert await result_row(service, first) == original
+
+    read = service.read
+
+    async def denied(**kwargs):
+        if kwargs["artifact_id"] == replacement:
+            raise TemporalArtifactAuthorizationError("fixture denied")
+        return await read(**kwargs)
+
+    monkeypatch.setattr(service, "read", denied)
+    blocked = await recurring.invoke(service, request)
+    blocked_row = await result_row(service, blocked)
+    assert replacement in blocked_row["unavailableEvidenceRefs"]
+    assert blocked_row["organisationalEvidence"][0]["state"] == "insufficient"
+    monkeypatch.setattr(service, "read", read)
+    retried = await recurring.invoke(service, request)
+    assert retried["controlAssessmentRef"] == second["controlAssessmentRef"]
+    assert retried["scanRef"] == first["scanRef"]

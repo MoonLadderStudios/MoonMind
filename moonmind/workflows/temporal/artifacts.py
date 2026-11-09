@@ -1497,6 +1497,12 @@ def schedule_input_artifact_ids(target: Mapping[str, Any]) -> set[str]:
                 entry.artifact_id
                 for entry in build_prepared_input_manifest(task).entries
             )
+    from moonmind.security.organisational_evidence import organisational_evidence_refs
+
+    for key in ("workflow", "task"):
+        task = parameters.get(key) if isinstance(parameters, Mapping) else None
+        if isinstance(task, Mapping):
+            refs.extend(organisational_evidence_refs(task))
     ids = set()
     for ref in refs:
         if not isinstance(ref, str):

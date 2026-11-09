@@ -19790,6 +19790,38 @@ describe("Task Create governed Tool authoring", () => {
     expect((within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement).value).toBe('{"scope": {"assets": [');
   });
 
+  it('exposes organisational evidence only for the selected assessment Tool and preserves requests in submitted inputs', async () => {
+    toolDiscoveryResponse = { ok: true, json: async () => ({ tools: [{ name: 'security.assess', inputSchema: { type: 'object', properties: { controlAssessment: { type: 'object' } } } }] }) } as Response;
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    expect(screen.queryByText('Organisational evidence requests and review')).toBeNull();
+    const step = (await screen.findByText('Step 1')).closest('section') as HTMLElement;
+    fireEvent.change(within(step).getByLabelText('Instructions'), { target: { value: 'Review organisational evidence.' } });
+    selectStepType(step, 'Tool');
+    fireEvent.click(await within(step).findByRole('button', { name: 'security.assess' }));
+    fireEvent.click(within(step).getByText('Edit JSON'));
+    const editor = within(step).getByLabelText('Tool Inputs (JSON object)') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: JSON.stringify({ controlAssessment: { requirements: [{ id: 'policy', organisationalEvidence: [] }] } }) } });
+    fireEvent.click(within(step).getByText('Organisational evidence requests and review'));
+    fireEvent.change(within(step).getByLabelText('Import organisational evidence'), { target: { files: [new File(['Synthetic policy'], 'policy.txt', { type: 'text/plain' })] } });
+    fireEvent.click(within(step).getByRole('button', { name: 'Upload evidence' }));
+    await within(step).findByText('art_01ACTIVEIMAGE00000000000');
+    fireEvent.click(within(step).getByRole('button', { name: 'Upload evidence' }));
+    await waitFor(() => expect(within(step).getByRole('button', { name: 'Upload evidence' })).toBeTruthy());
+    expect(fetchSpy.mock.calls.filter(([url, init]) => String(url) === '/api/artifacts' && init?.method === 'POST')).toHaveLength(1);
+    fireEvent.change(within(step).getByLabelText('Evidence requirement'), { target: { value: '0' } });
+    fireEvent.click(within(step).getByRole('button', { name: 'Add evidence request' }));
+    expect(JSON.parse(editor.value).controlAssessment.requirements[0].organisationalEvidence[0].revisions).toEqual([]);
+    const completeInputs = editor.value;
+    fireEvent.change(editor, { target: { value: '{"controlAssessment":' } });
+    expect(within(step).getByText('Correct the Tool input JSON before editing evidence. Existing inputs are preserved.')).toBeTruthy();
+    expect((within(step).getByRole('button', { name: 'Add evidence request' }).closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+    expect(editor.value).toBe('{"controlAssessment":');
+    fireEvent.change(editor, { target: { value: completeInputs } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) => String(url) === '/api/executions' && init?.method === 'POST')).toBe(true));
+    expect(latestCreateRequest()).toMatchObject({ payload: { task: { steps: [{ tool: { inputs: { controlAssessment: { requirements: [{ id: 'policy', organisationalEvidence: [{ id: 'evidence-1', revisions: [] }] }] } } } }] } } });
+  });
+
   describe('assessment reference aliases in Advanced JSON', () => {
     async function prepareAssessmentTool() {
       const configuration = { ...createAssessmentEnvironment(), id: 'prod', name: 'Production', assets: ['api'], artifactRefs: ['art_saved'] };

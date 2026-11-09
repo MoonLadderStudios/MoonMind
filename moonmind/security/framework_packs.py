@@ -343,6 +343,7 @@ def compile_framework_plan(
                     )
                     for item in requirement.objectives
                 ],
+                organisational_evidence=choice.organisational_evidence,
                 owner=choice.responsible_entity,
                 responsibility_reason=choice.responsibility_reason,
             )
