@@ -3231,3 +3231,37 @@ async def test_apply_overrides_fans_out_one_event_per_committed_key(
     assert len(published) == 2
     keys = {event.key for event in published}
     assert keys == {"workflow.default_runtime", "workflow.default_publish_mode"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env", [{}, {"WORKFLOW_DEFAULT_RUNTIME": "claude_code"}])
+async def test_catalog_reset_value_matches_actual_inheritance(settings_session_maker, env):
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(
+            env=env, session=session,
+            settings=SimpleNamespace(workflow=SimpleNamespace(default_runtime="codex_cli")),
+        )
+        await service.apply_overrides(changes={"workflow.default_runtime": "omnigent"})
+        catalog = await service.catalog_async(section="user-workspace")
+        descriptor = next(d for d in catalog.categories["Workflow"] if d.key == "workflow.default_runtime")
+        expected = env.get("WORKFLOW_DEFAULT_RUNTIME", "codex_cli")
+        assert descriptor.reset_value == expected
+        assert descriptor.default_value == "omnigent"
+        reset = await service.reset_override("workflow.default_runtime")
+        assert reset.value == descriptor.reset_value
+
+
+@pytest.mark.parametrize("sensitive,audit,value", [
+    (True, False, "private-reset-value"),
+    (False, True, "private-reset-value"),
+    (False, False, "secret=hidden"),
+    (False, False, {"path": "/run/secrets/token"}),
+])
+def test_catalog_redacts_sensitive_reset_values(sensitive, audit, value):
+    entry = SettingRegistryEntry(
+        key="workflow.default_provider_profile_ref", title="Profile", category="Test", section="user-workspace",
+        value_type="string", ui="text", order=1, apply_mode="immediate",
+        sensitive=sensitive, audit=SettingAuditPolicy(redact=audit), default_value=value,
+    )
+    service = SettingsCatalogService(env={}, registry=(entry,))
+    assert service.catalog().categories["Test"][0].reset_value is None
