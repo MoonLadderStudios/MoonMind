@@ -1727,10 +1727,7 @@ class AssessmentExecution:
                 runs = []
                 for run in results.runs:
                     try:
-                        for ref in [
-                            *run.evidence_refs,
-                            *([run.native_report_ref] if run.native_report_ref else []),
-                        ]:
+                        for ref in [*run.evidence_refs, *run.native_refs]:
                             await read_evidence(ref)
                         runs.append(run)
                     except Exception as exc:
@@ -1740,6 +1737,7 @@ class AssessmentExecution:
                                     "status": "blocked",
                                     "evidence_refs": [],
                                     "native_report_ref": None,
+                                    "native_report_refs": [],
                                     "reason": f"Procedure evidence unavailable ({type(exc).__name__})",
                                 }
                             )
@@ -1765,6 +1763,11 @@ class AssessmentExecution:
                         route.split(" ", 1)[-1]
                         for route in native.coverage.tested_routes
                     ]
+                    summary["methodologyIdentity"] = (
+                        native.admission.identity.name
+                        if native.admission.identity is not None
+                        else "anonymous"
+                    )
                     summary["configurationRef"] = (
                         _web_observation(
                             request, native, summary["summaryRef"], datetime.now(UTC)

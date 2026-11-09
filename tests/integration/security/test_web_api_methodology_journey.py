@@ -81,7 +81,10 @@ async def coverage(
     request["scope"] = plan["scope"]
     request["methodology"] = {"planRef": plan_ref}
     if native_ref:
-        request.update(tools=["retained-report"], reportRefs=[native_ref])
+        request.update(
+            tools=["retained-report"],
+            reportRefs=[native_ref] if isinstance(native_ref, str) else native_ref,
+        )
     if runs or reviewer_notes:
         request["methodology"]["resultsRef"] = await recurring.put(
             service,
@@ -499,8 +502,9 @@ async def test_primary_report_preserves_objective_states_and_redacts_credentials
 
 @pytest.mark.parametrize("mode", ["baseline", "api"])
 @pytest.mark.parametrize("repaired", [False, True])
+@pytest.mark.parametrize("selected_identity", [False, True])
 async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
-    environment, tmp_path, monkeypatch, web_target, mode, repaired
+    environment, tmp_path, monkeypatch, web_target, mode, repaired, selected_identity
 ):
     app, gateway = web_target
     asset = web.origin(app)
@@ -531,6 +535,11 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
     if definition:
         plan["apiContextRefs"] = [definition]
     plan["candidateRef"] = "fixture:repaired" if repaired else "fixture:vulnerable"
+    if not selected_identity:
+        for objective in plan["objectives"]:
+            if objective["id"] in {"configuration", "input-output"}:
+                for procedure in objective["procedures"]:
+                    procedure["identityIds"] = []
     plan_ref = await recurring.put(environment.service, plan)
     native, _, _, accepted, _ = await harness.run(web.assessment(app, **options), mode)
     native_ref = web.artifact_names(harness, accepted)["summary"]["artifactRef"]
@@ -564,7 +573,11 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
         == "untested"
     )
     configuration = next(o for o in report["objectives"] if o["id"] == "configuration")
-    assert configuration["status"] == "tested"
+    assert configuration["status"] == (
+        "partially_tested" if selected_identity else "tested"
+    )
+    if selected_identity:
+        assert any("identit" in reason for reason in configuration["limitations"])
     assert configuration["methods"][0]["nativeReportRef"] == native_ref
     for gap in ("endpoint", "asset"):
         uncovered = copy.deepcopy(plan)
@@ -606,6 +619,110 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
         assert partial["retest"]["configuration"] == "coverage_changed"
         assert not partial["complete"]
         assert uncovered_outputs["methodologyStatus"] == "incomplete"
+
+
+async def test_multiple_web_targets_complete_only_with_all_retained_native_reports(
+    environment, tmp_path, monkeypatch, web_target
+):
+    service = environment.service
+    second_app, second_gateway = web.fixture.start(app_host=web.HOST)
+    try:
+        targets = [web_target, (second_app, second_gateway)]
+        monkeypatch.setattr(
+            web.fixture.Gateway,
+            "routes",
+            {
+                f"{web.HOST}:{app.server_port}": ("127.0.0.1", app.server_port)
+                for app, _ in targets
+            },
+        )
+        assets = [web.origin(app) for app, _ in targets]
+        _, plan = await retain_plan(service, asset=assets[0])
+        plan["scope"]["assets"] = assets
+        plan["interfaces"] = [
+            {
+                "id": f"app-{index}",
+                "asset": asset,
+                "protocol": "http",
+                "locator": "/fixed/search",
+            }
+            for index, asset in enumerate(assets)
+        ]
+        for objective in plan["objectives"]:
+            if objective["id"] == "configuration":
+                for procedure in objective["procedures"]:
+                    procedure.update(
+                        assets=assets, interfaceIds=["app-0", "app-1"], identityIds=[]
+                    )
+            else:
+                objective.update(
+                    applicability="not_applicable",
+                    reason="This scenario selects configuration coverage only.",
+                    procedures=[],
+                )
+        plan_ref = await recurring.put(service, plan)
+        native_refs = []
+        routes = [{"path": "/fixed/search", "methods": ["GET"]}]
+        admitted = web.scope(targets[0][0]).model_dump(mode="json", by_alias=True)
+        admitted["targets"] = [
+            {"webOrigin": asset, "webRoutes": routes, "webExclusions": []}
+            for asset in assets
+        ]
+        admitted = web.AdmittedAssessmentScope.model_validate(admitted)
+        for index, (app, gateway) in enumerate(targets):
+            harness = web.Harness(
+                environment,
+                tmp_path,
+                monkeypatch,
+                app,
+                gateway,
+                admitted=admitted,
+            )
+            native, _, _, accepted, _ = await harness.run(
+                web.assessment(
+                    app, routes=routes, startPaths=["/fixed/search"], exclusions=[]
+                ),
+                f"methodology-target-{index}",
+            )
+            assert native["status"] == "complete", native["limitations"]
+            native_refs.append(
+                web.artifact_names(harness, accepted)["summary"]["artifactRef"]
+            )
+        runs = [
+            {
+                "objectiveId": "configuration",
+                "procedureId": "configuration-checks",
+                "status": "completed",
+                "evidenceKind": "tool_match",
+                "outcome": "clear",
+                "evidenceRefs": native_refs,
+                "nativeReportRefs": native_refs,
+            }
+        ]
+        for complete in [False, True]:
+            outputs, report = await coverage(
+                service,
+                plan_ref,
+                native_ref=native_refs if complete else native_refs[:1],
+                runs=runs,
+                key=f"multiple-targets-{complete}",
+            )
+            row = next(o for o in report["objectives"] if o["id"] == "configuration")
+            assert row["status"] == ("tested" if complete else "partially_tested"), row
+            assert row["methods"][0]["nativeReportRefs"] == native_refs
+            assert report["complete"] is complete
+            assert outputs["methodologyStatus"] == (
+                "complete" if complete else "incomplete"
+            )
+            retained = await recurring.required(service, outputs["methodologyRef"])
+            assert set(native_refs) <= set(retained)
+            summary = await primary_report(service, outputs)
+            assert (
+                "Coverage: complete." if complete else "Coverage: partial."
+            ) in summary
+    finally:
+        second_app.shutdown()
+        second_gateway.shutdown()
 
 
 async def test_reporting_retry_preserves_completed_native_work_and_reuses_coverage(

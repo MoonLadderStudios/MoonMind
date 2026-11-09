@@ -6,6 +6,7 @@ existing admitted ZAP/application-access jobs; this module launches nothing.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
@@ -92,10 +93,22 @@ class ProcedureRun(Contract):
     outcome: Literal["finding", "clear", "inconclusive"]
     reason: Text | None = None
     native_report_ref: Text | None = None
+    native_report_refs: Refs = Field(default_factory=list)
     case_refs: Texts = Field(default_factory=list)
     configuration_ref: Text | None = Field(
         default=None, json_schema_extra={"readOnly": True}
     )
+
+    @property
+    def native_refs(self):
+        return list(
+            dict.fromkeys(
+                [
+                    *([self.native_report_ref] if self.native_report_ref else []),
+                    *self.native_report_refs,
+                ]
+            )
+        )
 
     @model_validator(mode="after")
     def evidence_and_limits(self):
@@ -219,9 +232,7 @@ def evidence_refs(plan, results=None):
     ]
     if results:
         refs.extend(ref for run in results.runs for ref in run.evidence_refs)
-        refs.extend(
-            run.native_report_ref for run in results.runs if run.native_report_ref
-        )
+        refs.extend(ref for run in results.runs for ref in run.native_refs)
     refs = list(dict.fromkeys(refs))
     if len(refs) > 64:
         raise ValueError("methodology evidence exceeds reference bound")
@@ -255,72 +266,105 @@ def bind_native_runs(plan, pack, results, summaries):
         }:
             runs.append(run)
             continue
-        summary = native.get(run.native_report_ref)
-        reasons, outcome = [], "inconclusive"
-        if (
-            summary is None
-            or summary["scanner"] != procedure.method
-            or summary["target"] not in selected.assets
-        ):
+        reasons, outcomes, configurations = [], [], []
+        targets, endpoints, identities, cases = set(), set(), set(), set()
+        zap_endpoints = set()
+        selected_endpoints = {
+            (i.asset, i.locator)
+            for i in plan.interfaces
+            if i.id in selected.interface_ids
+        }
+        if not run.native_refs:
             reasons.append(
                 "No verified native report for the selected method and target"
             )
-        elif procedure.method == "application-access":
-            cases = {c["caseRef"]: c for c in summary["cases"]}
-            if summary.get("specDigest") != selected.case_spec_digest:
-                reasons.append("Native cases differ from the pre-execution test oracle")
-            elif (
-                not selected.case_refs
-                or set(selected.case_refs) != set(run.case_refs)
-                or set(selected.case_refs) - set(cases)
+        for ref in run.native_refs:
+            summary = native.get(ref)
+            if (
+                summary is None
+                or summary["scanner"] != procedure.method
+                or summary["target"] not in selected.assets
             ):
                 reasons.append(
-                    "Planned authorization cases were removed or not executed"
+                    "No verified native report for the selected method and target"
                 )
+                continue
+            target = summary["target"]
+            targets.add(target)
+            configurations.append(
+                (target, summary.get("specDigest") or summary.get("configurationRef"))
+            )
+            if procedure.method == "application-access":
+                if summary.get("specDigest") != selected.case_spec_digest:
+                    reasons.append(
+                        "Native cases differ from the pre-execution test oracle"
+                    )
+                    continue
+                for case in summary["cases"]:
+                    if case["caseRef"] not in selected.case_refs:
+                        continue
+                    cases.add(case["caseRef"])
+                    outcomes.append(
+                        "finding" if case["outcome"] == "finding" else "clear"
+                    )
+                    endpoint = (target, case["request"]["path"])
+                    if (
+                        case["coverage"] != "complete"
+                        or case["authenticationState"] != "verified"
+                        or case["identityRef"] not in selected.identity_ids
+                        or endpoint not in selected_endpoints
+                    ):
+                        reasons.append(
+                            "Selected identities, endpoints or case coverage are incomplete"
+                        )
+                        continue
+                    endpoints.add(endpoint)
+                    identities.add((target, case["identityRef"]))
             else:
-                covered = [cases[c] for c in selected.case_refs]
-                locators = {
-                    i.locator for i in plan.interfaces if i.id in selected.interface_ids
-                }
-                if any(
-                    c["coverage"] != "complete"
-                    or c["authenticationState"] != "verified"
-                    or c["identityRef"] not in selected.identity_ids
-                    or c["request"]["path"] not in locators
-                    for c in covered
-                ) or set(selected.identity_ids) - {c["identityRef"] for c in covered}:
+                outcomes.append(summary["methodologyOutcome"])
+                if summary["coverage"] != "complete":
                     reasons.append(
-                        "Selected identities, endpoints or case coverage are incomplete"
+                        "Native scanner route, authentication or execution coverage is incomplete"
                     )
-                uncovered = locators - {c["request"]["path"] for c in covered}
-                if uncovered:
-                    reasons.append(
-                        f"Selected endpoints were not covered by native cases: {sorted(uncovered)}"
-                    )
-                outcome = (
-                    "finding"
-                    if any(c["outcome"] == "finding" for c in covered)
-                    else "clear"
-                )
-        else:
-            outcome = summary["methodologyOutcome"]
-            if summary["coverage"] != "complete":
-                reasons.append(
-                    "Native scanner route, authentication or execution coverage is incomplete"
-                )
-            uncovered = {
-                i.locator for i in plan.interfaces if i.id in selected.interface_ids
-            } - set(summary["methodologyRoutes"])
-            if uncovered:
-                reasons.append(
-                    f"Selected endpoints were not covered by the scanner: {sorted(uncovered)}"
-                )
-        if summary is not None:
-            uncovered_assets = set(selected.assets) - {summary["target"]}
-            if uncovered_assets:
-                reasons.append(
-                    f"No verified native report for selected targets: {sorted(uncovered_assets)}"
-                )
+                identity = summary.get("methodologyIdentity")
+                identities.add((target, identity))
+                for path in summary["methodologyRoutes"]:
+                    endpoints.add((target, path))
+                    zap_endpoints.add((target, path, identity))
+        if procedure.method == "application-access" and (
+            not selected.case_refs
+            or set(selected.case_refs) != set(run.case_refs)
+            or set(selected.case_refs) - cases
+        ):
+            reasons.append("Planned authorization cases were removed or not executed")
+        uncovered_assets = set(selected.assets) - targets
+        if uncovered_assets:
+            reasons.append(
+                f"No verified native report for selected targets: {sorted(uncovered_assets)}"
+            )
+        uncovered = selected_endpoints - endpoints
+        if uncovered:
+            reasons.append(
+                f"Selected endpoints were not covered by native reports: {sorted(uncovered)}"
+            )
+        if (
+            {
+                (asset, identity)
+                for asset in selected.assets
+                for identity in selected.identity_ids
+            }
+            - identities
+        ) or (
+            procedure.method == "zap"
+            and {
+                (asset, path, identity)
+                for asset, path in selected_endpoints
+                for identity in selected.identity_ids
+            }
+            - zap_endpoints
+        ):
+            reasons.append("Selected identities were not covered by native reports")
+        outcome = "finding" if "finding" in outcomes else "clear"
         if reasons:
             run = run.model_copy(
                 update={
@@ -332,11 +376,19 @@ def bind_native_runs(plan, pack, results, summaries):
                 }
             )
         else:
+            configuration = None
+            if configurations and all(value for _, value in configurations):
+                configuration = (
+                    configurations[0][1]
+                    if len(configurations) == 1
+                    else hashlib.sha256(
+                        json.dumps(sorted(set(configurations))).encode()
+                    ).hexdigest()
+                )
             run = run.model_copy(
                 update={
                     "outcome": outcome,
-                    "configuration_ref": summary.get("specDigest")
-                    or summary.get("configurationRef"),
+                    "configuration_ref": configuration,
                 }
             )
         runs.append(run)
@@ -426,6 +478,7 @@ def evaluate_coverage(plan, pack, results, *, plan_ref):
                     "caseSpecDigest": selected_method.case_spec_digest,
                     "configurationRef": run.configuration_ref if run else None,
                     "nativeReportRef": run.native_report_ref if run else None,
+                    "nativeReportRefs": run.native_refs if run else [],
                     "status": status,
                     "evidenceRefs": run.evidence_refs if run else [],
                     "evidenceKind": run.evidence_kind if run else None,
@@ -524,13 +577,21 @@ def compare_methodology(baseline, current):
         elif any(m["outcome"] == "finding" for m in previous["methods"]):
             # Comparable scanner absence or a changed judgment alone is not a
             # passing reproduction of protected behavior.
+            current_methods = {m["id"]: m for m in row["methods"]}
             state = (
                 "fixed_behavior"
                 if any(
                     m["outcome"] == "finding"
                     and m["evidenceKind"] == "reproduction"
-                    and m["nativeReportRef"]
+                    and (m.get("nativeReportRefs") or m["nativeReportRef"])
                     and m["configurationRef"]
+                    and current_methods[m["id"]]["evidenceKind"] == "reproduction"
+                    and current_methods[m["id"]]["outcome"] == "clear"
+                    and (
+                        current_methods[m["id"]].get("nativeReportRefs")
+                        or current_methods[m["id"]]["nativeReportRef"]
+                    )
+                    and current_methods[m["id"]]["configurationRef"]
                     for m in previous["methods"]
                 )
                 else "absent_comparable"

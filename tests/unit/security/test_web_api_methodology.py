@@ -525,6 +525,145 @@ def test_clean_scanner_absence_is_distinct_from_a_reproduced_behavior_fix():
     assert compare_methodology(before, after)["configuration"] == "absent_comparable"
 
 
+@pytest.mark.parametrize("current_kind", ["tool_match", "reproduction"])
+def test_reproduced_scanner_finding_needs_a_passing_current_reproduction(current_kind):
+    from moonmind.security.web_api_methodology import compare_methodology
+
+    plan, _ = prepared()
+    reports = []
+    for outcome, kind in [("finding", "reproduction"), ("clear", current_kind)]:
+        data = result_payload(plan, outcome=outcome)
+        run = next(r for r in data["runs"] if r["objectiveId"] == "configuration")
+        run.update(
+            evidenceKind=kind,
+            nativeReportRef="art_" + outcome,
+            configurationRef="same-scanner-configuration",
+        )
+        reports.append(report(results=data))
+    assert compare_methodology(*reports)["configuration"] == (
+        "fixed_behavior" if current_kind == "reproduction" else "absent_comparable"
+    )
+
+
+@pytest.mark.parametrize("native_identity", [None, "anonymous", "bob", "alice"])
+def test_zap_coverage_requires_the_selected_native_identity(native_identity):
+    from moonmind.security.web_api_methodology import ProcedureResults, bind_native_runs
+
+    plan, pack = prepared()
+    data = result_payload(plan)
+    run = next(r for r in data["runs"] if r["objectiveId"] == "configuration")
+    run["nativeReportRef"] = "art_scan"
+    summary = {
+        "scanner": "zap",
+        "summaryRef": "art_scan",
+        "target": "app",
+        "coverage": "complete",
+        "methodologyRoutes": ["/invoices/2"],
+        "methodologyOutcome": "clear",
+        "methodologyIdentity": native_identity,
+        "configurationRef": "scanner-config",
+    }
+    bound = bind_native_runs(
+        plan, pack, ProcedureResults.model_validate(data), [summary]
+    )
+    result = report(results=bound.model_dump(mode="json", by_alias=True))
+    row = next(o for o in result["objectives"] if o["id"] == "configuration")
+    assert row["status"] == (
+        "tested" if native_identity == "alice" else "partially_tested"
+    )
+    if native_identity != "alice":
+        assert any("identit" in limitation for limitation in row["limitations"])
+
+
+@pytest.mark.parametrize("method", ["zap", "application-access"])
+@pytest.mark.parametrize("gap", [None, "report", "target", "endpoint", "identity"])
+@pytest.mark.parametrize("outcome", ["clear", "finding"])
+def test_multiple_native_reports_cover_only_their_actual_selections(
+    method, gap, outcome
+):
+    from moonmind.security.web_api_methodology import ProcedureResults, bind_native_runs
+
+    payload = plan_payload()
+    payload["scope"]["assets"].append("second-app")
+    payload["interfaces"].append(
+        {
+            "id": "second",
+            "asset": "second-app",
+            "protocol": "https",
+            "locator": "/invoices/3",
+        }
+    )
+    objective_id = "configuration" if method == "zap" else "authorization"
+    objective = next(o for o in payload["objectives"] if o["id"] == objective_id)
+    for selected in objective["procedures"]:
+        selected["assets"].append("second-app")
+        selected["interfaceIds"].append("second")
+        if selected["caseRefs"]:
+            selected["caseRefs"].append("read-second")
+    plan, pack = prepared(payload)
+    data = result_payload(plan)
+    run = next(
+        r
+        for r in data["runs"]
+        if r["objectiveId"] == objective_id
+        and (method == "zap" or r["procedureId"] == "ownership-cases")
+    )
+    run.pop("nativeReportRef", None)
+    run.update(
+        nativeReportRefs=["art_first", "art_second"],
+        caseRefs=["read", "read-second"] if method == "application-access" else [],
+    )
+    summaries = [
+        {
+            "scanner": method,
+            "summaryRef": ref,
+            "target": asset,
+            "specDigest": "1" * 64,
+            "coverage": "complete",
+            "methodologyRoutes": [path],
+            "methodologyOutcome": outcome,
+            "methodologyIdentity": "alice",
+            "configurationRef": "scanner-config",
+            "cases": [
+                {
+                    "caseRef": case,
+                    "identityRef": "alice",
+                    "authenticationState": "verified",
+                    "coverage": "complete",
+                    "outcome": "finding" if outcome == "finding" else "pass",
+                    "request": {"path": path},
+                }
+            ],
+        }
+        for ref, asset, path, case in [
+            ("art_first", "app", "/invoices/2", "read"),
+            ("art_second", "second-app", "/invoices/3", "read-second"),
+        ]
+    ]
+    if gap == "report":
+        summaries.pop()
+    elif gap == "target":
+        summaries[1]["target"] = "app"
+    elif gap == "endpoint":
+        summaries[1]["methodologyRoutes"] = ["/unselected"]
+        summaries[1]["cases"][0]["request"]["path"] = "/unselected"
+    elif gap == "identity":
+        summaries[1]["methodologyIdentity"] = "bob"
+        summaries[1]["cases"][0]["identityRef"] = "bob"
+    bound = bind_native_runs(
+        plan, pack, ProcedureResults.model_validate(data), summaries
+    )
+    result = report(payload, bound.model_dump(mode="json", by_alias=True))
+    row = next(o for o in result["objectives"] if o["id"] == objective_id)
+    selected = next(p for p in row["methods"] if p["method"] == method)
+    assert row["status"] == ("tested" if gap is None else "partially_tested")
+    assert selected["nativeReportRefs"] == ["art_first", "art_second"]
+    assert selected["outcome"] == (
+        "finding" if outcome == "finding" else "inconclusive" if gap else "clear"
+    )
+    assert bool(row["limitations"]) is (gap is not None)
+
+
 def test_application_content_cannot_replace_the_pre_execution_case_oracle():
     from moonmind.security.web_api_methodology import ProcedureResults, bind_native_runs
 

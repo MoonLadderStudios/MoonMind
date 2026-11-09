@@ -55,9 +55,11 @@ explicitly; no plan field grants execution authority or changes a case oracle.
 Retain `web-api-procedure-results/v1` with that exact `planRef` and `runs` naming
 objective/procedure IDs, actual status, supporting evidence, evidence kind and
 outcome. Incomplete runs need a reason. Native ZAP/application-access methods
-name `nativeReportRef` selected in the same assessment's `reportRefs`; access
-runs also retain planned `caseRefs`. A native report covers only its target and
-executed endpoints; every selected asset and interface needs matching evidence.
+name `nativeReportRef`, or `nativeReportRefs` to combine reports selected in the
+same assessment's `reportRefs`; access runs also retain planned `caseRefs`.
+Each report covers only its actual target, identity and endpoints; every selected
+asset, identity and interface needs matching evidence. Anonymous ZAP scans cannot
+complete authenticated selections.
 Uncovered selections remain partial with a specific limitation and any confirmed
 findings retained. Verified native coverage and authentication override optimistic
 claims. Keep tool matches, reproductions, cited review
@@ -66,6 +68,8 @@ Record limitations, review status, reviewer attribution when reviewed, reviewer
 notes and follow-up tasks. Automated coverage does not imply an independent
 professional engagement. Missing methods, identities or evidence remain visible;
 comparable retests require the original cases, methods, oracle and coverage.
+Declaring a reproduced fix also needs a passing current reproduction of the
+corresponding method; scanner-only absence remains `absent_comparable`.
 The primary report and bundle show overall selected coverage; native comparison
 coverage stays separate. Public objective states remain readable after credential
 redaction, and reporting retries refresh changed presentations while retaining
