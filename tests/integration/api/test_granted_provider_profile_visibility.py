@@ -635,7 +635,13 @@ async def test_generic_grant_waits_for_host_before_start_marker_and_replays(
                 usable_search_attributes=usable,
             )
             async with asyncio.timeout(30):
-                while await _listed_ids(client, query) != [workflow_id]:
+                # Retained histories publish the provider grant as launching
+                # before a separate signal records the host-capacity wait.
+                # Visibility alone can expose that intermediate state.
+                while (
+                    await _listed_ids(client, query) != [workflow_id]
+                    or (await parent.query("get_status"))["state"] != "awaiting_slot"
+                ):
                     await asyncio.sleep(0.1)
             assert (await parent.query("get_status"))["state"] == "awaiting_slot"
             assert await child.query("dispatched") is False

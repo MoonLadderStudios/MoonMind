@@ -1020,3 +1020,19 @@ async def test_unauthored_preset_keeps_its_profile_route_preview(monkeypatch, pr
         authored_runtime=None,
         task_payload=preset,
     ) == "omnigent"
+
+
+def test_authored_claude_files_use_shared_configuration_without_changing_native_gaps():
+    from tests.unit.omnigent.test_claude_profile_configuration import configuration
+
+    stock = _claude_api_key_configuration("omnigent-claude-api-key")
+    profile = _claude_api_key_provider()
+    files = configuration()
+    profile.home_path_overrides = files["homePathOverrides"]
+    profile.file_templates = files["fileTemplates"]
+    assert configuration_accepts_profile(stock[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [stock])
+    assert select_execution_configuration(profile, [stock])["harnessId"] == "claude-native"
+    profile.file_templates[0]["content_template"] = {"apiKeyHelper": "other authority"}
+    assert not configuration_accepts_profile(stock[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [stock])

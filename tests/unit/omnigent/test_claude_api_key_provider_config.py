@@ -164,10 +164,10 @@ def test_declared_endpoint_model_and_tier_pins_are_carried_exactly():
             },
             "egress",
         ),
-        ({"file_templates": [{"path": "settings.json"}]}, "file templates"),
+        ({"file_templates": [{"path": "settings.json"}]}, "home path overrides"),
         (
             {"home_path_overrides": {"CLAUDE_HOME": "{{runtime_support_dir}}/c"}},
-            "file templates",
+            "home path overrides",
         ),
         ({"secret_refs": {}}, "has no SecretRef"),
         (
@@ -454,3 +454,20 @@ async def test_env_bundle_materializes_only_the_key_and_carries_non_secret_tunin
         }
     )
     assert [record.cleanup_state for record in records] == ["active"]
+
+
+def test_authored_claude_preferences_use_shared_materializer():
+    profile = _api_key_profile(
+        home_path_overrides={"CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home"},
+        file_templates=[{
+            "path": "{{runtime_support_dir}}/claude-home/settings.json",
+            "format": "json", "content_template": {"outputStyle": "concise"},
+        }, {
+            "path": "{{runtime_support_dir}}/claude-home/CLAUDE.md",
+            "content_template": "Work in {{workspace_path}}", "format": "text",
+        }],
+    )
+    endpoint, reason = claude_provider_config_endpoint(profile)
+    assert reason == ""
+    assert endpoint.claudeConfiguration["homePathOverrides"] == profile.home_path_overrides
+    assert materializer_ref_for_profile(profile) == "omnigent-provider-config@1"
