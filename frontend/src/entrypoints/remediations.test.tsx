@@ -178,3 +178,14 @@ describe('Remediations', () => {
     expect(screen.queryByRole('link', { name: /Unauthorized repair/ })).toBeNull();
   });
 });
+
+it('links selected security finding provenance without treating lifecycle completion as verification', async () => {
+  vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ items: [{
+    remediationWorkflowId: 'repair', targetWorkflowId: 'assessment', status: 'completed',
+    securityFinding: { comparisonArtifactRef: 'art_comparison', findingId: 'ownership' },
+  }] }) } as Response);
+  renderPage();
+  const links = await screen.findAllByRole('link', { name: 'ownership security finding' });
+  expect(links[0]?.getAttribute('href')).toBe('/workflows/assessment/artifacts');
+  expect(screen.queryByText('remediated_verified')).toBeNull();
+});
