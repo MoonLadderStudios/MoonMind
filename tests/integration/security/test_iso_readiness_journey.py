@@ -228,3 +228,34 @@ async def test_selected_supporting_document_export_withholds_superseded_revision
     )
     assert entries[old]["status"] == "withheld"
     assert entries[old]["reason"] == "unassociated_evidence"
+
+
+async def test_management_scope_revision_flags_only_affected_requirement_and_preserves_report(
+    environment,
+):
+    service = environment.service
+    request = payload()
+    request["scope"]["assets"] = ["isms", "second"]
+    request["framework"]["systemInputs"]["systems"] = ["isms", "second"]
+    first = await recurring.invoke(service, request)
+    original = await recurring.read(service, first["frameworkRef"])
+    request["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    request["framework"]["requirementChoices"] = {"9.2": {"systems": ["isms"]}}
+    revised = await recurring.invoke(service, request, key="revised-audit-scope")
+    report = await recurring.read(service, revised["frameworkRef"])
+    assert report["reassessment"]["affectedRequirementIds"] == ["9.2"]
+    assert report["reassessment"]["affectedControlIds"] == []
+    prompt = next(
+        r
+        for r in revised["evidenceRequests"]
+        if r["id"] == "reassessment.applicability"
+    )
+    assert prompt["affectedRequirementIds"] == ["9.2"]
+    assert (
+        report["statementOfApplicability"]["version"]
+        == original["statementOfApplicability"]["version"]
+    )
+    assert await recurring.read(service, first["frameworkRef"]) == original
+    assert first["frameworkRef"] in await recurring.required(
+        service, revised["frameworkRef"]
+    )

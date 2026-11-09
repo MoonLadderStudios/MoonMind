@@ -579,13 +579,48 @@ def prepare_assessment(
             if global_change
             else [r["controlId"] for r in decisions if old.get(r["controlId"]) != r]
         )
-        if affected:
+
+        # Compare effective requirement choices rather than input spelling.
+        # A management-only scope/period change invalidates that evidence review,
+        # without changing unrelated Annex A applicability or its SoA version.
+        def management_basis(row):
+            return {
+                "systems": sorted(set(row.get("systems", []))),
+                **{
+                    key: row.get(key)
+                    for key in (
+                        "period",
+                        "responsibleEntity",
+                        "responsibilityReason",
+                        "limitations",
+                    )
+                },
+            }
+
+        old_requirements = {
+            row["id"]: management_basis(row)
+            for row in previous.get("requirements", [])
+            if row["id"] in MANAGEMENT
+        }
+        management_changes = {
+            row["id"]
+            for row in rows
+            if row["id"] in MANAGEMENT
+            and old_requirements.get(row["id"]) != management_basis(row)
+        }
+        affected_requirements = (
+            sorted(known)
+            if global_change
+            else sorted(set(affected) | management_changes)
+        )
+        if affected_requirements:
             report["readiness"] = "incomplete"
             report["evidenceRequests"].append(
                 {
                     "id": "reassessment.applicability",
                     "prompt": "Review applicability and evidence after changed risk, scope, period or pack edition.",
                     "affectedControlIds": affected,
+                    "affectedRequirementIds": affected_requirements,
                 }
             )
         report["reassessment"] = {
@@ -593,7 +628,7 @@ def prepare_assessment(
             "previousSoAVersion": prior.get("version"),
             "previousEdition": previous["pack"]["edition"],
             "affectedControlIds": affected,
-            "affectedRequirementIds": sorted(known) if global_change else affected,
+            "affectedRequirementIds": affected_requirements,
             "prompt": "Review affected applicability and evidence; historical SoA decisions remain retained in the previous immutable report.",
         }
     return report

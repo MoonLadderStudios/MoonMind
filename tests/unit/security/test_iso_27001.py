@@ -206,3 +206,49 @@ def test_technical_evidence_reuse_keeps_independent_requirement_conclusions():
         == ["art_mapping"]
     )
     assert rows["A.8.8"]["status"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        {"systems": ["isms"]},
+        {"period": {"start": "2026-11-02", "end": "2026-11-02"}},
+        {
+            "responsibleEntity": "partner",
+            "responsibilityReason": "Independent audit provider",
+        },
+    ],
+)
+def test_management_choices_trigger_scoped_review_without_annex_changes(choice):
+    import copy
+
+    from moonmind.security.frameworks import RequirementChoice
+
+    request = selection(systems=["isms", "second"])
+    previous = evaluate(request)
+    unchanged = copy.deepcopy(previous)
+    request.requirement_choices["9.2"] = RequirementChoice.model_validate(choice)
+    report = evaluate(request, previous=previous)
+    assert report["reassessment"]["affectedRequirementIds"] == ["9.2"]
+    assert report["reassessment"]["affectedControlIds"] == []
+    prompt = next(
+        r for r in report["evidenceRequests"] if r["id"] == "reassessment.applicability"
+    )
+    assert prompt["affectedRequirementIds"] == ["9.2"]
+    assert previous == unchanged
+    assert (
+        report["statementOfApplicability"]["version"]
+        == previous["statementOfApplicability"]["version"]
+    )
+
+
+def test_reordered_management_scope_is_not_a_changed_requirement():
+    from moonmind.security.frameworks import RequirementChoice
+
+    request = selection(systems=["isms", "second"])
+    previous = evaluate(request)
+    request.requirement_choices["9.2"] = RequirementChoice(systems=["second", "isms"])
+    assert (
+        evaluate(request, previous=previous)["reassessment"]["affectedRequirementIds"]
+        == []
+    )
