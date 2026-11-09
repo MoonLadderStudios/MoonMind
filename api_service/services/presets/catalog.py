@@ -39,6 +39,7 @@ from api_service.db.models import (
 from moonmind.capabilities.input_contracts import (
     CapabilityInputOwner,
     capability_contract_from_legacy_inputs,
+    contains_unsafe_capability_default,
     normalize_capability_input_contract,
 )
 from moonmind.config.settings import settings
@@ -1414,13 +1415,7 @@ def _contains_secret_like_default(value: Any, schema: Mapping[str, Any]) -> bool
         schema = {}
     contract = schema.get("x-moonmind-input-contract")
     if contract is not None and value is not None:
-        from moonmind.security.assessment_preset_inputs import validate_assessment_input
-
-        try:
-            validate_assessment_input(contract, value)
-        except (ValueError, TypeError):
-            raise PresetValidationError("Invalid native assessment default.") from None
-        return _contains_secret_like_value(value, check_keys=False)
+        return contains_unsafe_capability_default(value, schema)
     if isinstance(value, Mapping):
         properties = schema.get("properties") or {}
         return any(

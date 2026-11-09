@@ -69,6 +69,7 @@ _DIAGNOSED_SAFE_SCHEMA_KEYWORDS = frozenset(
 _SUPPORTED_MOONMIND_HINTS = frozenset(
     {
         "x-moonmind-context-default",
+        "x-moonmind-input-contract",
         "x-moonmind-multiline",
         "x-moonmind-provider",
         "x-moonmind-semantic-type",
@@ -424,6 +425,7 @@ def normalize_capability_input_contract(
 
     defaults, default_diagnostics = _remove_secret_like_defaults(
         defaults,
+        schema=input_schema,
         strict=strict,
     )
     diagnostics.extend(default_diagnostics)
@@ -1190,18 +1192,49 @@ def _first_mapping(metadata: Mapping[str, Any], *keys: str) -> dict[str, Any] | 
     return None
 
 
-def _contains_secret_like_value(value: Any) -> bool:
+def _contains_secret_like_value(value: Any, *, check_keys: bool = True) -> bool:
     if value is None:
         return False
     if isinstance(value, Mapping):
         return any(
-            _SECRET_LIKE_KEY_PATTERN.search(str(key or ""))
-            or _contains_secret_like_value(item)
+            (check_keys and _SECRET_LIKE_KEY_PATTERN.search(str(key or "")))
+            or _contains_secret_like_value(item, check_keys=check_keys)
             for key, item in value.items()
         )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(_contains_secret_like_value(item) for item in value)
+        return any(
+            _contains_secret_like_value(item, check_keys=check_keys) for item in value
+        )
     return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
+
+
+def contains_unsafe_capability_default(
+    value: Any, schema: Mapping[str, Any] | None = None
+) -> bool:
+    """Declared native names are safe only after validating the whole value.
+
+    The native model rejects unknown fields and validates opaque references;
+    every supplied scalar still receives the ordinary secret-value check.
+    """
+    schema = schema if isinstance(schema, Mapping) else {}
+    contract = schema.get("x-moonmind-input-contract")
+    if contract is not None and value is not None:
+        from moonmind.security.assessment_preset_inputs import validate_assessment_input
+
+        try:
+            validate_assessment_input(contract, value)
+        except (ValueError, TypeError):
+            return True
+        return _contains_secret_like_value(value, check_keys=False)
+    if isinstance(value, Mapping):
+        properties = schema.get("properties")
+        properties = properties if isinstance(properties, Mapping) else {}
+        return any(
+            _SECRET_LIKE_KEY_PATTERN.search(str(key or ""))
+            or contains_unsafe_capability_default(item, properties.get(key))
+            for key, item in value.items()
+        )
+    return _contains_secret_like_value(value)
 
 
 def _bounded_mapping(
@@ -1351,7 +1384,9 @@ def _remove_secret_like_schema_defaults(
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             child_path = f"{path}.{key}"
-            if str(key) == "default" and _contains_secret_like_value(item):
+            if str(key) == "default" and contains_unsafe_capability_default(
+                item, value
+            ):
                 diagnostic = _diagnostic(
                     code="defaults_secret_like_value",
                     message=(
@@ -1394,14 +1429,16 @@ def _remove_secret_like_schema_defaults(
 def _remove_secret_like_defaults(
     defaults: Mapping[str, Any],
     *,
+    schema: Mapping[str, Any],
     strict: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     sanitized: dict[str, Any] = {}
+    properties = schema.get("properties") or {}
     for key, value in defaults.items():
         if _SECRET_LIKE_KEY_PATTERN.search(
             str(key or "")
-        ) or _contains_secret_like_value(value):
+        ) or contains_unsafe_capability_default(value, properties.get(key)):
             diagnostic = _diagnostic(
                 code="defaults_secret_like_value",
                 message=(

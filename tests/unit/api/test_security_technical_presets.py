@@ -287,6 +287,11 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
                 },
             )
             assert saved.status_code == 201, saved.text
+            saved_detail = (await client.get("/api/presets/saved-assessment")).json()
+            assert (
+                saved_detail["defaults"]["assessment"]
+                == expanded["appliedTemplate"]["inputs"]["assessment"]
+            )
             saved_run = await client.post(
                 "/api/presets/saved-assessment:expand", json={"inputs": {}}
             )
