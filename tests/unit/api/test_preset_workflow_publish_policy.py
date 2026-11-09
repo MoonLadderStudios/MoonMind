@@ -49,6 +49,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-nj-dge",
         "security-ukgc-rts",
         "security-gli-readiness",
+        "security-iso-27001",
     }
 )
 
@@ -144,6 +145,14 @@ async def test_no_seed_preset_declares_auto_publish(tmp_path):
 @pytest.mark.parametrize(
     ("slug", "inputs"),
     [
+        (
+            "security-iso-27001",
+            {
+                "assets": ["synthetic-isms"],
+                "system_inputs": {"systems": ["synthetic-isms"]},
+                "period": {"start": "2026-11-01", "end": "2026-11-02"},
+            },
+        ),
         (
             "document-update-orchestrate",
             {"document_directory": "docs", "publish_mode": "pr"},
