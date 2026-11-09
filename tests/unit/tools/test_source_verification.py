@@ -19,7 +19,7 @@ IDENTITY = dict(revision="a" * 40, run_id="123", attempt="2")
 SELECTION = {
     **dict.fromkeys(SOURCE_OWNERS, "true"),
     "full_backend": "true",
-    "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":21}]}',
+    "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":26}]}',
 }
 
 

@@ -1481,6 +1481,18 @@ async def compile_and_persist_execution_plan(
     require_execution_model_delivery(
         initial_parameters, profile_ref=getattr(provider_profile, "profile_id", None)
     )
+    from api_service.services.repository_scanner_readiness import (
+        require_assessment_step_readiness,
+    )
+
+    # Preset compilation stays portable. Current deployment prerequisites and
+    # reviewed target authority are checked at real admission before provider
+    # or artifact side effects; native job admission still rechecks them.
+    require_assessment_step_readiness(
+        _workflow_payload(initial_parameters),
+        assessment_scope=initial_parameters.get("assessmentScope"),
+        principal=principal,
+    )
     target_runtime = str(initial_parameters.get("targetRuntime") or "").strip().lower()
     if target_runtime != OMNIGENT_RUNTIME_ID:
         raise ValueError(

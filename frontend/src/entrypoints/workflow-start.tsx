@@ -1,13 +1,15 @@
+import { schemaProperties, schemaRequired, schemaAlternativeRequiredGroups, schemaGuidedInputNames, capabilityFieldLabel, capabilityFieldUiSchema, capabilityFieldVisible, capabilityWidgetName, safeCapabilityDefault, dependentCapabilityDefault, recordValue, OWNER_REPO_PATTERN, SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
+export { SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
 import { OrganisationalEvidenceEditor } from '../components/OrganisationalEvidenceEditor';
 import { securitySelectionIdentity, securitySelectionArtifact } from '../lib/remediationCreateDraft';
 import { AssessmentAuthorizationPicker, AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
 import { reviewAssessmentProposal, type AssessmentEngagementReview as AssessmentReview } from "../lib/assessmentEngagement";
 import { AssessmentProjectPicker } from "../components/workflows/AssessmentProjectPicker";
-import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, resolveSchemaProperty, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
+import { applyAssessmentInputDefaults, assessmentInputAliases, supportsAssessmentDefaults, type AssessmentProjectSnapshot } from "../lib/assessmentProjects";
 import { newWorkDefaultProblem, type NewWorkDefaultProfile } from '../lib/newWorkDefault';
 import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
@@ -114,7 +116,6 @@ const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
 const BRANCH_OPTIONS_DATALIST_ID = "queue-branch-options";
-const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
@@ -1448,11 +1449,6 @@ function hasInlineTaskInstructions(task: unknown): boolean {
   });
 }
 
-function recordValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefined {
   const record = recordValue(value);
@@ -3672,370 +3668,11 @@ function isVisiblePresetInputName(
   return true;
 }
 
-function schemaProperties(schema: Record<string, unknown> | undefined): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(recordValue(schema?.properties)).map(([name, property]) => [name, resolveSchemaProperty(property, schema || {})]));
-}
-
-function schemaRequired(schema: Record<string, unknown> | undefined): Set<string> {
-  return new Set(
-    (Array.isArray(schema?.required) ? schema.required : [])
-      .map((item) => String(item || "").trim())
-      .filter(Boolean),
-  );
-}
-
-function schemaAlternativeRequiredGroups(
-  schema: Record<string, unknown> | undefined,
-): string[][] {
-  const alternatives = Array.isArray(schema?.anyOf)
-    ? schema.anyOf
-    : Array.isArray(schema?.oneOf)
-      ? schema.oneOf
-      : [];
-  return alternatives
-    .map((alternative) =>
-      Array.from(schemaRequired(recordValue(alternative))),
-    )
-    .filter((group) => group.length > 0);
-}
-
-function schemaGuidedInputNames(
-  schema: Record<string, unknown> | undefined,
-): Set<string> {
-  const names = schemaRequired(schema);
-  for (const group of schemaAlternativeRequiredGroups(schema)) {
-    for (const name of group) {
-      names.add(name);
-    }
-  }
-  return names;
-}
-
-function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
-  return String(schema.title || name)
-    .trim()
-    .replaceAll("_", " ");
-}
-
-function capabilityFieldUiSchema(
-  uiSchema: Record<string, unknown> | undefined,
-  name: string,
-): Record<string, unknown> {
-  return recordValue(uiSchema?.[name]);
-}
-
-function capabilityFieldVisible(
-  uiSchema: Record<string, unknown>,
-  values: Record<string, unknown>,
-  defaults?: Record<string, unknown>,
-): boolean {
-  const visibleWhen = recordValue(uiSchema["visibleWhen"]);
-  if (Object.keys(visibleWhen).length === 0) {
-    return true;
-  }
-  const field = String(visibleWhen["field"] ?? "").trim();
-  if (!field) {
-    return true;
-  }
-  const actual =
-    values && values[field] !== undefined
-      ? values[field]
-      : safeCapabilityDefault(defaults, field);
-  if (Object.prototype.hasOwnProperty.call(visibleWhen, "equals")) {
-    return actual === visibleWhen["equals"];
-  }
-  if (Array.isArray(visibleWhen["oneOf"])) {
-    return visibleWhen["oneOf"].some((value) => value === actual);
-  }
-  return true;
-}
-
-function capabilityWidgetName(
-  schema: Record<string, unknown>,
-  uiSchema: Record<string, unknown>,
-): string {
-  const widget = String(
-    uiSchema.widget || schema["x-moonmind-widget"] || schema.format || schema.type || "text",
-  )
-    .trim()
-    .toLowerCase();
-  const aliases: Record<string, string> = {
-    checkbox: "boolean",
-    editor: "textarea",
-    "github.repository-picker": "repository-picker",
-    repository: "repository-picker",
-    repo: "repository-picker",
-    "repo-picker": "repository-picker",
-    "github.branch-picker": "branch",
-  };
-  return aliases[widget] || widget;
-}
-
-function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
-  label: string;
-  value: unknown;
-}> {
-  const choices = Array.isArray(schema.oneOf)
-    ? schema.oneOf
-    : Array.isArray(schema.anyOf)
-      ? schema.anyOf
-      : [];
-  return choices
-    .map((choice) => {
-      const choiceSchema = recordValue(choice);
-      const value = choiceSchema.const ?? (Array.isArray(choiceSchema.enum) ? choiceSchema.enum[0] : undefined);
-      if (value === undefined) {
-        return null;
-      }
-      return {
-        label: String(choiceSchema.title || value),
-        value,
-      };
-    })
-    .filter((choice): choice is { label: string; value: unknown } => Boolean(choice));
-}
-
-function textInputTypeForSchema(schema: Record<string, unknown>): string {
-  const format = String(schema.format || "").trim().toLowerCase();
-  if (format === "date-time") {
-    return "datetime-local";
-  }
-  if (
-    format === "email" ||
-    format === "uri" ||
-    format === "url" ||
-    format === "date"
-  ) {
-    return format === "uri" ? "url" : format;
-  }
-  if (schema.type === "number" || schema.type === "integer") {
-    return "number";
-  }
-  return "text";
-}
-
-function complexCapabilityTextValue(value: unknown): string {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function parseComplexCapabilityValue(text: string): unknown {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-function unsupportedCapabilityWidget(
-  widget: string,
-  schema: Record<string, unknown>,
-): boolean {
-  if (Array.isArray(schema.enum) || schemaChoiceOptions(schema).length > 0) {
-    return false;
-  }
-  const supported = new Set([
-    "array",
-    "boolean",
-    "branch",
-    "date",
-    "date-time",
-    "email",
-    "integer",
-    "json",
-    "multi-select",
-    "github.issue-picker",
-    "jira.issue-picker",
-    "markdown",
-    "number",
-    "object",
-    "repository",
-    "repository-picker",
-    "repo",
-    "repo-picker",
-    "string",
-    "text",
-    "textarea",
-    "uri",
-    "url",
-  ]);
-  return !supported.has(widget);
-}
-
-function containsSecretLikeCapabilityValue(value: unknown): boolean {
-  if (value && typeof value === "object") {
-    if (Array.isArray(value)) {
-      return value.some((item) => containsSecretLikeCapabilityValue(item));
-    }
-    return Object.entries(value as Record<string, unknown>).some(
-      ([key, nested]) =>
-        /(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)/i.test(
-          key,
-        ) || containsSecretLikeCapabilityValue(nested),
-    );
-  }
-  return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)/i.test(
-    String(value || ""),
-  );
-}
-
-function safeCapabilityDefault(
-  defaults: Record<string, unknown> | undefined,
-  name: string,
-): unknown {
-  const value = defaults?.[name];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (containsSecretLikeCapabilityValue(value)) {
-    return undefined;
-  }
-  return structuredClone(value);
-}
-
-// A preset may declare `uiSchema.<field>.defaultFrom` when one input's default
-// has to follow another operator selection rather than a single static value.
-// The rule only supplies a default: once the operator sets the field, their
-// value lives in `values` and is never replaced.
-function dependentCapabilityDefault(
-  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
-  values: Record<string, unknown>,
-  name: string,
-): unknown {
-  const defaultFrom = recordValue(
-    capabilityFieldUiSchema(detail.uiSchema, name)["defaultFrom"],
-  );
-  const field = String(defaultFrom["field"] ?? "").trim();
-  const map = recordValue(defaultFrom["map"]);
-  if (!field || Object.keys(map).length === 0) {
-    return undefined;
-  }
-  const source = capabilityInputValue(values, detail.defaults, field);
-  const key = String(source ?? "").trim();
-  // Only an entry the preset actually declared may supply a default. A source
-  // value such as `constructor` would otherwise resolve an inherited
-  // `Object.prototype` member that `structuredClone` cannot clone.
-  if (!Object.hasOwn(map, key)) {
-    return undefined;
-  }
-  const mapped = map[key];
-  if (mapped === undefined || containsSecretLikeCapabilityValue(mapped)) {
-    return undefined;
-  }
-  return structuredClone(mapped);
-}
-
-function capabilityEffectiveDefaults(
-  detail: Pick<PresetDetail, "uiSchema" | "defaults">,
-  values: Record<string, unknown>,
-): Record<string, unknown> {
-  const effective = { ...(detail.defaults || {}) };
-  for (const name of Object.keys(recordValue(detail.uiSchema))) {
-    const derived = dependentCapabilityDefault(detail, values, name);
-    if (derived !== undefined) {
-      effective[name] = derived;
-    }
-  }
-  return effective;
-}
-
-function capabilityInputValue(
-  values: Record<string, unknown>,
-  defaults: Record<string, unknown> | undefined,
-  name: string,
-): unknown {
-  return values[name] !== undefined ? values[name] : safeCapabilityDefault(defaults, name);
-}
-
-function capabilityInputTextValue(
-  values: Record<string, unknown>,
-  defaults: Record<string, unknown> | undefined,
-  name: string,
-): string {
-  const value = capabilityInputValue(values, defaults, name);
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    if (record.repository && record.number) {
-      return `${String(record.repository)}#${String(record.number)}`;
-    }
-    return String(record.key || "");
-  }
-  return value === undefined || value === null ? "" : String(value);
-}
-
-function capabilityInputStringArrayValue(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => String(item)).filter(Boolean);
-}
-
-function normalizeGitHubIssueInput(
-  rawValue: string,
-  defaultRepository: string | undefined,
-): Record<string, unknown> {
-  const value = rawValue.trim();
-  if (!value) {
-    return {};
-  }
-  const urlMatch = value.match(
-    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/(\d+)(?:[/?#].*)?$/i,
-  );
-  if (urlMatch) {
-    return {
-      repository: urlMatch[1],
-      number: Number(urlMatch[2]),
-      url: `https://github.com/${urlMatch[1]}/issues/${urlMatch[2]}`,
-    };
-  }
-  const qualifiedMatch = value.match(
-    /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)$/i,
-  );
-  if (qualifiedMatch) {
-    return { repository: qualifiedMatch[1], number: Number(qualifiedMatch[2]) };
-  }
-  const shorthandMatch = value.match(/^#(\d+)$/);
-  const normalizedRepository = String(defaultRepository || "").trim();
-  if (shorthandMatch && OWNER_REPO_PATTERN.test(normalizedRepository)) {
-    return { repository: normalizedRepository, number: Number(shorthandMatch[1]) };
-  }
-  return { repository: normalizedRepository, number: Number.NaN, raw: value };
-}
-
-function issuePickerTextValue(
-  value: unknown,
-  provider: "jira" | "github",
-): string {
-  const issueValue = recordValue(value);
-  if (provider === "github") {
-    const repository = String(issueValue.repository || "").trim();
-    const number = String(issueValue.number || "").trim();
-    if (repository && number) {
-      return `${repository}#${number}`;
-    }
-    return String(issueValue.raw || "");
-  }
-  return String(issueValue.key || "");
-}
-
 function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | null | undefined): boolean {
   return Object.keys(schemaProperties(detail?.inputSchema)).length > 0;
 }
 
-function resolveSchemaCapabilityValues(
+export function resolveSchemaCapabilityValues(
   detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
@@ -4070,8 +3707,8 @@ function resolveSchemaCapabilityValues(
     );
     const fallback =
       dependentDefault ??
-      safeCapabilityDefault(detail.defaults, name) ??
-      safeCapabilityDefault(fieldSchema, "default");
+      safeCapabilityDefault(detail.defaults, name, fieldSchema) ??
+      safeCapabilityDefault(fieldSchema, "default", fieldSchema);
     // Expansion treats a blank dependent target as omitted, so clearing a text
     // or textarea field must derive the rule's value here too instead of
     // submitting an empty string the server would replace.
@@ -4089,6 +3726,16 @@ function resolveSchemaCapabilityValues(
     } else if (fallback !== undefined) {
       values[name] = fallback;
     }
+    if (fieldSchema.type === "array" && Array.isArray(values[name]) && recordValue(fieldSchema.items).type === "object") {
+      values[name] = (values[name] as unknown[]).map((item) =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? { ...recordValue(item), ...resolveSchemaCapabilityValues({ inputSchema: recordValue(fieldSchema.items) }, recordValue(item)) }
+          : item);
+    }
+    if (fieldSchema.type === "object" && values[name] && typeof values[name] === "object" && !Array.isArray(values[name]) && Object.keys(schemaProperties(fieldSchema)).length) {
+      const nested = recordValue(values[name]);
+      values[name] = { ...nested, ...resolveSchemaCapabilityValues({ inputSchema: fieldSchema, uiSchema }, nested) };
+    }
   }
   return values;
 }
@@ -4103,7 +3750,7 @@ function resolvedPresetInputValues(
     : explicitValues;
 }
 
-function validateSchemaCapabilityValues(
+export function validateSchemaCapabilityValues(
   detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   values: Record<string, unknown>,
 ): Record<string, string> {
@@ -4141,12 +3788,26 @@ function validateSchemaCapabilityValues(
     if (value === undefined || value === null || value === "") {
       continue;
     }
+    if (fieldSchema.type === "object" && typeof value === "object" && !Array.isArray(value)) {
+      const nestedErrors = validateSchemaCapabilityValues({ inputSchema: fieldSchema, uiSchema }, recordValue(value));
+      for (const [path, message] of Object.entries(nestedErrors)) errors[`${name}.${path}`] = message;
+    }
     if (fieldSchema.type === "array") {
       if (!Array.isArray(value)) {
         errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
         continue;
       }
       const itemSchema = recordValue(fieldSchema.items);
+      if (itemSchema.type === "object") {
+        value.forEach((item, index) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            errors[`${name}.${index}`] = `${capabilityFieldLabel(name, fieldSchema)} item ${index + 1} must be an object.`;
+          } else {
+            const nestedErrors = validateSchemaCapabilityValues({ inputSchema: itemSchema }, recordValue(item));
+            for (const [path, message] of Object.entries(nestedErrors)) errors[`${name}.${index}.${path}`] = message;
+          }
+        });
+      }
       if (Array.isArray(itemSchema.enum)) {
         const allowed = new Set(itemSchema.enum.map((item) => String(item)));
         const invalid = value.some((item) => !allowed.has(String(item)));
@@ -4399,360 +4060,6 @@ function initializeToolInputValues(
 
 function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
-}
-
-export function SchemaCapabilityFields({
-  fields,
-  detail,
-  values,
-  errors,
-  disabled,
-  repositoryOptions,
-  branchOptions,
-  onChange,
-  onGitHubIssueRepositoryChange,
-}: {
-  fields: Array<[string, unknown]>;
-  detail: Pick<PresetDetail, "uiSchema" | "defaults">;
-  values: Record<string, unknown>;
-  errors: Record<string, string>;
-  disabled: boolean;
-  repositoryOptions: RepositoryOption[];
-  branchOptions: BranchOption[];
-  onChange: (name: string, value: unknown) => void;
-  onGitHubIssueRepositoryChange?: (repository: string) => void;
-}): ReactElement | null {
-  const fieldGroupId = useId();
-  if (fields.length === 0) {
-    return null;
-  }
-  // Dependent defaults are resolved against the current values so a field whose
-  // default follows another selection re-renders with the derived value.
-  const effectiveDefaults = capabilityEffectiveDefaults(detail, values);
-  return (
-    <div className="grid-2">
-      {fields.map(([name, rawSchema]) => {
-        const fieldSchema = recordValue(rawSchema);
-        const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
-        const widget = capabilityWidgetName(fieldSchema, uiSchema);
-        const label = capabilityFieldLabel(name, fieldSchema);
-        const value = capabilityInputValue(values, effectiveDefaults, name);
-        const inputId = `queue-capability-input-${fieldGroupId}-${name}`;
-        const error = errors[name];
-        const description = String(fieldSchema.description || "").trim();
-        const describedBy = [description ? `${inputId}-hint` : '', error ? `${inputId}-error` : ''].filter(Boolean).join(' ') || undefined;
-        const choices = schemaChoiceOptions(fieldSchema);
-        const hasTypeSafeRenderer =
-          fieldSchema.type === "boolean" ||
-          fieldSchema.type === "number" ||
-          fieldSchema.type === "integer" ||
-          fieldSchema.type === "array" ||
-          fieldSchema.type === "object" ||
-          Array.isArray(fieldSchema.enum) ||
-          choices.length > 0;
-        if (fieldSchema.readOnly === true) {
-          return <label key={name} htmlFor={inputId}>{label}<textarea id={inputId} aria-label={label}
-            value={complexCapabilityTextValue(value)} readOnly disabled={disabled} aria-describedby={describedBy} />
-            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-          </label>;
-        }
-        if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <input
-                id={inputId}
-                aria-label={label}
-                type="text"
-                value={capabilityInputTextValue(values, effectiveDefaults, name)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => onChange(name, event.target.value)}
-              />
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              <span className="notice small">
-                Widget {widget} is unavailable; using a text field.
-              </span>
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        if (widget === "jira.issue-picker" || widget === "github.issue-picker") {
-          const issueValue = recordValue(value);
-          const provider = widget === "github.issue-picker" ? "github" : "jira";
-          const placeholder = String(
-            uiSchema.searchPlaceholder ||
-              (provider === "github" ? "Search GitHub issues" : "Search Jira issues"),
-          );
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <input
-                id={inputId}
-                aria-label={label}
-                type="text"
-                value={issuePickerTextValue(value, provider)}
-                placeholder={placeholder}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => {
-                  if (provider === "github") {
-                    const normalizedIssue = normalizeGitHubIssueInput(
-                      event.target.value,
-                      String(
-                        issueValue.repository ||
-                          readLocalPreference(
-                            LAST_REPOSITORY_OPTION_PREFERENCE_KEY,
-                          ) ||
-                          "",
-                      ),
-                    );
-                    onChange(name, normalizedIssue);
-                    const issueRepository = String(
-                      normalizedIssue.repository || "",
-                    ).trim();
-                    if (
-                      issueRepository &&
-                      Number.isInteger(normalizedIssue.number) &&
-                      Number(normalizedIssue.number) > 0
-                    ) {
-                      onGitHubIssueRepositoryChange?.(issueRepository);
-                    }
-                    return;
-                  }
-                  onChange(name, {
-                    ...issueValue,
-                    key: event.target.value,
-                  });
-                }}
-              />
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        if (fieldSchema.type === "boolean") {
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <input
-                id={inputId}
-                aria-label={label}
-                type="checkbox"
-                checked={Boolean(value)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => onChange(name, event.target.checked)}
-              />
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        const itemSchema = recordValue(fieldSchema.items);
-        if (
-          fieldSchema.type === "array" &&
-          (Array.isArray(itemSchema.enum) || schemaChoiceOptions(itemSchema).length > 0)
-        ) {
-          const itemChoices = schemaChoiceOptions(itemSchema);
-          const itemEnumOptions = Array.isArray(itemSchema.enum)
-            ? itemSchema.enum
-            : [];
-          const itemOptions: Array<{ label: string; value: unknown }> =
-            itemChoices.length > 0
-              ? itemChoices
-              : itemEnumOptions.map((option: unknown) => ({
-                  label: String(option),
-                  value: option,
-                }));
-          const selectedValues = capabilityInputStringArrayValue(value);
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <select
-                id={inputId}
-                aria-label={label}
-                multiple
-                value={selectedValues}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => {
-                  const selected = Array.from(event.currentTarget.selectedOptions)
-                    .map((option) => {
-                      const matched = itemOptions.find(
-                        (item) => String(item.value) === option.value,
-                      );
-                      return matched?.value ?? option.value;
-                    });
-                  onChange(name, selected);
-                }}
-              >
-                {itemOptions.map((option) => (
-                  <option key={String(option.value)} value={String(option.value)}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        if (Array.isArray(fieldSchema.enum) || choices.length > 0) {
-          const enumOptions = Array.isArray(fieldSchema.enum)
-            ? fieldSchema.enum
-            : [];
-          const options: Array<{ label: string; value: unknown }> =
-            choices.length > 0
-              ? choices
-              : enumOptions.map((option: unknown) => ({
-                  label: String(option),
-                  value: option,
-                }));
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <select
-                id={inputId}
-                aria-label={label}
-                value={capabilityInputTextValue(values, effectiveDefaults, name)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => {
-                  const selected = options.find(
-                    (option) => String(option.value) === event.target.value,
-                  );
-                  onChange(name, selected?.value ?? event.target.value);
-                }}
-              >
-                {options.map((option) => (
-                  <option key={String(option.value)} value={String(option.value)}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        if (widget === "textarea" || widget === "markdown" || widget === "json") {
-          const structuredValue =
-            widget === "json" &&
-            (fieldSchema.type === "array" || fieldSchema.type === "object");
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <textarea
-                id={inputId}
-                aria-label={label}
-                value={capabilityInputTextValue(values, effectiveDefaults, name)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) =>
-                  onChange(
-                    name,
-                    structuredValue
-                      ? parseComplexCapabilityValue(event.target.value)
-                      : event.target.value,
-                  )
-                }
-              />
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        if (fieldSchema.type === "array" || fieldSchema.type === "object") {
-          return (
-            <label key={name} htmlFor={inputId}>
-              {label}
-              <textarea
-                id={inputId}
-                aria-label={label}
-                value={complexCapabilityTextValue(value)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) =>
-                  onChange(name, parseComplexCapabilityValue(event.target.value))
-                }
-              />
-              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>
-          );
-        }
-        const inputType = textInputTypeForSchema(fieldSchema);
-        return (
-          <label key={name} htmlFor={inputId}>
-            {label}
-            <input
-              id={inputId}
-              aria-label={label}
-              type={inputType}
-              list={
-                widget === "repository" ||
-                widget === "repository-picker" ||
-                widget === "repo" ||
-                widget === "repo-picker" ||
-                widget === "branch"
-                  ? `${inputId}-options`
-                  : undefined
-              }
-              value={capabilityInputTextValue(values, effectiveDefaults, name)}
-              disabled={disabled}
-              aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-              onChange={(event) =>
-                onChange(
-                  name,
-                  inputType === "number"
-                    ? event.target.value === ""
-                      ? ""
-                      : Number(event.target.value)
-                    : event.target.value,
-                )
-              }
-            />
-            {widget === "repository" ||
-            widget === "repository-picker" ||
-            widget === "repo" ||
-            widget === "repo-picker" ? (
-              <datalist id={`${inputId}-options`}>
-                {repositoryOptions.map((option) => (
-                  <option
-                    key={option.value}
-                    value={option.value}
-                    label={option.label}
-                  />
-                ))}
-              </datalist>
-            ) : null}
-            {widget === "branch" ? (
-              <datalist id={`${inputId}-options`}>
-                {branchOptions.map((option) => (
-                  <option
-                    key={option.value}
-                    value={option.value}
-                    label={option.label}
-                  />
-                ))}
-              </datalist>
-            ) : null}
-            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
-            {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-          </label>
-        );
-      })}
-    </div>
-  );
 }
 
 export function resolveObjectiveInstructions(
@@ -6356,6 +5663,16 @@ function WorkflowStartPageContent({
   const submitExpansionRequestIdRef = useRef(0);
   const createIntentsRef = useRef<CreateSubmissionIntents | null>(null);
   const createDraftRevisionRef = useRef(0);
+  const retainedPresetSubmissionRef = useRef<{
+    revision: number;
+    href: string;
+    expansion: {
+      steps: StepState[];
+      appliedTemplates: AppliedTemplateState[];
+      warnings: string[];
+      workflowPublish: Record<string, unknown> | null;
+    };
+  } | null>(null);
   const createMountedRef = useRef(true);
   const [acceptedCreatePath, setAcceptedCreatePath] = useState<string | null>(null);
   const attachmentUploadsRef = useRef(new WeakMap<File, Map<string, StepAttachmentRef>>());
@@ -6470,6 +5787,9 @@ function WorkflowStartPageContent({
   });
 
   useEffect(() => {
+    // The router and this listener may run in either mount order. Share approval
+    // only for this click, never for a later click to the same destination.
+    const approvedNavigationEvents = new WeakSet<Event>();
     const markDraftDirty = (event: Event) => {
       const target = event.target;
       if (target instanceof Element && target.closest("#queue-submit-form")) {
@@ -6484,6 +5804,11 @@ function WorkflowStartPageContent({
       }
     };
     const handleRouteChangeRequest = (event: Event) => {
+      if (
+        event instanceof CustomEvent &&
+        event.detail?.sourceEvent instanceof Event &&
+        approvedNavigationEvents.has(event.detail.sourceEvent)
+      ) return;
       if (!routeGuardDirtyRef.current) {
         return;
       }
@@ -6492,6 +5817,8 @@ function WorkflowStartPageContent({
       );
       if (!confirmed) {
         event.preventDefault();
+      } else if (event instanceof CustomEvent && event.detail?.sourceEvent instanceof Event) {
+        approvedNavigationEvents.add(event.detail.sourceEvent);
       } else if (event instanceof CustomEvent && typeof event.detail?.href === "string") {
         approvedNavigationHrefRef.current = new URL(
           event.detail.href,
@@ -6526,9 +5853,12 @@ function WorkflowStartPageContent({
           approved.search === destination.search
         ) return;
       }
+      if (approvedNavigationEvents.has(event)) return;
       if (!confirmDraftNavigation()) {
         event.preventDefault();
         event.stopPropagation();
+      } else {
+        approvedNavigationEvents.add(event);
       }
     };
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -8888,8 +8218,8 @@ function WorkflowStartPageContent({
         if (step.localId !== localId) {
           return step;
         }
-        const { [definition.name]: _removed, ...remainingErrors } =
-          step.presetInputErrors;
+        const remainingErrors = Object.fromEntries(Object.entries(step.presetInputErrors)
+          .filter(([path]) => path !== definition.name && !path.startsWith(`${definition.name}.`)));
         return {
           ...step,
           presetInputValues: {
@@ -10304,10 +9634,15 @@ function WorkflowStartPageContent({
     );
     if (unresolvedPresetSteps.length > 0) {
       try {
-        const expanded = await expandUnresolvedPresetsForSubmit({
-          requestId,
-          submitIntent: pageMode.mode,
-        });
+        // An unchanged retry must reuse the exact expansion, including its
+        // provenance timestamp, so an uncertain admission keeps its identity.
+        // Every authored edit and route transition advances the draft revision.
+        const retained = retainedPresetSubmissionRef.current;
+        const expanded = retained?.revision === createRevision && retained.href === submissionHref
+          ? retained.expansion
+          : await expandUnresolvedPresetsForSubmit({ requestId, submitIntent: pageMode.mode });
+        if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+        retainedPresetSubmissionRef.current = { revision: createRevision, href: submissionHref, expansion: expanded };
         submissionSteps = expanded.steps;
         submissionAppliedTemplates = expanded.appliedTemplates;
         submitExpandedWorkflowPublish = expanded.workflowPublish;
@@ -12941,7 +12276,7 @@ function WorkflowStartPageContent({
                               return ref.artifactId;
                             }}
                           /> : null}
-                          <SchemaCapabilityFields
+                          <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
                             fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}
                             values={selectedToolAuthoredInputs.values}
@@ -12959,7 +12294,7 @@ function WorkflowStartPageContent({
                           {optionalToolSchemaFields.length > 0 ? (
                             <details>
                               <summary>Optional inputs</summary>
-                              <SchemaCapabilityFields
+                              <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
                                 fields={optionalToolSchemaFields}
                                 detail={selectedToolDetail}
                                 values={selectedToolAuthoredInputs.values}
@@ -13165,7 +12500,7 @@ function WorkflowStartPageContent({
                               {skillContractNotice}
                             </p>
                           ) : null}
-                        <SchemaCapabilityFields
+                        <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
                           fields={visibleSkillSchemaFields}
                           detail={selectedSkillDetail}
                           values={step.presetInputValues}
@@ -13226,7 +12561,8 @@ function WorkflowStartPageContent({
                       aria-label="Step Preset Options"
                     >
                       {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
-                        <SchemaCapabilityFields
+                        <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
+                          key={step.presetKey}
                           fields={visiblePresetSchemaFields}
                           detail={step.presetDetail}
                           values={step.presetInputValues}

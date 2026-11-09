@@ -68,6 +68,7 @@ _KEEP_SNAPSHOTS = 3
 _STALE_STAGING_SECONDS = 24 * 3600
 
 Code = Literal[
+    "feed_snapshot_stale",
     "feed_snapshot_unavailable",
     "feed_snapshot_incomplete",
     "feed_snapshot_corrupt",

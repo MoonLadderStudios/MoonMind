@@ -1,0 +1,185 @@
+slug: security-image-sbom
+title: Image and SBOM assessment
+description: Assess a registry image or retained archive, generate an SBOM, or reassess a retained SBOM
+  using an admitted offline database. No runtime container testing.
+tags:
+- security
+- assessment
+- image-assessment
+releaseStatus: active
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  uiSchema:
+    assessment:
+      feedMaxAgeHours:
+        advanced: true
+      outputDirectory:
+        advanced: true
+      maxInputBytes:
+        advanced: true
+      maxSbomBytes:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
+  inputSchema:
+    type: object
+    required:
+    - assessment
+    properties:
+      goal:
+        type: string
+        title: Goal
+        default: Assess a registry image or retained archive, generate an SBOM, or reassess a retained
+          SBOM using an admitted offline database. No runtime container testing.
+      assessment:
+        additionalProperties: false
+        description: 'One Trivy operation on an image, image archive, SBOM or source snapshot.
+
+
+          A typed workload of its own, so target-image coverage is requested and
+
+          reported apart from source scanning. Registry targets are read from the
+
+          registry and archives or SBOMs from captured inputs, never through a
+
+          container daemon. ``targetCredentialRef`` authorizes the target registry
+
+          only; the scanner image is a deployment image source with its own pull
+
+          authority.'
+        properties:
+          operation:
+            enum:
+            - assess
+            - sbom-generate
+            - sbom-reassess
+            title: Operation
+            type: string
+            default: sbom-generate
+          target:
+            enum:
+            - registry
+            - archive
+            - sbom
+            - source
+            title: Target
+            type: string
+            default: archive
+          imageReference:
+            maxLength: 512
+            minLength: 1
+            type: string
+            title: Image reference
+          platform:
+            pattern: ^linux/(?:amd64|arm64|arm|386|ppc64le|s390x|riscv64)(?:/v[5-8])?$
+            type: string
+            title: Platform
+          inputArtifactRef:
+            pattern: ^art_[0-9A-Za-z]{1,64}$
+            type: string
+            title: Input artifact ref
+          egressPolicyRef:
+            pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+            type: string
+            title: Egress policy ref
+          targetCredentialRef:
+            maxLength: 1024
+            minLength: 1
+            type: string
+            title: Target credential ref
+          databaseCacheRef:
+            pattern: ^[a-z0-9][a-z0-9.-]*$
+            type: string
+            title: Database cache ref
+          databaseDigest:
+            pattern: ^[0-9a-f]{64}$
+            type: string
+            title: Database digest
+          feedMaxAgeHours:
+            default: 72
+            maximum: 8760
+            minimum: 1
+            title: Feed max age hours
+            type: integer
+          outputDirectory:
+            default: image-assessment
+            title: Output directory
+            type: string
+          maxInputBytes:
+            default: 2147483648
+            maximum: 4294967296
+            minimum: 1
+            title: Max input bytes
+            type: integer
+          maxSbomBytes:
+            default: 33554432
+            maximum: 67108864
+            minimum: 1024
+            title: Max sbom bytes
+            type: integer
+          maxReportBytes:
+            default: 8388608
+            maximum: 8388608
+            minimum: 128
+            title: Max report bytes
+            type: integer
+          timeoutSeconds:
+            default: 900
+            maximum: 3600
+            minimum: 1
+            title: Timeout seconds
+            type: integer
+          requireFreshFeeds:
+            type: boolean
+            title: Require fresh feeds
+            default: true
+            description: Stop before scanning if the admitted feed snapshot is stale. Disable only for
+              an explicitly requested stale-evidence assessment.
+        required:
+        - operation
+        - target
+        title: Assessment
+        type: object
+        x-moonmind-input-contract: image-assessment
+      baseline_ref:
+        type: string
+        title: Baseline ref
+        description: Optional retained report for comparison. Omit for a first assessment.
+steps:
+- title: Collect evidence and assess
+  repositoryOperation: read
+  instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
+    Execute the compiled job_spec through moonmind container run --spec <file> --request-id <collection-id>.
+    Serialize job_spec as JSON and reuse the collection ID on retry without changing target, rules, feeds, exclusions, credentials, network,
+    timeout or source. Use the existing container-job owner; retain the job ID and native report artifact
+    references. Reconcile uncertain submissions before retrying. Stop with actionable diagnostics if readiness
+    or admission fails; never install substitutes, broaden scope or refresh feeds as a side effect.
+
+
+    Interpret this step''s collected native evidence for the supplied goal. Reuse completed evidence;
+    never repeat collection. Save an evidence-referenced security-review/v1 interpretation and readable
+    report with findings, examined coverage, missing checks and honest exclusions. Compare baseline_ref
+    only when supplied and accessible. Preserve native reports if interpretation fails.
+
+
+    Preserve the selected workflow source, harness, Provider Profile, evidence-processing policy and publication
+    choice. This assessment does not authorize remediation, infrastructure changes or publication. Use
+    only the original remaining budget, including retries.'
+  skill:
+    id: security-review
+    args:
+      goal: '{{ inputs.goal }}'
+      assessment: '{{ inputs.assessment }}'
+      baseline_ref: '{{ inputs.baseline_ref }}'
+    requiredCapabilities:
+    - sandbox
+  annotations:
+    securityAssessment:
+      kind: image-assessment
+      admission: '{{ inputs.assessment }}'
+      phase: collect

@@ -3,9 +3,10 @@ export const WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT =
 
 export type WorkflowStartRouteChangeRequestDetail = {
   href: string;
+  sourceEvent?: Event;
 };
 
-export function requestWorkflowStartRouteChange(href: string): boolean {
+export function requestWorkflowStartRouteChange(href: string, sourceEvent?: Event): boolean {
   if (typeof window === 'undefined') {
     return true;
   }
@@ -14,7 +15,7 @@ export function requestWorkflowStartRouteChange(href: string): boolean {
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       {
         cancelable: true,
-        detail: { href },
+        detail: { href, ...(sourceEvent ? { sourceEvent } : {}) },
       },
     ),
   );

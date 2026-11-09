@@ -313,7 +313,7 @@ Rerun, schedule editing, and remediation use the same compiler and visible expla
 
 ## Provenance and Catalog Loading
 
-The catalog normalizes Presets, Skills, Tools, and supported runtime capabilities into shared schema metadata. Large schemas can be fetched by immutable reference. Empty schemas remain valid where allowed.
+The catalog normalizes Presets, Skills, Tools, and supported runtime capabilities into shared schema metadata. Large schemas can be fetched by immutable reference. Empty schemas remain valid where allowed. Nested `uiSchema.<object>.<field>.advanced` hints place optional controls in a native disclosure, leaving required inputs visible. Saved values stay effective without opening the section; validation errors reveal it. Assessment presets keep target, authorization, scope and conditionally required inputs outside advanced tuning.
 
 Generated steps show a compact source annotation. Provenance includes selected preset/Skill identity, definition/input-contract digest, task input snapshot, and context/policy derivation evidence. It distinguishes what the user entered from what the compiler bound, and never leaks credentials or unnecessary runtime handles.
 

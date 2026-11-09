@@ -1,0 +1,727 @@
+{
+  "additionalProperties": false,
+  "description": "Compact operator-admitted authority for one assessment's container jobs.\n\nIt is resolved at the trusted launch boundary and travels only inside the\nsigned session capability; repository text and model output cannot alter\nit. ``maxJobs`` and ``maxJobSeconds`` bound new jobs; an exact replay of an\nalready-admitted job consumes no budget. ``networkRefs`` names admitted\negress policies. ``grants`` are the only workload credential references\nits jobs may request.",
+  "properties": {
+    "assessmentRef": {
+      "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$",
+      "title": "Assessment Ref",
+      "type": "string",
+      "description": "Use this same assessment reference in the selected cloud or web preset."
+    },
+    "profileRefs": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Profile Refs",
+      "type": "array",
+      "description": "Installed workload profile references, for example web-assessment or cloud-posture."
+    },
+    "actionClasses": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Action Classes",
+      "type": "array",
+      "description": "Explicit allowed actions, for example web-passive, web-active or cloud-posture."
+    },
+    "targets": {
+      "items": {
+        "additionalProperties": false,
+        "description": "One admitted input path, input artifact, web origin or cloud account.\n\nA web origin carries the route prefixes and methods that may be tested\nand the prefixes that may not; jobs stay within all of them. A cloud\naccount carries its provider and the regions that may be assessed.",
+        "properties": {
+          "workspacePath": {
+            "maxLength": 1000,
+            "type": "string",
+            "title": "Workspace Path"
+          },
+          "artifactRef": {
+            "pattern": "^art_[0-9A-Za-z]{1,64}$",
+            "type": "string",
+            "title": "Artifact Ref"
+          },
+          "webOrigin": {
+            "maxLength": 300,
+            "type": "string",
+            "title": "Web Origin"
+          },
+          "webRoutes": {
+            "default": [],
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "title": "Path",
+                  "type": "string"
+                },
+                "methods": {
+                  "items": {
+                    "enum": [
+                      "GET",
+                      "HEAD",
+                      "POST",
+                      "PUT",
+                      "PATCH",
+                      "DELETE",
+                      "OPTIONS"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 7,
+                  "minItems": 1,
+                  "title": "Methods",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "title": "WebRoute",
+              "type": "object"
+            },
+            "maxItems": 64,
+            "title": "Web Routes",
+            "type": "array"
+          },
+          "webExclusions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Web Exclusions",
+            "type": "array"
+          },
+          "webMessages": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "maxProperties": 32,
+            "title": "Web Messages",
+            "type": "object"
+          },
+          "realtime": {
+            "additionalProperties": false,
+            "properties": {
+              "cases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "caseRef": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+                      "title": "Case Ref",
+                      "type": "string"
+                    },
+                    "protocol": {
+                      "enum": [
+                        "websocket",
+                        "signalr-json"
+                      ],
+                      "title": "Protocol",
+                      "type": "string"
+                    },
+                    "path": {
+                      "title": "Path",
+                      "type": "string"
+                    },
+                    "credentialRef": {
+                      "maxLength": 512,
+                      "type": "string",
+                      "title": "Credential Ref"
+                    },
+                    "anonymous": {
+                      "default": false,
+                      "title": "Anonymous",
+                      "type": "boolean"
+                    },
+                    "messageType": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+                      "title": "Message Type",
+                      "type": "string"
+                    },
+                    "payload": {
+                      "additionalProperties": true,
+                      "title": "Payload",
+                      "type": "object"
+                    },
+                    "effect": {
+                      "enum": [
+                        "read_only",
+                        "mutation"
+                      ],
+                      "title": "Effect",
+                      "type": "string"
+                    },
+                    "negotiationPath": {
+                      "type": "string",
+                      "title": "Negotiation Path"
+                    }
+                  },
+                  "required": [
+                    "caseRef",
+                    "protocol",
+                    "path",
+                    "messageType",
+                    "payload",
+                    "effect"
+                  ],
+                  "title": "RealtimeCase",
+                  "type": "object"
+                },
+                "maxItems": 512,
+                "minItems": 1,
+                "title": "Cases",
+                "type": "array"
+              },
+              "maxConnections": {
+                "default": 32,
+                "maximum": 8192,
+                "minimum": 1,
+                "title": "Max Connections",
+                "type": "integer"
+              },
+              "maxMessages": {
+                "default": 256,
+                "maximum": 65536,
+                "minimum": 1,
+                "title": "Max Messages",
+                "type": "integer"
+              },
+              "maxBytes": {
+                "default": 4194304,
+                "maximum": 67108864,
+                "minimum": 1,
+                "title": "Max Bytes",
+                "type": "integer"
+              },
+              "maxMessageBytes": {
+                "default": 65536,
+                "maximum": 262144,
+                "minimum": 128,
+                "title": "Max Message Bytes",
+                "type": "integer"
+              },
+              "maxReceiveMessages": {
+                "default": 8,
+                "maximum": 256,
+                "minimum": 1,
+                "title": "Max Receive Messages",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cases"
+            ],
+            "title": "Realtime",
+            "type": "object"
+          },
+          "dnsAssessment": {
+            "additionalProperties": false,
+            "properties": {
+              "questions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 254,
+                      "minLength": 1,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "recordType": {
+                      "enum": [
+                        "A",
+                        "AAAA",
+                        "CNAME",
+                        "NS",
+                        "SOA",
+                        "CAA",
+                        "TXT",
+                        "MX",
+                        "DS",
+                        "DNSKEY"
+                      ],
+                      "title": "Record Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "recordType"
+                  ],
+                  "title": "DNSQuestion",
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "title": "Questions",
+                "type": "array"
+              },
+              "allowedFollowups": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 254,
+                      "minLength": 1,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "recordType": {
+                      "enum": [
+                        "A",
+                        "AAAA",
+                        "CNAME",
+                        "NS",
+                        "SOA",
+                        "CAA",
+                        "TXT",
+                        "MX",
+                        "DS",
+                        "DNSKEY"
+                      ],
+                      "title": "Record Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "recordType"
+                  ],
+                  "title": "DNSQuestion",
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "title": "Allowed Followups",
+                "type": "array"
+              },
+              "checks": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check": {
+                      "enum": [
+                        "cname",
+                        "delegation",
+                        "caa",
+                        "dnssec",
+                        "spf",
+                        "dkim",
+                        "dmarc"
+                      ],
+                      "title": "Check",
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 254,
+                      "title": "Subject",
+                      "type": "string"
+                    },
+                    "selectors": {
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "title": "Selectors",
+                      "type": "array"
+                    },
+                    "organizationalDomain": {
+                      "maxLength": 254,
+                      "type": "string",
+                      "title": "Organizational Domain"
+                    }
+                  },
+                  "required": [
+                    "check",
+                    "subject"
+                  ],
+                  "title": "DNSCheckSelection",
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "title": "Checks",
+                "type": "array"
+              },
+              "maxFollowupDepth": {
+                "default": 4,
+                "maximum": 8,
+                "minimum": 0,
+                "title": "Max Followup Depth",
+                "type": "integer"
+              },
+              "maxAttempts": {
+                "default": 64,
+                "maximum": 256,
+                "minimum": 1,
+                "title": "Max Attempts",
+                "type": "integer"
+              },
+              "timeoutSeconds": {
+                "default": 120,
+                "maximum": 600,
+                "minimum": 1,
+                "title": "Timeout Seconds",
+                "type": "integer"
+              },
+              "queryTimeoutSeconds": {
+                "default": 10,
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Query Timeout Seconds",
+                "type": "integer"
+              },
+              "maxResponseBytes": {
+                "default": 65536,
+                "maximum": 65536,
+                "minimum": 12,
+                "title": "Max Response Bytes",
+                "type": "integer"
+              },
+              "maxOutputBytes": {
+                "default": 4194304,
+                "maximum": 4194304,
+                "minimum": 4096,
+                "title": "Max Output Bytes",
+                "type": "integer"
+              },
+              "queriesPerSecond": {
+                "default": 5,
+                "maximum": 20,
+                "minimum": 1,
+                "title": "Queries Per Second",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "title": "Dns Assessment",
+            "type": "object"
+          },
+          "nativeNetwork": {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "tcp-connect",
+                "default": "tcp-connect",
+                "title": "Operation",
+                "type": "string",
+                "enum": [
+                  "tcp-connect"
+                ]
+              },
+              "targets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hosts": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "title": "Hosts",
+                      "type": "array"
+                    },
+                    "ports": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "title": "Ports",
+                      "type": "array"
+                    },
+                    "exclusions": {
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "title": "Exclusions",
+                      "type": "array"
+                    },
+                    "purpose": {
+                      "const": "live-target",
+                      "title": "Purpose",
+                      "type": "string",
+                      "enum": [
+                        "live-target"
+                      ]
+                    },
+                    "targetNetworkRef": {
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$",
+                      "type": "string",
+                      "title": "Target Network Ref"
+                    },
+                    "targetContainerRef": {
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$",
+                      "type": "string",
+                      "title": "Target Container Ref"
+                    }
+                  },
+                  "required": [
+                    "hosts",
+                    "ports",
+                    "purpose"
+                  ],
+                  "title": "NativeNetworkTarget",
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "title": "Targets",
+                "type": "array"
+              },
+              "limits": {
+                "additionalProperties": false,
+                "properties": {
+                  "maxConnections": {
+                    "maximum": 1000000,
+                    "minimum": 1,
+                    "title": "Max Connections",
+                    "type": "integer"
+                  },
+                  "maxBytes": {
+                    "maximum": 1099511627776,
+                    "minimum": 1,
+                    "title": "Max Bytes",
+                    "type": "integer"
+                  },
+                  "maxConnectionsPerSecond": {
+                    "maximum": 1000,
+                    "minimum": 1,
+                    "title": "Max Connections Per Second",
+                    "type": "integer"
+                  },
+                  "maxConcurrentConnections": {
+                    "maximum": 256,
+                    "minimum": 1,
+                    "title": "Max Concurrent Connections",
+                    "type": "integer"
+                  },
+                  "maxDurationSeconds": {
+                    "maximum": 86400,
+                    "minimum": 1,
+                    "title": "Max Duration Seconds",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "maxConnections",
+                  "maxBytes",
+                  "maxConnectionsPerSecond",
+                  "maxConcurrentConnections",
+                  "maxDurationSeconds"
+                ],
+                "title": "Limits",
+                "type": "object"
+              }
+            },
+            "required": [
+              "targets",
+              "limits"
+            ],
+            "title": "Native Network",
+            "type": "object"
+          },
+          "cloudAccount": {
+            "pattern": "^[0-9]{12}$",
+            "type": "string",
+            "title": "Cloud Account"
+          },
+          "cloudProvider": {
+            "const": "aws",
+            "type": "string",
+            "title": "Cloud Provider",
+            "enum": [
+              "aws"
+            ]
+          },
+          "cloudRegions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Cloud Regions",
+            "type": "array"
+          }
+        },
+        "title": "AssessmentTarget",
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Targets",
+      "type": "array"
+    },
+    "exclusions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "title": "Exclusions",
+      "type": "array"
+    },
+    "configurationExceptions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Configuration Exceptions",
+      "type": "array"
+    },
+    "networkRefs": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Network Refs",
+      "type": "array"
+    },
+    "maxJobs": {
+      "maximum": 1000,
+      "minimum": 1,
+      "title": "Max Jobs",
+      "type": "integer"
+    },
+    "maxJobSeconds": {
+      "maximum": 86400,
+      "minimum": 1,
+      "title": "Max Job Seconds",
+      "type": "integer"
+    },
+    "maxCpuMillis": {
+      "maximum": 128000,
+      "minimum": 1,
+      "type": "integer",
+      "title": "Max Cpu Millis"
+    },
+    "maxMemoryMiB": {
+      "maximum": 1048576,
+      "minimum": 16,
+      "type": "integer",
+      "title": "Max Memory Mi B"
+    },
+    "maxRequestsPerSecond": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer",
+      "title": "Max Requests Per Second"
+    },
+    "evidenceIntent": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Evidence Intent",
+      "type": "string"
+    },
+    "grants": {
+      "default": [],
+      "items": {
+        "additionalProperties": false,
+        "description": "Operator admission of one workload credential reference.\n\nThe reference may fill a slot of ``purpose`` in the listed profiles, for\n``account`` only, until ``expiresAt``. ``revision`` pins a\nmanaged secret revision, so a rotated or revoked secret fails closed.\nCloud grants name the role to assume in that account; issued sessions are\nlimited to read-only inspection policies. Active or remediation access\nneeds a scope of its own and is not expressible here.",
+        "properties": {
+          "ref": {
+            "maxLength": 1024,
+            "minLength": 4,
+            "title": "Ref",
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "cloud_inventory",
+              "application_auth"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "account": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$",
+            "title": "Account",
+            "type": "string"
+          },
+          "profileRefs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Profile Refs",
+            "type": "array"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string",
+            "x-moonmind-widget": "text",
+            "description": "ISO time with timezone, for example 2026-12-01T12:00:00Z."
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer",
+            "title": "Revision"
+          },
+          "roleArn": {
+            "maxLength": 600,
+            "type": "string",
+            "title": "Role Arn"
+          },
+          "maxSessionSeconds": {
+            "default": 3600,
+            "maximum": 43200,
+            "minimum": 900,
+            "title": "Max Session Seconds",
+            "type": "integer"
+          },
+          "accessLevel": {
+            "const": "read_only",
+            "default": "read_only",
+            "title": "Access Level",
+            "type": "string",
+            "enum": [
+              "read_only"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "purpose",
+          "account",
+          "profileRefs",
+          "expiresAt"
+        ],
+        "title": "CredentialGrant",
+        "type": "object"
+      },
+      "maxItems": 16,
+      "title": "Grants",
+      "type": "array"
+    }
+  },
+  "required": [
+    "assessmentRef",
+    "profileRefs",
+    "actionClasses",
+    "targets",
+    "maxJobs",
+    "maxJobSeconds",
+    "evidenceIntent",
+    "maxCpuMillis",
+    "maxMemoryMiB"
+  ],
+  "title": "AdmittedAssessmentScope",
+  "type": "object"
+}

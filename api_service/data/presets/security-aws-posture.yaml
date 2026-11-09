@@ -1,0 +1,159 @@
+slug: security-aws-posture
+title: AWS posture assessment
+description: Run selected read-only Prowler checks or services in an explicitly authorized AWS account
+  and regions. AWS only; no infrastructure changes or certification.
+tags:
+- security
+- assessment
+- cloud-assessment
+releaseStatus: active
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  uiSchema:
+    assessment:
+      maxRetryAttempts:
+        advanced: true
+      outputDirectory:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
+  inputSchema:
+    type: object
+    required:
+    - assessment
+    properties:
+      goal:
+        type: string
+        title: Goal
+        default: Run selected read-only Prowler checks or services in an explicitly authorized AWS account
+          and regions. AWS only; no infrastructure changes or certification.
+      assessment:
+        additionalProperties: false
+        description: 'One read-only Prowler posture assessment of one admitted cloud account.
+
+
+          The job selects its regions and either explicit checks or services; it
+
+          never names remediation, export or notification options. The account''s
+
+          credential is a ``cloud_inventory`` grant exchanged for a read-only
+
+          session, so one session must cover the whole budget.'
+        properties:
+          provider:
+            pattern: ^[a-z0-9][a-z0-9-]{0,31}$
+            title: Provider
+            type: string
+            enum:
+            - aws
+            default: aws
+          assessmentRef:
+            pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+            title: Assessment ref
+            type: string
+          account:
+            pattern: ^[0-9]{12}$
+            title: Account
+            type: string
+          credentialRef:
+            maxLength: 1024
+            minLength: 4
+            title: Credential ref
+            type: string
+          regions:
+            items:
+              type: string
+            maxItems: 32
+            minItems: 1
+            title: Regions
+            type: array
+          checks:
+            items:
+              type: string
+            maxItems: 109
+            title: Checks
+            type: array
+          services:
+            items:
+              type: string
+            maxItems: 64
+            title: Services
+            type: array
+          egressPolicyRef:
+            pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+            title: Egress policy ref
+            type: string
+          maxRetryAttempts:
+            default: 3
+            maximum: 10
+            minimum: 0
+            title: Max retry attempts
+            type: integer
+          outputDirectory:
+            default: cloud-assessment
+            title: Output directory
+            type: string
+          maxReportBytes:
+            default: 8388608
+            maximum: 8388608
+            minimum: 1024
+            title: Max report bytes
+            type: integer
+          timeoutSeconds:
+            default: 1800
+            maximum: 43200
+            minimum: 300
+            title: Timeout seconds
+            type: integer
+        required:
+        - provider
+        - assessmentRef
+        - account
+        - credentialRef
+        - regions
+        - egressPolicyRef
+        title: Assessment
+        type: object
+        x-moonmind-input-contract: cloud-assessment
+      baseline_ref:
+        type: string
+        title: Baseline ref
+        description: Optional retained report for comparison. Omit for a first assessment.
+steps:
+- title: Collect evidence and assess
+  repositoryOperation: read
+  instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
+    Execute the compiled job_spec through moonmind container run --spec <file> --request-id <collection-id>.
+    Serialize job_spec as JSON and reuse the collection ID on retry without changing target, rules, feeds, exclusions, credentials, network,
+    timeout or source. Use the existing container-job owner; retain the job ID and native report artifact
+    references. Reconcile uncertain submissions before retrying. Stop with actionable diagnostics if readiness
+    or admission fails; never install substitutes, broaden scope or refresh feeds as a side effect.
+
+
+    Interpret this step''s collected native evidence for the supplied goal. Reuse completed evidence;
+    never repeat collection. Save an evidence-referenced security-review/v1 interpretation and readable
+    report with findings, examined coverage, missing checks and honest exclusions. Compare baseline_ref
+    only when supplied and accessible. Preserve native reports if interpretation fails.
+
+
+    Preserve the selected workflow source, harness, Provider Profile, evidence-processing policy and publication
+    choice. This assessment does not authorize remediation, infrastructure changes or publication. Use
+    only the original remaining budget, including retries.'
+  skill:
+    id: security-review
+    args:
+      goal: '{{ inputs.goal }}'
+      assessment: '{{ inputs.assessment }}'
+      baseline_ref: '{{ inputs.baseline_ref }}'
+    requiredCapabilities:
+    - sandbox
+  annotations:
+    securityAssessment:
+      kind: cloud-assessment
+      admission: '{{ inputs.assessment }}'
+      phase: collect

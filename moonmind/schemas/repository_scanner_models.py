@@ -76,6 +76,7 @@ class RepositoryScan(Contract):
     database_cache_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     feed_max_age_hours: int = Field(DEFAULT_FEED_MAX_AGE_HOURS, ge=1, le=8760)
+    require_fresh_feeds: bool = Field(False, exclude_if=lambda value: not value)
     max_files: int = Field(4096, ge=1, le=4096)
     max_input_bytes: int = Field(128 * 1024 * 1024, ge=1, le=2 * 1024**3)
     max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
@@ -211,6 +212,7 @@ class ImageAssessment(Contract):
     database_cache_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     feed_max_age_hours: int = Field(DEFAULT_FEED_MAX_AGE_HOURS, ge=1, le=8760)
+    require_fresh_feeds: bool = Field(False, exclude_if=lambda value: not value)
     output_directory: str = "image-assessment"
     max_input_bytes: int = Field(2 * 1024**3, ge=1, le=4 * 1024**3)
     max_sbom_bytes: int = Field(32 * 1024 * 1024, ge=1024, le=MAX_SBOM_BYTES)

@@ -1554,8 +1554,17 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       if (!isDashboardInternalUrl(url)) {
         return;
       }
+      const destination = `${url.pathname}${url.search}${url.hash}`;
+      if (
+        window.location.pathname.replace(/\/$/, '') === '/workflows/new' &&
+        (url.pathname !== window.location.pathname || url.search !== window.location.search) &&
+        !requestWorkflowStartRouteChange(destination, event)
+      ) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
-      navigate(`${url.pathname}${url.search}${url.hash}`);
+      navigate(destination);
     };
 
     document.addEventListener('click', handleClick);

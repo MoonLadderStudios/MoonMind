@@ -1072,3 +1072,24 @@ def test_scanner_execution_records_actual_snapshot_or_missing_data(tmp_path, sta
         )
         assert execution.database_digest is None and execution.feed is None
         assert execution.states == {"scan": "failed"}
+
+
+@pytest.mark.parametrize("prerequisite", ["stale", "missing-java"])
+def test_required_fresh_feed_stops_before_any_scanner_process(tmp_path, monkeypatch, prerequisite):
+    from moonmind.security import repository_scanner_runner as runner
+
+    root = tmp_path / "feeds"
+    snapshot = publish(root, updated=datetime.now(UTC) - timedelta(days=30 if prerequisite == "stale" else 0))
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ("requirements.txt" if prerequisite == "stale" else "example.jar")).write_text("fixture\n")
+    admitted = scan(snapshot.snapshot_id, requireFreshFeeds=True)
+    calls = []
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: calls.append(a))
+    output = tmp_path / "out"
+    assert runner.run_scanner(admitted, source=source, output=output, database=root) == 2
+    assert calls == []
+    execution = ScannerExecution.model_validate_json((output / "execution.json").read_bytes())
+    diagnostic = "feed_snapshot_stale" if prerequisite == "stale" else "feed_snapshot_incomplete"
+    assert {diagnostic, "scanner_prerequisite_failed"} <= set(execution.limitations)
+    assert execution.feed.snapshot.snapshot_id == snapshot.snapshot_id

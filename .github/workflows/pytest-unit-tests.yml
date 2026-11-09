@@ -499,10 +499,10 @@ jobs:
       - name: Run selected unit suite
         id: run-unit
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
-        # The full corpus can exceed twelve minutes while making progress.
+        # The full corpus can reach fifteen minutes while still completing tests.
         # Keep completion headroom, the 60s per-test timeout and preceding
         # 45s faulthandler stack dump.
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
           PYTHONUNBUFFERED: "1"
@@ -718,7 +718,7 @@ jobs:
               status_file="/tmp/backend-unit-fast-test-status.txt"
               effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 60 -o faulthandler_timeout=45 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="60s per-test"
-              step_budget="15-min test step within 21-min job" ;;
+              step_budget="20-min test step within 26-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
@@ -2141,7 +2141,7 @@ jobs:
                       raise ValueError(f"{flag} omits required selections")
               backend = [
                   {"suite": suite, "job_minutes": {
-                      "unit-fast": 21, "api-component": 18, "temporal-boundary": 20
+                      "unit-fast": 26, "api-component": 18, "temporal-boundary": 20
                   }[suite]}
                   for key, suite in (("unit_fast", "unit-fast"),
                                      ("api_component", "api-component"),

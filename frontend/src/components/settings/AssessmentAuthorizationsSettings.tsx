@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '../Button';
+import { SchemaCapabilityFields, schemaProperties } from '../SchemaCapabilityFields';
 import { responseError } from '../../lib/api/client';
 import { ASSESSMENT_AUTHORIZATIONS_KEY, createAssessmentAuthorization, readAssessmentAuthorizations, type AssessmentAuthorization } from '../../lib/assessmentEngagement';
 import { fetchCatalog, fetchSettingAudit, SettingAuditHistory } from './GeneratedSettingsSection';
@@ -20,6 +21,40 @@ function parseScope(text: string, name: string): Record<string, unknown> {
   if (!Array.isArray(scope.targets) || !scope.targets.length || !Array.isArray(scope.profileRefs) || !scope.profileRefs.length || !Array.isArray(scope.actionClasses) || !scope.actionClasses.length || !scope.assessmentRef || !scope.evidenceIntent || !(Number(scope.maxJobs) > 0) || !(Number(scope.maxJobSeconds) > 0)) throw new Error(`${name}: specify targets, profileRefs, actionClasses, assessmentRef, evidenceIntent, maxJobs, and maxJobSeconds. The server validates the complete scope before saving.`);
   return scope;
 }
+function editableScope(text: string): Record<string, unknown> | null {
+  try {
+    const scope: unknown = JSON.parse(text);
+    return scope && typeof scope === 'object' && !Array.isArray(scope) ? scope as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+function AuthorizedScopeFields({ text, schema, disabled, onChange }: {
+  text: string;
+  schema?: Record<string, unknown> | null;
+  disabled: boolean;
+  onChange: (text: string) => void;
+}) {
+  const scope = editableScope(text);
+  const properties = schemaProperties(schema ?? undefined);
+  return <div className="space-y-3">
+    {scope && Object.keys(properties).length ? <SchemaCapabilityFields
+      fields={Object.entries(properties)} detail={{ inputSchema: schema! }} values={scope} errors={{}}
+      disabled={disabled} repositoryOptions={[]} branchOptions={[]}
+      onChange={(name, value) => {
+        // Preserve unknown and advanced fields. The raw draft is the single
+        // source of truth and the server remains the authority for admission.
+        const next = { ...scope, [name]: value };
+        if (value === undefined) delete next[name];
+        onChange(JSON.stringify(next, null, 2));
+      }} /> : !scope ? <p className="text-sm">The scope JSON is incomplete or invalid. Correct it below before using structured fields; your draft is retained.</p> : <p className="text-sm">Structured scope fields are unavailable. Existing scope JSON is preserved below.</p>}
+    <details open={!scope ? true : undefined}>
+      <summary>Advanced scope JSON</summary>
+      <p className="text-xs">Structured edits preserve unrecognized fields. Review the full scope here; changing the text does not save or grant access.</p>
+      <label className="block text-sm">Authorized scope JSON<textarea className={`${fieldClass} font-mono`} rows={12} value={text} disabled={disabled} onChange={event => onChange(event.target.value)} /></label>
+    </details>
+  </div>;
+}
+
 export function AssessmentAuthorizationsSettings({ authorizationRef }: { authorizationRef?: string } = {}) {
   const client = useQueryClient();
   const catalog = useQuery({ queryKey: ['settings-catalog'], queryFn: fetchCatalog });
@@ -64,7 +99,7 @@ export function AssessmentAuthorizationsSettings({ authorizationRef }: { authori
     } catch (cause) { setError(`${cause instanceof Error ? cause.message : 'Save failed.'} Your draft is retained. Review concurrent changes before retrying.`); }
     finally { setSaving(false); }
   }
-  return <section className="space-y-4 rounded-3xl border border-mm-border/80 p-6" aria-label="Reusable assessment authorizations">
+  return <section id="assessment-authorizations" className="space-y-4 rounded-3xl border border-mm-border/80 p-6" aria-label="Reusable assessment authorizations">
     <h3 className="text-lg font-semibold">Reusable assessment authorizations</h3>
     <p className="text-sm">Record the authority, exact allowed scope, validity, and budgets for self-hosted or client engagements. These records are separate from non-authoritative assessment context. Save reference IDs only, never passwords, keys, or tokens.</p>
     <p className="text-sm">Disabling, removing, or resetting an authorization blocks new work under that grant. Retained evidence remains available. Use the workflow's Cancel action to stop an active run.</p>
@@ -89,7 +124,8 @@ export function AssessmentAuthorizationsSettings({ authorizationRef }: { authori
         <p className="text-xs">Renew by editing the validity window and limits, then saving. Material changes require a fresh rules-of-engagement review before future runs. Changing a schedule or renewing authority does not refund previously reserved budgets. Equivalent authorized occurrences do not need another confirmation.</p>
         <label className="flex gap-2"><input type="checkbox" checked={record.enabled} onChange={event => updateRecord(index, { enabled: event.target.checked })} />Authorization enabled</label>
         <p className="text-xs">Server generation: {record.generation ?? 'Assigned on save'}. Enabling this record alone does not launch work.</p>
-        <label className="block text-sm">Authorized scope JSON<textarea className={`${fieldClass} font-mono`} rows={12} value={current.scopeTexts[index] ?? ''} onChange={event => update({ ...current, scopeTexts: current.scopeTexts.map((text, i) => i === index ? event.target.value : text) })} /></label>
+        <AuthorizedScopeFields text={current.scopeTexts[index] ?? ''} schema={descriptor.input_schema ?? null} disabled={saving || descriptor.read_only}
+          onChange={value => update({ ...current, scopeTexts: current.scopeTexts.map((text, i) => i === index ? value : text) })} />
         <p className="text-xs">Scope includes assessmentRef, profileRefs, actionClasses, targets, exclusions, configurationExceptions, networkRefs, maxJobs, maxJobSeconds, maxCpuMillis, maxMemoryMiB, maxRequestsPerSecond, evidenceIntent, and optional grants. CPU and memory ceilings must be positive; web and TLS assessments also need an explicit request rate of 1–100 per second. Credential grants use reference IDs, expiry, and purpose. The server validates targets and resource limits; the launch review presents the complete rules in readable sections.</p>
         <Button type="button" variant="ghost" disabled={!record.enabled} onClick={() => updateRecord(index, { enabled: false })}>Revoke authorization</Button>
         <Button type="button" variant="ghost" onClick={() => update({ ...current, records: records.filter((_, i) => i !== index), scopeTexts: current.scopeTexts.filter((_, i) => i !== index) })}>Remove authorization</Button>

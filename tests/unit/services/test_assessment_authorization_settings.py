@@ -64,3 +64,42 @@ def test_authorization_schema_rejects_unknown_fields_and_secret_values():
     assert service._validation_issues_for_value(entry, value, boundary="write_request")
     value["authorizations"][0]["password"] = "not-permitted"
     assert service._validation_issues_for_value(entry, value, boundary="write_request")
+
+
+def test_authorization_descriptor_exposes_native_authoring_fields_without_granting():
+    import json
+
+    service = SettingsCatalogService(env={})
+    descriptor = service._descriptor(service._entries_by_key[SETTINGS_KEY])
+    schema = descriptor.input_schema
+    assert schema["type"] == "object"
+    assert "engagement" not in schema["properties"]
+    assert {"maxCpuMillis", "maxMemoryMiB"} <= set(schema["required"])
+    assert "$ref" not in json.dumps(schema)
+    assert "$defs" not in schema
+    target = schema["properties"]["targets"]["items"]["properties"]
+    assert target["webOrigin"]["type"] == "string"
+    assert target["cloudProvider"]["enum"] == ["aws"]
+    assert "default" not in target["cloudProvider"]
+    assert "default" not in target["webOrigin"]
+    assert target["webRoutes"]["items"]["properties"]["methods"]["items"]["enum"]
+    grant = schema["properties"]["grants"]["items"]["properties"]
+    assert {"ref", "purpose", "expiresAt", "roleArn"} <= set(grant)
+    assert descriptor.effective_value == {"authorizations": []}
+    other = next(entry for entry in service._registry if entry.key != SETTINGS_KEY)
+    assert service._descriptor(other).input_schema is None
+
+
+def test_shared_authorization_form_fixture_matches_native_schema():
+    import json
+    from pathlib import Path
+
+    from moonmind.security.assessment_authorizations import (
+        authorization_scope_input_schema,
+    )
+
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "frontend/src/runtime/fixtures/assessment-authorization-scope.json"
+    )
+    assert json.loads(fixture.read_text()) == authorization_scope_input_schema()

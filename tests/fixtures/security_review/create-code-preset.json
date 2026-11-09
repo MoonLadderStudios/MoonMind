@@ -1,0 +1,17 @@
+{
+  "goal": "Assess only the controlled repository fixture",
+  "assessment": {
+    "scanner": "gitleaks",
+    "inputPath": ".",
+    "outputDirectory": "artifacts/gitleaks-run",
+    "exclusions": ["vendor"],
+    "allowInlineSuppressions": false,
+    "gitleaksOwnsSecrets": false,
+    "feedMaxAgeHours": 72,
+    "maxFiles": 4096,
+    "maxInputBytes": 134217728,
+    "maxReportBytes": 8388608,
+    "timeoutSeconds": 45,
+    "requireFreshFeeds": false
+  }
+}

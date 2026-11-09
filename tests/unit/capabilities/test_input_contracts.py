@@ -5,13 +5,54 @@ import pytest
 
 from moonmind.capabilities.input_contracts import (
     CapabilityInputContractError,
-    CapabilityInputOwner,
     CapabilityInputContractParts,
+    CapabilityInputOwner,
     capability_contract_from_legacy_inputs,
     normalize_capability_input_contract,
     parse_skill_capability_input_contract,
     validate_capability_inputs,
 )
+
+
+def test_native_assessment_defaults_survive_public_contract_normalization():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    seed = yaml.safe_load(
+        (root / "api_service/data/presets/security-code-supply-chain.yaml").read_text()
+    )
+    selected = {
+        "scanner": "gitleaks",
+        "outputDirectory": "reports",
+        "gitleaksOwnsSecrets": False,
+        "requireFreshFeeds": False,
+    }
+    schema = seed["annotations"]["inputSchema"]
+    schema["properties"]["assessment"]["default"] = selected
+    owner = CapabilityInputOwner(
+        id="saved-assessment", kind="preset", label="Saved assessment"
+    )
+    contract = normalize_capability_input_contract(
+        owner=owner,
+        parts=CapabilityInputContractParts(
+            input_schema=schema, defaults={"assessment": selected}
+        ),
+    )
+    assert contract["defaults"]["assessment"] == selected
+    assert contract["inputSchema"]["properties"]["assessment"]["default"] == selected
+    for unsafe in [
+        dict(selected, password="unvalidated"),
+        dict(selected, inputPath="token=raw-secret"),
+    ]:
+        schema["properties"]["assessment"]["default"] = unsafe
+        rejected = normalize_capability_input_contract(
+            owner=owner,
+            parts=CapabilityInputContractParts(
+                input_schema=schema, defaults={"assessment": unsafe}
+            ),
+        )
+        assert "assessment" not in rejected["defaults"]
+        assert "default" not in rejected["inputSchema"]["properties"]["assessment"]
 
 
 def test_jira_verify_skill_exposes_batch_bindable_input_contract() -> None:

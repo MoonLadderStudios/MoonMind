@@ -375,6 +375,11 @@ def run_scanner(
             metadata.limitations.extend(feed_limitations)
             if metadata.feed is not None and metadata.feed.snapshot is not None:
                 metadata.database_digest = metadata.feed.snapshot.snapshot_id
+            if scan.require_fresh_feeds:
+                if metadata.feed is not None and metadata.feed.stale_components:
+                    raise FeedSnapshotError("feed_snapshot_stale")
+                if "java_db_unavailable" in feed_limitations:
+                    raise FeedSnapshotError("feed_snapshot_incomplete")
             version = root / "version"
             # Opengrep's one-file release unpacks a runtime far larger than any
             # report into $HOME/.cache on first use. This probe reads no input,

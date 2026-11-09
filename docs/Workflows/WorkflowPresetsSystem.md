@@ -120,7 +120,7 @@ Publication-role/default and context-binding metadata are included in the normal
 
 Schemas describe task-specific values: issue references, document paths, verification choices, discovery filters, review settings, constraints, and meaningful comparison or destination roles. Equivalent repository, branch, runtime/profile, and publication passthrough inputs use workflow context rather than another ordinary control.
 
-The shared practical subset includes `type`, `title`, `description`, `default`, `required`, `properties`, `items`, `enum`, `oneOf`/`anyOf`, standard formats, and safe namespaced semantic extensions. Optional schemas remain compatible with the Skill adoption policy in [Input Schema Guidance](../Steps/InputSchemaGuidance.md).
+The shared subset includes `type`, `title`, `description`, `default`, `required`, `properties`, `items`, `enum`, `oneOf`/`anyOf`, standard formats, and safe namespaced semantic extensions. Mixed or structured unions keep editable JSON; selects represent every choice. Native assessment defaults validate against their job contract, preserving nonsecret names such as `passwordField` while rejecting secret values and unknown fields. See [Input Schema Guidance](../Steps/InputSchemaGuidance.md).
 
 A widget can be selected through safe semantic hints or a registered UI identifier:
 
@@ -154,11 +154,11 @@ Changing workflow context invalidates dependent lookups, previews, and generated
 
 ## UI Generation Rules
 
-When a preset is selected, the frontend loads its normalized metadata, task inputs, defaults, existing draft values, and context bindings. It renders the remaining authored fields through the shared schema renderer and exposes bound-context explanations without duplicate editors. Local feedback is followed by authoritative backend validation.
+The shared renderer combines normalized metadata, authored values and context bindings. Objects use inline fieldsets; string arrays use one item per line; object arrays use repeatable rows. Explicit JSON widgets remain available. Nested defaults fill missing fields only inside authored objects; omitted optional objects stay absent. Omit clears optional authored values separately from explicit empty, zero or false values. Bound-context explanations remain visible; backend validation is authoritative.
 
-Supported draft states include no preset, missing required input, configured but unexpanded, applied with editable generated task content, submitted without manual expansion, and expansion failure. Values and provenance survive validation failures.
+Drafts support missing inputs, unexpanded or applied presets, and expansion failure without losing values. An unchanged submission retry reuses its exact expansion, provenance and idempotency key after an uncertain response. Edits or navigation invalidate that snapshot.
 
-Generated-step editing does not reopen repository/branch/publish override controls. Material changes to a generated step are revalidated against the single workflow policy. An incompatible combination requires a supported composition or separate workflows, not a hidden override.
+Generated-step edits cannot reopen repository, branch or publication overrides. Material changes are revalidated against workflow policy; incompatible combinations need supported composition or separate workflows.
 
 ## Jira Issue Input Pattern
 
@@ -419,7 +419,7 @@ Versioned reconstruction distinguishes equal historical passthrough values, conf
 
 ## Conformance
 
-Coverage exercises the real catalog, expansion, compiler, fan-out, and form boundaries: schemas render without per-preset frontend branches; Apply/Reapply and unexpanded Submit produce equivalent targets, policy, and provenance; context changes invalidate stale generated values without losing explicit choices; every built-in family produces its declared Auto behavior and required handoffs; coordinators preserve descendant intent through nesting; contradictory compositions fail before effects; and schedules, edit/rerun, MCP/API, reconstruction, and history replay keep the correct definition evidence. A documentation or seed update alone is not proof of conformance.
+Coverage exercises catalog, compiler, fan-out and forms without per-preset frontend branches. Apply/Reapply, Submit, schedules, edit/rerun and MCP/API preserve targets, explicit choices, policy and definition evidence. Changed context invalidates derived values; uncertain retries preserve identity. Auto behavior, nested descendants and required handoffs stay equivalent. Contradictions fail before effects; retained histories reconstruct their original evidence. Documentation or seeds alone do not prove conformance.
 
 ### Retained readiness Activity compatibility
 

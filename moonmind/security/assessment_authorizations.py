@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
 from pydantic import Field, model_validator
 
 from moonmind.security.workload_profiles import (
+    _REF,
     AdmittedAssessmentScope,
     AssessmentEngagement,
     AssessmentEngagementTerms,
     _Model,
-    _REF,
 )
 
 SETTINGS_KEY = "security.assessment_authorizations"
@@ -61,6 +62,61 @@ class AssessmentAuthorizations(_Model):
         if len(refs) != len(set(refs)):
             raise ValueError("authorization references must be unique")
         return self
+
+
+def authorization_scope_input_schema() -> dict[str, Any]:
+    """Project native fields for authoring, never saved or admitted authority.
+
+    Single nullable arms and local references are flattened for the shared form
+    renderer. Optional object defaults are not introduced, so opening the editor
+    cannot add a target or credential grant. Native validation remains final.
+    """
+    native = AdmittedAssessmentScope.model_json_schema(by_alias=True)
+    definitions = native.get("$defs", {})
+
+    def inline(value):
+        if isinstance(value, list):
+            return [inline(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        if "$ref" in value:
+            definition = value.pop("$ref").removeprefix("#/$defs/")
+            value = {**definitions[definition], **value}
+        choices = value.get("anyOf")
+        if isinstance(choices, list):
+            concrete = [choice for choice in choices if choice.get("type") != "null"]
+            if len(concrete) == 1 and len(concrete) != len(choices):
+                value.pop("anyOf")
+                value = {**concrete[0], **value}
+                if value.get("default") is None:
+                    value.pop("default", None)
+                return inline(value)
+        result = {key: inline(item) for key, item in value.items() if key != "$defs"}
+        if "const" in result:
+            result["enum"] = [result["const"]]
+        for name, field in result.get("properties", {}).items():
+            words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).replace("_", " ")
+            field["title"] = words[0].upper() + words[1:]
+        return result
+
+    # Engagement identity/generation is stamped only by trusted launch admission.
+    native["properties"].pop("engagement")
+    schema = inline(native)
+    schema["required"] = [*schema["required"], "maxCpuMillis", "maxMemoryMiB"]
+    schema["properties"]["assessmentRef"]["description"] = (
+        "Use this same assessment reference in the selected cloud or web preset."
+    )
+    schema["properties"]["profileRefs"]["description"] = (
+        "Installed workload profile references, for example web-assessment or cloud-posture."
+    )
+    schema["properties"]["actionClasses"]["description"] = (
+        "Explicit allowed actions, for example web-passive, web-active or cloud-posture."
+    )
+    expiry = schema["properties"]["grants"]["items"]["properties"]["expiresAt"]
+    expiry["x-moonmind-widget"] = "text"
+    expiry["description"] = "ISO time with timezone, for example 2026-12-01T12:00:00Z."
+    return schema
 
 
 def _json(value: Any) -> bytes:
