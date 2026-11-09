@@ -37,7 +37,7 @@ class MeteredRuntime:
     async def run(self, tokens: int) -> dict[str, Any]:
         await workflow.sleep(timedelta(seconds=1))
         return AgentRunResult(
-            metadata={"usage": {"totalTokens": tokens, "costUsd": 0.25}}
+            metadata={"usage": {"totalTokens": tokens, "costUsd": 0.5}}
         ).model_dump(mode="json")
 
 
@@ -56,11 +56,28 @@ class ResourceBudgetJourney:
                     update=(
                         {"max_wall_clock_seconds": 2}
                         if payload.get("wallClock")
-                        else {"token_budget": 100}
+                        else {
+                            payload.get("dimension", "token_budget"): (
+                                1 if payload.get("dimension") == "cost_budget" else 100
+                            )
+                        }
                     )
                 )
             }
         )
+        # Exercise production admission before restore, including upgraded runs.
+        controller = {
+            "id": "verify",
+            "inputs": {"instructions": "Verify the saved candidate"},
+            "annotations": {
+                "remediationLoop": run._remediation_loop_spec.model_dump(
+                    by_alias=True, mode="json"
+                )
+            },
+        }
+        run._remediation_loop_continuation = payload.get("remediation_loop_continuation")
+        run._initialize_remediation_loop_controller(ordered_nodes=[controller])
+        run._remediation_loop_runtime = {"mode": "codex_cli"}
         run._remediation_loop_state = _state(attempts=1).model_copy(
             update={"phase": RemediationLoopPhase.VERIFICATION_RUNNING}
         )
@@ -74,9 +91,7 @@ class ResourceBudgetJourney:
 
         run._write_json_artifact = persist
         stage = payload.get("stage", 0)
-        nodes = [
-            {"id": "verify", "inputs": {"instructions": "Verify the saved candidate"}}
-        ]
+        nodes = [controller]
         if stage:
             run._remediation_loop_continuation = payload[
                 "remediation_loop_continuation"
@@ -432,3 +447,71 @@ async def test_registered_agent_pause_expires_without_resume_and_replays(
             workflows=[agent_run.MoonMindAgentRun],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["token_budget", "cost_budget"])
+async def test_legacy_admitted_limits_survive_upgraded_continue_as_new(
+    monkeypatch, dimension
+):
+    selected = {_PATCH, "run-materialize-evidence-retry-v1"}
+
+    def upgraded_patch(patch):
+        # The first run models the installed old worker; the continued run
+        # activates the new admission policy on its new history.
+        if patch == run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH:
+            return bool(workflow.info().continued_run_id) and _REAL_PATCHED(patch)
+        return patch in selected and _REAL_PATCHED(patch)
+
+    monkeypatch.setattr(run_module.workflow, "patched", upgraded_patch)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="upgrade-limits",
+            workflows=[ResourceBudgetJourney, MeteredRuntime],
+            activities=[record],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            workflow_failure_exception_types=[ValueError],
+        ):
+            handle = await env.client.start_workflow(
+                ResourceBudgetJourney.run,
+                {
+                    "originalEvidenceRef": "artifact://finding/original",
+                    "dimension": dimension,
+                },
+                id="upgrade-limits",
+                task_queue="upgrade-limits",
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+            assert result["admitted"] is False
+            state = result["state"]
+            assert state["continuationReason"] == dimension + "_exhausted"
+            assert state["workspaceHeadRef"] == "artifact://workspace/C1"
+            assert state["continueAsNewCount"] == 1
+            assert state["consumedBudgets"]["attempts"] == 1
+            assert result["originalEvidenceRef"] == "artifact://finding/original"
+            receipts = state["resourceUsage"]["executions"].values()
+            assert sum(receipt["tokens"] for receipt in receipts) == 100
+            histories = [
+                await env.client.get_workflow_handle(
+                    "upgrade-limits", run_id=handle.first_execution_run_id
+                ).fetch_history(),
+                await env.client.get_workflow_handle("upgrade-limits").fetch_history(),
+            ]
+        # Replay both retained old admission and upgraded continuation with the
+        # current implementation. Temporal patch markers choose recorded policy.
+        monkeypatch.setattr(
+            run_module.workflow,
+            "patched",
+            lambda patch: (
+                patch
+                in selected | {run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH}
+                and _REAL_PATCHED(patch)
+            ),
+        )
+        replayer = Replayer(
+            workflows=[ResourceBudgetJourney],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        for history in histories:
+            await replayer.replay_workflow(history)
