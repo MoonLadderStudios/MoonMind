@@ -17,7 +17,10 @@ they use the session's unscoped capability.
 
 from __future__ import annotations
 
+import importlib.util
+import io
 import json
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -93,9 +96,18 @@ NO_GRANTS = PrivateImageAuthorizationService(
 class Session:
     """A managed session's CLI environment and the production MCP route."""
 
-    def __init__(self, environment, monkeypatch, *, scope=None, workspace_id="assess"):
+    def __init__(
+        self,
+        environment,
+        monkeypatch,
+        *,
+        scope=None,
+        workspace_id="assess",
+        job_spec=None,
+    ):
         self.environment, self.monkeypatch = environment, monkeypatch
         self.scope = scope
+        self.job_spec = job_spec
         token = mint_container_job_session_capability(
             secret=SECRET,
             owner=OWNER,
@@ -116,6 +128,7 @@ class Session:
         ):
             monkeypatch.delenv(name, raising=False)
         for name, value in {
+            "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
             "MOONMIND_URL": "http://api:8000",
             "MOONMIND_AGENT_RUN_ID": "run",
             "MOONMIND_TASK_WORKFLOW_ID": "assessment",
@@ -177,13 +190,77 @@ class Session:
                 return {"state": "succeeded"}
             raise ContainerJobCliError("auxiliary reads are not replayed")
 
-        self.monkeypatch.setattr(ContainerJobMcpClient, "call", call)
         path = tmp_path / f"{command}.json"
-        path.write_text(json.dumps(admission))
-        result = CliRunner().invoke(
-            cli_app, ["container", command, "--admission", str(path)]
-        )
-        assert result.exit_code == 0, result.output
+        if self.job_spec is None:
+            self.monkeypatch.setattr(ContainerJobMcpClient, "call", call)
+            path.write_text(json.dumps(admission))
+            result = CliRunner().invoke(
+                cli_app, ["container", command, "--admission", str(path)]
+            )
+            assert result.exit_code == 0, result.output
+        else:
+            # Exercise the image-owned dependency-free entrypoint, not the
+            # application Typer CLI. Only HTTP transport/scanner binaries are
+            # controlled; its actual signed request goes through the API below.
+            module_path = (
+                Path(__file__).resolve().parents[3]
+                / "services/omnigent/scripts/moonmind-container-cli.py"
+            )
+            module_spec = importlib.util.spec_from_file_location(
+                "shipped_container_cli", module_path
+            )
+            cli = importlib.util.module_from_spec(module_spec)
+            module_spec.loader.exec_module(cli)
+            native_key = {
+                "repository-scan": "repositoryScan",
+                "image-assessment": "imageAssessment",
+                "cloud-assessment": "cloudAssessment",
+                "web-assessment": "webAssessment",
+            }[command]
+            from moonmind.security.assessment_preset_inputs import (
+                ASSESSMENT_INPUT_CONTRACTS,
+            )
+
+            model = ASSESSMENT_INPUT_CONTRACTS[command]
+            assert model.model_validate(
+                self.job_spec[native_key]
+            ) == model.model_validate(admission)
+            path.write_text(json.dumps(self.job_spec))
+
+            def transport(request, timeout):
+                payload = json.loads(request.data)
+                if payload["tool"] == "container.submit":
+                    sent.append(
+                        (
+                            request.full_url,
+                            dict(request.header_items()),
+                            payload["arguments"],
+                        )
+                    )
+                    result = {"jobId": "pending-replay"}
+                elif payload["tool"] == "container.status":
+                    result = {"state": "succeeded"}
+                else:
+                    assert payload["tool"] == "container.logs"
+                    result = {"entries": []}
+                return io.BytesIO(json.dumps({"result": result}).encode())
+
+            with self.monkeypatch.context() as patch:
+                patch.setattr(cli.urllib.request, "urlopen", transport)
+                patch.setattr(
+                    sys,
+                    "argv",
+                    [
+                        "moonmind",
+                        "container",
+                        "run",
+                        "--spec",
+                        str(path),
+                        "--request-id",
+                        command,
+                    ],
+                )
+                assert cli.main() == 0
         ((endpoint, headers, arguments),) = sent
         async with AsyncClient(
             transport=ASGITransport(app=self.app), base_url="http://api:8000"
@@ -344,6 +421,15 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     admission = {"scanner": "gitleaks", "outputDirectory": "artifacts/gitleaks-run"}
     preset_provenance = None
     if entrypoint == "preset-api":
+        # The shared Create form event test emits this exact payload. Feeding
+        # it here connects authoring to native expansion/admission/retention.
+        create_payload = json.loads(
+            (
+                Path(__file__).resolve().parents[2]
+                / "fixtures/security_review/create-code-preset.json"
+            ).read_text()
+        )
+        admission = create_payload["assessment"]
         await run_guarded_upgrade(environment.session, operator_authorized=True)
         seed_dir = tmp_path / "assessment-presets"
         seed_dir.mkdir()
@@ -367,12 +453,7 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
         ) as client:
             response = await client.post(
                 "/api/presets/security-code-supply-chain:expand",
-                json={
-                    "inputs": {
-                        "goal": "Assess only the controlled repository fixture",
-                        "assessment": admission,
-                    }
-                },
+                json={"inputs": create_payload},
             )
         assert response.status_code == 200, response.text
         expanded = response.json()
@@ -386,7 +467,8 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
             frozen["admission"][key] == value for key, value in admission.items()
         )
         admission = frozen["admission"]
-        assert admission["requireFreshFeeds"] is True
+        session.job_spec = frozen["jobSpec"]
+        assert admission["requireFreshFeeds"] is False
         assert "assessmentScope" not in expanded
         preset_provenance = expanded["appliedTemplate"]
         # The test fixture performs the portable Skill's CLI dispatch, not its
@@ -509,8 +591,9 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
     )
 
 
+@pytest.mark.parametrize("entrypoint", ["cli", "preset-api"])
 async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
-    environment, tmp_path, monkeypatch
+    environment, tmp_path, monkeypatch, entrypoint
 ):
     image.install_trivy(tmp_path, monkeypatch)
     db = tmp_path / "feeds"
@@ -526,6 +609,11 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
         databaseDigest=digest,
     )
     session = Session(environment, monkeypatch)
+    if entrypoint == "preset-api":
+        step = await expand_preset(
+            environment, tmp_path, monkeypatch, "security-image-sbom", assessment
+        )
+        session.job_spec = step["annotations"]["securityAssessment"]["jobSpec"]
     temporal = AsyncMock()
     settings = image.settings()
     started = await session.submit(
@@ -600,22 +688,8 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
     )
 
 
-async def scoped_preset_plan(
-    environment, tmp_path, monkeypatch, slug, assessment, scope
-):
-    """Fixture substitutes for Skill dispatch, never for operator/job authority."""
-    from api_service.db.models import SettingsOverride, TemporalExecutionCanonicalRecord
-    from api_service.services.assessment_engagements import (
-        admit_assessment_parameters,
-        compile_assessment_proposal,
-    )
-    from moonmind.security.assessment_authorizations import (
-        SETTINGS_KEY,
-        prepare_authorizations_update,
-    )
-    from moonmind.security.operator_admission import OperatorAdmission
-    from moonmind.security.workload_profiles import AdmittedAssessmentScope
-
+async def expand_preset(environment, tmp_path, monkeypatch, slug, assessment):
+    """Expand the maintained seed through its production HTTP boundary."""
     await run_guarded_upgrade(environment.session, operator_authorized=True)
     seed_dir = tmp_path / "scoped-presets"
     seed_dir.mkdir()
@@ -661,6 +735,31 @@ async def scoped_preset_plan(
     assert frozen == step["skill"]["args"]["assessment"]
     assert type(assessment).model_validate(frozen) == assessment
     assert "assessmentScope" not in expanded
+    assert (
+        step["skill"]["args"]["job_spec"]
+        == step["annotations"]["securityAssessment"]["jobSpec"]
+    )
+    return step
+
+
+async def scoped_preset_plan(
+    environment, tmp_path, monkeypatch, slug, assessment, scope
+):
+    """Fixture substitutes for Skill dispatch, never for operator/job authority."""
+    from api_service.db.models import SettingsOverride, TemporalExecutionCanonicalRecord
+    from api_service.services.assessment_engagements import (
+        admit_assessment_parameters,
+        compile_assessment_proposal,
+    )
+    from moonmind.security.assessment_authorizations import (
+        SETTINGS_KEY,
+        prepare_authorizations_update,
+    )
+    from moonmind.security.operator_admission import OperatorAdmission
+    from moonmind.security.workload_profiles import AdmittedAssessmentScope
+
+    step = await expand_preset(environment, tmp_path, monkeypatch, slug, assessment)
+    frozen = step["annotations"]["securityAssessment"]["admission"]
 
     # New saved authority has explicit limits, using the existing native job's
     # resource ceiling; target/actions/exclusions/grants remain exactly selected.
@@ -691,7 +790,7 @@ async def scoped_preset_plan(
     parameters = {
         "workflow": {
             "title": "Controlled preset assessment",
-            "steps": expanded["steps"],
+            "steps": [step],
         },
         "assessmentAuthorizationRef": "controlled-engagement",
     }
@@ -728,9 +827,11 @@ async def scoped_preset_plan(
         )
     )
     await environment.session.commit()
-    return type(assessment).model_validate(
-        frozen
-    ), AdmittedAssessmentScope.model_validate(admitted)
+    return (
+        type(assessment).model_validate(frozen),
+        AdmittedAssessmentScope.model_validate(admitted),
+        step["annotations"]["securityAssessment"]["jobSpec"],
+    )
 
 
 async def assert_review_captured(environment, accepted):
@@ -782,8 +883,9 @@ async def test_cloud_assessment_cli_job_keeps_native_report_after_cleanup(
     environment, tmp_path, monkeypatch, provider, entrypoint
 ):
     selected, admitted = cloud.assessment(), cloud.scope()
+    job_spec = None
     if entrypoint == "preset-api":
-        selected, admitted = await scoped_preset_plan(
+        selected, admitted, job_spec = await scoped_preset_plan(
             environment,
             tmp_path,
             monkeypatch,
@@ -791,7 +893,7 @@ async def test_cloud_assessment_cli_job_keeps_native_report_after_cleanup(
             selected,
             admitted,
         )
-    session = Session(environment, monkeypatch, scope=admitted)
+    session = Session(environment, monkeypatch, scope=admitted, job_spec=job_spec)
     seen = spy_publication(monkeypatch)
     harness = CliCloud(
         session, environment, tmp_path, monkeypatch, provider, admitted=admitted
@@ -843,11 +945,12 @@ async def test_web_assessment_cli_job_keeps_native_report_after_cleanup(
         web.assessment(app, identity=web.identity("alice")),
         web.scope(app),
     )
+    job_spec = None
     if entrypoint == "preset-api":
-        selected, admitted = await scoped_preset_plan(
+        selected, admitted, job_spec = await scoped_preset_plan(
             environment, tmp_path, monkeypatch, "security-web-api", selected, admitted
         )
-    session = Session(environment, monkeypatch, scope=admitted)
+    session = Session(environment, monkeypatch, scope=admitted, job_spec=job_spec)
     harness = CliWeb(
         session, environment, tmp_path, monkeypatch, app, gateway, admitted=admitted
     )

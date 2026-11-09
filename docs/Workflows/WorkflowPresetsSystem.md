@@ -120,7 +120,7 @@ Publication-role/default and context-binding metadata are included in the normal
 
 Schemas describe task-specific values: issue references, document paths, verification choices, discovery filters, review settings, constraints, and meaningful comparison or destination roles. Equivalent repository, branch, runtime/profile, and publication passthrough inputs use workflow context rather than another ordinary control.
 
-The shared practical subset includes `type`, `title`, `description`, `default`, `required`, `properties`, `items`, `enum`, `oneOf`/`anyOf`, standard formats, and safe namespaced semantic extensions. Optional schemas remain compatible with the Skill adoption policy in [Input Schema Guidance](../Steps/InputSchemaGuidance.md).
+The shared subset includes `type`, `title`, `description`, `default`, `required`, `properties`, `items`, `enum`, `oneOf`/`anyOf`, standard formats, and safe namespaced semantic extensions. Mixed or structured unions keep editable JSON; selects represent every choice. Native assessment defaults validate against their job contract, preserving nonsecret names such as `passwordField` while rejecting secret values and unknown fields. See [Input Schema Guidance](../Steps/InputSchemaGuidance.md).
 
 A widget can be selected through safe semantic hints or a registered UI identifier:
 

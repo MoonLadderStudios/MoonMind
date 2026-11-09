@@ -221,6 +221,192 @@
             "title": "Realtime",
             "type": "object"
           },
+          "dnsAssessment": {
+            "additionalProperties": false,
+            "properties": {
+              "questions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 254,
+                      "minLength": 1,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "recordType": {
+                      "enum": [
+                        "A",
+                        "AAAA",
+                        "CNAME",
+                        "NS",
+                        "SOA",
+                        "CAA",
+                        "TXT",
+                        "MX",
+                        "DS",
+                        "DNSKEY"
+                      ],
+                      "title": "Record Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "recordType"
+                  ],
+                  "title": "DNSQuestion",
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "title": "Questions",
+                "type": "array"
+              },
+              "allowedFollowups": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 254,
+                      "minLength": 1,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "recordType": {
+                      "enum": [
+                        "A",
+                        "AAAA",
+                        "CNAME",
+                        "NS",
+                        "SOA",
+                        "CAA",
+                        "TXT",
+                        "MX",
+                        "DS",
+                        "DNSKEY"
+                      ],
+                      "title": "Record Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "recordType"
+                  ],
+                  "title": "DNSQuestion",
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "title": "Allowed Followups",
+                "type": "array"
+              },
+              "checks": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check": {
+                      "enum": [
+                        "cname",
+                        "delegation",
+                        "caa",
+                        "dnssec",
+                        "spf",
+                        "dkim",
+                        "dmarc"
+                      ],
+                      "title": "Check",
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 254,
+                      "title": "Subject",
+                      "type": "string"
+                    },
+                    "selectors": {
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "title": "Selectors",
+                      "type": "array"
+                    },
+                    "organizationalDomain": {
+                      "maxLength": 254,
+                      "type": "string",
+                      "title": "Organizational Domain"
+                    }
+                  },
+                  "required": [
+                    "check",
+                    "subject"
+                  ],
+                  "title": "DNSCheckSelection",
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "title": "Checks",
+                "type": "array"
+              },
+              "maxFollowupDepth": {
+                "default": 4,
+                "maximum": 8,
+                "minimum": 0,
+                "title": "Max Followup Depth",
+                "type": "integer"
+              },
+              "maxAttempts": {
+                "default": 64,
+                "maximum": 256,
+                "minimum": 1,
+                "title": "Max Attempts",
+                "type": "integer"
+              },
+              "timeoutSeconds": {
+                "default": 120,
+                "maximum": 600,
+                "minimum": 1,
+                "title": "Timeout Seconds",
+                "type": "integer"
+              },
+              "queryTimeoutSeconds": {
+                "default": 10,
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Query Timeout Seconds",
+                "type": "integer"
+              },
+              "maxResponseBytes": {
+                "default": 65536,
+                "maximum": 65536,
+                "minimum": 12,
+                "title": "Max Response Bytes",
+                "type": "integer"
+              },
+              "maxOutputBytes": {
+                "default": 4194304,
+                "maximum": 4194304,
+                "minimum": 4096,
+                "title": "Max Output Bytes",
+                "type": "integer"
+              },
+              "queriesPerSecond": {
+                "default": 5,
+                "maximum": 20,
+                "minimum": 1,
+                "title": "Queries Per Second",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "title": "Dns Assessment",
+            "type": "object"
+          },
           "nativeNetwork": {
             "additionalProperties": false,
             "properties": {

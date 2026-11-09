@@ -18,7 +18,7 @@ Deterministic jobs do not acquire model capacity.
 
 ### Repository scanner jobs
 
-Create offers Code and supply-chain, Image and SBOM, AWS posture and Web and API presets through shared typed forms. Explicit source/runtime, budgets, processing and publication survive expansion and reruns. Live/cloud goals need reviewed authority; repository/image work stays separate.
+Create offers Code and supply-chain, Image and SBOM, AWS posture and Web and API presets through shared typed forms. The compiler supplies native `job_spec` inputs for the managed host's `moonmind container run --spec <file> --request-id <collection-id>`; retries reuse the collection ID and reconcile uncertain submissions. Explicit source/runtime, budgets, processing and publication survive reruns. Live/cloud goals need reviewed authority; repository/image work stays separate.
 
 `moonmind container repository-scan --scanner gitleaks` (or `opengrep`, `trivy`) selects one scanner. `--admission scan.json` supplies complete explicit choices, without other flags. Settings shows configuration; worker evidence establishes actual image/rule/feed readiness.
 

@@ -5,6 +5,34 @@ import { SchemaCapabilityFields, resolveSchemaCapabilityValues, validateSchemaCa
 
 afterEach(cleanup);
 
+it('authors mixed GPU counts and structured workspace alternatives without narrowing their native schema', () => {
+  // These are the container.run_job native union shapes, nested in closed objects.
+  const count = { oneOf: [{ type: 'integer', minimum: 1 }, { type: 'string', const: 'all' }] };
+  const workspaceRef = { oneOf: [
+    { type: 'object', required: ['kind', 'artifactRef'], properties: { kind: { const: 'external_state' }, artifactRef: { type: 'string' } }, additionalProperties: false },
+    { type: 'object', required: ['kind', 'workspaceId'], properties: { kind: { const: 'sandbox' }, workspaceId: { type: 'string' } }, additionalProperties: false },
+    { type: 'object', required: ['kind', 'runtimeId', 'agentRunId'], properties: { kind: { const: 'managed_runtime' }, runtimeId: { type: 'string' }, agentRunId: { type: 'string' }, relativePath: { type: 'string' } }, additionalProperties: false },
+  ] };
+  const inputSchema = { type: 'object', properties: { spec: { type: 'object', additionalProperties: false, properties: {
+    workspaceRef, resources: { type: 'object', additionalProperties: false, properties: {
+      gpu: { type: 'object', additionalProperties: false, properties: { count } },
+    } },
+  } } } };
+  function Draft() {
+    const [values, setValues] = useState<Record<string, unknown>>({ spec: { workspaceRef: { kind: 'sandbox', workspaceId: 'saved' }, resources: { gpu: { count: 2 } } } });
+    return <><SchemaCapabilityFields fields={Object.entries(inputSchema.properties)} detail={{ inputSchema }} values={values} errors={{}}
+      disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={(name, value) => setValues({ ...values, [name]: value })} />
+      <output data-testid="unions">{JSON.stringify(resolveSchemaCapabilityValues({ inputSchema }, values))}</output></>;
+  }
+  const view = render(<Draft />);
+  expect(JSON.parse((view.getByRole('textbox', { name: 'workspaceRef' }) as HTMLTextAreaElement).value)).toEqual({ kind: 'sandbox', workspaceId: 'saved' });
+  fireEvent.change(view.getByRole('textbox', { name: 'count' }), { target: { value: '3' } });
+  fireEvent.change(view.getByRole('textbox', { name: 'workspaceRef' }), { target: { value: '{"kind":"external_state","artifactRef":"art_saved"}' } });
+  expect(JSON.parse(view.getByTestId('unions').textContent!)).toEqual({ spec: { workspaceRef: { kind: 'external_state', artifactRef: 'art_saved' }, resources: { gpu: { count: 3 } } } });
+  fireEvent.change(view.getByRole('textbox', { name: 'count' }), { target: { value: '"all"' } });
+  expect(JSON.parse(view.getByTestId('unions').textContent!).spec.resources.gpu.count).toBe('all');
+});
+
 const fields: Array<[string, unknown]> = [['assessment', {
   type: 'object', title: 'Assessment', description: 'Review only the selected targets.',
   properties: {

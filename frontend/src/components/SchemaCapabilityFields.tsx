@@ -125,19 +125,26 @@ export function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
     : Array.isArray(schema.anyOf)
       ? schema.anyOf
       : [];
+  // A select must represent every alternative. Mixed integer/enum and
+  // structured unions retain JSON authoring instead of silently narrowing.
+  if (choices.some((choice) => {
+    const option = recordValue(choice);
+    return option.const === undefined && !(Array.isArray(option.enum) && option.enum.length > 0);
+  })) return [];
   return choices
-    .map((choice) => {
+    .flatMap((choice) => {
       const choiceSchema = recordValue(choice);
-      const value = choiceSchema.const ?? (Array.isArray(choiceSchema.enum) ? choiceSchema.enum[0] : undefined);
-      if (value === undefined) {
-        return null;
-      }
-      return {
-        label: String(choiceSchema.title || value),
-        value,
-      };
-    })
-    .filter((choice): choice is { label: string; value: unknown } => Boolean(choice));
+      const values = choiceSchema.const !== undefined ? [choiceSchema.const] : choiceSchema.enum as unknown[];
+      return values.map(value => ({ label: String(choiceSchema.title || value), value }));
+    });
+}
+
+function schemaUnionNeedsJson(schema: Record<string, unknown>): boolean {
+  const choices = schema.oneOf ?? schema.anyOf;
+  return Array.isArray(choices) && choices.some(choice => {
+    const option = recordValue(choice);
+    return option.type !== undefined || option.$ref !== undefined || option.properties !== undefined;
+  }) && schemaChoiceOptions(schema).length === 0;
 }
 
 export function textInputTypeForSchema(schema: Record<string, unknown>): string {
@@ -220,16 +227,17 @@ export function unsupportedCapabilityWidget(
   return !supported.has(widget);
 }
 
-export function containsSecretLikeCapabilityValue(value: unknown): boolean {
+export function containsSecretLikeCapabilityValue(value: unknown, schema?: Record<string, unknown>, native = false): boolean {
+  native ||= ['repository-scan', 'image-assessment', 'cloud-assessment', 'web-assessment'].includes(String(schema?.['x-moonmind-input-contract'] || ''));
   if (value && typeof value === "object") {
     if (Array.isArray(value)) {
-      return value.some((item) => containsSecretLikeCapabilityValue(item));
+      return value.some((item) => containsSecretLikeCapabilityValue(item, recordValue(schema?.items), native));
     }
+    const properties = schemaProperties(schema);
     return Object.entries(value as Record<string, unknown>).some(
       ([key, nested]) =>
-        /(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)/i.test(
-          key,
-        ) || containsSecretLikeCapabilityValue(nested),
+        (native ? !Object.hasOwn(properties, key) : /(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)/i.test(key)) ||
+        containsSecretLikeCapabilityValue(nested, recordValue(properties[key]), native),
     );
   }
   return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)/i.test(
@@ -240,12 +248,13 @@ export function containsSecretLikeCapabilityValue(value: unknown): boolean {
 export function safeCapabilityDefault(
   defaults: Record<string, unknown> | undefined,
   name: string,
+  schema?: Record<string, unknown>,
 ): unknown {
   const value = defaults?.[name];
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (containsSecretLikeCapabilityValue(value)) {
+  if (containsSecretLikeCapabilityValue(value, schema)) {
     return undefined;
   }
   return structuredClone(value);
@@ -440,7 +449,7 @@ export function SchemaCapabilityFields({
         const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
         const label = capabilityFieldLabel(name, fieldSchema);
-        const value = capabilityInputValue(values, effectiveDefaults, name);
+        const value = values[name] !== undefined ? values[name] : safeCapabilityDefault(effectiveDefaults, name, fieldSchema);
         const inputId = `queue-capability-input-${fieldGroupId}-${name}`;
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
@@ -449,8 +458,8 @@ export function SchemaCapabilityFields({
         // Omission is distinct from an authored empty object/list. Only offer
         // it when no semantic default would immediately recreate the value.
         const omitControl = !schemaRequired(detail.inputSchema).has(name) && value !== undefined &&
-          safeCapabilityDefault(effectiveDefaults, name) === undefined &&
-          safeCapabilityDefault(fieldSchema, "default") === undefined
+          safeCapabilityDefault(effectiveDefaults, name, fieldSchema) === undefined &&
+          safeCapabilityDefault(fieldSchema, "default", fieldSchema) === undefined
           ? <Button type="button" variant="secondary" disabled={disabled} onClick={() => onChange(name, undefined)}>Omit {label}</Button>
           : null;
         const hasTypeSafeRenderer =
@@ -466,6 +475,15 @@ export function SchemaCapabilityFields({
             value={complexCapabilityTextValue(value)} readOnly disabled={disabled} aria-describedby={describedBy} />
             {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
           </label>;
+        }
+        if (schemaUnionNeedsJson(fieldSchema)) {
+          return <div key={name}><label htmlFor={inputId}>{label}
+            <textarea id={inputId} aria-label={label} value={complexCapabilityTextValue(value)} disabled={disabled}
+              aria-invalid={Boolean(error)} aria-describedby={describedBy}
+              onChange={event => onChange(name, parseComplexCapabilityValue(event.target.value))} />
+            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+            {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
+          </label>{omitControl}</div>;
         }
         if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
           return (

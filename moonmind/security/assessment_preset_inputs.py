@@ -21,6 +21,27 @@ ASSESSMENT_INPUT_CONTRACTS = {
 }
 
 
+def assessment_job_spec(contract: str, value: dict) -> dict:
+    """Compile workload intent with the existing native job owner.
+
+    This supplies no session, workspace, scope or credential authority. The
+    shipped CLI stamps its caller context and the API independently admits it.
+    """
+    from moonmind.security.cloud_assessments import build_cloud_assessment_job
+    from moonmind.security.image_assessments import build_image_assessment_job
+    from moonmind.security.repository_scanners import build_scanner_job
+    from moonmind.security.web_assessments import build_web_assessment_job
+
+    builders = {
+        "repository-scan": build_scanner_job,
+        "image-assessment": build_image_assessment_job,
+        "cloud-assessment": build_cloud_assessment_job,
+        "web-assessment": build_web_assessment_job,
+    }
+    model = ASSESSMENT_INPUT_CONTRACTS[contract].model_validate(value)
+    return builders[contract](model)
+
+
 _INPUT_HELP = {
     "repository-scan": "Select a supported scanner and output directory; omit rules for bundled rules or supply a nonempty licensed selection. Database identity requires a cache.",
     "image-assessment": "Registry targets need imageReference and egressPolicyRef; archives/SBOMs need inputArtifactRef. Vulnerability matching needs databaseCacheRef and databaseDigest; SBOM generation does not.",

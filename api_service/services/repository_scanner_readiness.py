@@ -100,11 +100,10 @@ def assessment_input_readiness(
     """
     from pydantic import ValidationError
 
-    from moonmind.security.assessment_preset_inputs import ASSESSMENT_INPUT_CONTRACTS
-    from moonmind.security.cloud_assessments import build_cloud_assessment_job
-    from moonmind.security.image_assessments import build_image_assessment_job
-    from moonmind.security.repository_scanners import build_scanner_job
-    from moonmind.security.web_assessments import build_web_assessment_job
+    from moonmind.security.assessment_preset_inputs import (
+        ASSESSMENT_INPUT_CONTRACTS,
+        assessment_job_spec,
+    )
 
     diagnostics = []
     runtime = {}
@@ -151,13 +150,7 @@ def assessment_input_readiness(
                 "Supply a valid value required by the selected native assessment contract.",
             )
         return result()
-    builders = {
-        "repository-scan": build_scanner_job,
-        "image-assessment": build_image_assessment_job,
-        "cloud-assessment": build_cloud_assessment_job,
-        "web-assessment": build_web_assessment_job,
-    }
-    job = builders[kind](assessment)
+    job = assessment_job_spec(kind, value)
     source_ref = job["imageSourceRef"]
     runtime["scannerImage"] = "unverified"
     if not settings.enabled or not settings.endpoint:
@@ -262,7 +255,9 @@ def require_assessment_step_readiness(
         hint = annotations["securityAssessment"]
         skill = step.get("skill")
         if not isinstance(hint, Mapping) or not isinstance(skill, Mapping):
-            raise ValueError(f"{field}: Select a valid security assessment preset.")  # noqa: TRY004 -- admission maps ValueError to a safe authoring response
+            raise ValueError(
+                f"{field}: Select a valid security assessment preset."
+            )  # noqa: TRY004 -- admission maps ValueError to a safe authoring response
         args = skill.get("args")
         if (
             skill.get("id") != "security-review"

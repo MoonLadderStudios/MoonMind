@@ -191,8 +191,8 @@ steps:
 - title: Collect evidence and assess
   repositoryOperation: read
   instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
-    Execute exactly the assessment inputs through moonmind container repository-scan --admission <file>.
-    Serialize assessment as JSON without changing target, rules, feeds, exclusions, credentials, network,
+    Execute the compiled job_spec through moonmind container run --spec <file> --request-id <collection-id>.
+    Serialize job_spec as JSON and reuse the collection ID on retry without changing target, rules, feeds, exclusions, credentials, network,
     timeout or source. Use the existing container-job owner; retain the job ID and native report artifact
     references. Reconcile uncertain submissions before retrying. Stop with actionable diagnostics if readiness
     or admission fails; never install substitutes, broaden scope or refresh feeds as a side effect.

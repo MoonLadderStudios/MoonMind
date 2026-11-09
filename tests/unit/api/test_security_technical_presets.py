@@ -91,6 +91,8 @@ CASES = [
             "outputDirectory": "reports",
             "exclusions": ["vendor"],
             "timeoutSeconds": 45,
+            "gitleaksOwnsSecrets": False,
+            "requireFreshFeeds": False,
         },
     ),
     (
@@ -124,13 +126,63 @@ CASES = [
             "mode": "baseline",
             "assessmentRef": "test",
             "origin": "https://example.test",
-            "routes": [{"path": "/", "methods": ["GET"]}],
+            "routes": [
+                {"path": "/", "methods": ["GET"]},
+                {"path": "/login", "methods": ["GET", "POST"]},
+            ],
             "exclusions": ["/logout"],
             "egressPolicyRef": "test",
             "timeoutSeconds": 300,
+            "identity": {
+                "name": "reader",
+                "method": "form",
+                "credentialRef": "vault://reader",
+                "verificationPath": "/",
+                "loggedInMarker": "Fixture reader",
+                "loginPath": "/login",
+                "username": "reader",
+                "usernameField": "username",
+                "passwordField": "password",
+            },
         },
     ),
 ]
+
+
+@pytest.mark.parametrize("slug,job_key,assessment", CASES)
+def test_saved_native_defaults_keep_contract_names_and_reject_secrets(
+    slug, job_key, assessment
+):
+    from api_service.services.presets.catalog import _normalize_seed_annotations
+
+    seed = yaml.safe_load(
+        (ROOT / "api_service/data/presets" / f"{slug}.yaml").read_text()
+    )
+    seed["annotations"]["defaults"] = {"assessment": assessment}
+    assert _normalize_seed_annotations(seed)["defaults"]["assessment"] == assessment
+    field_schema = seed["annotations"]["inputSchema"]["properties"]["assessment"]
+    definition = {
+        "name": "assessment",
+        "label": "Assessment",
+        "type": "object",
+        "schema": field_schema,
+        "default": assessment,
+    }
+    assert (
+        PresetCatalogService(None)._validate_inputs_schema([definition])[0]["default"]
+        == assessment
+    )
+    for invalid in [
+        dict(assessment, password="unvalidated"),
+        dict(assessment, outputDirectory="token=raw-secret"),
+    ]:
+        seed["annotations"]["defaults"] = {"assessment": invalid}
+        with pytest.raises(PresetValidationError):
+            _normalize_seed_annotations(seed)
+        with pytest.raises(PresetValidationError):
+            PresetCatalogService(None)._validate_inputs_schema(
+                [dict(definition, default=invalid)]
+            )
 
 
 @pytest.mark.asyncio
@@ -200,6 +252,9 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
                 "webAssessment": build_web_assessment_job,
             }[job_key]
             job = builder(model)
+            assert selection["jobSpec"] == job
+            assert step["skill"]["args"]["job_spec"] == job
+            assert "moonmind container run --spec" in step["instructions"]
             assert job[job_key] == model.model_dump(mode="json", by_alias=True)
             assert job["outputs"]
             assert "assessmentScope" not in expanded

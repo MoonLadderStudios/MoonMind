@@ -1408,6 +1408,29 @@ def _contains_secret_like_value(value: Any, *, check_keys: bool = True) -> bool:
     )
 
 
+def _contains_secret_like_default(value: Any, schema: Mapping[str, Any]) -> bool:
+    """Native contracts validate names; all values still receive secret checks."""
+    if not isinstance(schema, Mapping):
+        schema = {}
+    contract = schema.get("x-moonmind-input-contract")
+    if contract is not None and value is not None:
+        from moonmind.security.assessment_preset_inputs import validate_assessment_input
+
+        try:
+            validate_assessment_input(contract, value)
+        except (ValueError, TypeError):
+            raise PresetValidationError("Invalid native assessment default.") from None
+        return _contains_secret_like_value(value, check_keys=False)
+    if isinstance(value, Mapping):
+        properties = schema.get("properties") or {}
+        return any(
+            _SECRET_LIKE_KEY_PATTERN.search(str(key))
+            or _contains_secret_like_default(nested, properties.get(key) or {})
+            for key, nested in value.items()
+        )
+    return _contains_secret_like_value(value)
+
+
 def _capability_contract_from_inputs(
     *,
     inputs_schema: list[dict[str, Any]],
@@ -1500,10 +1523,6 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         value = item.get(source_key)
         if isinstance(value, Mapping):
             annotations[target_key] = dict(value)
-    if _contains_secret_like_value(annotations.get("defaults")):
-        raise PresetValidationError(
-            "Capability schema defaults contain a secret-like value."
-        )
     raw_inputs = item.get("inputs")
     return _normalize_preset_annotations(
         annotations,
@@ -1546,6 +1565,12 @@ def _normalize_preset_annotations(
     inputs_schema: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized = dict(annotations or {})
+    if _contains_secret_like_default(
+        normalized.get("defaults"), normalized.get("inputSchema") or {}
+    ):
+        raise PresetValidationError(
+            "Capability schema defaults contain a secret-like value."
+        )
     checkpoint_branching_alias = normalized.pop("checkpoint_branching", None)
     if (
         checkpoint_branching_alias is not None
@@ -2499,7 +2524,9 @@ class PresetCatalogService:
                 normalized_options = []
             placeholder = str(raw_input.get("placeholder") or "").strip()
             default_value = raw_input.get("default")
-            if _contains_secret_like_value(default_value):
+            if _contains_secret_like_default(
+                default_value, raw_input.get("schema") or {}
+            ):
                 raise PresetValidationError(
                     f"Template input '{name}' has a secret-like default value."
                 )
@@ -3006,6 +3033,24 @@ class PresetCatalogService:
                     rendered.get("skill"), index=source_index
                 )
                 _promote_skill_runtime(step_payload)
+                assessment = (step_payload.get("annotations") or {}).get(
+                    "securityAssessment"
+                )
+                if (
+                    isinstance(assessment, dict)
+                    and assessment.get("phase") == "collect"
+                ):
+                    from moonmind.security.assessment_preset_inputs import (
+                        ASSESSMENT_INPUT_CONTRACTS,
+                        assessment_job_spec,
+                    )
+
+                    if assessment.get("kind") in ASSESSMENT_INPUT_CONTRACTS:
+                        job_spec = assessment_job_spec(
+                            assessment["kind"], assessment["admission"]
+                        )
+                        assessment["jobSpec"] = job_spec
+                        step_payload["skill"]["args"]["job_spec"] = job_spec
             step_payload.update(
                 {
                     str(key).strip(): value

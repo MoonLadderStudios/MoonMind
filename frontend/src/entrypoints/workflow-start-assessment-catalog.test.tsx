@@ -4,9 +4,60 @@ import { useState } from 'react';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { SchemaCapabilityFields, resolveSchemaCapabilityValues } from './workflow-start';
+import { safeCapabilityDefault } from '../components/SchemaCapabilityFields';
 
 const yaml = createRequire(import.meta.url)('js-yaml') as { load: (text: string) => { annotations: { inputSchema: Record<string, unknown> } } };
 afterEach(cleanup);
+
+it.each([
+  ['security-code-supply-chain', { scanner: 'trivy', outputDirectory: 'reports', inputPath: 'src', exclusions: ['vendor'], gitleaksOwnsSecrets: false, requireFreshFeeds: false }, 'Input path', 'selected/src', 'inputPath'],
+  ['security-web-api', { assessmentRef: 'web-review', mode: 'baseline', origin: 'https://example.test', routes: [{ path: '/approved', methods: ['GET'] }, { path: '/login', methods: ['GET', 'POST'] }], startPaths: ['/approved'], exclusions: ['/logout'], egressPolicyRef: 'web', identity: { name: 'reader', method: 'form', credentialRef: 'vault://reader', verificationPath: '/approved', loggedInMarker: 'Fixture reader', loginPath: '/login', username: 'reader', usernameField: 'username', passwordField: 'password' } }, 'Origin', 'https://selected.test', 'origin'],
+])('round-trips saved native %s defaults through selection and nested edits', (slug, assessment, label, selected, key) => {
+  const schema = yaml.load(readFileSync(`api_service/data/presets/${slug}.yaml`, 'utf8')).annotations.inputSchema;
+  const detail = { inputSchema: schema, defaults: { assessment } };
+  function Draft() {
+    const [values, setValues] = useState<Record<string, unknown>>({});
+    const resolved = resolveSchemaCapabilityValues(detail, values);
+    return <><SchemaCapabilityFields fields={Object.entries(schema.properties as Record<string, unknown>)} detail={detail} values={resolved} errors={{}}
+      disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={(name, value) => setValues({ ...values, [name]: value })} />
+      <output data-testid="native-saved">{JSON.stringify(resolved.assessment)}</output></>;
+  }
+  const view = render(<Draft />);
+  expect(JSON.parse(view.getByTestId('native-saved').textContent!)).toMatchObject(assessment);
+  fireEvent.change(view.getByRole('textbox', { name: label }), { target: { value: selected } });
+  expect(JSON.parse(view.getByTestId('native-saved').textContent!)).toMatchObject({ ...assessment, [key]: selected });
+  const saved = JSON.parse(view.getByTestId('native-saved').textContent!);
+  expect(resolveSchemaCapabilityValues({ inputSchema: schema, defaults: { assessment: saved } }, {}).assessment).toEqual(saved);
+});
+
+it('rejects secret values and undeclared native default fields', () => {
+  const schema = yaml.load(readFileSync('api_service/data/presets/security-code-supply-chain.yaml', 'utf8')).annotations.inputSchema;
+  for (const assessment of [
+    { scanner: 'gitleaks', outputDirectory: 'reports', password: 'raw' },
+    { scanner: 'gitleaks', outputDirectory: 'reports', inputPath: 'token=raw-secret' },
+  ]) expect(resolveSchemaCapabilityValues({ inputSchema: schema, defaults: { assessment } }, {}).assessment).not.toMatchObject(assessment);
+  expect(safeCapabilityDefault({ unknown: { password: 'raw' } }, 'unknown')).toBeUndefined();
+});
+
+it('authors the exact controlled API-to-job request using the maintained Create form', () => {
+  const expected = JSON.parse(readFileSync('tests/fixtures/security_review/create-code-preset.json', 'utf8'));
+  const schema = yaml.load(readFileSync('api_service/data/presets/security-code-supply-chain.yaml', 'utf8')).annotations.inputSchema;
+  function Draft() {
+    const [values, setValues] = useState<Record<string, unknown>>({});
+    const resolved = resolveSchemaCapabilityValues({ inputSchema: schema }, values);
+    return <><SchemaCapabilityFields fields={Object.entries(schema.properties as Record<string, unknown>)} detail={{ inputSchema: schema }} values={resolved} errors={{}}
+      disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={(key, value) => setValues({ ...values, [key]: value })} />
+      <output data-testid="create-payload">{JSON.stringify(resolved)}</output></>;
+  }
+  const view = render(<Draft />);
+  fireEvent.change(view.getByLabelText('Goal'), { target: { value: expected.goal } });
+  fireEvent.change(view.getByLabelText('Output directory'), { target: { value: expected.assessment.outputDirectory } });
+  fireEvent.change(view.getByLabelText('Exclusions'), { target: { value: 'vendor' } });
+  fireEvent.change(view.getByLabelText('Timeout seconds'), { target: { value: '45' } });
+  fireEvent.click(view.getByLabelText('Gitleaks owns secrets'));
+  fireEvent.click(view.getByLabelText('Require fresh feeds'));
+  expect(JSON.parse(view.getByTestId('create-payload').textContent!)).toEqual(expected);
+});
 
 it.each([
   ['security-code-supply-chain', 'Input path'],

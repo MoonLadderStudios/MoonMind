@@ -3706,8 +3706,8 @@ export function resolveSchemaCapabilityValues(
     );
     const fallback =
       dependentDefault ??
-      safeCapabilityDefault(detail.defaults, name) ??
-      safeCapabilityDefault(fieldSchema, "default");
+      safeCapabilityDefault(detail.defaults, name, fieldSchema) ??
+      safeCapabilityDefault(fieldSchema, "default", fieldSchema);
     // Expansion treats a blank dependent target as omitted, so clearing a text
     // or textarea field must derive the rule's value here too instead of
     // submitting an empty string the server would replace.
