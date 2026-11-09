@@ -1,0 +1,128 @@
+slug: security-soc2-readiness
+title: SOC 2 Readiness
+description: Prepare published SOC 2 criteria, service boundaries and Type 1 or Type
+  2 documentary evidence without claiming examination or certification.
+tags:
+- security
+- assessment
+- soc2
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required:
+    - assets
+    - system_inputs
+    - period
+    properties:
+      assets:
+        type: array
+        title: Assessed system assets
+        items:
+          type: string
+        minItems: 1
+        description: Admit the system identifiers examined by this assessment.
+      system_inputs:
+        type: object
+        title: Saved service and evidence inputs
+        required:
+        - assessmentType
+        properties:
+          assessmentType:
+            type: string
+            enum:
+            - type1
+            - type2
+          categories:
+            type: array
+            items:
+              type: string
+              enum:
+              - security
+              - availability
+              - confidentiality
+              - processing_integrity
+              - privacy
+            minItems: 1
+        description: Record entityName, systems, serviceBoundary, serviceCommitments,
+          categories and assessmentType. Set boundaryReviewed after recording subserviceOrganisations
+          (name, method inclusive/carve_out, services, responsibilities, evidenceRequirementIds)
+          and complementaryResponsibilities, including explicit absence. requirementEvidence
+          maps criteria to organisational evidence requests and immutable revisions;
+          requirementSamples records populationRequestId, populationSize, samplingRationale,
+          selectedRecordIds, exceptions and managementResponse. The current population revision review must include matching samplingContext (requirementId, populationArtifactRef, populationSize, samplingRationale, selectedRecordIds, exceptions). See docs/Security/SOC2Readiness.md
+          and the synthetic fixture for runnable inputs.
+      period:
+        type: object
+        title: Assessment evidence period
+        required:
+        - start
+        - end
+        properties:
+          start:
+            type: string
+            format: date
+          end:
+            type: string
+            format: date
+        description: 'Type 1: identical start/end as-of dates. Type 2: start before
+          end. Historical operation needs period records, not a current scan.'
+      requirement_choices:
+        type: object
+        title: Requirement scope and period choices
+        description: Key choices by published criterion identifier (CC6.1, A1.1, DC9).
+          Set systems, period, notApplicableReason, responsibleEntity and responsibilityReason.
+          Narrowed periods remain explicit gaps; partner ownership does not waive
+          evidence.
+      evidence_refs:
+        type: array
+        title: Evidence record artifacts
+        items:
+          type: string
+        description: Optional retained FrameworkEvidence record artifacts for technical
+          or other supporting context. These never replace requirementEvidence design
+          or operational records.
+      previous_assessment_ref:
+        type:
+        - string
+        - 'null'
+        title: Previous framework assessment
+        description: Retained SOC 2 readiness report for immutable reassessment and
+          changed-period comparison.
+  defaults:
+    assets: []
+    system_inputs: {}
+    period: {}
+    requirement_choices: {}
+    evidence_refs: []
+    previous_assessment_ref: null
+steps:
+- type: tool
+  title: Prepare SOC 2 readiness
+  instructions: Assess service scope and documentary evidence against the selected
+    published criteria. Retain assessed/unassessed requirements, populations, samples,
+    exceptions and evidence requests. No CPA examination or certification is performed.
+  tool:
+    id: security.assess
+    requiredCapabilities:
+    - sandbox
+    inputs:
+      scope:
+        assets: '{{ inputs.assets }}'
+      tools: []
+      budget:
+        baseSeconds: 60
+        maxSeconds: 120
+        progressStallSeconds: 60
+      credentialRefs: []
+      networkRefs: []
+      framework:
+        packId: soc2-readiness
+        systemInputs: '{{ inputs.system_inputs }}'
+        period: '{{ inputs.period }}'
+        requirementChoices: '{{ inputs.requirement_choices }}'
+        evidenceRefs: '{{ inputs.evidence_refs }}'
+        previousAssessmentRef: '{{ inputs.previous_assessment_ref }}'

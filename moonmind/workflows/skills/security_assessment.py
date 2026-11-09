@@ -1305,6 +1305,24 @@ class AssessmentExecution:
         )
 
         selection = request.framework
+        if selection.pack_id in {"iso-27001-readiness", "soc2-readiness"}:
+            from importlib import import_module
+
+            from moonmind.security.builtin_frameworks import prepare_builtin_framework
+
+            module = import_module(
+                "moonmind.security."
+                + {
+                    "iso-27001-readiness": "iso_27001",
+                    "soc2-readiness": "soc2_readiness",
+                }[selection.pack_id]
+            )
+            return await prepare_builtin_framework(
+                self,
+                request,
+                module=module,
+                collected_evidence_refs=collected_evidence_refs,
+            )
         pack = load_framework_pack(selection.pack_id)
         if pack.id == "gli-19-readiness":
             from moonmind.security.gli_readiness import (
@@ -2154,15 +2172,25 @@ class AssessmentExecution:
                                 }
                             )
                         elif payload.get("schemaVersion") == "service-inventory/v1":
-                            inventory_summary = ServiceInventorySummary.model_validate(payload)
+                            inventory_summary = ServiceInventorySummary.model_validate(
+                                payload
+                            )
                             native_body = attestation_body = None
                             native_refs = {}
                             if inventory_summary.evidence_ref != "unavailable":
-                                _, native_body = await self.read(inventory_summary.evidence_ref)
-                                native_refs["execution"] = inventory_summary.evidence_ref
+                                _, native_body = await self.read(
+                                    inventory_summary.evidence_ref
+                                )
+                                native_refs["execution"] = (
+                                    inventory_summary.evidence_ref
+                                )
                             if inventory_summary.attestation_ref:
-                                _, attestation_body = await self.read(inventory_summary.attestation_ref)
-                                native_refs["attestation"] = inventory_summary.attestation_ref
+                                _, attestation_body = await self.read(
+                                    inventory_summary.attestation_ref
+                                )
+                                native_refs["attestation"] = (
+                                    inventory_summary.attestation_ref
+                                )
                             inventory_summary = _verify_service_inventory_report(
                                 inventory_summary, native_body, attestation_body
                             )
@@ -2182,7 +2210,9 @@ class AssessmentExecution:
                                         "jobState": inventory_summary.job_state,
                                         "stopReason": inventory_summary.stop_reason,
                                         "endpoints": [
-                                            endpoint.model_dump(mode="json", by_alias=True)
+                                            endpoint.model_dump(
+                                                mode="json", by_alias=True
+                                            )
                                             for endpoint in inventory_summary.endpoints
                                         ],
                                     },
@@ -2191,9 +2221,14 @@ class AssessmentExecution:
                                         for endpoint in inventory_summary.endpoints
                                         if endpoint.reachability == "untested"
                                     ],
-                                    "reducedCoverage": inventory_summary.status != "complete",
+                                    "reducedCoverage": inventory_summary.status
+                                    != "complete",
                                     "limitations": list(inventory_summary.limitations),
-                                    "verification": "observed" if native_body is not None else "unverified",
+                                    "verification": (
+                                        "observed"
+                                        if native_body is not None
+                                        else "unverified"
+                                    ),
                                     "attribution": "Per-endpoint outcomes are fixed-runner observations; the gateway independently attests aggregate bounds, not each endpoint outcome.",
                                     "interpretation": inventory_summary.interpretation,
                                 }
@@ -2207,7 +2242,9 @@ class AssessmentExecution:
                                 {
                                     "scanner": "dns",
                                     "summaryRef": ref,
-                                    "nativeRefs": {"execution": dns_summary.evidence_ref},
+                                    "nativeRefs": {
+                                        "execution": dns_summary.evidence_ref
+                                    },
                                     "coverage": dns_summary.status,
                                     "execution": dns_summary.execution.model_dump(
                                         mode="json", by_alias=True
@@ -2224,14 +2261,17 @@ class AssessmentExecution:
                                         q.model_dump(mode="json", by_alias=True)
                                         for q in dns_summary.uncovered_questions
                                     ],
-                                    "coverageExpiresAt": dns_summary.coverage_expires_at.isoformat()
-                                    if dns_summary.coverage_expires_at
-                                    else None,
+                                    "coverageExpiresAt": (
+                                        dns_summary.coverage_expires_at.isoformat()
+                                        if dns_summary.coverage_expires_at
+                                        else None
+                                    ),
                                     "limitations": sorted(
                                         {
                                             check.code
                                             for check in dns_summary.checks
-                                            if check.status in {"incomplete", "unsupported"}
+                                            if check.status
+                                            in {"incomplete", "unsupported"}
                                         }
                                     ),
                                     "verification": "resolver_observation",
@@ -2244,7 +2284,9 @@ class AssessmentExecution:
                             # native bytes, not editable summary assertions.
                             native = {}
                             if tls_summary.evidence_ref != "unavailable":
-                                _, native_body = await self.read(tls_summary.evidence_ref)
+                                _, native_body = await self.read(
+                                    tls_summary.evidence_ref
+                                )
                                 native = json.loads(native_body)
                             normalized = summarize_tls_assessment(
                                 TLSAssessment.model_validate(tls_summary.settings),
@@ -2257,13 +2299,18 @@ class AssessmentExecution:
                                 or normalized.findings != tls_summary.findings
                                 or normalized.origin != tls_summary.origin
                                 or normalized.execution != tls_summary.execution
-                                or normalized.unperformed_checks != tls_summary.unperformed_checks
+                                or normalized.unperformed_checks
+                                != tls_summary.unperformed_checks
                             ):
-                                raise ValueError("TLS summary differs from retained evidence")
+                                raise ValueError(
+                                    "TLS summary differs from retained evidence"
+                                )
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
-                            observation = _tls_observation(request, tls_summary, ref, observed_at)
+                            observation = _tls_observation(
+                                request, tls_summary, ref, observed_at
+                            )
                             scanner_summaries.append(
                                 {
                                     "scanner": "openssl",
@@ -2277,15 +2324,31 @@ class AssessmentExecution:
                                     "coverage": "partial",
                                     "execution": {
                                         "probes": [
-                                            {k: p[k] for k in ("protocol", "cipher", "status", "trustResult")}
-                                            for p in tls_summary.execution.get("probes", [])
+                                            {
+                                                k: p[k]
+                                                for k in (
+                                                    "protocol",
+                                                    "cipher",
+                                                    "status",
+                                                    "trustResult",
+                                                )
+                                            }
+                                            for p in tls_summary.execution.get(
+                                                "probes", []
+                                            )
                                         ],
                                         "unperformedChecks": tls_summary.unperformed_checks,
-                                        "errors": tls_summary.execution.get("errors", []),
+                                        "errors": tls_summary.execution.get(
+                                            "errors", []
+                                        ),
                                     },
                                     "limitations": sorted(tls_summary.limitations),
                                     "unperformedChecks": tls_summary.unperformed_checks,
-                                    "verification": "observed" if tls_summary.execution else "unverified",
+                                    "verification": (
+                                        "observed"
+                                        if tls_summary.execution
+                                        else "unverified"
+                                    ),
                                     "interpretation": tls_summary.interpretation,
                                 }
                             )
@@ -2459,7 +2522,8 @@ class AssessmentExecution:
                                                         "effect": case.request.effect,
                                                         "realtimeCaseRef": case.request.realtime_case_ref,
                                                     }
-                                                    if case.request.realtime_case_ref is not None
+                                                    if case.request.realtime_case_ref
+                                                    is not None
                                                     else {}
                                                 ),
                                             },
@@ -3143,15 +3207,19 @@ class AssessmentExecution:
             structured_refs = [comparison_ref, *evidence]
             if review_readable:
                 structured_refs.append(request.review_ref)
-            summary = bound_report_presentation(summary, structured_refs=structured_refs)
+            summary = bound_report_presentation(
+                summary, structured_refs=structured_refs
+            )
             summary_key = content_key(
                 [
                     report_key,
                     "summary",
                     "professional-report/v4",
-                    request.report_context.model_dump(mode="json", by_alias=True)
-                    if request.report_context
-                    else None,
+                    (
+                        request.report_context.model_dump(mode="json", by_alias=True)
+                        if request.report_context
+                        else None
+                    ),
                     EVIDENCE_TRANSFORMATION_VERSION,
                     request.review_ref,
                     review_status,
@@ -3641,18 +3709,32 @@ def _scanner_summary(summaries: list[dict]) -> str:
         if summary.get("interpretation"):
             lines.append(summary["interpretation"])
         if summary["scanner"] == "dns":
-            lines.append("DNS checks: " + json.dumps(summary["checks"], sort_keys=True) + ".")
-            lines.append("Covered questions: " + json.dumps(summary["coveredQuestions"], sort_keys=True) + ".")
-            lines.append("Uncovered questions: " + json.dumps(summary["uncoveredQuestions"], sort_keys=True) + ".")
+            lines.append(
+                "DNS checks: " + json.dumps(summary["checks"], sort_keys=True) + "."
+            )
+            lines.append(
+                "Covered questions: "
+                + json.dumps(summary["coveredQuestions"], sort_keys=True)
+                + "."
+            )
+            lines.append(
+                "Uncovered questions: "
+                + json.dumps(summary["uncoveredQuestions"], sort_keys=True)
+                + "."
+            )
             lines.append("Coverage expires: " + str(summary["coverageExpiresAt"]) + ".")
         if summary["scanner"] == "service-inventory":
             lines.append(summary["attribution"])
             lines.append(
-                "Reduced coverage: " + ("yes" if summary["reducedCoverage"] else "no") + "."
+                "Reduced coverage: "
+                + ("yes" if summary["reducedCoverage"] else "no")
+                + "."
             )
             if summary["missingEndpoints"]:
                 lines.append(
-                    "Untested endpoints: " + ", ".join(summary["missingEndpoints"]) + "."
+                    "Untested endpoints: "
+                    + ", ".join(summary["missingEndpoints"])
+                    + "."
                 )
         if summary["scanner"] == "application-access":
 
@@ -3665,7 +3747,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
                 transport = (
                     f"{safe(request['protocol'])} {safe(request['messageType'])} "
                     f"({safe(request['effect'])}; operation {safe(request['realtimeCaseRef'])}), "
-                    if request.get("realtimeCaseRef") is not None else ""
+                    if request.get("realtimeCaseRef") is not None
+                    else ""
                 )
                 lines.append(
                     f"- Case {safe(row['caseRef'])}: {safe(row['identityRef'])} on {safe(row['resourceRef'])}, "

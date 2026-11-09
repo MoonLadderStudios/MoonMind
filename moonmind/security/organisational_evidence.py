@@ -37,7 +37,23 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             or len(requirements) + len(choices) > 64
         ):
             raise ValueError("invalid assessment requirement collection")
-        for row in [*requirements, *choices.values()]:
+        framework = inputs.get("framework") or {}
+        builtin_rows = []
+        if isinstance(framework, Mapping) and framework.get(
+            "packId", framework.get("pack_id")
+        ) in {"iso-27001-readiness", "soc2-readiness"}:
+            system = framework.get("systemInputs", framework.get("system_inputs", {}))
+            if not isinstance(system, Mapping):
+                raise TypeError("invalid built-in framework system inputs")
+            evidence = system.get(
+                "requirementEvidence", system.get("requirement_evidence", {})
+            )
+            if not isinstance(evidence, Mapping) or len(evidence) > 256:
+                raise ValueError("invalid built-in framework evidence collection")
+            builtin_rows = [
+                {"organisationalEvidence": requests} for requests in evidence.values()
+            ]
+        for row in [*requirements, *choices.values(), *builtin_rows]:
             if not isinstance(row, Mapping):
                 raise TypeError("invalid assessment requirement")
             requests = row.get(

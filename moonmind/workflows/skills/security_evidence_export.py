@@ -34,6 +34,27 @@ def associated_evidence(*, request, work, outputs, evidence, summary_ref, review
             refs[ref] = ""
     if request.framework:
         refs.update({ref: "" for ref in request.framework.evidence_refs})
+        from moonmind.security.organisational_evidence import (
+            organisational_evidence_refs,
+        )
+
+        refs.update(
+            {
+                ref: ""
+                for ref in organisational_evidence_refs(
+                    {
+                        "tool": {
+                            "id": "security.assess",
+                            "inputs": {
+                                "framework": request.framework.model_dump(
+                                    mode="json", by_alias=True
+                                )
+                            },
+                        }
+                    }
+                )
+            }
+        )
     if request.control_assessment:
         refs.update(
             {
@@ -201,9 +222,11 @@ async def export_selected_evidence(execution, *, selection, associated):
         ],
         "entries": entries,
         "offlineReview": {
-            "status": "incomplete"
-            if missing_refs or len(included_refs) != len(entries)
-            else "selected_material_available",
+            "status": (
+                "incomplete"
+                if missing_refs or len(included_refs) != len(entries)
+                else "selected_material_available"
+            ),
             "missingArtifactRefs": missing_refs,
             "limitations": [
                 "Referenced artifacts not included in this selection are unavailable for offline review. No automatic disclosure of dependencies occurs.",
