@@ -12177,6 +12177,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         timeout=deadline - workflow.now(),
                     )
                 except TimeoutError:
+                    # Expected expiry falls through to the durable budget stop below.
                     pass
             if (
                 deadline is not None

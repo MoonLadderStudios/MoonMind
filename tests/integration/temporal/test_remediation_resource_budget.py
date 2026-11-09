@@ -315,7 +315,6 @@ async def test_absolute_loop_deadline_bounds_active_registered_operation_and_rep
 async def test_registered_agent_pause_expires_without_resume_and_replays(
     monkeypatch, cancel, after_slot
 ):
-    import asyncio
     from contextlib import AsyncExitStack
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
