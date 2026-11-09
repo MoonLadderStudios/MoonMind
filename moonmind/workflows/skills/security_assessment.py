@@ -2640,6 +2640,40 @@ class AssessmentExecution:
                     total += len(body)
                     if total > _MAX_INPUT_BYTES:
                         raise ValueError("review evidence exceeds the input bound")
+                review_refs = review.evidence_refs()
+                if (
+                    review.candidate_ref.startswith("art_")
+                    and review.candidate_ref not in review_refs
+                ):
+                    _, body = await self.read(review.candidate_ref)
+                    total += len(body)
+                    if total > _MAX_INPUT_BYTES:
+                        raise ValueError("review evidence exceeds the input bound")
+                    review_refs.append(review.candidate_ref)
+
+                async def review_dependencies():
+                    return [
+                        ArtifactDependency(
+                            ref, self.digests[ref], True, "security.review.evidence"
+                        )
+                        for ref in review_refs
+                    ]
+
+                await self.seal(request.review_ref, review_dependencies)
+                _root, links, _pinned, _policy = await self.service.get_metadata(
+                    artifact_id=request.review_ref, access=self.access
+                )
+                if not any(
+                    link.link_type == "security.review"
+                    and link.workflow_id == self.execution["workflow_id"]
+                    and link.run_id == self.execution["run_id"]
+                    for link in links
+                ):
+                    await self.service.link_artifact(
+                        artifact_id=request.review_ref,
+                        principal=self.principal,
+                        execution_ref={**self.execution, "link_type": "security.review"},
+                    )
                 review_status = "completed"
             except Exception as exc:
                 review = None
