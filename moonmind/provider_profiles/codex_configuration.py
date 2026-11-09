@@ -379,11 +379,22 @@ def configuration_for_profile(profile):
         ):
             return None, "Codex config requires its exact declared key environment"
         launch_environment = {key: value for key, value in environment.items() if key != key_name}
-        if any(not isinstance(value, str) or "{{" in value for value in launch_environment.values()):
-            return None, "Codex project environment requires literal nonsecret values"
+        if any(not isinstance(value, str) for value in launch_environment.values()):
+            return None, "Codex project environment requires nonsecret values"
         from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
 
         launch_environment = validate_provider_literal_launch_environment(launch_environment)
+        from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+
+        environment_templates = {key: value for key, value in launch_environment.items() if "{{" in value}
+        environment_templates = validate_environment_template_context(environment_templates)
+        for value in environment_templates.values():
+            normalized = re.sub(r"{{\s*runtime_support_dir\s*}}", "{{runtime_support_dir}}", value)
+            # Native sessions relocate the declared HOME. Generic runtime paths
+            # are equivalent, but references into that HOME need its own owner.
+            if re.search(re.escape(parsed["homePath"].rstrip("/")) + r"(?=/|$)", normalized):
+                return None, "Codex HOME-relative environment requires native delivery"
+        launch_environment = {key: value for key, value in launch_environment.items() if key not in environment_templates}
         value = environment[key_name]
         if not isinstance(value, dict) or set(value) != {"from_secret_ref"}:
             return None, "Codex config key must come from a SecretRef"
@@ -409,6 +420,7 @@ def configuration_for_profile(profile):
             "providerName": provider_name,
             "secretRole": role,
             "managedRecipeRepaired": repaired,
+            **({"environmentTemplates": environment_templates} if environment_templates else {}),
             **({"additionalFiles": additional_files} if additional_files else {}),
             **({"launchEnvironment": launch_environment} if launch_environment else {}),
         }, ""

@@ -16,8 +16,15 @@ from tests.unit.omnigent.test_codex_api_key_provider_config import (
     _provision,
 )
 
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("minimax_egress")
+
 
 def profile(runtime):
+    if runtime == "custom_codex":
+        from tests.unit.omnigent.test_codex_profile_configuration import profile as custom_profile
+        return custom_profile()
     selected = _api_key_profile()
     if runtime == "claude_code":
         selected.runtime_id = runtime
@@ -28,7 +35,7 @@ def profile(runtime):
     return selected
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "custom_codex"])
 @pytest.mark.parametrize("schema", ["v1", "v2"])
 def test_available_key_context_selects_the_shared_lifecycle(runtime, schema):
     from api_service.services.profile_execution_selection import (
@@ -39,9 +46,13 @@ def test_available_key_context_selects_the_shared_lifecycle(runtime, schema):
         profile_and_configuration,
     )
 
-    selected, configuration = profile_and_configuration(runtime, schema)
+    selected, configuration = profile_and_configuration("codex_cli" if runtime == "custom_codex" else runtime, schema)
     selected.credential_source = "secret_ref"
     selected.runtime_materialization_mode = "api_key_env"
+    if runtime == "custom_codex":
+        custom = profile(runtime)
+        for key in ("provider_id", "file_templates", "home_path_overrides", "model_overrides", "command_behavior"):
+            setattr(selected, key, getattr(custom, key))
     selected.secret_refs = profile(runtime).secret_refs
     selected.env_template = {
         **profile(runtime).env_template,
@@ -50,15 +61,17 @@ def test_available_key_context_selects_the_shared_lifecycle(runtime, schema):
     document = configuration[1].document
     if schema == "v2":
         document["credentialSlots"][0]["acceptedAuthModels"] = ["omnigent-provider-config"]
+        document["credentialSlots"][0]["acceptedProviderIds"] = [selected.provider_id]
     else:
         document["providerRequirements"].update(
-            credentialSource="secret_ref", materializationMode="api_key_env"
+            credentialSource="secret_ref", materializationMode="api_key_env",
+            providerIds=[selected.provider_id]
         )
     assert configuration_accepts_profile(document, selected)
     assert not profile_has_native_inventory_route(selected, [configuration])
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "custom_codex"])
 def test_templates_survive_admission_edits_and_snapshot_retries(runtime):
     selected = profile(runtime)
     values = {
@@ -91,7 +104,7 @@ def test_templates_survive_admission_edits_and_snapshot_retries(runtime):
     )
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "custom_codex"])
 @pytest.mark.parametrize(
     "name,value",
     [
@@ -138,7 +151,7 @@ async def test_provisioned_key_handle_delivers_templates_without_resolving_other
     assert resolver.resolved == ["OPENAI_API_KEY"]
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "custom_codex"])
 def test_shared_paths_match_direct_renderer_and_are_attempt_local(runtime):
     from moonmind.omnigent.host_services.runtime_scripts import (
         OmnigentRuntimeScriptService,
@@ -162,7 +175,7 @@ def test_shared_paths_match_direct_renderer_and_are_attempt_local(runtime):
             credential_handles=[handle],
             skill_attachment={"targetPath": "/opt/skills"},
             step_execution_id="workflow:run:work:execution:1",
-            enable_codex_runtime=runtime == "codex_cli",
+            enable_codex_runtime=runtime != "claude_code",
             enable_claude_runtime=runtime == "claude_code",
             workspace_path=workspace,
         )
@@ -249,20 +262,24 @@ def test_retained_key_snapshot_keeps_literal_interpretation_and_bytes():
     )
 
 
-def test_template_handle_cannot_override_a_sibling_launch_value():
+@pytest.mark.parametrize("custom", [False, True])
+def test_template_handle_cannot_override_a_sibling_launch_value(custom):
     from moonmind.omnigent.host_services.runtime_scripts import (
         OmnigentRuntimeScriptService,
     )
 
+    values = {"REPORT_DIR": "{{workspace_path}}/reports"}
+    if custom:
+        selected = profile("custom_codex")
+        selected.env_template.update(values)
+        values = snapshot_provider_configuration(selected).environmentTemplates
     with pytest.raises(ValueError, match="conflicting"):
         OmnigentRuntimeScriptService().build_entrypoint(
             credential_handles=[
                 {
                     "materializerRef": "omnigent-provider-config@1",
                     "attachments": [],
-                    "runtimeEnvironmentTemplates": {
-                        "REPORT_DIR": "{{workspace_path}}/reports"
-                    },
+                    "runtimeEnvironmentTemplates": values,
                 },
                 {
                     "materializerRef": "omnigent-provider-config@1",
@@ -275,3 +292,16 @@ def test_template_handle_cannot_override_a_sibling_launch_value():
             step_execution_id="workflow:run:work:execution:1",
             enable_codex_runtime=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_queued_launch_and_retry_keep_admitted_templates(tmp_path):
+    from tests.unit.omnigent.test_codex_api_key_provider_config import (
+        _assert_sibling_attempt_credentials_are_isolated,
+    )
+    selected = vars(profile("custom_codex"))
+    for key in ("profile_id", "runtime_id", "provider_id", "credential_source"):
+        selected.pop(key)
+    await _assert_sibling_attempt_credentials_are_isolated(
+        tmp_path, "codex_cli", profile_values=selected,
+    )

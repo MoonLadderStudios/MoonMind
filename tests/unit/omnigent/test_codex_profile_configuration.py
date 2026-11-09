@@ -72,6 +72,18 @@ def test_custom_codex_configuration_has_an_exact_shared_translation():
     assert configured["document"]["model_reasoning_effort"] == "high"
 
 
+def test_custom_provider_preserves_nonsecret_path_templates():
+    selected = profile()
+    selected.env_template.update({"REPORT_DIR": "{{workspace_path}}/reports", "CACHE_DIR": "{{ runtime_support_dir }}/cache"})
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is not None, reason
+    assert endpoint.environmentTemplates == {"REPORT_DIR": "{{workspace_path}}/reports", "CACHE_DIR": "{{ runtime_support_dir }}/cache"}
+    assert endpoint.launchEnvironment == {}
+    assert endpoint.codexConfiguration["providerName"] == "custom"
+    assert endpoint.codexConfiguration["provider"]["env_key"] == "CUSTOM_MODEL_KEY"
+    assert "environmentTemplates" not in endpoint.codexConfiguration
+
+
 def test_custom_provider_keeps_safe_project_values_without_another_key():
     selected = profile()
     selected.env_template["PROJECT_RUNTIME_STYLE"] = "  exact $(not-executed) literal  "
@@ -86,7 +98,8 @@ def test_custom_provider_keeps_safe_project_values_without_another_key():
 @pytest.mark.parametrize("extra", [
     {"HOME": "/another-home"},
     {"PROJECT_RUNTIME_STYLE": {"from_secret_ref": "another_key"}},
-    {"PROJECT_RUNTIME_STYLE": "{{workspace_path}}"},
+    {"PROJECT_RUNTIME_STYLE": "{{unknown}}"},
+    {"PROJECT_RUNTIME_STYLE": "{{ runtime_support_dir }}/codex-home/reports"},
 ])
 def test_custom_provider_cannot_smuggle_other_authority_as_project_values(extra):
     selected = profile()
@@ -605,3 +618,24 @@ def test_profile_file_projection_cannot_follow_a_sibling_home_symlink(tmp_path):
     with pytest.raises(ValueError, match="within runtime_support_dir"):
         configure_profile_files(configuration, home, tmp_path)
     assert original.read_text() == "Keep sibling instructions."
+
+
+@pytest.mark.parametrize("home", ["codex-home", "operator-home"])
+@pytest.mark.parametrize("suffix", ["", "/reports"])
+def test_custom_provider_home_references_keep_direct_routing(home, suffix):
+    selected = profile()
+    selected.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/" + home}
+    selected.file_templates[0]["path"] = "{{runtime_support_dir}}/" + home + "/config.toml"
+    selected.env_template["REPORT_DIR"] = "{{ runtime_support_dir }}/" + home + suffix
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "HOME-relative" in reason
+
+
+def test_custom_provider_path_templates_do_not_expand_endpoint_authority():
+    selected = profile()
+    selected.env_template["REPORT_DIR"] = "{{workspace_path}}/reports"
+    selected.file_templates[0]["content_template"]["model_providers"]["custom"]["base_url"] = "https://unapproved.invalid/v1"
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "egress" in reason
