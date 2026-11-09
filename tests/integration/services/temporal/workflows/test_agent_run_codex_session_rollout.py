@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 from temporalio import activity as _activity
 from temporalio import workflow
-from temporalio.service import RPCError
+from temporalio.client import WorkflowExecutionStatus
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
@@ -29,6 +32,20 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+async def _shutdown_fixture_workflow(handle, signal) -> None:
+    """Acknowledge only a verified successful close racing the shutdown RPC."""
+    try:
+        await handle.signal(signal)
+    except RPCError as error:
+        if error.status != RPCStatusCode.NOT_FOUND:
+            raise
+        if (await handle.describe()).status != WorkflowExecutionStatus.COMPLETED:
+            raise
+    # A failed, canceled or unreadable result must still fail teardown.
+    await handle.result()
+
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
 class MockProviderProfileManager:
@@ -530,14 +547,12 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                             task_queue="agent-run-task-queue",
                         )
                     finally:
-                        await session_handle.signal(DummyCodexSessionWorkflow.shutdown)
-                        await session_handle.result()
-                        try:
-                            await manager_handle.signal(MockProviderProfileManager.shutdown)
-                            await manager_handle.result()
-                        except RPCError:
-                            # Best-effort teardown can race the worker shutdown path.
-                            pass
+                        await _shutdown_fixture_workflow(
+                            session_handle, DummyCodexSessionWorkflow.shutdown
+                        )
+                        await _shutdown_fixture_workflow(
+                            manager_handle, MockProviderProfileManager.shutdown
+                        )
 
                     assert isinstance(result, AgentRunResult)
                     assert result.failure_class is None
@@ -585,3 +600,104 @@ def test_agent_execution_request_rejects_top_level_communication_field() -> None
                 },
             }
         )
+
+
+@pytest.mark.parametrize("already_completed", [False, True])
+async def test_fixture_cleanup_verifies_completed_signal_race(already_completed):
+    handle = SimpleNamespace(
+        signal=AsyncMock(),
+        result=AsyncMock(return_value={}),
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=WorkflowExecutionStatus.COMPLETED)
+        ),
+    )
+    if already_completed:
+        handle.signal.side_effect = RPCError(
+            "Completed workflow", RPCStatusCode.NOT_FOUND, b""
+        )
+    await _shutdown_fixture_workflow(handle, "shutdown")
+    handle.signal.assert_awaited_once_with("shutdown")
+    handle.result.assert_awaited_once_with()
+    if already_completed:
+        handle.describe.assert_awaited_once_with()
+    else:
+        handle.describe.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "code,status",
+    [
+        ("NOT_FOUND", "RUNNING"),
+        ("NOT_FOUND", "FAILED"),
+        ("NOT_FOUND", "CANCELED"),
+        ("NOT_FOUND", "TERMINATED"),
+        ("NOT_FOUND", "TIMED_OUT"),
+        ("UNAVAILABLE", "COMPLETED"),
+        ("PERMISSION_DENIED", "COMPLETED"),
+    ],
+)
+async def test_fixture_cleanup_does_not_hide_rpc_or_terminal_failures(code, status):
+    error = RPCError("fixture failure", RPCStatusCode[code], b"")
+    handle = SimpleNamespace(
+        signal=AsyncMock(side_effect=error),
+        result=AsyncMock(),
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=WorkflowExecutionStatus[status])
+        ),
+    )
+    with pytest.raises(RPCError) as raised:
+        await _shutdown_fixture_workflow(handle, "shutdown")
+    assert raised.value is error
+    handle.result.assert_not_awaited()
+    if code != "NOT_FOUND":
+        handle.describe.assert_not_awaited()
+
+
+async def test_fixture_cleanup_still_surfaces_unreadable_completion():
+    handle = SimpleNamespace(
+        signal=AsyncMock(
+            side_effect=RPCError("Completed workflow", RPCStatusCode.NOT_FOUND, b"")
+        ),
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=WorkflowExecutionStatus.COMPLETED)
+        ),
+        result=AsyncMock(side_effect=RuntimeError("unreadable completion")),
+    )
+    with pytest.raises(RuntimeError, match="unreadable completion"):
+        await _shutdown_fixture_workflow(handle, "shutdown")
+
+
+async def test_fixture_cleanup_does_not_hide_missing_execution():
+    missing = RPCError("Unknown workflow", RPCStatusCode.NOT_FOUND, b"")
+    handle = SimpleNamespace(
+        signal=AsyncMock(
+            side_effect=RPCError("not found", RPCStatusCode.NOT_FOUND, b"")
+        ),
+        describe=AsyncMock(side_effect=missing),
+        result=AsyncMock(),
+    )
+    with pytest.raises(RPCError) as raised:
+        await _shutdown_fixture_workflow(handle, "shutdown")
+    assert raised.value is missing
+    handle.result.assert_not_awaited()
+
+
+async def test_fixture_cleanup_accepts_real_completed_execution():
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="completed-fixture-cleanup",
+            workflows=[DummyCodexSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                DummyCodexSessionWorkflow.run,
+                {"fixture": "cleanup"},
+                id="test-completed-fixture-cleanup",
+                task_queue="completed-fixture-cleanup",
+            )
+            await _shutdown_fixture_workflow(handle, DummyCodexSessionWorkflow.shutdown)
+            assert (await handle.describe()).status == WorkflowExecutionStatus.COMPLETED
+            # A second shutdown targets the retained closed execution, not a new run.
+            await _shutdown_fixture_workflow(handle, DummyCodexSessionWorkflow.shutdown)
+            assert (await handle.result())["binding"] == {"fixture": "cleanup"}
