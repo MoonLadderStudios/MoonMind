@@ -4281,7 +4281,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if len(controllers) != 1:
             raise ValueError("a plan must contain at most one remediation loop")
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
-        if self._workflow_patch_enabled(RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH):
+        if (
+            self._workflow_patch_enabled(RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH)
+            and self._remediation_loop_continuation is None
+        ):
+            # A new history after Continue-As-New may activate this patch for
+            # an already admitted loop. Restore validates its carried state;
+            # keep its original limits and receipt accounting across upgrades.
             for name, limit in (
                 ("tokenBudget", spec.budgets.token_budget),
                 ("costBudget", spec.budgets.cost_budget),
