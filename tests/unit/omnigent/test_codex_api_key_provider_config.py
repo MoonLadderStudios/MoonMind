@@ -418,7 +418,15 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
     never removes the other's key.
     """
 
+    import hashlib
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        provider_configuration_snapshot_bytes,
+        snapshot_provider_configuration,
+    )
+
     shape = _SHAPES[runtime_id]
+    templates = {"REPORT_DIR": "{{workspace_path}}/reports"}
     profile_id = f"{runtime_id}_api"
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/attempts.db")
     async with engine.begin() as connection:
@@ -434,10 +442,17 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
                 credential_source="secret_ref",
                 runtime_materialization_mode="api_key_env",
                 secret_refs=shape["secret_refs"],
-                env_template=shape["env_template"],
+                env_template={**shape["env_template"], **templates},
             )
         )
         await session.commit()
+
+    class SnapshotArtifacts(_Artifacts):
+        async def read_admitted_input(self, ref, *, request):
+            assert ref == "artifact://admitted-provider-configuration"
+            return self.snapshot
+
+    artifacts = SnapshotArtifacts()
     docker = _VolumeDocker()
     service = OmnigentCredentialProvisioningService(
         session_factory=sessions,
@@ -445,7 +460,7 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
             session_factory=sessions, resolver=_AnySecret()
         ),
         registry=build_default_credential_materializer_registry(backend=docker),
-        artifact_gateway=_Artifacts(),
+        artifact_gateway=artifacts,
     )
     qualified_id, route = shape["model"]
     plan = SimpleNamespace(
@@ -460,6 +475,20 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
             modelConfig=SimpleNamespace(qualifiedId=qualified_id, routeRef=route),
         )
     )
+
+    async with sessions() as session:
+        selected = await session.get(ManagedAgentProviderProfile, profile_id)
+        admitted = snapshot_provider_configuration(selected)
+        artifacts.snapshot = provider_configuration_snapshot_bytes(
+            plan.payload.credentialBindings, {"primary-model": admitted},
+        )
+        plan.payload.providerConfigurationSnapshot = SimpleNamespace(
+            artifactRef="artifact://admitted-provider-configuration",
+            contentDigest="sha256:" + hashlib.sha256(artifacts.snapshot).hexdigest(),
+        )
+        # Neither the first queued launch nor its retry may reinterpret edits.
+        selected.env_template = {**shape["env_template"], "REPORT_DIR": "{{unavailable_secret}}"}
+        await session.commit()
 
     async def provision(epoch: int):
         acquired = AcquiredProviderLease(
@@ -494,6 +523,8 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
     try:
         (interrupted,) = await provision(1)
         (restarted,) = await provision(2)
+        assert interrupted.runtimeEnvironmentTemplates == templates
+        assert restarted.runtimeEnvironmentTemplates == templates
         interrupted_volume = interrupted.attachments[0].sourceRef
         restarted_volume = restarted.attachments[0].sourceRef
         assert interrupted.credentialRuntimeRef != restarted.credentialRuntimeRef
