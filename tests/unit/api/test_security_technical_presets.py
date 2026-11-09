@@ -153,21 +153,25 @@ CASES = [
 def test_saved_native_defaults_keep_contract_names_and_reject_secrets(
     slug, job_key, assessment
 ):
-    from api_service.services.presets.catalog import _normalize_seed_annotations
+    from api_service.services.presets.catalog import (
+        _normalize_seed_annotations,
+        _schema_contract_input_definitions,
+    )
 
     seed = yaml.safe_load(
         (ROOT / "api_service/data/presets" / f"{slug}.yaml").read_text()
     )
     seed["annotations"]["defaults"] = {"assessment": assessment}
     assert _normalize_seed_annotations(seed)["defaults"]["assessment"] == assessment
-    field_schema = seed["annotations"]["inputSchema"]["properties"]["assessment"]
-    definition = {
-        "name": "assessment",
-        "label": "Assessment",
-        "type": "object",
-        "schema": field_schema,
-        "default": assessment,
-    }
+    definition = next(
+        item
+        for item in _schema_contract_input_definitions(
+            input_schema=seed["annotations"]["inputSchema"],
+            ui_schema={},
+            defaults={"assessment": assessment},
+        )
+        if item["name"] == "assessment"
+    )
     assert (
         PresetCatalogService(None)._validate_inputs_schema([definition])[0]["default"]
         == assessment
