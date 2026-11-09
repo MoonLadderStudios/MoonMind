@@ -30,6 +30,7 @@ RUNNER_FILES = (
     "security/repository_scanner_runner.py",
     "security/repository_scanners.py",
     "security/scanner_feeds.py",
+    "security/scanner_readiness.py",
     "security/image_assessment_runner.py",
     "security/image_assessments.py",
     "security/assessments.py",

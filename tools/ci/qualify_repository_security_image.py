@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -70,14 +71,74 @@ def container(
     return [str(value) for value in argv]
 
 
-def invoke(argv, evidence: Path, *, exits=(0,)):
+def readiness_container(image: str, probe: list[str]) -> list[str]:
+    """Use the same offline, source-free envelope as runtime readiness."""
+    return [
+        "docker", "run", "--rm", "--pull=never", "--network", "none",
+        "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+        "--cpus", "1", "--memory", "1g", "--pids-limit", "128",
+        "--tmpfs", "/tmp:rw,nosuid,nodev,size=536870912",
+        "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+        "--entrypoint", "timeout", image,
+        "--signal=TERM", "--kill-after=5s", "75s", *probe,
+    ]
+
+
+def qualify_readiness(image: str, evidence: Path, *, kind: str = "repository") -> None:
+    """Run packaged helpers and upstream startup under the production limits."""
+    evidence.mkdir(parents=True, exist_ok=True)
+    if kind in {"web", "cloud"}:
+        probe = ["/zap/zap.sh", "-version"] if kind == "web" else ["prowler", "--version"]
+        output = invoke(
+            readiness_container(image, probe), evidence / f"readiness-{kind}.json",
+            timeout=90,
+        )
+        if len(output.encode()) > 16384 or not re.search(r"\b[0-9]+\.[0-9]+", output):
+            raise ImageError(f"{kind}: readiness version probe did not identify a release")
+        return
+    if kind != "repository":
+        raise ImageError("unknown readiness qualification kind")
+    selections = {
+        "gitleaks": {"repositoryScan": {"scanner": "gitleaks", "outputDirectory": "report"}},
+        "opengrep": {"repositoryScan": {"scanner": "opengrep", "outputDirectory": "report"}},
+        "trivy-misconfig": {"repositoryScan": {
+            "scanner": "trivy", "trivyScanners": ["misconfig"], "outputDirectory": "report",
+        }},
+        "sbom-generate": {"imageAssessment": {"operation": "sbom-generate", "target": "source"}},
+    }
+    for label, selection in selections.items():
+        raw = json.dumps(selection, sort_keys=True, separators=(",", ":"))
+        output = invoke(
+            readiness_container(image, ["python", "-I", "-m", "moonmind.security.scanner_readiness", raw]),
+            evidence / f"readiness-{label}.json", timeout=90,
+        )
+        if len(output.encode()) > 16384:
+            raise ImageError(f"{label}: readiness helper output exceeds its runtime limit")
+        try:
+            result = json.loads(output)
+        except ValueError as exc:
+            raise ImageError(f"{label}: readiness helper did not return JSON") from exc
+        if (
+            not isinstance(result, dict)
+            or result.get("schemaVersion") != "scanner-readiness/v1"
+            or result.get("selectionDigest") != hashlib.sha256(raw.encode()).hexdigest()
+            or result.get("status") != "ready"
+            or not isinstance(result.get("checks"), list)
+            or not result["checks"]
+            or any(not isinstance(check, dict) or check.get("status") not in ("ready", "unverified") for check in result["checks"])
+            or not any(check.get("code") == "scanner_available" for check in result["checks"])
+        ):
+            raise ImageError(f"{label}: packaged readiness helper is not ready; see retained evidence")
+
+
+def invoke(argv, evidence: Path, *, exits=(0,), timeout=300):
     result = subprocess.run(
         argv,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=300,
+        timeout=timeout,
     )
     evidence.write_text(
         json.dumps(
@@ -162,6 +223,7 @@ def qualify(image: str, evidence: Path) -> dict:
     }
     record_path = evidence / "qualification.json"
     record_path.write_text(json.dumps(record, indent=2) + "\n")
+    qualify_readiness(image, evidence)
     with tempfile.TemporaryDirectory(prefix="repository-security-") as directory:
         root = Path(directory)
         root.chmod(0o755)
@@ -506,5 +568,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--readiness-only", action="store_true")
+    parser.add_argument("--kind", choices=("repository", "web", "cloud"), default="repository")
     args = parser.parse_args()
-    qualify(args.image, args.evidence.resolve())
+    if args.readiness_only:
+        qualify_readiness(args.image, args.evidence.resolve(), kind=args.kind)
+    else:
+        if args.kind != "repository":
+            parser.error("upstream kinds require --readiness-only")
+        qualify(args.image, args.evidence.resolve())

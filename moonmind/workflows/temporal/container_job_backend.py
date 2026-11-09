@@ -712,7 +712,12 @@ class DockerContainerJobBackend:
     # ------------------------------------------------------------------ helpers
 
     async def _run(
-        self, args: Sequence[str], *, on_output=None
+        self,
+        args: Sequence[str],
+        *,
+        on_output=None,
+        output_limit_bytes=None,
+        timeout_seconds=None
     ) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
         if self._docker_host:
@@ -734,11 +739,15 @@ class DockerContainerJobBackend:
             (self._docker_binary, *args),
             env=env,
             on_output=on_output,
-            output_limit_bytes=_PULL_DIAGNOSTICS_MAX_BYTES if on_output else None,
+            output_limit_bytes=(
+                output_limit_bytes
+                if output_limit_bytes is not None
+                else _PULL_DIAGNOSTICS_MAX_BYTES if on_output else None
+            ),
             **(
                 {"binary_stdout_limit_bytes": 1048576, "timeout_seconds": 30}
                 if archive
-                else {}
+                else {"timeout_seconds": timeout_seconds}
             ),
         )
 
@@ -1229,6 +1238,180 @@ class DockerContainerJobBackend:
                     f"reported {observed}"
                 )
         return ContainerJobActivityResult()
+
+    async def assessment_readiness(self, request, *, kind, selection, caches):
+        """Prepare the admitted tool image, then inspect it without target authority.
+
+        Image preparation retains its normal deployment policy and lock owner.
+        The diagnostic has no workspace, credentials or egress, never reserves
+        an assessment job, and cannot create a missing feed volume implicitly.
+        """
+        from api_service.services.assessment_runtime_readiness import readiness_failure
+
+        mounted = []
+        for selected in caches:
+            cache = next(
+                (
+                    item
+                    for item in self._settings.cache_sources
+                    if item.cache_ref == selected["cacheRef"]
+                ),
+                None,
+            )
+            if (
+                cache is None
+                or not cache.read_only
+                or not selected["readOnly"]
+                or cache.target != selected["target"]
+            ):
+                return readiness_failure("feed_cache_unavailable")
+            code, _, _ = await self._runner(("volume", "inspect", cache.volume_name))
+            if code:
+                return readiness_failure("feed_cache_unavailable")
+            mounted.extend(
+                (
+                    "--mount",
+                    f"type=volume,src={cache.volume_name},dst={cache.target},readonly,volume-nocopy",
+                )
+            )
+        try:
+            acquired = await self.acquire_image(request)
+        except (ImageAcquisitionError, ContainerJobBackendError):
+            return readiness_failure("scanner_image_unavailable", unavailable=True)
+        image = acquired.resolved_image_ref
+        if not image:
+            return readiness_failure("scanner_image_unavailable", unavailable=True)
+        name = "mm-assessment-readiness-" + uuid.uuid4().hex
+        args = [
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--pull=never",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--cpus",
+            "1",
+            "--memory",
+            "1g",
+            "--pids-limit",
+            "128",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=536870912",
+            "--env",
+            "HOME=/tmp",
+            "--env",
+            "TMPDIR=/tmp",
+            *mounted,
+        ]
+        if kind in {"repository-scan", "image-assessment"}:
+            field = "repositoryScan" if kind == "repository-scan" else "imageAssessment"
+            args.extend(
+                (
+                    "--entrypoint",
+                    "timeout",
+                    image,
+                    "--signal=TERM",
+                    "--kill-after=5s",
+                    "75s",
+                    "python",
+                    "-I",
+                    "-m",
+                    "moonmind.security.scanner_readiness",
+                    json.dumps({field: selection}, separators=(",", ":")),
+                )
+            )
+        elif kind == "cloud-assessment":
+            args.extend(
+                (
+                    "--entrypoint",
+                    "timeout",
+                    image,
+                    "--signal=TERM",
+                    "--kill-after=5s",
+                    "75s",
+                    "prowler",
+                    "--version",
+                )
+            )
+        elif kind == "web-assessment":
+            args.extend(
+                (
+                    "--entrypoint",
+                    "timeout",
+                    image,
+                    "--signal=TERM",
+                    "--kill-after=5s",
+                    "75s",
+                    "/zap/zap.sh",
+                    "-version",
+                )
+            )
+        else:
+            return readiness_failure("invalid_assessment_input")
+        try:
+            async with asyncio.timeout(90):
+                if self._uses_default_runner:
+
+                    async def discard_output(stream, line):
+                        pass
+
+                    code, stdout, _ = await self._run(
+                        tuple(args),
+                        on_output=discard_output,
+                        output_limit_bytes=16385,
+                        timeout_seconds=90,
+                    )
+                else:
+                    code, stdout, _ = await self._runner(tuple(args))
+            if code:
+                return readiness_failure("scanner_probe_unavailable", unavailable=True)
+            if len(stdout) > 16384:
+                return readiness_failure("scanner_probe_unavailable", unavailable=True)
+            if kind in {"cloud-assessment", "web-assessment"}:
+                # Fixed offline entrypoints; don't expose upstream console text.
+                if not re.search(rb"[0-9]+\.[0-9]+", stdout):
+                    return readiness_failure("scanner_probe_unavailable", unavailable=True)
+                return {
+                    "status": "ready",
+                    "diagnostics": [],
+                    "checks": [
+                        {
+                            "component": "scanner",
+                            "status": "ready",
+                            "code": "scanner_available",
+                        },
+                        {
+                            "component": "targetAccess",
+                            "status": "unverified",
+                            "code": "not_probed",
+                        },
+                    ],
+                }
+            from api_service.services.assessment_runtime_readiness import (
+                validate_probe_result,
+            )
+
+            return validate_probe_result(stdout, kind=kind, selection=selection)
+        except (TimeoutError, ValueError, OSError):
+            return readiness_failure("scanner_probe_unavailable", unavailable=True)
+        finally:
+            # The in-container timeout also bounds lifetime if this worker dies.
+            # A canceled Docker CLI need not stop its daemon-owned container.
+            # Unique names belong only to this invocation, including retries.
+            async def remove_diagnostic():
+                # Put the deadline inside the shield so cancellation cannot
+                # orphan an unbounded Docker cleanup CLI.
+                async with asyncio.timeout(15):
+                    return await self._runner(("rm", "-f", name))
+
+            try:
+                await asyncio.shield(remove_diagnostic())
+            except (TimeoutError, OSError):
+                logger.warning("assessment readiness container cleanup unavailable")
 
     async def network_ready(self, network_ref: str) -> bool:
         """Return live Docker authority for one deployment-owned network ref."""

@@ -1310,6 +1310,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     **{
         f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
         for name in (
+            "assessment_readiness",
             "submit",
             "status",
             "cancel",
@@ -8778,6 +8779,34 @@ class TemporalAgentRuntimeActivities:
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
+
+    async def container_job_assessment_readiness(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.assessment_runtime_readiness import (
+            check_assessment_runtime_readiness,
+            readiness_failure,
+        )
+
+        info = temporal_activity.info()
+        try:
+            async with asyncio.timeout(590):
+                async with get_async_session_context() as session:
+                    return await _await_with_activity_heartbeats(
+                        check_assessment_runtime_readiness(
+                            payload["parameters"],
+                            owner=payload["owner"],
+                            workflow_id=info.workflow_id,
+                            run_id=info.workflow_run_id,
+                            backend=self._container_job_backend,
+                            session=session,
+                        ),
+                        heartbeat_payload={"phase": "assessment_readiness"},
+                        interval_seconds=5,
+                    )
+        except Exception:  # noqa: BLE001 -- redact infrastructure errors
+            return readiness_failure("worker_unavailable", unavailable=True)
 
     async def _container_job_call(
         self, operation: str, payload: Mapping[str, Any]

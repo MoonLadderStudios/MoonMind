@@ -356,6 +356,7 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
     "entrypoint",
     [
         "moonmind.security.repository_scanner_runner",
+        "moonmind.security.scanner_readiness",
         "moonmind.security.scanner_feeds",
         "moonmind.security.image_assessment_runner",
         "moonmind.security.tls_assessment_runner",
