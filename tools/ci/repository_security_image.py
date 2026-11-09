@@ -56,6 +56,7 @@ RUNNER_FILES = (
     "schemas/temporal_payload_policy.py",
     "schemas/_validation.py",
     "provider_profiles/model_tiers.py",
+    "provider_profiles/template_renderer.py",
     "utils/logging.py",
 )
 
