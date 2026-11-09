@@ -106,6 +106,7 @@ def _validate_json(payload, *, hint: str):
     # Import lazily: AssessmentRequest owns the optional selection contract.
     from moonmind.security.assessments import (
         AdvisoryFeed,
+        AssessmentReportContext,
         Comparison,
         ControlAssessment,
         Inventory,
@@ -114,6 +115,7 @@ def _validate_json(payload, *, hint: str):
     )
     from moonmind.security.cloud_assessments import CloudAssessmentSummary
     from moonmind.security.dns_assessments import DNSAssessmentSummary, DNSExecution
+    from moonmind.security.game_math import GameMathAssessment
     from moonmind.security.image_assessments import ImageAssessmentSummary
     from moonmind.security.repository_scanners import ScannerSummary, _document
     from moonmind.security.service_inventory import ServiceInventorySummary
@@ -121,6 +123,7 @@ def _validate_json(payload, *, hint: str):
     from moonmind.security.web_assessments import WebAssessmentSummary
 
     models = {
+        "assessment-report-context/v1": AssessmentReportContext,
         "security-inventory/v1": Inventory,
         "security-feed/v1": AdvisoryFeed,
         "security-comparison/v1": Comparison,
@@ -134,6 +137,7 @@ def _validate_json(payload, *, hint: str):
         "dns-execution/v1": DNSExecution,
         "web-assessment/v1": WebAssessmentSummary,
         "cloud-posture/v1": CloudAssessmentSummary,
+        "game-math-assessment/v1": GameMathAssessment,
     }
     if hint in {"native:gitleaks", "native:opengrep", "native:trivy"}:
         scanner = hint.split(":", 1)[1]
@@ -258,3 +262,104 @@ def build_evidence_archive(
 
 def member_name(index: int, body: bytes, extension: str) -> str:
     return f"evidence/{index:03d}-{hashlib.sha256(body).hexdigest()[:16]}.{extension}"
+
+
+def verify_evidence_archive(package: bytes) -> dict:
+    """Offline integrity check, without extraction, network or artifact access.
+
+    Checksums detect corruption against the enclosed manifest, not authenticity
+    if someone replaces both. This does not validate assessment conclusions.
+    """
+    if len(package) > MAX_EXPORT_BYTES:
+        raise WithheldEvidence("export_bound_exceeded")
+    try:
+        with zipfile.ZipFile(io.BytesIO(package)) as archive:
+            entries = archive.infolist()
+            names = {entry.filename for entry in entries}
+            if len(entries) > MAX_EXPORT_REFS + 1 or len(names) != len(entries):
+                raise WithheldEvidence("invalid_archive_members")
+            if "manifest.json" not in names:
+                raise WithheldEvidence("missing_manifest")
+            if any(
+                entry.file_size
+                > (
+                    MAX_MANIFEST_BYTES
+                    if entry.filename == "manifest.json"
+                    else MAX_MEMBER_BYTES
+                )
+                for entry in entries
+            ):
+                raise WithheldEvidence("export_bound_exceeded")
+            if sum(entry.file_size for entry in entries) > MAX_EXPORT_BYTES:
+                raise WithheldEvidence("export_bound_exceeded")
+            manifest = json.loads(archive.read("manifest.json"))
+            if manifest.get("schemaVersion") != "assessment-evidence-export/v1":
+                raise WithheldEvidence("unsupported_schema")
+            expected = {"manifest.json"}
+            for entry in manifest["entries"]:
+                if entry["status"] == "withheld":
+                    continue
+                if entry["status"] != "included":
+                    raise WithheldEvidence("invalid_manifest")
+                name = entry["memberName"]
+                if name in expected or not re.fullmatch(
+                    r"evidence/[0-9]{3}-[a-f0-9]{16}\.(?:json|txt)", name
+                ):
+                    raise WithheldEvidence("invalid_member_name")
+                expected.add(name)
+                body = archive.read(name)
+                if (
+                    len(body) != entry["memberBytes"]
+                    or hashlib.sha256(body).hexdigest() != entry["memberSha256"]
+                ):
+                    raise WithheldEvidence("evidence_integrity_failed")
+            if names != expected:
+                raise WithheldEvidence("invalid_archive_members")
+            return manifest
+    except WithheldEvidence:
+        raise
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        RuntimeError,
+        OSError,
+        zipfile.BadZipFile,
+        NotImplementedError,
+    ):
+        raise WithheldEvidence("malformed_archive") from None
+
+
+def main():
+    """Verify a saved package with the installed MoonMind tool, entirely offline."""
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(
+        description="Verify assessment package checksums offline (not source authenticity or certification)."
+    )
+    parser.add_argument("package", type=Path)
+    args = parser.parse_args()
+    try:
+        with args.package.open("rb") as source:
+            manifest = verify_evidence_archive(source.read(MAX_EXPORT_BYTES + 1))
+    except (OSError, WithheldEvidence) as exc:
+        parser.exit(
+            1, f"Verification failed: {getattr(exc, 'code', 'package_unavailable')}\n"
+        )
+    print(
+        json.dumps(
+            {
+                "integrity": "verified_against_enclosed_manifest",
+                "offlineReview": manifest.get(
+                    "offlineReview", {"status": "unavailable"}
+                ),
+            },
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

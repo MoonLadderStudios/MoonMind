@@ -69,7 +69,6 @@ from moonmind.security.tls_assessments import (
 from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.utils.logging import (
     EVIDENCE_TRANSFORMATION_VERSION,
-    redact_evidence_text,
     redact_sensitive_text,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
@@ -2795,8 +2794,43 @@ class AssessmentExecution:
                     f"Exact configuration: {project_ref}. These are reusable inputs, not execution authority. "
                     "Candidate targets and retention intent do not establish tested coverage, grants, or retention policy.\n"
                 )
+            from moonmind.security.assessment_reports import render_assessment_details
+
+            details = render_assessment_details(
+                comparison,
+                request=request,
+                comparison_ref=comparison_ref,
+                review_status=review_status,
+                work=work,
+                native_reports=[
+                    (row["summaryRef"], inputs[row["summaryRef"]][1])
+                    for row in work.get("scannerSummaries", [])
+                    if row["summaryRef"] in inputs
+                ],
+            )
+            if request.report_context:
+                context_body = _json(
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                )
+                context_key = content_key([context_body.decode("utf-8")])
+                saved_context = await self.saved(
+                    kind="security.report-context", key=context_key
+                )
+                context_ref = (
+                    saved_context[0]
+                    if saved_context
+                    else await self.write(
+                        context_body,
+                        kind="security.report-context",
+                        key=context_key,
+                    )
+                )
+                evidence.append(context_ref)
+                outputs["reportContextRef"] = context_ref
+                details += f"\nAttributed report context: {context_ref}.\n"
             summary = (
                 _summary(comparison)
+                + details
                 + project_summary
                 + _scanner_summary(work.get("scannerSummaries", []))
                 + _github_summary(github)
@@ -2824,18 +2858,20 @@ class AssessmentExecution:
                 summary += render_control_assessment(control_report).encode()
             elif request.control_assessment is not None:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
-            from moonmind.security.evidence_exports import presentation_provenance
+            from moonmind.security.assessment_reports import bound_report_presentation
 
-            summary = (
-                redact_evidence_text(summary.decode("utf-8"))
-                + "\n"
-                + presentation_provenance()
-                + "\n"
-            ).encode("utf-8")
+            structured_refs = [comparison_ref, *evidence]
+            if review_readable:
+                structured_refs.append(request.review_ref)
+            summary = bound_report_presentation(summary, structured_refs=structured_refs)
             summary_key = content_key(
                 [
                     report_key,
                     "summary",
+                    "professional-report/v3",
+                    request.report_context.model_dump(mode="json", by_alias=True)
+                    if request.report_context
+                    else None,
                     EVIDENCE_TRANSFORMATION_VERSION,
                     request.review_ref,
                     review_status,
