@@ -42,6 +42,7 @@ export interface SettingDescriptor {
   type: string;
   ui: string;
   default_value?: unknown;
+  reset_value?: unknown;
   effective_value: unknown;
   override_value?: unknown;
   source: string;
