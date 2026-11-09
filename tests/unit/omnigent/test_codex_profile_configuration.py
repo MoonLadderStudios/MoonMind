@@ -640,3 +640,18 @@ def test_custom_provider_path_templates_do_not_expand_endpoint_authority():
     endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is None
     assert "egress" in reason
+
+
+def test_instruction_file_home_alias_keeps_file_and_environment_on_direct_route():
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "format": "text", "merge_strategy": "replace",
+        "content_template": "Preserve the selected instructions.", "permissions": "0600",
+    })
+    selected.env_template["INSTRUCTIONS_FILE"] = "{{runtime_support_dir}}/./codex-home/AGENTS.md"
+    before = copy.deepcopy(vars(selected))
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "HOME-relative" in reason
+    assert vars(selected) == before
