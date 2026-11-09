@@ -1,3 +1,6 @@
+import { AssessmentOccurrenceEvidence } from '../components/workflows/AssessmentOccurrenceEvidence';
+import { SecurityFindingsPanel, SecurityEvidenceSchema, SecurityEvidenceSummary } from '../components/workflows/SecurityFindingsPanel';
+import type { SecurityFindingSelection } from '../lib/remediationCreateDraft';
 import { AssessmentEngagementReview } from "../components/workflows/AssessmentEngagementReview";
 import { copyAssessmentReview } from "../lib/assessmentEngagement";
 import { Button } from '../components/Button';
@@ -1151,6 +1154,7 @@ const RemediationLinkSchema = z
     verificationOutcome: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
+    securityEvidence: SecurityEvidenceSchema.nullable().optional(),
     selectedSteps: z.array(z.string()).nullable().optional(),
     currentTargetState: z.string().nullable().optional(),
     allowedActions: z.array(z.string()).nullable().optional(),
@@ -8175,6 +8179,7 @@ function RemediationRelationshipsPanel({
                   ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
+                {item.securityEvidence ? <section className="stack"><h4>Pinned security finding at admission</h4><SecurityEvidenceSummary evidence={item.securityEvidence} /><p>New retests appear in this workflow’s security comparisons. This original snapshot does not change when a candidate is published or CI passes.</p></section> : null}
                 <RemediationLifecycleProjection item={item} apiBase={apiBase} />
                 <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
                 <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
@@ -8274,6 +8279,7 @@ function RemediationRelationshipsPanel({
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
+                {item.securityEvidence ? <section className="stack"><h4>Pinned security finding at admission</h4><SecurityEvidenceSummary evidence={item.securityEvidence} /><p>New retests appear in this workflow’s security comparisons. This original snapshot does not change when a candidate is published or CI passes.</p></section> : null}
                 <RemediationLifecycleProjection item={item} apiBase={apiBase} />
                 <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
                 <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
@@ -9545,12 +9551,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const createRemediationMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (securityFinding?: SecurityFindingSelection) => {
       if (!execution) {
         throw new Error('Workflow detail is required before remediation can be drafted.');
       }
       const draft = buildRemediationCreateDraft(execution, {
-        runId: latestRunId || runId,
+        runId: securityFinding ? artifactRunId || runId : latestRunId || runId,
+        ...(securityFinding ? { securityFinding } : {}),
       });
       const draftId = storeRemediationCreateDraft(draft);
       navigateToDashboardRoute(remediationCreateDraftHref(draftId));
@@ -10029,7 +10036,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       onBypassDependencies,
       onCreateRemediation: () => {
         setActionError(null);
-        createRemediationMutation.mutate();
+        createRemediationMutation.mutate(undefined);
       },
     },
   });
@@ -10887,6 +10894,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             return review ? <AssessmentEngagementReview review={review} historical /> : null;
           })() : null}
 
+          {detailsTabActive ? <AssessmentOccurrenceEvidence value={execution.inputParameters.assessmentOccurrence} /> : null}
+
           {detailsTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
@@ -11122,6 +11131,15 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <InputImagesSection
                 artifacts={artifactsQuery.data?.artifacts || []}
                 apiBase={payload.apiBase}
+              />
+
+              <SecurityFindingsPanel
+                key={`${workflowId}/${artifactRunId}`}
+                workflowId={workflowId}
+                runId={artifactRunId || ''}
+                apiBase={payload.apiBase}
+                artifacts={artifactsQuery.data?.artifacts || []}
+                onSelect={actionsOn && actions ? (selection) => createRemediationMutation.mutate(selection) : undefined}
               />
 
               <RemediationEvidencePanel

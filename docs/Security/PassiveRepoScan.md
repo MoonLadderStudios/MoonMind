@@ -1,54 +1,31 @@
 # Passive Repository Scan
 
-**Document Class:** Working document (owning tool/report note)
+**Document Class:** Tool/report note
 **Viewpoint:** Security tooling
 **Status:** Implemented
 **Owners:** MoonMind Engineering
 **Last Updated:** 2026-09-22
 
-> [!NOTE]
-> This is the small owning documentation for one bounded product extension:
-> a single passive, read-only secret-exposure scan over an authorized
-> snapshot, run through the existing Container Job and artifact path. It is
-> not a security platform, scanner runtime, or replacement for core
-> reliability work.
-
-The broader proposed assessment program and tool recommendations are described
-in [Security Tools and Assessment Workflows](SecurityTools.md).
+Passive scans and retained-artifact assessments use the existing Container Job,
+Temporal and artifact owners. See [Security Tools and Assessment Workflows](SecurityTools.md)
+for supported tools and target admission.
 
 ## Scanner selection
 
-One maintained scanner for one declared input class with a useful
-secret-exposure result:
-
-- **Scanner:** the in-repo outbound-scan regex contract
-  (`moonmind.security.outbound_scan.scan_outbound_text`, forced
-  `high_security_mode=True` per file), as wired by
-  `moonmind/security/passive_repo_scan.py`.
-- **Official interface:** `scan_outbound_text(text, location, high_security_mode=True)`;
-  findings are category/location/redacted-preview triples.
-- **Licensing:** in-repo MoonMind code; no new dependency.
-- **Image provenance:** not applicable -- the scan runs in-process; no scanner
-  image is pulled, installed into MoonMind's main image, or executed from a
-  collection.
-- **Configuration:** `PassiveScanConfig` bounds (`max_files`,
-  `max_bytes_per_file`, `max_total_bytes`), recorded in result metadata.
-- **Output behavior:** native machine-readable JSON plus a small Markdown
-  summary; raw matches never leave the scan boundary.
-
-No ToolPack database/schema family, no scanner collection, no universal
-findings model, no feed service, and no assessment-target network access.
+The in-repo `moonmind.security.outbound_scan.scan_outbound_text` regex scanner
+runs with `high_security_mode=True` through `moonmind/security/passive_repo_scan.py`.
+It emits category/location/redacted-preview findings; raw matches never leave
+the boundary. `PassiveScanConfig` records file-count, per-file and total byte
+bounds. Results include native JSON and a Markdown summary. This in-process
+MoonMind code requires no scanner image, external feed or target-network access.
 
 ## Execution
 
-- **Supported journey:** `moonmind container passive-scan` (backed by
+- **Supported journey:** `moonmind container passive-scan` submits through
   `passive_scan_submission()` / `run_passive_scan_job()` in
-  `moonmind/container_job_cli.py`) submits the scan workload through the
-  existing `container_job_submission` path -- workspace and correlation
-  identity are stamped from the admitted managed session, so the authorized
-  operator never hand-authors a JSON workload. The command waits durably and
-  prints the terminal job state plus the collected logs and artifacts
-  references for the retained native report and summary.
+  `moonmind/container_job_cli.py`. Managed-session admission stamps workspace
+  and correlation identity. The command waits durably and prints terminal state,
+  logs and native report/summary references.
 - **Input:** an authorized snapshot directory (declared input class:
   UTF-8 text files). The default snapshot is the mounted workspace root
   (`.` with `workdir: /workspace`): the container-job path mounts the
@@ -165,16 +142,26 @@ admission owners. Agent-backed steps and PR finishing, including
 `review_only`, retain execution-plan admission; an assessment adds no image or
 source-revision pin.
 
-Use the existing schedule policy (`overlap.mode`, `catchup.mode`) and manual
-`POST /api/recurring-workflows/{id}/run` with an `Idempotency-Key`. Supply a newer
-`feedRef` through normal workflow/schedule authoring when intelligence changes,
-and the last `comparisonRef` as the next `baselineRef`. Trivy feed snapshots
-refresh through a recurring `container.run_job` step
-([feed snapshots](SecurityTools.md#trivy-feed-snapshots)); there is no feed
-poller or second scheduler. Identical admitted inputs reuse a confirmed scanner save;
-a later occurrence can also reuse the supplied baseline's scanner observation.
-Scanner results are saved before report publication, so publication retries
-do not repeat completed work. Cancellation propagates without a successor.
+Use existing overlap/catch-up policy and idempotent manual runs. Assessment
+authorizations optionally bound continuing work by minimum interval, occurrence
+count, per-occurrence jobs/seconds and run lifetime. Original validity, scope
+and aggregate limits still apply. Occurrence reservations survive schedule edits,
+retries and restarts; catch-up cannot compress cadence. Worker launch and passive
+reassessment recheck authority. Credential resolution stays with its workload
+owner: `CredentialGrant.revision` identifies the secret, not a policy revision.
+Passive work acquires no network rights.
+
+Renew/revoke through the recorded rules panel in Recurring or Workflow Detail.
+After material changes, edit the schedule, review current authority, use the
+proposal, then save. Equivalent runs need no extra confirmation. Renewal does
+not reset consumption. The occurrence panel links retained comparisons;
+missing/expired evidence is a gap. Existing comparisons explain scope, tool,
+pack/feed and coverage changes, never treating disappearance alone as remediation.
+
+Supply new feeds and previous comparisons through normal authoring. Feed
+snapshots reuse `container.run_job`; no second poller is introduced. Confirmed
+scans survive report retries; cancellation starts no successor. External provider
+qualification remains Unverified without run evidence.
 
 ### Evidence contracts
 
@@ -293,9 +280,9 @@ Comparisons distinguish `new`, `still_observed`, `absent_comparable`,
 `remediated_verified`, `closed_upstream` and `not_reassessed`. Absence requires
 fresh, completed coverage of the original asset/rule under comparable scope,
 exclusions and configuration. Comparable absence becomes `remediated_verified`
-only with a passing `fix_retest` decision for the finding; a source's own fixed
-state (a GitHub alert GitHub reports fixed) also counts, while dismissed or
-resolved alerts are `closed_upstream`. Coverage rows record the feed, rule and
+only with a passing `fix_retest` decision for the finding. Upstream fixed,
+dismissed or resolved claims remain `closed_upstream` until then, with their
+original source states retained. Coverage rows record the feed, rule and
 tool identity that interpreted the inputs (`intelligence`). New or absent
 findings whose covering tool's intelligence changed list the keys in
 `changedIntelligence`, and the comparison lists them in `intelligenceChanges`.

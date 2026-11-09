@@ -336,27 +336,34 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
             "scheduled workflow identity conflicts with Activity authority"
         )
     async with async_session_maker() as db_session:
-        admitted = await RecurringWorkflowsService(
-            db_session,
-            artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(db_session),
-                transaction_ownership=ArtifactTransactionOwnership.CALLER,
-            ),
-        ).admit_occurrence_execution_plan(
-            workflow_id=workflow_id,
-            initial_parameters=initial_parameters,
-        )
+        from api_service.services.assessment_authorizations import AssessmentAuthorizationDenied
+        from temporalio.exceptions import ApplicationError
+
+        try:
+            admitted = await RecurringWorkflowsService(
+                db_session,
+                artifact_service=TemporalArtifactService(
+                    TemporalArtifactRepository(db_session),
+                    transaction_ownership=ArtifactTransactionOwnership.CALLER,
+                ),
+            ).admit_occurrence_execution_plan(
+                workflow_id=workflow_id,
+                initial_parameters=initial_parameters,
+            )
+        except AssessmentAuthorizationDenied as exc:
+            raise ApplicationError(str(exc), type="AssessmentAuthorizationDenied", non_retryable=True) from exc
         # Recorded-plan reuse may not otherwise mutate this caller-owned
         # transaction. Preserve its verified saved-revision input grants.
         await db_session.commit()
     # Temporal starts occurrences outside API admission. Commit their exact
     # input grants before planning under the Activity's actual execution.
-    await _link_execution_plan_inputs(
-        admitted.get("omnigentExecutionPlan")
-        or initial_parameters.get("omnigentExecutionPlan"),
-        execution=execution,
-        planning_parameters={**initial_parameters, **admitted},
-    )
+    if admitted.get("omnigentExecutionPlan") or initial_parameters.get("omnigentExecutionPlan"):
+        await _link_execution_plan_inputs(
+            admitted.get("omnigentExecutionPlan")
+            or initial_parameters.get("omnigentExecutionPlan"),
+            execution=execution,
+            planning_parameters={**initial_parameters, **admitted},
+        )
     return admitted
 
 

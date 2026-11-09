@@ -1174,6 +1174,36 @@
         "rng-raw-pair-frequency"
       ],
       "conclusion": "inconclusive"
+    },
+    {
+      "id": "methodology-authorization-vulnerable",
+      "capability": "methodology",
+      "split": "regression",
+      "target": "first-party controlled HTTP record fixture with independent owner/other access policy",
+      "expected": {
+        "outcome": "vulnerable",
+        "findings": [
+          "read@http://fixture.test"
+        ],
+        "covered": [
+          "http://fixture.test"
+        ],
+        "satisfied": false
+      }
+    },
+    {
+      "id": "methodology-authorization-repaired",
+      "capability": "methodology",
+      "split": "regression",
+      "target": "first-party controlled HTTP record fixture with independent owner/other access policy",
+      "expected": {
+        "outcome": "repaired",
+        "findings": [],
+        "covered": [
+          "http://fixture.test"
+        ],
+        "satisfied": true
+      }
     }
   ]
 }

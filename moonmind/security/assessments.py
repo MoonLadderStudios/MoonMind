@@ -28,6 +28,13 @@ from moonmind.security.frameworks import (
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
+from moonmind.security.web_api_methodology import (
+    Method,
+    MethodologyInput,
+    PlannedObjective,
+    TestIdentity,
+    TestInterface,
+)
 
 MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
 
@@ -93,6 +100,22 @@ class ThreatModel(Contract):
     entry_points: Annotated[Items, Field(min_length=1)]
     trust_boundaries: Annotated[Items, Field(min_length=1)]
     invariants: Annotated[Items, Field(min_length=1)]
+
+
+class WebAPITestPlan(Contract):
+    schema_version: Literal["web-api-test-plan/v1"] = "web-api-test-plan/v1"
+    pack: FrameworkPackSelection
+    scope: AssessmentScope
+    candidate_ref: Text
+    system_boundary: Text
+    threat_model: ThreatModel
+    authority_ref: Text
+    interfaces: Annotated[list[TestInterface], Field(min_length=1, max_length=64)]
+    identities: Annotated[list[TestIdentity], Field(max_length=64)]
+    source_refs: Annotated[list[Text], Field(max_length=32)]
+    api_context_refs: Annotated[list[Text], Field(max_length=32)]
+    allowed_methods: Annotated[list[Method], Field(min_length=1, max_length=6)]
+    objectives: Annotated[list[PlannedObjective], Field(min_length=1, max_length=64)]
 
 
 class SecurityInterpretation(Contract):
@@ -448,7 +471,8 @@ class ComparedFinding(Contract):
     state: FindingState
     observed_coverage_key: Text | None
     evidence_expires_at: AwareDatetime
-    # How remediation was verified; set only for remediated_verified.
+    # upstream_fixed remains readable in immutable historical comparisons.
+    # New comparisons verify remediation only through a passing retest.
     verification: Literal["retest_passed", "upstream_fixed"] | None = None
     # Intelligence of the covering tool that differs from the baseline, so a
     # new or absent finding is not attributed to a subject change alone.
@@ -844,6 +868,7 @@ class AssessmentRequest(Contract):
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
     review_ref: Text | None = None
+    methodology: MethodologyInput | None = None
     github_alerts: GitHubAlertImport | None = None
     github_change_control: GitHubChangeControl | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
@@ -859,7 +884,12 @@ class AssessmentRequest(Contract):
     def validate_admission(self):
         if self.framework_pack is not None and self.control_assessment is not None:
             raise ValueError("frameworkPack cannot also supply controlAssessment")
-        if not self.tools and not self.review_ref and not self.framework:
+        if (
+            not self.tools
+            and not self.review_ref
+            and not self.framework
+            and not self.methodology
+        ):
             raise ValueError(
                 "assessment requires native evidence or an explicit reviewRef"
             )
@@ -1166,8 +1196,8 @@ def compare_observations(
 
     A disposition annotates a finding; it never changes the scanner's facts.
     Absence alone is a coverage observation. It becomes verified remediation
-    only with a linked passing fix-retest, or when the source itself reports
-    the finding fixed.
+    only with a linked passing fix-retest and sufficient comparable coverage.
+    Upstream closure records the source's claim independently of verification.
     """
     prior = Comparison.model_validate(previous) if previous is not None else None
     previous_observation = prior.observation if prior else None
@@ -1252,15 +1282,13 @@ def compare_observations(
     for retained in old.values():
         closure = current.upstream_closed.get(retained.finding_id)
         verification = None
-        if closure == "fixed":
-            state, verification = "remediated_verified", "upstream_fixed"
+        comparable = _comparable(retained, current, prior.observation, now)
+        if comparable and retained.finding_id in retest_passed:
+            state, verification = "remediated_verified", "retest_passed"
         elif closure is not None:
             state = "closed_upstream"
-        elif _comparable(retained, current, prior.observation, now):
-            if retained.finding_id in retest_passed:
-                state, verification = "remediated_verified", "retest_passed"
-            else:
-                state = "absent_comparable"
+        elif comparable:
+            state = "absent_comparable"
         else:
             state = "not_reassessed"
         compared.append(

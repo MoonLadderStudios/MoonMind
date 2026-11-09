@@ -1423,23 +1423,58 @@ class RecurringWorkflowsService:
         from moonmind.workflows.temporal.schedule_mapping import scheduled_definition_id
 
         try:
+            scheduled_parameters = None
             if activity.in_activity() and scheduled_definition_id(workflow_id):
                 info = activity.info()
-                artifacts = self._artifact_service or TemporalArtifactService(
-                    TemporalArtifactRepository(self._session)
-                )
-                # Only the original start owns the complete direct selection,
-                # including input/plan pointers outside initial parameters.
-                # Legacy starts without a saved revision acquire no new rights.
-                await artifacts.readmit_scheduled_inputs(
+                artifacts = self._artifact_service or TemporalArtifactService(TemporalArtifactRepository(self._session))
+                original = await artifacts.readmit_scheduled_inputs(
                     artifact_ids=None,
-                    execution=ExecutionRef(
-                        namespace=info.namespace,
-                        workflow_id=workflow_id,
-                        run_id=info.workflow_run_id,
-                        link_type="input.execution_plan",
-                    ),
+                    execution=ExecutionRef(namespace=info.namespace, workflow_id=workflow_id,
+                                           run_id=info.workflow_run_id, link_type="input.execution_plan"),
                 )
+                if isinstance(original, Mapping):
+                    scheduled_parameters = original.get("initial_parameters")
+            if initial_parameters.get("assessmentScope") is not None:
+                from api_service.services.assessment_authorizations import admit_assessment_occurrence, canonical_assessment_scope
+                from moonmind.security.workload_profiles import AdmittedAssessmentScope
+
+                scope = (AdmittedAssessmentScope.model_validate(scheduled_parameters.get("assessmentScope"))
+                         if scheduled_parameters is not None else
+                         await canonical_assessment_scope(self._session, workflow_id))
+                if scope != AdmittedAssessmentScope.model_validate(initial_parameters["assessmentScope"]):
+                    raise RecurringWorkflowValidationError("scheduled assessment differs from its original authority")
+                await admit_assessment_occurrence(self._session, workflow_id=workflow_id, scheduled_parameters=scheduled_parameters)
+            elif scheduled_parameters is not None and scheduled_parameters.get("assessmentScope") is not None:
+                raise RecurringWorkflowValidationError("scheduled assessment cannot discard its original authority")
+            from api_service.services.assessment_model_delivery import (
+                require_execution_model_delivery,
+            )
+            from moonmind.workflows.executions.execution_contract import (
+                workflow_payload_from_parameters,
+                workflow_requires_agent,
+            )
+
+            # A continuation cannot discard the original schedule's processing
+            # constraints. Check before recorded-plan fallback, which otherwise
+            # defers compilation failures to launch-time admission.
+            processing_parameters = dict(initial_parameters)
+            if scheduled_parameters is not None:
+                processing_parameters["assessmentProject"] = scheduled_parameters.get(
+                    "assessmentProject"
+                )
+            snapshot = initial_parameters.get("agentProfileSnapshot") or {}
+            require_execution_model_delivery(
+                processing_parameters, profile_ref=snapshot.get("providerProfileRef")
+            )
+            if not initial_parameters.get(
+                "omnigentExecutionPlan"
+            ) and not workflow_requires_agent(
+                workflow_payload_from_parameters(initial_parameters), initial_parameters
+            ):
+                return {
+                    "disposition": "recorded",
+                    "reason": "Native occurrence retains its admitted tool plan.",
+                }
             return await readmit_frozen_execution_plan(
                 db_session=self._session,
                 artifact_service=self._artifact_service,
@@ -1454,6 +1489,8 @@ class RecurringWorkflowsService:
         except TemporalArtifactAuthorizationError as exc:
             # The shared model admission owner supplies a bounded policy reason.
             raise RecurringWorkflowValidationError(str(exc)) from None
+        except RecurringWorkflowValidationError:
+            raise
         except ValueError as exc:
             raise RecurringWorkflowValidationError(
                 "scheduled Omnigent execution-plan authority is invalid"

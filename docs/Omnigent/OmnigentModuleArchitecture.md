@@ -357,8 +357,9 @@ Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
 artifact for OAuth and API-key Profiles, retaining exact literal values.
-Newly admitted environment templates carry only workspace and runtime
-support-directory context, rendered through the shared Profile template renderer
+Newly admitted OAuth and API-key environment templates, including single-provider
+Codex Responses configurations, carry only workspace
+and runtime support-directory context, rendered through the shared Profile template renderer
 after the attempt's native workspace path is known. Recorded literal values keep
 their original interpretation. Native executable wrappers restore values after child environment filtering
 without overriding private HOME or editing the enrolled home. Codex OAuth
@@ -367,6 +368,11 @@ the same artifact and renderer in the native owner's private app-server HOME.
 Selected inherited instruction links become private files; untouched entries stay
 visible. Environment templates referencing those files bind to that private HOME
 at native launch; generic support paths and recorded literals retain their meaning.
+Custom Responses API-key Profiles also bind canonical environment references to
+admitted nonsecret files inside the declared Codex HOME at native launch. These
+private templates are validated both in frozen configuration and by the portable
+launcher. Undeclared files, mixed private/generic references and ambiguous paths
+with dot segments or repeated separators retain the direct route.
 Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
 uncarried tool/auth configuration and other HOME choices retain their adapter

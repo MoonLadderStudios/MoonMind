@@ -223,11 +223,13 @@ def test_review_discloses_exact_operations_and_rejects_tampering():
 
 
 @pytest.mark.asyncio
-async def test_worker_rechecks_realtime_authority_before_launch(monkeypatch):
+@pytest.mark.parametrize("recurring", [False, True])
+async def test_worker_rechecks_realtime_authority_before_launch(monkeypatch, recurring):
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    from api_service.db.models import AssessmentOccurrenceRecord
     from api_service.services import assessment_authorizations as service
     from moonmind.schemas.container_job_models import ContainerJobSubmitRequest
 
@@ -250,10 +252,30 @@ async def test_worker_rechecks_realtime_authority_before_launch(monkeypatch):
     )
     monkeypatch.setattr(service, "lock_assessment_admission", AsyncMock())
     monkeypatch.setattr(service, "bind_assessment_job", lambda *args: None)
+    # This focused launch recheck stubs scope/lock owners above, but still
+    # supplies the durable occurrence lookup used by the real worker session.
+    # Both ordinary jobs and bounded recurring jobs must reject altered cases.
+    occurrence_deadline = datetime.now(UTC) + timedelta(minutes=5)
+
+    async def get_occurrence(model, workflow_id):
+        assert model is AssessmentOccurrenceRecord
+        assert workflow_id == request.source.workflow_id
+        return (
+            SimpleNamespace(
+                authority_json={"expiresAt": occurrence_deadline.isoformat()}
+            )
+            if recurring
+            else None
+        )
+
+    session = SimpleNamespace(get=AsyncMock(side_effect=get_occurrence))
     with pytest.raises(service.AssessmentAuthorizationDenied, match="real-time"):
         await service.validate_job_assessment_authority(
-            None, durable, request, profiles=profiles
+            session, durable, request, profiles=profiles
         )
+    session.get.assert_awaited_once_with(AssessmentOccurrenceRecord, "workflow-1")
+    if recurring:
+        assert durable.assessment_deadline_at == occurrence_deadline
 
 
 def test_signalr_negotiation_is_exact_authority_and_disclosed():
