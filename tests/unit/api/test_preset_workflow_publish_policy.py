@@ -49,6 +49,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-nj-dge",
         "security-ukgc-rts",
         "security-gli-readiness",
+        "security-soc2-readiness",
     }
 )
 
@@ -144,6 +145,17 @@ async def test_no_seed_preset_declares_auto_publish(tmp_path):
 @pytest.mark.parametrize(
     ("slug", "inputs"),
     [
+        (
+            "security-soc2-readiness",
+            {
+                "assets": ["synthetic-api"],
+                "system_inputs": {
+                    "assessmentType": "type1",
+                    "systems": ["synthetic-api"],
+                },
+                "period": {"start": "2026-11-09", "end": "2026-11-09"},
+            },
+        ),
         (
             "document-update-orchestrate",
             {"document_directory": "docs", "publish_mode": "pr"},
