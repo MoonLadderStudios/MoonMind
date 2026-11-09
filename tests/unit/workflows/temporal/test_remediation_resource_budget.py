@@ -271,13 +271,23 @@ async def test_rollover_without_historical_metering_cannot_reset_an_admitted_bud
 
 @pytest.mark.parametrize("dimension", ["tokenBudget", "costBudget"])
 @pytest.mark.parametrize("amount", [0, 100])
+@pytest.mark.parametrize("supplied_continuation", [False, True])
 def test_unenforceable_resource_dimension_rejected_at_admission(
-    monkeypatch, dimension, amount
+    monkeypatch, dimension, amount, supplied_continuation
 ):
     run = parent(monkeypatch)
     monkeypatch.setattr(run_module.workflow, "patched", lambda patch: True)
     spec = _spec(6).model_dump(by_alias=True, mode="json")
     spec["budgets"][dimension] = amount
+    if supplied_continuation:
+        # Caller-controlled payload fields do not make a fresh execution an
+        # already admitted Temporal continuation, even with valid carried state.
+        run._remediation_loop_continuation = {
+            "schemaVersion": 1,
+            "state": _state(attempts=1).model_dump(by_alias=True, mode="json"),
+            "orderedNodes": [{"id": "verify"}],
+            "stepLedgerRows": [],
+        }
     with pytest.raises(ValueError, match=f"{dimension}.*unsupported"):
         run._initialize_remediation_loop_controller(
             ordered_nodes=[{"id": "verify", "annotations": {"remediationLoop": spec}}],
