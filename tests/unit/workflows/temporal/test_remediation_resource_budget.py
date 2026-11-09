@@ -193,6 +193,7 @@ async def test_dispatch_admission_checks_exhaustion_unknown_metering_and_cancell
         )
     )
     run = parent(monkeypatch, limits=limits)
+    run._write_json_artifact.return_value = "art_resource_stop"
     run._step_ledger_rows = [{"logicalStepId": "verify", "attempt": 1}]
     run._rebuild_step_ledger_index()
     assert await run._admit_remediation_resource_execution("verify")
@@ -208,6 +209,10 @@ async def test_dispatch_admission_checks_exhaustion_unknown_metering_and_cancell
     assert state.workspace_head_ref == "artifact://workspace/C1"
     if kind != "cancel":
         assert state.phase == RemediationLoopPhase.STOPPED_REMAINING_WORK
+        assert state.continuation_decision_ref == "artifact://art_resource_stop"
+        assert run._publish_context["publicationBlockedBy"] == (
+            "remediation_resource_budget"
+        )
         assert (
             state.continuation_reason
             == {

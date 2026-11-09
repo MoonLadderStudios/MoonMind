@@ -4749,6 +4749,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 name=f"reports/remediation_resource_stop_{state.loop_id}.json",
                 payload=decision.model_dump(by_alias=True, mode="json"),
             )
+            decision_ref = self._bounded_story_loop_artifact_ref(decision_ref)
+            if decision_ref is None:
+                raise ValueError(
+                    "remediation resource stop requires an artifact continuation decision"
+                )
             self._remediation_loop_state = apply_continuation_decision(
                 state.model_copy(
                     update={"phase": RemediationLoopPhase.CONTINUATION_DECIDING}
