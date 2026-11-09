@@ -1,4 +1,4 @@
-import { act, fireEvent } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { assessmentPresetJourneyCases } from '../utils/assessmentPresetJourneyCases';
 
 // Exercise the same Create state/admission boundary locally. Native keyboard,
@@ -7,4 +7,6 @@ assessmentPresetJourneyCases({
   click: async (element) => { await act(async () => { fireEvent.click(element); }); },
   fill: async (element, value) => { await act(async () => { fireEvent.change(element, { target: { value } }); }); },
   selectOptions: async (element, value) => { await act(async () => { fireEvent.change(element, { target: { value } }); }); },
-}, { viewport: async () => {} });
+}, { viewport: async () => {} }, async () => {
+  await act(async () => { fireEvent.click(screen.getByRole('link', { name: /^Create$/ })); });
+});

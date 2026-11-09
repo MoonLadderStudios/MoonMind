@@ -8,7 +8,7 @@ export function assessmentPresetJourneyCases(userEvent: {
   click: (element: HTMLElement) => Promise<unknown>;
   fill: (element: HTMLElement, value: string) => Promise<unknown>;
   selectOptions: (element: HTMLElement, value: string) => Promise<unknown>;
-}, page: { viewport: (width: number, height: number) => Promise<unknown> }) {
+}, page: { viewport: (width: number, height: number) => Promise<unknown> }, clickCreateNavigation: () => Promise<unknown>) {
 // Controlled catalog and admission responses isolate authoring and retry boundaries.
 
 
@@ -215,7 +215,8 @@ it('cancels an interrupted preset submission on navigation without leaking it in
     await userEvent.click(screen.getByRole('link', { name: 'MoonMind workflows' }));
     await expect.poll(() => window.location.pathname).toBe('/workflows');
     finishExpansion(jsonResponse({ steps: [{ id: 'late', instructions: 'Do not submit this abandoned plan.' }], appliedTemplate: { slug: preset.slug, inputs: {} }, capabilities: [], warnings: [] }));
-    await userEvent.click(await screen.findByRole('link', { name: /^Create$/ }));
+    await screen.findByRole('link', { name: /^Create$/ });
+    await clickCreateNavigation();
     await screen.findByLabelText('Instructions', {}, { timeout: 10_000 });
     expect(admissions).toBe(0);
     expect(screen.queryByDisplayValue('repo/abandoned')).toBeNull();
