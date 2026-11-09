@@ -396,6 +396,127 @@ def test_native_cases_cannot_hide_reduced_authorization_coverage(gap):
     )
 
 
+@pytest.mark.parametrize("method", ["application-access", "zap"])
+@pytest.mark.parametrize("gap", ["endpoint", "asset"])
+@pytest.mark.parametrize("outcome", ["clear", "finding"])
+def test_native_report_does_not_cover_unexecuted_selections(method, gap, outcome):
+    from moonmind.security.web_api_methodology import (
+        ProcedureResults,
+        bind_native_runs,
+        compare_methodology,
+    )
+
+    payload = plan_payload()
+    objective_id = (
+        "authorization" if method == "application-access" else "configuration"
+    )
+    objective = next(o for o in payload["objectives"] if o["id"] == objective_id)
+    missing_asset = "unassessed-app" if gap == "asset" else "app"
+    missing_path = "/unexecuted" if gap == "endpoint" else "/invoices/2"
+    if gap == "asset":
+        payload["scope"]["assets"].append(missing_asset)
+        for procedure in objective["procedures"]:
+            procedure["assets"].append(missing_asset)
+    payload["interfaces"].append(
+        {
+            "id": "unexecuted",
+            "asset": missing_asset,
+            "protocol": "https",
+            "locator": missing_path,
+        }
+    )
+    for procedure in objective["procedures"]:
+        procedure["interfaceIds"].append("unexecuted")
+    plan, pack = prepared(payload)
+    data = result_payload(plan)
+    for run in data["runs"]:
+        run.update(nativeReportRef="art_native", caseRefs=["read"])
+    native = {
+        "scanner": method,
+        "summaryRef": "art_native",
+        "target": "app",
+        "specDigest": "1" * 64,
+        "coverage": "complete",
+        "methodologyRoutes": ["/invoices/2"],
+        "methodologyOutcome": outcome,
+        "cases": [
+            {
+                "caseRef": "read",
+                "identityRef": "alice",
+                "authenticationState": "verified",
+                "coverage": "complete",
+                "outcome": "finding" if outcome == "finding" else "pass",
+                "request": {"path": "/invoices/2"},
+            }
+        ],
+    }
+    bound = bind_native_runs(
+        plan, pack, ProcedureResults.model_validate(data), [native]
+    )
+    result = report(payload, bound.model_dump(mode="json", by_alias=True))
+    row = next(o for o in result["objectives"] if o["id"] == objective_id)
+    procedure = next(p for p in row["methods"] if p["method"] == method)
+    assert row["status"] == "partially_tested"
+    assert procedure["status"] == "partial"
+    assert any(
+        (missing_asset if gap == "asset" else missing_path) in reason
+        for reason in procedure["limitations"]
+    )
+    assert procedure["outcome"] == (
+        "finding" if outcome == "finding" else "inconclusive"
+    )
+    assert procedure["oracle"]
+    assert procedure["nativeReportRef"] == "art_native"
+    assert not result["complete"]
+    # Historical optimistic coverage must not establish a fix on a reduced retest.
+    baseline = report(payload, result_payload(plan, outcome="finding"))
+    assert compare_methodology(baseline, result)[objective_id] == "coverage_changed"
+
+
+def test_native_cases_can_cover_multiple_selected_endpoints():
+    from moonmind.security.web_api_methodology import ProcedureResults, bind_native_runs
+
+    payload = plan_payload()
+    payload["interfaces"].append(
+        {"id": "second", "asset": "app", "protocol": "https", "locator": "/invoices/3"}
+    )
+    for objective in payload["objectives"]:
+        for procedure in objective["procedures"]:
+            procedure["interfaceIds"].append("second")
+            if procedure["caseRefs"]:
+                procedure["caseRefs"].append("read-second")
+    plan, pack = prepared(payload)
+    data = result_payload(plan)
+    for run in data["runs"]:
+        run.update(nativeReportRef="art_native", caseRefs=["read", "read-second"])
+    native = {
+        "scanner": "application-access",
+        "summaryRef": "art_native",
+        "target": "app",
+        "specDigest": "1" * 64,
+        "cases": [
+            {
+                "caseRef": ref,
+                "identityRef": "alice",
+                "authenticationState": "verified",
+                "coverage": "complete",
+                "outcome": "pass",
+                "request": {"path": path},
+            }
+            for ref, path in [("read", "/invoices/2"), ("read-second", "/invoices/3")]
+        ],
+    }
+    bound = bind_native_runs(
+        plan, pack, ProcedureResults.model_validate(data), [native]
+    )
+    coverage = report(payload, bound.model_dump(mode="json", by_alias=True))
+    authorization = next(
+        o for o in coverage["objectives"] if o["id"] == "authorization"
+    )
+    assert authorization["status"] == "tested"
+    assert not authorization["limitations"]
+
+
 def test_clean_scanner_absence_is_distinct_from_a_reproduced_behavior_fix():
     from moonmind.security.web_api_methodology import compare_methodology
 

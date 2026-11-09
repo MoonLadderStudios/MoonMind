@@ -256,23 +256,27 @@ def bind_native_runs(plan, pack, results, summaries):
             runs.append(run)
             continue
         summary = native.get(run.native_report_ref)
-        reason, outcome = None, run.outcome
+        reasons, outcome = [], "inconclusive"
         if (
             summary is None
             or summary["scanner"] != procedure.method
             or summary["target"] not in selected.assets
         ):
-            reason = "No verified native report for the selected method and target"
+            reasons.append(
+                "No verified native report for the selected method and target"
+            )
         elif procedure.method == "application-access":
             cases = {c["caseRef"]: c for c in summary["cases"]}
             if summary.get("specDigest") != selected.case_spec_digest:
-                reason = "Native cases differ from the pre-execution test oracle"
+                reasons.append("Native cases differ from the pre-execution test oracle")
             elif (
                 not selected.case_refs
                 or set(selected.case_refs) != set(run.case_refs)
                 or set(selected.case_refs) - set(cases)
             ):
-                reason = "Planned authorization cases were removed or not executed"
+                reasons.append(
+                    "Planned authorization cases were removed or not executed"
+                )
             else:
                 covered = [cases[c] for c in selected.case_refs]
                 locators = {
@@ -285,28 +289,46 @@ def bind_native_runs(plan, pack, results, summaries):
                     or c["request"]["path"] not in locators
                     for c in covered
                 ) or set(selected.identity_ids) - {c["identityRef"] for c in covered}:
-                    reason = (
+                    reasons.append(
                         "Selected identities, endpoints or case coverage are incomplete"
+                    )
+                uncovered = locators - {c["request"]["path"] for c in covered}
+                if uncovered:
+                    reasons.append(
+                        f"Selected endpoints were not covered by native cases: {sorted(uncovered)}"
                     )
                 outcome = (
                     "finding"
                     if any(c["outcome"] == "finding" for c in covered)
                     else "clear"
                 )
-        elif summary["coverage"] != "complete":
-            reason = "Native scanner route, authentication or execution coverage is incomplete"
-        elif {
-            i.locator for i in plan.interfaces if i.id in selected.interface_ids
-        } - set(summary["methodologyRoutes"]):
-            reason = "Selected interfaces were not covered by the scanner"
         else:
             outcome = summary["methodologyOutcome"]
-        if reason:
+            if summary["coverage"] != "complete":
+                reasons.append(
+                    "Native scanner route, authentication or execution coverage is incomplete"
+                )
+            uncovered = {
+                i.locator for i in plan.interfaces if i.id in selected.interface_ids
+            } - set(summary["methodologyRoutes"])
+            if uncovered:
+                reasons.append(
+                    f"Selected endpoints were not covered by the scanner: {sorted(uncovered)}"
+                )
+        if summary is not None:
+            uncovered_assets = set(selected.assets) - {summary["target"]}
+            if uncovered_assets:
+                reasons.append(
+                    f"No verified native report for selected targets: {sorted(uncovered_assets)}"
+                )
+        if reasons:
             run = run.model_copy(
                 update={
                     "status": "partial",
-                    "outcome": "inconclusive",
-                    "reason": reason,
+                    "outcome": "finding" if outcome == "finding" else "inconclusive",
+                    "reason": "; ".join(
+                        dict.fromkeys(item for item in (run.reason, *reasons) if item)
+                    ),
                 }
             )
         else:

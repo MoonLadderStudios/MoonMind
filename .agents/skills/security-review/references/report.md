@@ -56,8 +56,11 @@ Retain `web-api-procedure-results/v1` with that exact `planRef` and `runs` namin
 objective/procedure IDs, actual status, supporting evidence, evidence kind and
 outcome. Incomplete runs need a reason. Native ZAP/application-access methods
 name `nativeReportRef` selected in the same assessment's `reportRefs`; access
-runs also retain planned `caseRefs`. Verified native coverage and authentication
-override optimistic claims. Keep tool matches, reproductions, cited review
+runs also retain planned `caseRefs`. A native report covers only its target and
+executed endpoints; every selected asset and interface needs matching evidence.
+Uncovered selections remain partial with a specific limitation and any confirmed
+findings retained. Verified native coverage and authentication override optimistic
+claims. Keep tool matches, reproductions, cited review
 judgments and hypotheses distinct; a hypothesis cannot complete coverage.
 Record limitations, review status, reviewer attribution when reviewed, reviewer
 notes and follow-up tasks. Automated coverage does not imply an independent

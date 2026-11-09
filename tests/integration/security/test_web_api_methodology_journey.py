@@ -274,6 +274,130 @@ async def test_missing_results_evidence_preserves_other_completed_reviews(enviro
     assert outputs["methodologyStatus"] == "incomplete"
 
 
+@pytest.mark.parametrize("gap", ["endpoint", "asset"])
+async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
+    environment, tmp_path, monkeypatch, access_target, gap
+):
+    service = environment.service
+    asset = "http://fixture.test"
+    monkeypatch.setattr(access_jobs, "ORIGIN", asset)
+    monkeypatch.setattr(
+        access_jobs, "target_scope", lambda: http_fixture.scope(access_target["origin"])
+    )
+    _, plan = await retain_plan(service, asset=asset)
+    for objective in plan["objectives"]:
+        if objective["id"] != "authorization":
+            objective.update(
+                applicability="not_applicable",
+                reason="This controlled scenario selects only the authorization objective.",
+                procedures=[],
+            )
+    control_ref = await recurring.put(service, plan)
+    missing_asset = "http://unassessed.test" if gap == "asset" else asset
+    missing_path = "/unexecuted" if gap == "endpoint" else "/record"
+    plan = copy.deepcopy(plan)
+    if gap == "asset":
+        plan["scope"]["assets"].append(missing_asset)
+    plan["interfaces"].append(
+        {
+            "id": "unexecuted",
+            "asset": missing_asset,
+            "protocol": "http",
+            "locator": missing_path,
+        }
+    )
+    for procedure in next(o for o in plan["objectives"] if o["id"] == "authorization")[
+        "procedures"
+    ]:
+        procedure["interfaceIds"].append("unexecuted")
+        if gap == "asset":
+            procedure["assets"].append(missing_asset)
+    retained = []
+    evidence_dir = Path("artifacts/integration-ci/security-quality") / (
+        "methodology-uncovered-" + gap
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    for vulnerable in [True, False]:
+        state = "vulnerable" if vulnerable else "repaired"
+        access_target["vulnerable"] = vulnerable
+        job = access_jobs.Job(environment, tmp_path, monkeypatch)
+        policy = http_fixture.selected("other")
+        raw_spec = policy.model_dump_json(by_alias=True).encode()
+        await job.launch(
+            state, {"spec": "spec/spec.json", "maxSeconds": 60}, {"spec": raw_spec}
+        )
+        capture = await observe_application_access(
+            policy,
+            http_fixture.client(access_target, tmp_path),
+            checkpoint_path=tmp_path / (state + "-capture"),
+        )
+        native = assess_application_access(policy, capture.bundle)
+        raw_capture = capture.model_dump_json(by_alias=True).encode()
+        native.input_digests = {
+            "spec": hashlib.sha256(raw_spec).hexdigest(),
+            "capture": hashlib.sha256(raw_capture).hexdigest(),
+        }
+        job.storage.outputs.mkdir(parents=True, exist_ok=True)
+        (job.storage.outputs / "capture.json").write_bytes(raw_capture)
+        (job.storage.outputs / "assessment.json").write_text(
+            native.model_dump_json(by_alias=True)
+        )
+        native_ref = await job.publish(terminal_state="succeeded", exit_code=0)
+        await finish(job.backend, job.request, tmp_path)
+        runs = access_runs(plan, native_ref, plan["sourceRefs"][0])
+        if vulnerable:
+            _, control = await coverage(
+                service,
+                control_ref,
+                native_ref=native_ref,
+                runs=runs,
+                key="fully-covered",
+            )
+            assert control["complete"]
+        else:
+            plan["candidateRef"] = "fixture:repaired"
+        plan_ref = await recurring.put(service, plan)
+        outputs, report = await coverage(
+            service,
+            plan_ref,
+            native_ref=native_ref,
+            runs=runs,
+            baseline=retained[0] if retained else None,
+            key=gap + "-" + state,
+        )
+        # Retain the original production report bytes, including the red sample.
+        for ref, suffix in [
+            (outputs["methodologyRef"], "coverage.json"),
+            (recurring.report_ref(outputs), "report.md"),
+            (native_ref, "native.json"),
+        ]:
+            _, raw = await service.read(
+                artifact_id=ref, access=recurring.access_for_test("workflow:assessment")
+            )
+            (evidence_dir / (state + "-" + suffix)).write_bytes(raw)
+        row = next(o for o in report["objectives"] if o["id"] == "authorization")
+        method = next(p for p in row["methods"] if p["method"] == "application-access")
+        assert row["status"] == "partially_tested"
+        assert method["status"] == "partial"
+        assert method["outcome"] == ("finding" if vulnerable else "inconclusive")
+        assert method["caseSpecDigest"] == spec_digest(policy)
+        assert method["nativeReportRef"] == native_ref and method["oracle"]
+        assert any(
+            (missing_asset if gap == "asset" else missing_path) in reason
+            for reason in method["limitations"]
+        )
+        assert not report["complete"]
+        assert outputs["methodologyStatus"] == "incomplete"
+        assert (missing_asset if gap == "asset" else missing_path).encode() in (
+            evidence_dir / (state + "-report.md")
+        ).read_bytes()
+        if not vulnerable:
+            assert report["retest"]["authorization"] == "coverage_changed"
+        retained.append(outputs["methodologyRef"])
+    assert len(access_target["calls"]) == 6
+    assert not any(path == "/unexecuted" for _, path, *_ in access_target["calls"])
+
+
 @pytest.mark.parametrize("mode", ["baseline", "api"])
 @pytest.mark.parametrize("repaired", [False, True])
 async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
@@ -343,6 +467,46 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
     configuration = next(o for o in report["objectives"] if o["id"] == "configuration")
     assert configuration["status"] == "tested"
     assert configuration["methods"][0]["nativeReportRef"] == native_ref
+    for gap in ("endpoint", "asset"):
+        uncovered = copy.deepcopy(plan)
+        missing_asset = "http://unassessed.test" if gap == "asset" else asset
+        missing_path = "/unexecuted" if gap == "endpoint" else path
+        if gap == "asset":
+            uncovered["scope"]["assets"].append(missing_asset)
+        uncovered["interfaces"].append(
+            {
+                "id": "unexecuted",
+                "asset": missing_asset,
+                "protocol": "http",
+                "locator": missing_path,
+            }
+        )
+        for objective in uncovered["objectives"]:
+            for procedure in objective["procedures"]:
+                procedure["interfaceIds"].append("unexecuted")
+                if gap == "asset":
+                    procedure["assets"].append(missing_asset)
+        uncovered_ref = await recurring.put(environment.service, uncovered)
+        uncovered_outputs, partial = await coverage(
+            environment.service,
+            uncovered_ref,
+            native_ref=native_ref,
+            runs=runs,
+            baseline=outputs["methodologyRef"],
+            key=mode + "-uncovered-" + gap,
+        )
+        row = next(o for o in partial["objectives"] if o["id"] == "configuration")
+        assert row["status"] == "partially_tested"
+        assert row["methods"][0]["outcome"] == (
+            "inconclusive" if repaired else "finding"
+        )
+        assert any(
+            (missing_asset if gap == "asset" else missing_path) in reason
+            for reason in row["limitations"]
+        )
+        assert partial["retest"]["configuration"] == "coverage_changed"
+        assert not partial["complete"]
+        assert uncovered_outputs["methodologyStatus"] == "incomplete"
 
 
 async def test_reporting_retry_preserves_completed_native_work_and_reuses_coverage(
