@@ -460,8 +460,12 @@ def test_claude_oauth_unsupported_files_remain_direct(path, content):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe_target", [None, "settings.json", "rules", "projection"]
+)
 async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_cleanup(
     tmp_path,
+    unsafe_target,
 ):
     from pathlib import Path
     from moonmind.omnigent.credential_materializers import (
@@ -486,11 +490,15 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
                 volume = mount.split("src=", 1)[1].split(",", 1)[0]
                 root = tmp_path / volume
                 root.mkdir(exist_ok=True)
+                if unsafe_target == "projection":
+                    (root / "files").symlink_to(outside, target_is_directory=True)
                 result = subprocess.run(
                     [
                         sys.executable,
                         "-c",
-                        script.replace("'/preferences'", repr(str(root))),
+                        script.replace("'/preferences'", repr(str(root))).replace(
+                            "'/credential'", repr(str(tmp_path / "claude_enrolled"))
+                        ),
                     ],
                     input=kwargs["input_bytes"],
                     capture_output=True,
@@ -498,9 +506,12 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
                 assert result.returncode == 0, result.stderr
             return await super().run(argv, **kwargs)
 
+    outside = tmp_path / "unrelated"
+    outside.mkdir()
+    (outside / "settings.json").write_text('{"language":"unchanged"}')
     backend = ExecutingPreferenceBackend()
     owner = DockerClaudeOauthHomeMaterializer(backend)
-    enrolled = tmp_path / "enrolled"
+    enrolled = tmp_path / "claude_enrolled"
     enrolled.mkdir()
     token = enrolled / ".credentials.json"
     token.write_text("initial-test-token")
@@ -512,7 +523,23 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
             claude_oauth_profile()
         ),
     )
+    if unsafe_target:
+        if unsafe_target != "projection":
+            (enrolled / unsafe_target).symlink_to(
+                outside if unsafe_target == "rules" else outside / "settings.json",
+                target_is_directory=unsafe_target == "rules",
+            )
+        with pytest.raises(AssertionError):
+            await owner.materialize(context)
+        assert (outside / "settings.json").read_text() == '{"language":"unchanged"}'
+        assert list(outside.iterdir()) == [outside / "settings.json"]
+        assert token.read_text() == "initial-test-token"
+        return
     handle = await owner.materialize(context)
+    # Untuned siblings see neutral mountpoints, never empty invalid settings.
+    assert json.loads((enrolled / "settings.json").read_text()) == {}
+    assert (enrolled / "settings.json").stat().st_mode & 0o777 == 0o600
+    assert (enrolled / "rules/project.md").read_text() == ""
     assert (
         handle.attachments
         == anticipated_credential_handle(
@@ -538,7 +565,11 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
     replacement = token.with_suffix(".tmp")
     replacement.write_text("refreshed-test-token")
     os.replace(replacement, token)
+    (enrolled / "settings.json").write_text('{"language":"sibling default"}')
     again = await owner.materialize(context)
+    assert json.loads((enrolled / "settings.json").read_text()) == {
+        "language": "sibling default"
+    }
     assert again.attachments == handle.attachments
     first_files = {
         item.subPath: (tmp_path / item.sourceRef / item.subPath).read_bytes()

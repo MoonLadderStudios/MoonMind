@@ -696,7 +696,7 @@ class NativeDocker(StaticCodexDocker):
                 assert volume in self.volumes and volume != "journey_oauth"
                 self.claude_preferences = payload["files"]
                 self.generations[volume] = str(payload["generation"])
-            if "/credential" in mounts:
+            if "/credential" in mounts and "/preferences" not in mounts:
                 volume = mounts["/credential"]["src"]
                 assert volume in self.volumes
                 if input_bytes:

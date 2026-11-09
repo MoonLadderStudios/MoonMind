@@ -1051,16 +1051,64 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             failure="Claude preference volume creation failed",
         )
         # Re-delivery compares the exact bytes instead of appending again.
-        writer = r"""import hashlib, json, os, pathlib, sys, tempfile
+        writer = r"""import hashlib, json, os, pathlib, stat, sys, tempfile, uuid
 root = pathlib.Path('/preferences')
+if root.is_symlink():
+    raise ValueError('Claude preference root contains a symlink')
 payload = json.load(sys.stdin)
 expected = payload['files']
+# runc creates absent bind targets in the enrolled volume. Publish harmless
+# mountpoints atomically first, so untuned siblings never see invalid empty
+# settings JSON or this attempt's authored content. Never follow home symlinks.
+for name in expected:
+    parent = os.open('/credential', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parts = pathlib.PurePosixPath(name).parts
+        for part in parts[:-1]:
+            created = False
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=parent)
+                created = True
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+            if created:
+                os.fchown(parent, 1000, 1000)
+        leaf = parts[-1]
+        try:
+            observed = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            staged = '.moonmind-mountpoint-' + uuid.uuid4().hex
+            fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'{}\n' if name == 'settings.json' else b'')
+                    stream.flush()
+                    os.fchown(stream.fileno(), 1000, 1000)
+                    os.fsync(stream.fileno())
+                try:
+                    os.link(staged, leaf, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(staged, dir_fd=parent)
+            observed = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISREG(observed.st_mode):
+            raise ValueError('Claude preference mount target must be a regular file')
+    finally:
+        os.close(parent)
 generation = str(payload['generation']) + '\n'
 marker = root / '.moonmind-generation'
+if marker.is_symlink() or (root / 'profile.json').is_symlink():
+    raise ValueError('Claude preference metadata contains a symlink')
 if marker.exists() and marker.read_text() != generation:
     raise ValueError('Claude preference generation mismatch')
 for name, content in expected.items():
     path = root / 'files' / name
+    if any(parent.is_symlink() for parent in path.parents if parent != root.parent):
+        raise ValueError('Claude preference source contains a symlink')
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         if path.is_symlink() or path.read_text() != content:
@@ -1091,6 +1139,8 @@ for path in [root, *root.rglob('*')]:
                 "--read-only",
                 "--mount",
                 f"type=volume,src={volume},dst=/preferences",
+                "--mount",
+                f"type=volume,src={context.profile_credential_home.volume_ref},dst=/credential",
                 "--entrypoint",
                 "python3",
                 await self._resolve_writer_ref(
