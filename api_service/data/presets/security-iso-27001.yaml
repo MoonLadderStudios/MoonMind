@@ -1,0 +1,109 @@
+slug: security-iso-27001
+title: ISO/IEC 27001 ISMS Readiness
+description: Prepare risk-based ISMS gaps and a versioned draft Statement of Applicability, with independent
+  certification Unverified.
+tags:
+- security
+- assessment
+- iso27001
+- isms
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required:
+    - assets
+    - system_inputs
+    - period
+    properties:
+      assets:
+        type: array
+        title: Assessed system assets
+        items:
+          type: string
+        minItems: 1
+        description: Admit the system identifiers examined by this assessment.
+      system_inputs:
+        type: object
+        title: Saved ISMS scope, risks and applicability decisions
+        description: Supply systems, scopeStatement, context, interestedParties, climateRelevance, risks
+          and controls. Risks retain id, version, owner, assessment, treatment, treatmentPlan, controlIds
+          and residualRiskApproval. Key controls by Annex A identifier (A.8.8) or EXTRA. identifier with
+          title, decision (include/exclude/undetermined), rationale, riskIds, owner and implementationStatus.
+          Attach purpose-specific organisational requests in requirementEvidence keyed by requirement
+          ID, with current revision, period, population and attributed review. Generated drafts and management
+          assertions do not establish adoption or operation.
+      period:
+        type: object
+        title: Assessment evidence period
+        required:
+        - start
+        - end
+        properties:
+          start:
+            type: string
+            format: date
+          end:
+            type: string
+            format: date
+        description: Set start and end dates as YYYY-MM-DD. Evidence must cover each requirement's selected
+          period.
+      requirement_choices:
+        type: object
+        title: Requirement scope and period choices
+        description: Key by clause or control ID, such as 9.2 or A.8.8. Select systems and period within
+          the admitted ISMS scope and assessment period. Partner responsibility requires responsibilityReason;
+          it does not remove evidence needs. Management-system requirements cannot be excluded; Annex
+          A exclusions need justified SoA decisions.
+      evidence_refs:
+        type: array
+        title: Evidence record artifacts
+        items:
+          type: string
+        description: Optional retained FrameworkEvidence records linked to exact requirement IDs, scope,
+          period and provenance. Technical records are supporting context only and cannot replace reviewed
+          organisational evidence.
+      previous_assessment_ref:
+        type:
+        - string
+        - 'null'
+        title: Previous framework assessment
+        description: Retained prior ISO readiness artifact. Compare changed risks, scope, evidence and
+          edition, preserving original SoA decisions and identifying affected requirements.
+  defaults:
+    assets: []
+    system_inputs: {}
+    period: {}
+    requirement_choices: {}
+    evidence_refs: []
+    previous_assessment_ref: null
+steps:
+- type: tool
+  title: Prepare ISO ISMS readiness
+  instructions: Evaluate management-system requirements separately from Annex A, retain risk-treatment
+    gaps and versioned draft SoA, and request missing organisational evidence. No certification or implemented
+    ISMS claim.
+  tool:
+    id: security.assess
+    requiredCapabilities:
+    - sandbox
+    inputs:
+      scope:
+        assets: '{{ inputs.assets }}'
+      tools: []
+      budget:
+        baseSeconds: 60
+        maxSeconds: 120
+        progressStallSeconds: 60
+      credentialRefs: []
+      networkRefs: []
+      framework:
+        packId: iso-27001-readiness
+        systemInputs: '{{ inputs.system_inputs }}'
+        period: '{{ inputs.period }}'
+        requirementChoices: '{{ inputs.requirement_choices }}'
+        evidenceRefs: '{{ inputs.evidence_refs }}'
+        previousAssessmentRef: '{{ inputs.previous_assessment_ref }}'

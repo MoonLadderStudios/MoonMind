@@ -50,6 +50,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-ukgc-rts",
         "security-gli-readiness",
         "security-soc2-readiness",
+        "security-iso-27001",
     }
 )
 
@@ -154,6 +155,14 @@ async def test_no_seed_preset_declares_auto_publish(tmp_path):
                     "systems": ["synthetic-api"],
                 },
                 "period": {"start": "2026-11-09", "end": "2026-11-09"},
+            },
+        ),
+        (
+            "security-iso-27001",
+            {
+                "assets": ["synthetic-isms"],
+                "system_inputs": {"systems": ["synthetic-isms"]},
+                "period": {"start": "2026-11-01", "end": "2026-11-02"},
             },
         ),
         (
