@@ -3550,7 +3550,7 @@ class TemporalExecutionService:
             )
             if projection is not None:
                 require_product_projection(projection.workflow_type, include_historical=True)
-                return projection
+                return await self._with_assessment_occurrence(projection)
         return await self._with_assessment_occurrence(await self._sync_projection_best_effort(record))
 
     async def _with_assessment_occurrence(self, projection):

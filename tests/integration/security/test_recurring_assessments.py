@@ -2033,3 +2033,104 @@ async def test_delayed_passive_activity_keeps_remaining_occurrence_budget(enviro
     request, _, _ = await inputs(environment.service)
     output = await invoke(environment.service, request, activity_age_seconds=70)
     assert output["coverageStatus"] == "complete"
+
+
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("sync_available", [False, True])
+async def test_manual_occurrence_temporal_api_read_enriches_existing_projection(
+    environment, monkeypatch, stale, sync_available
+):
+    """The operator GET route must enrich canonical + projection reads too."""
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers import executions as routes
+    from api_service.db.models import (
+        AssessmentOccurrenceRecord,
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+    )
+    from moonmind.security.assessment_authorizations import authorization_scope
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+    from tests.unit.services.test_assessment_job_authority import (
+        authorization,
+        save_scope,
+    )
+
+    workflow_id = "mm:manual-assessment"
+    auth = authorization(
+        recurring={
+            "minIntervalSeconds": 60,
+            "maxOccurrences": 2,
+            "maxJobsPerOccurrence": 1,
+            "maxJobSecondsPerOccurrence": 120,
+            "maxRunSeconds": 120,
+        }
+    )
+    await save_scope(
+        environment.session, authorization_scope(auth), workflow=workflow_id, auth=auth
+    )
+    request, inventory, _ = await inputs(environment.service)
+    if stale:
+        inventory["expiresAt"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        request["inventoryRef"] = await put(environment.service, inventory)
+    await environment.service.delegate_read_access(
+        artifact_ids=[request["inventoryRef"], request["feedRef"]],
+        workflow_id=workflow_id,
+        access=access_for_test("operator"),
+    )
+    output = await invoke(environment.service, request, workflow_id=workflow_id)
+    source = await environment.session.get(
+        TemporalExecutionCanonicalRecord, workflow_id
+    )
+    source.state = MoonMindWorkflowState.COMPLETED
+    source.close_status = "completed"
+    await environment.session.commit()
+    await environment.session.refresh(source)
+    owner = TemporalExecutionService(
+        environment.session,
+        client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
+    )
+    projection = await owner._upsert_projection_from_source(source)
+    await environment.session.commit()
+    assert "assessmentOccurrence" not in projection.parameters
+    occurrence = await environment.session.get(AssessmentOccurrenceRecord, workflow_id)
+    retained = copy.deepcopy(occurrence.authority_json)
+
+    async def sync(*_args, **_kwargs):
+        if not sync_available:
+            raise ConnectionError("Controlled Temporal read outage")
+        return projection
+
+    monkeypatch.setattr(routes.execution_sync, "fetch_and_sync_execution", sync)
+    monkeypatch.setattr(
+        routes, "_resolve_agent_run_ids_from_managed_store", lambda *_args: {}
+    )
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(environment.storage_root)),
+    )
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[routes._get_service] = lambda: owner
+    app.dependency_overrides[routes.get_async_session] = lambda: environment.session
+    app.dependency_overrides[routes.get_temporal_client] = lambda: AsyncMock()
+    app.dependency_overrides[routes.get_instance_access_optional] = lambda: (
+        OperatorAdmission(via="loopback")
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/executions/{workflow_id}", params={"source": "temporal"}
+        )
+    assert response.status_code == 200, response.text
+    proof = response.json()["inputParameters"]["assessmentOccurrence"]
+    assert proof["ordinal"] == 1
+    assert proof["evidenceRefs"] == [output["comparisonRef"]]
+    assert proof["coverage"] == ("gap" if stale else "complete")
+    assert proof["comparisonDisposition"] == ("review_required" if stale else "initial")
+    await environment.session.refresh(occurrence)
+    await environment.session.refresh(source)
+    assert occurrence.authority_json == retained
+    assert "assessmentOccurrence" not in source.parameters
