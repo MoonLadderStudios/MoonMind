@@ -485,7 +485,12 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
                 self.inputs.append(None)
                 return 0, b"owned", b""
             if kwargs.get("input_bytes"):
+                assert argv[argv.index("--user") + 1] == "0:0"
                 script = argv[argv.index("-c") + 1]
+                # The production writer is Docker root assigning its runtime
+                # UID. This local transport maps that UID to the test runner,
+                # which need not have permission to chown to container UID 1000.
+                script = script.replace("1000, 1000", f"{os.getuid()}, {os.getgid()}")
                 mount = argv[argv.index("--mount") + 1]
                 volume = mount.split("src=", 1)[1].split(",", 1)[0]
                 root = tmp_path / volume
@@ -529,7 +534,12 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
                 outside if unsafe_target == "rules" else outside / "settings.json",
                 target_is_directory=unsafe_target == "rules",
             )
-        with pytest.raises(AssertionError):
+        reason = {
+            "settings.json": "mount target must be a regular file",
+            "rules": "Not a directory",
+            "projection": "source contains a symlink",
+        }[unsafe_target]
+        with pytest.raises(AssertionError, match=reason):
             await owner.materialize(context)
         assert (outside / "settings.json").read_text() == '{"language":"unchanged"}'
         assert list(outside.iterdir()) == [outside / "settings.json"]
@@ -538,7 +548,9 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
     handle = await owner.materialize(context)
     # Untuned siblings see neutral mountpoints, never empty invalid settings.
     assert json.loads((enrolled / "settings.json").read_text()) == {}
-    assert (enrolled / "settings.json").stat().st_mode & 0o777 == 0o600
+    mountpoint = (enrolled / "settings.json").stat()
+    assert mountpoint.st_mode & 0o777 == 0o600
+    assert (mountpoint.st_uid, mountpoint.st_gid) == (os.getuid(), os.getgid())
     assert (enrolled / "rules/project.md").read_text() == ""
     assert (
         handle.attachments
@@ -560,6 +572,8 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
         )
         root = tmp_path / attachment.sourceRef
         assert (root / attachment.subPath).is_file()
+        observed = (root / attachment.subPath).stat()
+        assert (observed.st_uid, observed.st_gid) == (os.getuid(), os.getgid())
     # Native refresh atomically replaces the enrolled file; neither projection
     # setup nor cleanup reads, redirects, copies or overwrites that credential.
     replacement = token.with_suffix(".tmp")
