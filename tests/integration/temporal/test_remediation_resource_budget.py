@@ -309,9 +309,11 @@ async def test_absolute_loop_deadline_bounds_active_registered_operation_and_rep
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize(
+    "cancel,after_slot", [(False, False), (True, False), (False, True)]
+)
 async def test_registered_agent_pause_expires_without_resume_and_replays(
-    monkeypatch, cancel
+    monkeypatch, cancel, after_slot
 ):
     import asyncio
     from contextlib import AsyncExitStack
@@ -327,8 +329,22 @@ async def test_registered_agent_pause_expires_without_resume_and_replays(
 
     def paused_init(self):
         original_init(self)
-        self._paused = True
+        self._paused = not after_slot
 
+    paused_at_grant = []
+    original_granted = agent_run.MoonMindAgentRun._signal_parent_granted_profile
+
+    async def pause_after_grant(self, parent_info, runtime_id):
+        paused_at_grant.append(True)
+        self._paused = True
+        await original_granted(self, parent_info, runtime_id)
+
+    if after_slot:
+        monkeypatch.setattr(
+            agent_run.MoonMindAgentRun,
+            "_signal_parent_granted_profile",
+            pause_after_grant,
+        )
     monkeypatch.setattr(agent_run.MoonMindAgentRun, "__init__", paused_init)
     monkeypatch.setattr(harness, "_managed_launch_requests", [])
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -338,6 +354,7 @@ async def test_registered_agent_pause_expires_without_resume_and_replays(
             agentId="claude_code",
             correlationId="pause",
             idempotencyKey="pause",
+            executionProfileRef="default-managed" if after_slot else None,
             executionBudget=ExecutionBudgetContext(
                 budget=resolve_execution_budget(
                     timeout_policy={"timeout_seconds": 3600}
@@ -384,6 +401,13 @@ async def test_registered_agent_pause_expires_without_resume_and_replays(
                     ],
                 )
             )
+            if after_slot:
+                await env.client.start_workflow(
+                    harness.MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id="provider-profile-manager:claude_code",
+                    task_queue="pause-resource-budget",
+                )
             handle = await env.client.start_workflow(
                 agent_run.MoonMindAgentRun.run,
                 request,
@@ -404,6 +428,7 @@ async def test_registered_agent_pause_expires_without_resume_and_replays(
                 assert result.metadata["reason"] == "timed_out"
             history = await handle.fetch_history()
         assert not harness._managed_launch_requests
+        assert bool(paused_at_grant) is after_slot
         await Replayer(
             workflows=[agent_run.MoonMindAgentRun],
             workflow_runner=UnsandboxedWorkflowRunner(),
