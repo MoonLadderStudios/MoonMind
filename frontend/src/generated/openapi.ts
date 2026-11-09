@@ -7191,6 +7191,83 @@ export interface components {
              */
             markdown: string;
         };
+        /** DNSAssessment */
+        DNSAssessment: {
+            /** Questions */
+            questions: components["schemas"]["DNSQuestion"][];
+            /**
+             * Allowedfollowups
+             * @default []
+             */
+            allowedFollowups: components["schemas"]["DNSQuestion"][];
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["DNSCheckSelection"][];
+            /**
+             * Maxfollowupdepth
+             * @default 4
+             */
+            maxFollowupDepth: number;
+            /**
+             * Maxattempts
+             * @default 64
+             */
+            maxAttempts: number;
+            /**
+             * Timeoutseconds
+             * @default 120
+             */
+            timeoutSeconds: number;
+            /**
+             * Querytimeoutseconds
+             * @default 10
+             */
+            queryTimeoutSeconds: number;
+            /**
+             * Maxresponsebytes
+             * @default 65536
+             */
+            maxResponseBytes: number;
+            /**
+             * Maxoutputbytes
+             * @default 4194304
+             */
+            maxOutputBytes: number;
+            /**
+             * Queriespersecond
+             * @default 5
+             */
+            queriesPerSecond: number;
+        };
+        /** DNSCheckSelection */
+        DNSCheckSelection: {
+            /**
+             * Check
+             * @enum {string}
+             */
+            check: "cname" | "delegation" | "caa" | "dnssec" | "spf" | "dkim" | "dmarc";
+            /** Subject */
+            subject: string;
+            /**
+             * Selectors
+             * @default []
+             */
+            selectors: string[];
+            /** Organizationaldomain */
+            organizationalDomain?: string | null;
+        };
+        /** DNSQuestion */
+        DNSQuestion: {
+            /** Name */
+            name: string;
+            /**
+             * Recordtype
+             * @enum {string}
+             */
+            recordType: "A" | "AAAA" | "CNAME" | "NS" | "SOA" | "CAA" | "TXT" | "MX" | "DS" | "DNSKEY";
+        };
         /**
          * DashboardBranchListResponse
          * @description Dashboard response containing bounded branch suggestions for one repository.
@@ -14549,6 +14626,7 @@ export interface components {
             /** Assessmentref */
             assessmentRef?: string | null;
             nativeNetwork?: components["schemas"]["NativeNetworkSelection"] | null;
+            dnsAssessment?: components["schemas"]["DNSAssessment"] | null;
             serviceInventory?: components["schemas"]["ServiceInventoryOptions"] | null;
             /** Credentials */
             credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;

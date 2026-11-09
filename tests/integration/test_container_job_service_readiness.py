@@ -61,7 +61,7 @@ def test_rendered_service_flag_matches_api_and_planner(tmp_path, monkeypatch, en
     assert rendered.returncode == 0, rendered.stderr
     services = json.loads(rendered.stdout)["services"]
     expected = enabled != "false"
-    for name in ("api", "temporal-worker-llm", "temporal-worker-agent-runtime"):
+    for name in ("api", "temporal-worker-core", "temporal-worker-agent-runtime"):
         flag = services[name]["environment"].get("MOONMIND_CONTAINER_JOBS_ENABLED")
         assert flag is not None, f"{name} must receive the deployment's service flag"
         flags = FeatureFlagsSettings(

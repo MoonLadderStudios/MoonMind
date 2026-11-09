@@ -327,7 +327,9 @@ async def persisted_assessment_scope(session, record, request, *, bind=True):
     return scope
 
 
-async def assessment_reserved_budget(session, scope, *, include_native=False, workflow_id=None):
+async def assessment_reserved_budget(
+    session, scope, *, include_native=False, include_dns=False, workflow_id=None
+):
     """Count admitted reservations without reauthorizing historical actions."""
     spec = ContainerJobRecord.request_json["spec"]
     refs = [
@@ -357,6 +359,9 @@ async def assessment_reserved_budget(session, scope, *, include_native=False, wo
         ("max_connections", "max_bytes", "max_connections_per_second", "max_concurrent_connections"),
         0,
     )
+    dns_reserved = dict.fromkeys(
+        ("max_attempts", "timeout_seconds", "max_output_bytes", "queries_per_second"), 0
+    )
     for record in rows:
         request = ContainerJobSubmitRequest.model_validate(
             {**record.request_json, "source": record.source_json}
@@ -373,9 +378,15 @@ async def assessment_reserved_budget(session, scope, *, include_native=False, wo
         if profile is not None and profile.native_network is not None:
             for name in native_reserved:
                 native_reserved[name] += getattr(profile.native_network.limits, name)
+        if profile is not None and profile.dns_assessment is not None:
+            for name in dns_reserved:
+                dns_reserved[name] += getattr(profile.dns_assessment, name)
+    totals = (count, seconds)
     if include_native:
-        return count, seconds, native_reserved
-    return count, seconds
+        totals += (native_reserved,)
+    if include_dns:
+        totals += (dns_reserved,)
+    return totals
 
 
 async def validate_job_assessment_authority(

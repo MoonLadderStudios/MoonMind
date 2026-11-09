@@ -208,13 +208,10 @@ def test_compose_policy_selection_reaches_gateway_and_consumers(
         "omnigent-runtime-bootstrap",
         "init-db",
         "sandbox-egress-proxy",
-        "temporal-worker-workflow",
-        "temporal-worker-artifacts",
-        "temporal-worker-llm",
+        "temporal-worker-core",
         "temporal-worker-sandbox",
         "temporal-worker-agent-runtime",
         "temporal-worker-deployment-control",
-        "temporal-worker-integrations",
     ]
     target = (
         "/app/docker/sandbox-egress-proxy"

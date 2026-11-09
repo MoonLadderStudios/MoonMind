@@ -35,7 +35,8 @@ tags (see [Combined Stack Validation and Rollback](Omnigent/CombinedStackValidat
 ## Steady-state defaults
 
 These services start with a plain `docker compose up -d` and restart with the
-stack (`restart: unless-stopped`). This is the default always-on footprint.
+stack (`restart: unless-stopped`). The default footprint is 11 persistent
+application services; the separately installed deployment controller is excluded.
 
 | Service | Published ports (host:container) | Role |
 | --- | --- | --- |
@@ -43,13 +44,10 @@ stack (`restart: unless-stopped`). This is the default always-on footprint.
 | `postgres` | none | Relational persistence |
 | `temporal` | `7233:7233` | Durable execution engine |
 | `minio` | `9000:9000`, `9001:9001` (via `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`) | S3-compatible artifact storage and console |
-| `temporal-worker-workflow` | none | Orchestration worker |
-| `temporal-worker-artifacts` | none | Artifact worker |
-| `temporal-worker-llm` | none | LLM-call worker |
+| `temporal-worker-core` | none | One process hosting orchestration, artifacts, LLM calls and integrations |
 | `temporal-worker-sandbox` | none | Sandbox-execution worker |
 | `temporal-worker-agent-runtime` | none | Agent-runtime supervision worker |
 | `temporal-worker-deployment-control` | none | Deployment-control worker |
-| `temporal-worker-integrations` | none | External-integrations worker |
 | `omnigent` | `8000:8000` (via `OMNIGENT_PORT`) | Omnigent server and UI |
 | `docker-proxy` | none | Restricted system-Docker access for trusted MoonMind backend execution; the MoonMind image bundles Wollomatic socket-proxy and maps capability switches into its ACLs. Upgraded exec/attach and BuildKit sessions have no proxy deadline; operation owners enforce their budgets. Never exposed to managed sessions or Omnigent runners |
 | `sandbox-egress-proxy` | none | Sandbox egress proxy boundary |

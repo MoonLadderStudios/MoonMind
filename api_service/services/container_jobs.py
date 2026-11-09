@@ -465,8 +465,8 @@ class ContainerJobService:
                     # may already own its one reservation.
                     existing = await self.repository.find_exact_replay(owner=owner, request=request)
                     if existing is None:
-                        jobs, seconds, native_reserved = await assessment_reserved_budget(
-                            self._session, scope, include_native=True
+                        jobs, seconds, native_reserved, dns_reserved = await assessment_reserved_budget(
+                            self._session, scope, include_native=True, include_dns=True
                         )
                         continuing = scope.engagement.recurring if scope.engagement else None
                         if continuing is not None:
@@ -491,6 +491,21 @@ class ContainerJobService:
                             ):
                                 raise AssessmentAuthorizationDenied(
                                     "assessment native network budget is exhausted"
+                                )
+                        if profile is not None and profile.dns_assessment is not None:
+                            authority = next(
+                                (target.dns_assessment for target in scope.targets
+                                 if target.dns_assessment is not None),
+                                None,
+                            )
+                            if authority is None or any(
+                                dns_reserved[name]
+                                + getattr(profile.dns_assessment, name)
+                                > getattr(authority, name)
+                                for name in dns_reserved
+                            ):
+                                raise AssessmentAuthorizationDenied(
+                                    "assessment DNS query budget is exhausted"
                                 )
                         if jobs >= scope.max_jobs or (
                             scope.engagement is not None
