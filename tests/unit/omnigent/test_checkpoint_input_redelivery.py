@@ -545,3 +545,58 @@ async def test_baseline_input_deleted_during_handoff_is_not_recreated(
         await exercise_branch(
             tmp_path, monkeypatch, None, ignored_inputs=False, saved_inputs="same"
         )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_authority_is_revalidated_after_fence_acquisition(
+    tmp_path, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+    materialize = OmnigentWorkspaceMaterializer.materialize
+    read = OmnigentWorkspaceMaterializer._read_step_input_checkpoint
+    locked = SandboxWorkspaceRecordStore.materialization_locked
+    in_fence = False
+    reads = []
+
+    @asynccontextmanager
+    async def observed_fence(self, workspace_id):
+        nonlocal in_fence
+        async with locked(self, workspace_id):
+            in_fence = True
+            try:
+                yield
+            finally:
+                in_fence = False
+
+    async def changing_authority(self, *args):
+        reads.append(in_fence)
+        if in_fence:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                "authority revoked during acquisition",
+            )
+        return await read(self, *args)
+
+    async def inspect(self, request, **kwargs):
+        with pytest.raises(CheckpointRestoreError, match="revoked"):
+            await materialize(self, request, **kwargs)
+        assert reads == [False, True]
+        locator = request.workspace_spec["workspaceLocator"]
+        assert not (self._root / "temporal_sandbox" / locator["workspaceId"]).exists()
+        assert (
+            SandboxWorkspaceRecordStore(self._root).load(locator["workspaceId"]) is None
+        )
+        raise AuditStopped
+
+    monkeypatch.setattr(
+        SandboxWorkspaceRecordStore, "materialization_locked", observed_fence
+    )
+    monkeypatch.setattr(
+        OmnigentWorkspaceMaterializer, "_read_step_input_checkpoint", changing_authority
+    )
+    monkeypatch.setattr(OmnigentWorkspaceMaterializer, "materialize", inspect)
+    with pytest.raises(AuditStopped):
+        await exercise_branch(tmp_path, monkeypatch, None)

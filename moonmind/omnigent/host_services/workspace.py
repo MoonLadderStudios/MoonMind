@@ -307,6 +307,10 @@ class OmnigentWorkspaceMaterializer:
         )
         try:
             if fenced:
+                # Reject invalid saved authority before even preparing the
+                # owner-record directory. Revalidate again under the fence;
+                # this early read is not cached authority for mutation.
+                await self._read_step_input_checkpoint(source, request, plan)
                 locator = SandboxWorkspaceLocator.model_validate(
                     spec.get("workspaceLocator")
                 )
