@@ -82,7 +82,7 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         "personality": "pragmatic",
     }
     selected.file_templates[0]["content_template"].update(session_settings)
-    private_reference = delivery == "oauth-home" and source_home == "per-run"
+    private_reference = source_home == "per-run"
     if private_reference:
         selected.env_template = {
             "PROJECT_CONFIG_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
@@ -91,6 +91,13 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
             "PROJECT_SIBLING_ROOT": "{{runtime_support_dir}}/codex-home-other",
             "PROJECT_WORKSPACE": "{{workspace_path}}/reports",
         }
+        if delivery == "provider-config":
+            selected.credential_source = "secret_ref"
+            selected.runtime_materialization_mode = "api_key_env"
+            selected.secret_refs = {"provider_api_key": "env://OPENAI_API_KEY"}
+            selected.env_template["OPENAI_API_KEY"] = {
+                "from_secret_ref": "provider_api_key",
+            }
     tuning = snapshot_provider_configuration(selected)
     home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
     for directory in (home, skills, binaries):
@@ -113,6 +120,7 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
             "credentialGeneration": 4, "materializerRef": "omnigent-provider-config@1",
             "attachments": [{"targetPath": "/home/app/.moonmind-provider-config"}],
             "runtimeEnvironment": {"OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config", "MOONMIND_CODEX_PROFILE_CONFIG_FILE": "/home/app/.moonmind-provider-config/codex-profile.json"},
+            "runtimeEnvironmentTemplates": tuning.environmentTemplates,
         }
     else:
         configuration_projection = home / ".omnigent/moonmind/runtime-context/provider-MOONMIND_CODEX_PROFILE_CONFIGURATION"
@@ -209,6 +217,23 @@ def test_private_environment_references_cannot_replace_native_authority(key):
     selected.env_template = {key: "{{runtime_support_dir}}/codex-home/AGENTS.md"}
     with pytest.raises(HarnessPlatformError):
         snapshot_provider_configuration(selected)
+
+
+def test_retained_private_directory_reference_keeps_its_decoder():
+    from moonmind.provider_profiles.codex_configuration import (
+        validate_private_environment,
+    )
+
+    retained = {
+        "privateHomeOnly": True,
+        "document": {},
+        "environmentTemplates": {"PROJECT_CACHE": "{{runtime_support_dir}}/cache"},
+    }
+    before = json.dumps(retained, sort_keys=True)
+    assert validate_private_environment(retained) == retained["environmentTemplates"]
+    with pytest.raises(ValueError, match="canonical admitted file"):
+        validate_private_environment(retained, require_admitted_file=True)
+    assert json.dumps(retained, sort_keys=True) == before
 
 
 def test_mixed_private_and_generic_support_references_keep_the_native_route():

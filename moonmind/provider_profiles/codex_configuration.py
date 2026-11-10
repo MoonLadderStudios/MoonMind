@@ -441,7 +441,7 @@ def configuration_for_profile(profile):
         return None, "Codex file templates contain invalid configuration"
 
 
-def validate_private_environment(configuration):
+def validate_private_environment(configuration, *, require_admitted_file=False):
     """Revalidate late-bound values at admission and in the portable launcher."""
     if __package__:
         from .template_renderer import validate_environment_template_context, validate_provider_literal_launch_environment
@@ -451,7 +451,7 @@ def validate_private_environment(configuration):
     if not isinstance(environment, dict):
         raise ValueError("private Codex environment templates must be an object")
     environment = validate_environment_template_context(validate_provider_literal_launch_environment(environment))
-    if not configuration.get("privateHomeOnly"):
+    if require_admitted_file or not configuration.get("privateHomeOnly"):
         files = configuration.get("additionalFiles") or []
         paths = {_additional_file(_template(item), "{{runtime_support_dir}}")["path"] for item in files}
         for value in environment.values():

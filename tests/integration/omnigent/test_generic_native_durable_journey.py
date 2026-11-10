@@ -1865,26 +1865,40 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
-@pytest.mark.parametrize("native_journey", [{
+@pytest.mark.parametrize(("native_journey", "private_reference"), [({
     "harness": "codex-native-api-key", "privateProfileConfiguration": True,
     "sessionSettings": {"developer_instructions": "Keep the admitted key Profile preferences."},
     "additionalFiles": [{
         "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
         "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted key Profile file.\n",
     }],
-}], indirect=True)
-async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey):
+    "apiKeyTuning": {
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "REPORT_DIR": "{{workspace_path}}/reports",
+    } if private_reference else {},
+}, private_reference) for private_reference in (False, True)], indirect=["native_journey"])
+async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey, private_reference):
     journey = native_journey
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, PROFILE)
         profile.file_templates = []
         profile.home_path_overrides = {}
+        profile.env_template = {"OPENAI_API_KEY": {"from_secret_ref": "provider_api_key"}}
         await session.commit()
     await assert_native_turn_saved_and_cleaned(journey)
     configuration = journey.docker.codex_configuration
     assert configuration["privateHomeOnly"] is True
     assert configuration["document"] == {"developer_instructions": "Keep the admitted key Profile preferences."}
     assert configuration["additionalFiles"][0]["content_template"] == "Admitted key Profile file.\n"
+    if private_reference:
+        assert configuration["environmentTemplates"] == {
+            "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md",
+        }
+        assert journey.docker.launch_env["REPORT_DIR"] == "/workspaces/run/reports"
+        assert "INSTRUCTIONS_FILE" not in journey.docker.launch_env
+    else:
+        assert "environmentTemplates" not in configuration
+        assert "REPORT_DIR" not in journey.docker.launch_env
 
 
 @pytest.mark.parametrize(("native_journey", "private_reference"), [({
@@ -2788,14 +2802,15 @@ async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
 
 
 @pytest.mark.parametrize("native_journey", [{
-    "harness": "codex-native-file-config",
+    "harness": harness,
+    "privateProfileConfiguration": harness == "codex-native-api-key",
     "apiKeyTuning": {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md"},
     "additionalFiles": [{
         "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
         "format": "text", "merge_strategy": "append", "permissions": "0600",
         "content_template": "Use the admitted global instructions.\n",
     }],
-}], indirect=True)
+} for harness in ("codex-native-file-config", "codex-native-api-key")], indirect=True)
 @pytest.mark.parametrize("refresh", [None, False, True], ids=["queued", "frozen", "fresh-scheduled"])
 async def test_profile_files_keep_queued_and_fresh_configuration_authority(native_journey, refresh):
     from copy import deepcopy
@@ -2833,6 +2848,8 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
                 access=access_for_test("system"),
             )
             configuration = json.loads(body)["primary-model"]["endpoint"]["codexConfiguration"]
+            if not refresh:
+                assert "sha256:" + hashlib.sha256(body).hexdigest() == journey.plan.payload.providerConfigurationSnapshot.contentDigest
             changed = plan_writer.changed_admitted_intent(journey.plan.payload, compiled.envelope.payload)
             assert ("providerConfiguration" in changed) is refresh
         await session.commit()
