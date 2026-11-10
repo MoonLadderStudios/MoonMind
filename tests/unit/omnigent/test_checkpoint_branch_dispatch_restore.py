@@ -69,7 +69,13 @@ def git(path, *args):
     ],
 )
 async def test_branch_producer_dispatch_restores_saved_git_work(
-    tmp_path, monkeypatch, fault, interrupt_before_ready=None
+    tmp_path,
+    monkeypatch,
+    fault,
+    interrupt_before_ready=None,
+    ignored_inputs=True,
+    materialization_attempts=1,
+    saved_inputs=None,
 ):
     model_override = fault == "model_override"
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
@@ -95,7 +101,7 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
     git(source, "init", "-q", "-b", "main")
     git(source, "config", "user.email", "test@example.invalid")
     git(source, "config", "user.name", "Test")
-    (source / ".gitignore").write_text(".moonmind/\n")
+    (source / ".gitignore").write_text(".moonmind/\n" if ignored_inputs else "")
     for name in ("staged.txt", "unstaged.txt", "deleted.txt", "committed.txt"):
         (source / name).write_text("base\n")
     git(source, "add", ".")
@@ -142,6 +148,27 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                 )
                 return "artifact://" + record.artifact_id
 
+            saved_input_paths = set()
+            carried_head_ref = None
+            if saved_inputs:
+                from moonmind.omnigent.workspace_artifacts import (
+                    WorkspaceArtifactProjector,
+                )
+
+                carried_head_ref = await write(json.dumps({"head": head}).encode())
+                prior_inputs = await WorkspaceArtifactProjector(artifacts).project(
+                    source,
+                    restore_refs=(carried_head_ref,),
+                    workflow_id="source-workflow",
+                    runtime_uid=os.getuid(),
+                    runtime_gid=os.getgid(),
+                )
+                saved_input_paths = {
+                    item["path"] for item in prior_inputs["restoreInputs"]
+                }
+                expected_status = git(
+                    source, "status", "--porcelain", "--untracked-files=all"
+                )
             instruction = await write(b'"Continue the checkpoint branch"')
             captured = await activity.run(
                 TemporalSandboxActivities(
@@ -258,7 +285,11 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                     "workspace_checkpoint_ref": saved_ref,
                     "workspace_checkpoint_digest": "sha256:"
                     + hashlib.sha256(saved_bytes).hexdigest(),
-                    "head_ref": await write(json.dumps({"head": head}).encode()),
+                    "head_ref": (
+                        carried_head_ref
+                        if saved_inputs == "same"
+                        else await write(json.dumps({"head": head}).encode())
+                    ),
                     "head_digest": "sha256:"
                     + hashlib.sha256(json.dumps({"head": head}).encode()).hexdigest(),
                     "external_state_ref": await write(b"{}"),
@@ -351,6 +382,45 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                 / request.workspace_spec["workspaceLocator"]["workspaceId"]
                 / "repo"
             )
+            def candidate_status():
+                if ignored_inputs:
+                    return git(destination, "status", "--porcelain")
+                from moonmind.workflows.temporal.runtime.workspace_locators import (
+                    SandboxWorkspaceRecordStore,
+                )
+
+                record = SandboxWorkspaceRecordStore(workspaces).read_readiness(
+                    request.workspace_spec["workspaceLocator"]["workspaceId"]
+                )
+                projected = {
+                    entry["path"].encode()
+                    for entry in record["inputProjection"]["entries"]
+                    if entry["path"] not in saved_input_paths
+                }
+                status = subprocess.check_output(
+                    [
+                        "git",
+                        "-C",
+                        str(destination),
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--untracked-files=all",
+                    ]
+                )
+                # Only precisely bound input outputs differ from the saved raw
+                # status when the repository has no runtime-input ignore rule.
+                return (
+                    b"\n".join(
+                        entry
+                        for entry in status.split(b"\0")
+                        if entry
+                        and not (entry.startswith(b"?? ") and entry[3:] in projected)
+                    )
+                    .decode()
+                    .strip()
+                )
+
             # The launch helper admits the real saved-work dependency closure.
             # Start-workflow and plan admission are controlled persistence ports
             # here; delegate the new request's authored attachments explicitly.
@@ -422,7 +492,11 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                 async def no_additional_paths(*args, **kwargs):
                     return {"attachments": []}
 
-                monkeypatch.setattr(WorkspaceArtifactProjector, "project", no_additional_paths)
+                monkeypatch.setattr(
+                    WorkspaceArtifactProjector,
+                    "project_bound_inputs",
+                    no_additional_paths,
+                )
                 mark_ready = SandboxWorkspaceRecordStore.mark_ready
                 interrupted = False
 
@@ -580,7 +654,11 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
             assert (destination / "staged.txt").read_text() == "staged work\n"
             assert (destination / "unstaged.txt").read_text() == "unstaged work\n"
             assert not (destination / "deleted.txt").exists()
-            assert git(destination, "status", "--porcelain") == expected_status
+            for saved_path in saved_input_paths:
+                assert (destination / saved_path).read_bytes() == json.dumps(
+                    {"head": head}
+                ).encode()
+            assert candidate_status() == expected_status
             if interrupt_before_ready and interrupt_before_ready != "admitted":
                 assert branch_preparations == [destination]
                 return
@@ -588,13 +666,15 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                 git(destination, "branch", "--show-current")
                 == request.workspace_spec["targetBranch"]
             )
-            expected_preparations = [destination] * (2 if interrupt_before_ready else 1)
+            expected_preparations = [destination] * (
+                2 if interrupt_before_ready else materialization_attempts
+            )
             assert branch_preparations == expected_preparations
             redelivery = await omnigent_activities._omnigent_execute_activity(request)
             assert redelivery.failure_class is None, redelivery
             assert branch_preparations == expected_preparations
             assert git(destination, "rev-parse", "HEAD") == head
-            assert git(destination, "status", "--porcelain") == expected_status
+            assert candidate_status() == expected_status
     finally:
         await engine.dispose()
 

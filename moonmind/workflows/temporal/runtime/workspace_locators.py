@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
+import hashlib
 import json
 import os
+import tempfile
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from moonmind.schemas.workspace_locator_models import (
-    ManagedWorkspaceLocator,
-    SandboxWorkspaceLocator,
     WORKSPACE_AUTHORITY_MISMATCH,
     WORKSPACE_IDENTITY_MISMATCH,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
     WorkspaceLocatorResolutionError,
 )
 
@@ -122,13 +125,221 @@ class SandboxWorkspaceRecordStore:
         recorded = self.read_readiness(workspace_id)
         if recorded is None:
             return False
+        if recorded.get("version") == "ready-v2":
+            self._validate_input_projection(recorded)
+            if recorded["phase"] != "ready":
+                return False
         return recorded.get("fingerprint") == dict(fingerprint)
 
-    def mark_ready(
+    @staticmethod
+    def _canonical_input_projection(
+        projection: Any,
+    ) -> tuple[dict[str, Any], str]:
+        """Bound and digest the internal descriptor, not its projected files."""
+
+        try:
+            if not isinstance(projection, Mapping):
+                raise ValueError("input projection must be an object")
+            encoded = json.dumps(
+                dict(projection), sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+            if len(encoded) > 128 * 1024:
+                raise ValueError("input projection exceeds its size limit")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace input projection is invalid or too large",
+            ) from exc
+        return json.loads(encoded), "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def _validate_input_projection(self, recorded: Mapping[str, Any]) -> None:
+        """Refuse incomplete or modified projection evidence without replacing it."""
+
+        _, digest = self._canonical_input_projection(recorded.get("inputProjection"))
+        fingerprint = recorded.get("fingerprint")
+        if (
+            recorded.get("version") != "ready-v2"
+            or recorded.get("phase") not in ("restoring", "projecting", "ready")
+            or not isinstance(fingerprint, dict)
+            or fingerprint.get("inputProjectionDigest") != digest
+        ):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace input projection record does not match its identity",
+            )
+
+    @contextmanager
+    def _readiness_directory(self) -> Iterator[int]:
+        """Pin the actual record directory for replacement and durability checks."""
+
+        descriptor = os.open(
+            self.store_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        try:
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
+    def _write_readiness(self, workspace_id: str, payload: Mapping[str, Any]) -> None:
+        """Publish complete evidence and sync its directory entry before returning."""
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._readiness_marker_path(workspace_id)
+        with self._readiness_directory() as directory:
+            if (
+                payload.get("version") == "ready-v2"
+                and payload.get("phase") == "restoring"
+            ):
+                # Preparing a generation must never leave legacy readers seeing
+                # completion. Validate authority, then unlink the marker itself,
+                # not the target of a marker symlink.
+                self._completion_marker_path(workspace_id)
+                try:
+                    os.unlink(
+                        Path(f"{workspace_id}.materialized").name, dir_fd=directory
+                    )
+                except FileNotFoundError:
+                    pass
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=self.store_root
+            )
+            staging = Path(temporary)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(dict(payload), sort_keys=True, allow_nan=False)
+                    )
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(
+                    staging.name, path.name, src_dir_fd=directory, dst_dir_fd=directory
+                )
+                os.fsync(directory)
+            finally:
+                try:
+                    os.unlink(staging.name, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+
+    def bind_input_projection(
+        self,
+        workspace_id: str,
+        base_fingerprint: Mapping[str, Any],
+        projection: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Admit inputs in the readiness record before any restoration writes.
+
+        The caller holds ``claims_locked`` (or ``materialization_locked``) for
+        the entire materialization. Existing evidence must match exactly;
+        completed legacy generations are not implicitly migrated.
+        """
+
+        descriptor, digest = self._canonical_input_projection(projection)
+        if "inputProjectionDigest" in base_fingerprint:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace base fingerprint already binds an input projection",
+            )
+        fingerprint = {**base_fingerprint, "inputProjectionDigest": digest}
+        recorded = self.read_readiness(workspace_id)
+        if recorded is not None:
+            self._validate_input_projection(recorded)
+            if (
+                recorded["fingerprint"] != fingerprint
+                or recorded["inputProjection"] != descriptor
+            ):
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "sandbox workspace input projection differs from its admitted generation",
+                )
+            # A prior replace may be visible even though its directory fsync
+            # failed. Confirm that publication before permitting input writes.
+            with self._readiness_directory() as directory:
+                os.fsync(directory)
+            return recorded
+        recorded = {
+            "version": "ready-v2",
+            "phase": "restoring",
+            "fingerprint": fingerprint,
+            "inputProjection": descriptor,
+        }
+        self._write_readiness(workspace_id, recorded)
+        return recorded
+
+    def advance_input_projection(
+        self, workspace_id: str, fingerprint: Mapping[str, Any], phase: str
+    ) -> dict[str, Any]:
+        """Advance a locked generation after baseline verification or projection.
+
+        Idempotent retries preserve the descriptor. Skipping verification or
+        moving backwards would permit inputs to overwrite unverified work.
+        """
+
+        recorded = self.read_readiness(workspace_id)
+        if recorded is None:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace input projection has not been admitted",
+            )
+        self._validate_input_projection(recorded)
+        phases = ("restoring", "projecting", "ready")
+        if (
+            recorded["fingerprint"] != dict(fingerprint)
+            or phase not in phases
+            or phases.index(phase) - phases.index(recorded["phase"]) not in (0, 1)
+        ):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace input projection cannot advance this generation",
+            )
+        if recorded["phase"] != phase:
+            recorded = {**recorded, "phase": phase}
+            self._write_readiness(workspace_id, recorded)
+        else:
+            with self._readiness_directory() as directory:
+                os.fsync(directory)
+        if phase == "ready":
+            self.mark_materialized(workspace_id)
+        return recorded
+
+    def restart_input_projection(
         self, workspace_id: str, fingerprint: Mapping[str, Any]
-    ) -> None:
+    ) -> dict[str, Any]:
+        """Prepare the same admitted generation after its entire candidate is lost.
+
+        The caller must prove the candidate is wholly absent while holding the
+        existing claims fence, before any reconstruction writes. This explicit
+        operation does not authorize resetting a partially present candidate.
+        """
+
+        recorded = self.read_readiness(workspace_id)
+        if recorded is None:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace input projection has not been admitted",
+            )
+        self._validate_input_projection(recorded)
+        if (
+            recorded["fingerprint"] != dict(fingerprint)
+            or recorded["phase"] not in ("ready", "restoring")
+        ):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace input projection cannot restart this generation",
+            )
+        recorded = {**recorded, "phase": "restoring"}
+        # Repeat publication on a restoring retry: a previous replace may have
+        # been visible without completing its directory durability confirmation.
+        self._write_readiness(workspace_id, recorded)
+        return recorded
+
+    def mark_ready(self, workspace_id: str, fingerprint: Mapping[str, Any]) -> None:
         """Record the verified ready generation for this source and attempt."""
 
+        recorded = self.read_readiness(workspace_id)
+        if recorded is not None and recorded.get("version") == "ready-v2":
+            self.advance_input_projection(workspace_id, fingerprint, "ready")
+            return
         self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._readiness_marker_path(workspace_id)
         payload = json.dumps(
@@ -283,6 +494,40 @@ class SandboxWorkspaceRecordStore:
             yield
         finally:
             os.close(descriptor)
+
+    @asynccontextmanager
+    async def materialization_locked(self, workspace_id: str) -> AsyncIterator[None]:
+        """Hold the existing claims fence across asynchronous materialization.
+
+        The blocking kernel-lock acquisition runs off-loop. Cancellation must
+        drain that acquisition before releasing it: cancelling ``to_thread``
+        alone would leave its thread free to acquire an orphaned lock later.
+        """
+
+        lock = self.claims_locked(workspace_id)
+        acquisition = asyncio.create_task(asyncio.to_thread(lock.__enter__))
+        try:
+            await asyncio.shield(acquisition)
+        except asyncio.CancelledError:
+            while not acquisition.done():
+                try:
+                    await asyncio.shield(acquisition)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            try:
+                acquisition.result()
+            except BaseException:
+                # Failed acquisition already closed its descriptor.
+                pass
+            else:
+                lock.__exit__(None, None, None)
+            raise
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
 
     @staticmethod
     def _claim_is_expired(
