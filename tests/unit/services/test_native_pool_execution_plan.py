@@ -405,6 +405,13 @@ def test_resolution_is_digest_covered_without_rewriting_older_plans():
 @pytest.mark.parametrize("effective_tier", [None, 1])
 def test_recorded_selection_preserves_absence_and_explicit_values(effective_tier):
     frozen = resolution(effectiveModelTier=effective_tier, tierParameterDefaults={})
+    if effective_tier is None:
+        frozen.update(
+            requestedModelTier=None,
+            modelSource="task_override",
+            effortSource="none",
+            resolvedModel="authored-alias",
+        )
     selected = request()
     selected.parameters.update(
         commitMessage="Explicit commit",
@@ -412,6 +419,10 @@ def test_recorded_selection_preserves_absence_and_explicit_values(effective_tier
     )
     recorded = service._RecordedPoolStep(plan(tier_resolution=frozen), {}, frozen, None)
     service._restore_recorded_pool_selection(selected, recorded)
+    assert selected.parameters["model"] == "admitted-model"
+    assert (
+        selected.parameters["metadata"]["moonmind"]["modelEffortResolution"] == frozen
+    )
     assert selected.parameters["commitMessage"] == "Explicit commit"
     assert "publishBaseBranch" not in selected.parameters
     assert ("modelTierResolution" in selected.parameters) == (
