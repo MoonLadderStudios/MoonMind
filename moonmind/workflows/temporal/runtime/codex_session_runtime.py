@@ -42,6 +42,7 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
@@ -113,29 +114,10 @@ _SQLITE_STATE_RUNTIME_FAILURE_MARKERS: tuple[str, ...] = (
     "failed to initialize state runtime",
 )
 _MISSING_TURN_IDLE_EMPTY_ROLLOUT_SUBTYPE = "missing_turn_idle_empty_rollout"
-_SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
-    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"ATATT[0-9A-Za-z_-]{20,}"),
-    re.compile(
-        r"(?i)(authorization|token|password|api[_-]?key|secret)(\s*[=:]\s*)([^\s,;]+)"
-    ),
-)
 
 
 def _redact_text(value: Any, *, max_chars: int) -> str:
-    text = str(value) if value is not None else ""
-    for pattern in _SECRET_REDACTION_PATTERNS:
-        text = pattern.sub(
-            lambda match: (
-                f"{match.group(1)}{match.group(2)}[REDACTED]"
-                if match.lastindex and match.lastindex >= 2
-                else "[REDACTED]"
-            ),
-            text,
-        )
+    text = redact_sensitive_text(str(value) if value is not None else "")
     if len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
