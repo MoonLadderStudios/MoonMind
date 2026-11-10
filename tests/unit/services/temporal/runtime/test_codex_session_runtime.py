@@ -647,6 +647,23 @@ def test_redaction_preserves_falsy_non_none_values() -> None:
             for token in ("AIza" + "a" * 32, "AKIA" + "A" * 16)
         ],
     ],
+    ids=[
+        "authorization-bearer",
+        "authorization-basic",
+        "password-assignment",
+        "token-assignment",
+        "github-classic",
+        "github-oauth",
+        "github-user",
+        "github-installation",
+        "github-refresh",
+        "github-fine-grained",
+        "google-api-token",
+        "opaque-provider-token",
+        "aws-access-key",
+        "serialized-google-token",
+        "serialized-aws-key",
+    ],
 )
 def test_runtime_diagnostics_share_credential_redaction(
     credential: str,

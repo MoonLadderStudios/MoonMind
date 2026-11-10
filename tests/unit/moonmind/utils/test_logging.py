@@ -83,7 +83,11 @@ def test_shared_redaction_preserves_native_atlassian_token_coverage():
     assert redact_sensitive_text("ATATTshort") == "ATATTshort"
 
 
-@pytest.mark.parametrize("token", ["AIza" + "a" * 32, "AKIA" + "A" * 16])
+@pytest.mark.parametrize(
+    "token",
+    ["AIza" + "a" * 32, "AKIA" + "A" * 16],
+    ids=["google-api-token", "aws-access-key"],
+)
 def test_cloud_tokens_in_serialized_log_messages_are_redacted(token):
     text = json.dumps({"message": "provider request failed\n" + token})
     safe = redact_sensitive_text(text)
