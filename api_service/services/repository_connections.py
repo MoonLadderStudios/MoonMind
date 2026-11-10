@@ -221,7 +221,6 @@ def _assignment_to_row(
         provider_repo_id=(identity.provider_repo_id or None),
         canonical_remote=(identity.canonical_remote or None),
         display_name=identity.display_name,
-        operations=list(assignment.operations),
         revision=assignment.revision,
         verified=assignment.verified,
     )
@@ -349,7 +348,6 @@ class RepositoryConnectionService:
                 canonicalRemote=row.canonical_remote,
                 displayName=row.display_name,
             ),
-            operations=tuple(row.operations or ()),
             revision=row.revision,
             verified=row.verified,
         )
@@ -1037,8 +1035,8 @@ class RepositoryConnectionService:
                 action="attach",
             )
             # Return the persisted assignment, never the newly submitted
-            # one: a reused request identity for a different repository or
-            # operation set must not grant authority that does not exist.
+            # one: a reused request identity for a different repository
+            # must not grant authority that does not exist.
             endpoint_normalized = normalize_endpoint(assignment.identity.endpoint)
             stored = (
                 await self._session.execute(
@@ -1102,8 +1100,8 @@ class RepositoryConnectionService:
             stored_revision = assignment.revision
         else:
             # Compare-and-set on the submitted revision: concurrent editors
-            # of the same row conflict instead of silently restoring
-            # operations the other edit removed.
+            # of the same row conflict instead of silently replacing
+            # the identity the other edit verified.
             replaced = await self._session.execute(
                 update(RepositoryConnectionAssignment)
                 .where(
@@ -1114,7 +1112,6 @@ class RepositoryConnectionService:
                     provider_repo_id=assignment.identity.provider_repo_id,
                     canonical_remote=assignment.identity.canonical_remote,
                     display_name=assignment.identity.display_name,
-                    operations=list(assignment.operations),
                     revision=assignment.revision + 1,
                     verified=assignment.verified,
                 )
@@ -1412,7 +1409,6 @@ class RepositoryConnectionService:
                             canonicalRemote=row.canonical_remote,
                             displayName=row.display_name,
                         ),
-                        operations=tuple(row.operations or ()),
                         revision=row.revision,
                         verified=row.verified,
                     ),
@@ -1453,7 +1449,6 @@ class RepositoryConnectionService:
                 canonicalRemote=f"{endpoint.rstrip('/')}/{name}.git",
                 displayName=name,
             ),
-            operations=connection.allowed_operations,
         )
 
     async def admit_selected_use(
@@ -1496,7 +1491,7 @@ class RepositoryConnectionService:
     async def admitted_selected_connection(
         self, admission: Mapping[str, Any]
     ) -> RepositoryConnection:
-        """Reload what ``admit_selected_use`` admitted, narrowed to its assignment.
+        """Reload the connection and repository ``admit_selected_use`` admitted.
 
         The connection must still admit the recorded principal and be active,
         and the assignment must be the one admitted: a retargeted or changed
@@ -1527,15 +1522,7 @@ class RepositoryConnectionService:
                 f"assignment of {repository} to {connection_ref} changed after "
                 "admission; submit the work again to re-admit it",
             )
-        return connection.model_copy(
-            update={
-                "allowed_operations": tuple(
-                    operation
-                    for operation in connection.allowed_operations
-                    if operation in assignment.operations
-                )
-            }
-        )
+        return connection
 
     async def _is_unscoped_migrated_default(
         self, connection: RepositoryConnection
@@ -1591,9 +1578,8 @@ class RepositoryConnectionService:
 
         A launch names its repository (``owner/name`` or a remote URL), not a
         provider ID, so it is matched against each assignment's recorded name
-        or canonical remote; the match can only narrow what the connection
-        allows (MoonLadderStudios/MoonMind#4023). No match, or a name shared
-        by several assignments, admits nothing.
+        or canonical remote. Permissions are inherited from the connection.
+        No match, or a name shared by several assignments, admits nothing.
         """
 
         wanted = _github_repository_key(repository)

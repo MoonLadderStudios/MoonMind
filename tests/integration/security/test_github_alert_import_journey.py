@@ -101,7 +101,7 @@ async def admitted(tmp_path, monkeypatch):
             directory,
             connection,
             assignments=[
-                github_repository_assignment(CONNECTION, REPO, operations=operations)
+                github_repository_assignment(CONNECTION, REPO)
             ],
             admitted_runs={
                 "assessment": {

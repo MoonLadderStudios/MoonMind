@@ -118,8 +118,11 @@ async def _selected_probe_connection(connection_id: str, *, user: Any) -> Any | 
             return None
 
 
-async def _readable_assigned_repositories(connection_id: str) -> tuple[str, ...]:
-    """Repositories saved on the selected connection for reads."""
+async def _readable_assigned_repositories(connection: Any) -> tuple[str, ...]:
+    """Verified repositories inheriting read access from this connection."""
+
+    if "read" not in connection.allowed_operations:
+        return ()
 
     from api_service.services.repository_connections import (
         RepositoryConnectionService,
@@ -127,12 +130,12 @@ async def _readable_assigned_repositories(connection_id: str) -> tuple[str, ...]
 
     async with db_base.async_session_maker() as session:
         assignments = await RepositoryConnectionService(session).list_assignments(
-            connection_id
+            connection.id
         )
     return tuple(
         assignment.identity.display_name
         for assignment in assignments
-        if assignment.verified and "read" in assignment.operations
+        if assignment.verified
     )
 
 
@@ -435,7 +438,7 @@ async def github_token_probe(
     admitted = (
         ()
         if connection.credential.source == "github_app"
-        else await _readable_assigned_repositories(connection_id)
+        else await _readable_assigned_repositories(connection)
     )
     result = await probe_github_token(
         repo=payload.repo,

@@ -49,9 +49,14 @@ def db_path(tmp_path):
 @pytest.fixture
 def engine(db_path):
     engine = sa.create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(
-        engine, tables=[Base.metadata.tables[name] for name in _TABLES]
+    # These migrations run before assignment permissions were retired.
+    metadata = sa.MetaData()
+    for name in _TABLES:
+        Base.metadata.tables[name].to_metadata(metadata)
+    metadata.tables["repository_connection_assignments"].append_column(
+        sa.Column("operations", sa.JSON(), nullable=False)
     )
+    metadata.create_all(engine)
     yield engine
     engine.dispose()
 
@@ -165,7 +170,7 @@ def test_mapped_default_with_full_assignment_admits_issue_collaboration(
 ):
     _map_default(engine)
     _assign(engine, MAPPED_OPERATIONS)
-    with pytest.raises(BoundAccessError, match="does not admit issues"):
+    with pytest.raises(BoundAccessError, match="does not allow issues"):
         _admit_issues(db_path)
 
     _upgrade(engine, migration)
@@ -244,7 +249,7 @@ def test_operator_scoped_publishing_default_keeps_issue_collaboration(
     _map_default(engine)
     _edit_default(engine, PUBLISH_OPERATIONS, keep_mapping_audit=keep_mapping_audit)
     _assign(engine, PUBLISH_OPERATIONS)
-    with pytest.raises(BoundAccessError, match="does not admit issues"):
+    with pytest.raises(BoundAccessError, match="does not allow issues"):
         _admit_issues(db_path)
 
     _upgrade(engine, migration)
@@ -293,7 +298,7 @@ def test_rerun_is_a_no_op(engine, migration):
 
 
 def test_settings_assignment_of_an_upgraded_default_admits_issues(
-    engine, db_path, migration
+    engine, db_path, migration, monkeypatch
 ):
     """An assignment added through Source Control after upgrade keeps issues."""
 
@@ -311,6 +316,18 @@ def test_settings_assignment_of_an_upgraded_default_admits_issues(
     _map_default(engine)
     _edit_default(engine, [*PUBLISH_OPERATIONS, "issues"])
     _upgrade(engine, migration)
+    # The current API writes the current schema, after permission inheritance.
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    inheritance = importlib.import_module(
+        "api_service.migrations.versions.413_assignment_permissions"
+    )
+    with engine.begin() as connection:
+        monkeypatch.setattr(
+            inheritance, "op", Operations(MigrationContext.configure(connection))
+        )
+        inheritance.upgrade()
 
     async def _assign_through_settings():
         async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")

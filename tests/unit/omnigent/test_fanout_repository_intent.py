@@ -127,7 +127,7 @@ async def test_batch_parent_runs_under_read_only_on_demand_workspace_policy(
         connection,
         assignments=[
             github_repository_assignment(
-                connection.id, "owner/repo", operations=("read",)
+                connection.id, "owner/repo",
             )
         ],
     )

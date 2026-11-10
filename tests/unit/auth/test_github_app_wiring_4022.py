@@ -118,7 +118,6 @@ def test_production_issuer_maps_github_app_to_adapter() -> None:
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read"],
             "revision": 1,
             "verified": True,
         }
@@ -486,7 +485,6 @@ def test_acquire_delegates_snapshot_to_selector_with_identity() -> None:
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read"],
             "revision": 1,
             "verified": True,
         }
@@ -506,13 +504,12 @@ def test_acquire_delegates_snapshot_to_selector_with_identity() -> None:
     assert acquired.binding.adapter_kind == "github_app"
     assert acquired.binding.access_mode == "explicit"
 
-    # The selector owns assignment admission: the connection allows write
-    # but the assignment grants only read, so a write request fails. The
-    # legacy constructor (connection policy only) would have admitted it.
+    # Membership inherits the connection policy; reducing it denies writes
+    # before provider issuance, without needing to edit the assignment.
     with pytest.raises(BoundAccessError):
         asyncio.run(
             acquire_bound_credential_for_connection(
-                conn,
+                conn.model_copy(update={"allowed_operations": ("read",)}),
                 operations=["write"],
                 principal_ref="principal:alice",
                 principal_scope=("system", None),

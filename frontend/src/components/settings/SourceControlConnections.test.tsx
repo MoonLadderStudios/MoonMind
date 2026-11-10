@@ -555,7 +555,7 @@ describe('SourceControlConnections', () => {
   });
 
 
-  it('sends every publication operation when editing and assigning repositories', async () => {
+  it('assigns repositories with inherited permissions and no separate publishing control', async () => {
     const state = { items: [connection()] };
     const fetchMock = stubApi(state, {
       'PATCH /api/v1/repository-connections/personal-github': (_url, init) => {
@@ -568,7 +568,7 @@ describe('SourceControlConnections', () => {
         state.items = [connection({
           policyRevision: 3,
           allowedOperations: PUBLISH_OPERATIONS,
-          assignments: [{ repository: body.repository, providerRepoId: '7', operations: body.operations, revision: 1, verified: true }],
+          assignments: [{ repository: body.repository, providerRepoId: '7', operations: PUBLISH_OPERATIONS, revision: 1, verified: true }],
         })];
         return json(state.items[0]);
       },
@@ -582,13 +582,31 @@ describe('SourceControlConnections', () => {
 
     const assign = screen.getByRole('form', { name: 'Assign repository' });
     fireEvent.change(within(assign).getByLabelText(/Assign repository/), { target: { value: 'acme/widgets' } });
-    fireEvent.click(within(assign).getByLabelText('Publish'));
+    expect(within(assign).queryByRole('checkbox')).toBeNull();
     fireEvent.click(within(assign).getByRole('button', { name: 'Assign' }));
     await screen.findByText('read and publish');
-    expect(bodyOf(calls(fetchMock, 'POST', '/api/v1/repository-connections/personal-github/assignments')[0]).operations).toEqual(PUBLISH_OPERATIONS);
+    expect(bodyOf(calls(fetchMock, 'POST', '/api/v1/repository-connections/personal-github/assignments')[0]).operations).toBeUndefined();
     fireEvent.click(screen.getByRole('link', { name: 'Operations' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('location').textContent).toBe('/settings/operations');
+  });
+
+  it('shows inherited permissions for every existing assignment after a base permission change', async () => {
+    const assignments = ['acme/first', 'acme/second'].map((repository, index) => ({
+      repository, providerRepoId: String(index), operations: ['read'], revision: 1, verified: true,
+    }));
+    const state = { items: [connection({ allowedOperations: PUBLISH_OPERATIONS, assignments })] };
+    stubApi(state);
+    const { queryClient } = renderSection();
+    await screen.findByRole('form', { name: 'Assign repository' });
+    expect(screen.getAllByText('read and publish')).toHaveLength(2);
+    act(() => {
+      queryClient.setQueryData(SOURCE_CONTROL_QUERY_KEY, {
+        items: [connection({ allowedOperations: ['read'], policyRevision: 2, assignments })],
+      });
+    });
+    await waitFor(() => expect(screen.getAllByText('read only')).toHaveLength(2));
+    expect(screen.queryByText('read and publish')).toBeNull();
   });
 
   it('keeps an existing publishing connection publishing and removes issue collaboration with publishing', async () => {
@@ -875,7 +893,6 @@ describe('SourceControlConnections', () => {
     } else {
       form = screen.getByRole('form', { name: 'Assign repository' });
       fireEvent.change(within(form).getByLabelText(/Assign repository/), { target: { value: 'acme/widgets' } });
-      fireEvent.click(within(form).getByLabelText('Publish'));
       cancel = 'Cancel assignment';
     }
     fireEvent.click(within(form).getByRole('button', { name: cancel }));

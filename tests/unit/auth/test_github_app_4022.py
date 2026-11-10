@@ -67,7 +67,6 @@ def _snapshot_for_app(conn=None, *, operations=("read", "write"), role="publishe
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": list(operations),
             "revision": 1,
             "verified": True,
         }

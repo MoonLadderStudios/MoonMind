@@ -187,7 +187,6 @@ def test_factory_acquires_app_credential_through_production_site() -> None:
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read"],
             "revision": 1,
             "verified": True,
         }
@@ -243,7 +242,6 @@ def test_factory_acquires_pat_connection_through_same_site() -> None:
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read"],
             "revision": 1,
             "verified": True,
         }
