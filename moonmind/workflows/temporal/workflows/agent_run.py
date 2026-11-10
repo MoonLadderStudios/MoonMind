@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from pydantic import ValidationError
     from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from moonmind.omnigent.workspace_sources import replace_repository_workspace_source
 
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
@@ -488,6 +489,9 @@ AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID = "agent-run-pool-canonical-workspace-handoff-v1"
 AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID = "agent-run-shared-pool-step-retry-v1"
 AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID = "agent-run-pool-checkpoint-source-v1"
+AGENT_RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH_ID = (
+    "agent-run-canonical-repository-workspace-handoff-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -6834,7 +6838,18 @@ class MoonMindAgentRun:
         if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
             saved_workspace = self._saved_pool_workspace_ref(self.final_result)
             if saved_workspace is not None:
-                request.workspace_spec["workspaceCheckpointRestoreRef"] = saved_workspace
+                if (
+                    (request.workspace_spec.get("workspaceSource") or {}).get("kind") == "repository"
+                    and request.canonical_repository_workspace_handoff
+                    and self._workflow_patch_enabled(
+                        AGENT_RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH_ID
+                    )
+                ):
+                    request.workspace_spec = replace_repository_workspace_source(
+                        request.workspace_spec, saved_workspace
+                    )
+                else:
+                    request.workspace_spec["workspaceCheckpointRestoreRef"] = saved_workspace
                 if (
                     (request.workspace_spec.get("workspaceSource") or {}).get("kind")
                     == "scratch"

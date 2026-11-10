@@ -46,6 +46,7 @@ with workflow.unsafe.imports_passed_through():
         authored_repository_source,
         authored_starting_branch,
     )
+    from moonmind.omnigent.workspace_sources import replace_repository_workspace_source
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
@@ -808,6 +809,7 @@ RUN_SHARED_STEP_CONFIGURATION_PATCH = "run-shared-step-recorded-configuration-v1
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
 RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH = "run-dispatch-checkpoint-source-v1"
+RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH = "run-canonical-repository-workspace-handoff-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -18240,6 +18242,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             moonmind = dict(raw_hints) if isinstance(raw_hints, Mapping) else {}
             moonmind["poolContextHandoff"] = True
             if (
+                (request.workspace_spec.get("workspaceSource") or {}).get("kind") == "repository"
+                and workflow.patched(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
+            ):
+                request = request.model_copy(
+                    update={"canonical_repository_workspace_handoff": True}
+                )
+            if (
                 self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
                 and self._workflow_patch_enabled(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
             ):
@@ -18274,9 +18283,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if not workspace.get("workspaceCheckpointRestoreRef"):
                 if receipt.workspace_checkpoint_restore_ref is None:
                     raise ValueError("shared pool context has no verified saved workspace")
-                workspace["workspaceCheckpointRestoreRef"] = (
-                    receipt.workspace_checkpoint_restore_ref
-                )
+                if (
+                    (workspace.get("workspaceSource") or {}).get("kind") == "repository"
+                    and workflow.patched(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
+                ):
+                    workspace = replace_repository_workspace_source(
+                        workspace, receipt.workspace_checkpoint_restore_ref
+                    )
+                else:
+                    workspace["workspaceCheckpointRestoreRef"] = (
+                        receipt.workspace_checkpoint_restore_ref
+                    )
                 if (
                     (workspace.get("workspaceSource") or {}).get("kind") == "scratch"
                     and workflow.patched(RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH)
@@ -23574,7 +23591,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 raise ValueError(
                     "authored workspace checkpoint conflicts with remediation authority"
                 )
-            workspace_spec["workspaceCheckpointRestoreRef"] = restore_ref
+            if (
+                shared_checkpoint_required
+                and (workspace_spec.get("workspaceSource") or {}).get("kind") == "repository"
+                and self._workflow_patch_enabled(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
+            ):
+                workspace_spec = replace_repository_workspace_source(
+                    workspace_spec, restore_ref
+                )
+            else:
+                workspace_spec["workspaceCheckpointRestoreRef"] = restore_ref
             if (
                 shared_checkpoint_required
                 and (workspace_spec.get("workspaceSource") or {}).get("kind")

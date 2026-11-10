@@ -344,10 +344,36 @@ class ManagedCheckpointRestoreService:
                 if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
 
-    def _verify_git_candidate(self, workspace, manifest, base):
+    def _saved_sandbox_branch(self, manifest: Mapping[str, Any]) -> str | None:
+        # Managed manifests historically recorded branch as provenance while
+        # restoring detached. Only the sandbox format newly captures restore
+        # intent here; old absent fields retain their original interpretation.
+        if manifest.get("kind") != "worktree_archive" or manifest.get("contentType") == (
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"
+        ):
+            return None
+        git = manifest.get("git", {})
+        if "branch" not in git:
+            return None
+        branch = git["branch"]
+        if not isinstance(branch, str):
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        if branch and self._git(
+            ["check-ref-format", "--branch", branch],
+            code="CHECKPOINT_MANIFEST_CORRUPTED",
+        ) != branch:
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        return branch
+
+    def _verify_git_candidate(self, workspace, manifest, base, *, admitted_target_branch=None):
         from .checkpoint_history import capture_git_index_patch
         if self._git(["rev-parse", "HEAD"], workspace) != base:
             raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
+        branch = self._saved_sandbox_branch(manifest)
+        if branch is not None and self._git(["branch", "--show-current"], workspace) not in {
+            branch, admitted_target_branch,
+        }:
+            raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git branch changed")
         index = manifest.get("git", {}).get("indexPatch")
         # This compares already-authorized immutable content; it does not grant
         # export authority or re-scan a checkpoint under a different policy.
@@ -547,12 +573,34 @@ class ManagedCheckpointRestoreService:
         raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest,
         *,
         access: ArtifactAccessContext,
+        admitted_target_branch: str | None = None,
     ) -> dict[str, Any]:
         req = (
             raw
             if isinstance(raw, ManagedWorkspaceRestoreRequest)
             else ManagedWorkspaceRestoreRequest.model_validate(raw)
         )
+        # The checkpoint-branch owner may already have renamed a verified
+        # candidate before its readiness commit was interrupted. This internal
+        # authority is not authored restore data and does not change retained
+        # request/receipt digests. It never changes the branch during restore.
+        if admitted_target_branch == "":
+            admitted_target_branch = None
+        if admitted_target_branch is not None:
+            if (
+                not isinstance(req.destination, SandboxRestoreDestination)
+                or req.workspace_policy != "restore_step_input"
+                or not isinstance(admitted_target_branch, str)
+                or not admitted_target_branch
+                or self._git(
+                    ["check-ref-format", "--branch", admitted_target_branch],
+                    code="CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                ) != admitted_target_branch
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "checkpoint branch override is invalid",
+                )
         lock_dir = self.root / "managed_restores"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / (
@@ -563,7 +611,9 @@ class ManagedCheckpointRestoreService:
             with lock_path.open("a+") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
-                    return await self._restore_locked(req, access=access)
+                    return await self._restore_locked(
+                        req, access=access, admitted_target_branch=admitted_target_branch,
+                    )
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -572,6 +622,7 @@ class ManagedCheckpointRestoreService:
         req: ManagedWorkspaceRestoreRequest,
         *,
         access: ArtifactAccessContext,
+        admitted_target_branch: str | None = None,
     ) -> dict[str, Any]:
         record_dir = self.root / "managed_restores"
         record_dir.mkdir(parents=True, exist_ok=True)
@@ -608,7 +659,10 @@ class ManagedCheckpointRestoreService:
                         raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed")
                     manifest = self._normalize_manifest(json.loads(manifest_bytes))
                     self._verify_materialized(workspace, manifest, selected_only=req.restores_original_owner)
-                    self._verify_git_candidate(workspace, manifest, req.checkpoint.base_commit)
+                    self._verify_git_candidate(
+                        workspace, manifest, req.checkpoint.base_commit,
+                        admitted_target_branch=admitted_target_branch,
+                    )
                     if self._git(["rev-parse", "HEAD"], workspace) != req.checkpoint.base_commit:
                         raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
                     status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
@@ -852,7 +906,11 @@ class ManagedCheckpointRestoreService:
                 self._git(
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
-                self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                branch = self._saved_sandbox_branch(manifest)
+                if branch:
+                    self._git(["checkout", "-B", branch, req.checkpoint.base_commit], staging)
+                else:
+                    self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
                 await self._restore_index(staging, manifest, access=access)
                 await self._restore_submodules(staging, manifest, access=access)
                 count, size = self._extract(

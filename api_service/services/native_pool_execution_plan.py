@@ -536,8 +536,34 @@ async def prepare_selected_pool_plan(
             }
         source = request.workspace_spec.get("workspaceSource") or {}
         locator = request.workspace_spec.get("workspaceLocator") or {}
+        repository_handoff = (
+            request.canonical_repository_workspace_handoff
+            and source.get("kind") == "repository"
+        )
+        if repository_handoff:
+            from moonmind.omnigent.repository_sources import normalize_repository_source
+            from moonmind.omnigent.workspace_sources import (
+                compile_workspace_source, has_repository_workspace_revision,
+            )
+
+            compiled_source = compile_workspace_source(request.workspace_spec)
+            target = (
+                source.get("repositoryTarget")
+                or request.workspace_spec.get("repositoryTarget")
+                or {}
+            )
+            # The shared repository materializer consumes admitted GitHub
+            # identity/credentials. Local and other-provider native sources
+            # keep their current adapter rather than acquiring a new meaning.
+            repository_handoff = (
+                isinstance(target, Mapping)
+                and target.get("provider") in {None, "git"}
+                and not has_repository_workspace_revision(request.workspace_spec)
+                and normalize_repository_source(compiled_source.repository_ref or "")[1]
+                == "github_https"
+            )
         if (
-            source.get("kind") not in {None, "scratch", "git"}
+            (source.get("kind") not in {None, "scratch", "git"} and not repository_handoff)
             or not isinstance(locator, Mapping)
             or locator.get("kind") not in {None, "managed_runtime", "sandbox"}
             or any(

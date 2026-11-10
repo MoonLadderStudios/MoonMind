@@ -1,6 +1,7 @@
 """A pool remains dynamic until its existing manager grants the exact account."""
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -110,7 +111,9 @@ def _submission(payload, *, fixed_serialized, runtime):
 async def execute_selected_pool_source(
     native_journey, monkeypatch, *, scenario="ordinary", include_successor=False,
     fixed_serialized=False, explicit_scratch=False,
-    runtime_selection=None, step_runtime=None,
+    runtime_selection=None, step_runtime=None, repository_workspace=None,
+    bind_parent_context=False, repository_at_top=True, terminal_runner=None,
+    expected_native_reason=None, parent_repository_patch=True, submission_parameters=None,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -123,7 +126,7 @@ async def execute_selected_pool_source(
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
         repository = None
-        if publish_scenario or work_branch_scenario:
+        if publish_scenario or work_branch_scenario or repository_workspace is not None:
             from api_service.services.repository_connections import (
                 RepositoryConnectionService,
             )
@@ -248,10 +251,11 @@ async def execute_selected_pool_source(
                             ],
                         },
                         "publishMode": "none",
-                        **({"repository": repository} if repository else {}),
+                        **(submission_parameters or {}),
+                        **({"repository": repository} if repository and repository_at_top else {}),
                         **(
                             {"workspace": {"workspaceSource": {"kind": "scratch"}}}
-                            if explicit_scratch else {}
+                            if explicit_scratch else ({"workspace": repository_workspace} if repository_workspace is not None else {})
                         ),
                     },
                 }, fixed_serialized=fixed_serialized, runtime=runtime),
@@ -262,9 +266,28 @@ async def execute_selected_pool_source(
         )
         assert record.parameters["targetRuntime"] == runtime
         assert not record.parameters.get("omnigentExecutionPlan")
-        request = agent_requests(
-            record.parameters, workflow_id=record.workflow_id, run_id=record.run_id
-        )["work"]
+        with monkeypatch.context() as parent_patch:
+            if not parent_repository_patch:
+                from moonmind.workflows.temporal.workflows.run import (
+                    MoonMindUserWorkflow, RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH,
+                )
+
+                original_patch = MoonMindUserWorkflow._workflow_patch_enabled
+                parent_patch.setattr(
+                    MoonMindUserWorkflow, "_workflow_patch_enabled",
+                    lambda self, marker: False if marker == RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH else original_patch(marker),
+                )
+            request = agent_requests(
+                deepcopy(record.parameters), workflow_id=record.workflow_id, run_id=record.run_id
+            )["work"]
+        if bind_parent_context:
+            from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+
+            monkeypatch.setattr("temporalio.workflow.patched", lambda marker: True)
+            request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
+            assert request.canonical_repository_workspace_handoff is (
+                (request.workspace_spec.get("workspaceSource") or {}).get("kind") == "repository"
+            )
         assert request.execution_profile_ref == (native_fixture.PROFILE if fixed_serialized else None)
         assert request.profile_selector.tags_all == ([] if fixed_serialized else ["selected-pool"])
         if scenario == "explicit_work_branch":
@@ -285,7 +308,7 @@ async def execute_selected_pool_source(
         if publish_scenario:
             assert record.parameters["publishMode"] == "none"
             assert request.parameters["publishMode"] == "pr"
-        original_parameters, original_memo = dict(record.parameters), dict(record.memo)
+        original_parameters, original_memo = deepcopy(record.parameters), deepcopy(record.memo)
         parent_id = record.workflow_id
         parent_run = record.run_id
         monkeypatch.setattr(
@@ -399,8 +422,12 @@ async def execute_selected_pool_source(
         result = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
         )
-        if scenario in {"disabled", "native_tier_option", "tier_environment", "explicit_native_option", "invalid_work_branch_origin", "missing_generated_work_branch"}:
+        if expected_native_reason or scenario in {"disabled", "native_tier_option", "tier_environment", "explicit_native_option", "invalid_work_branch_origin", "missing_generated_work_branch"}:
             assert result["disposition"] == "native", result
+            if expected_native_reason:
+                assert result["reason"] == expected_native_reason
+                unchanged = await session.get(TemporalExecutionCanonicalRecord, parent_id)
+                assert unchanged.parameters == original_parameters and unchanged.memo == original_memo
             if scenario == "native_tier_option":
                 assert result["reason"] == "native_parameter_defaults_require_an_equivalent_handoff"
             if scenario == "tier_environment":
@@ -662,7 +689,7 @@ async def execute_selected_pool_source(
     journey.docker.host_class, _ = await journey.services.planned_host_resolver(
         plan, request=admitted
     )
-    terminal = await native_fixture.assert_native_turn_saved_and_cleaned(journey)
+    terminal = await (terminal_runner or native_fixture.assert_native_turn_saved_and_cleaned)(journey)
     return SimpleNamespace(
         result=terminal,
         original=request,
