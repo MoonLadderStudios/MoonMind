@@ -9,13 +9,13 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.omnigent import workspace_intent  # noqa: F401
+    from moonmind.omnigent import workspace_intent
     from moonmind.omnigent.workspace_sources import replace_repository_workspace_source
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
         AgentRunResult,
     )
-    from moonmind.workflows.executions import repository_contract  # noqa: F401
+    from moonmind.workflows.executions import repository_contract
     from moonmind.workflows.temporal.workflows.agent_run import (
         AGENT_RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH_ID,
         MoonMindAgentRun,
@@ -65,9 +65,6 @@ async def _retained(payload):
 @activity.defn(name="repository.observe.current")
 async def _current(payload):
     from moonmind.omnigent.workspace_sources import compile_workspace_source
-    from moonmind.workflows.executions.repository_contract import (
-        authored_repository_access,
-    )
 
     source = compile_workspace_source(payload["workspaceSpec"])
     assert (source.kind, source.repository_ref, source.repository_branch) == (
@@ -75,7 +72,13 @@ async def _current(payload):
         "owner/repo",
         "selected-base",
     )
-    assert authored_repository_access({"workspaceSpec": payload["workspaceSpec"]}) == (
+    request = AgentExecutionRequest.model_construct(
+        workspace_spec=payload["workspaceSpec"], parameters={}
+    )
+    assert workspace_intent.authored_repository_source(request) == "owner/repo"
+    assert repository_contract.authored_repository_access(
+        {"workspaceSpec": payload["workspaceSpec"]}
+    ) == (
         "selected-repository",
         False,
     )
