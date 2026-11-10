@@ -23,20 +23,16 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
     TemporalArtifactStateError,
 )
-
-# Reuse the real durable graph/instruction-admission fixture.
-from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (
-    _dispatch_claimed,
-)
-from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (
-    auth_mode as auth_mode,  # noqa: PLC0414 - pytest fixture registration
-)
-from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (
-    instruction_authority as instruction_authority,  # noqa: PLC0414 - pytest fixture registration
+from tests.unit.omnigent import (
+    test_checkpoint_branch_instruction_authority as branch_fixtures,
 )
 from tests.unit.omnigent.test_checkpoint_branch_turn_execution import (
     _valid_source_checkpoint,
 )
+
+# Register the existing durable graph fixtures in this module's pytest scope.
+auth_mode = branch_fixtures.auth_mode
+instruction_authority = branch_fixtures.instruction_authority
 
 
 @pytest.mark.asyncio
@@ -190,7 +186,7 @@ async def test_claimed_turn_admits_only_its_recorded_launch_inputs(
         turn.source_checkpoint_ref = checkpoint
         turn.step_execution_manifest_ref = manifest
         await session.commit()
-    client = await _dispatch_claimed(fixture)
+    client = await branch_fixtures._dispatch_claimed(fixture)
     client.start_workflow.assert_awaited_once()
     destination = ArtifactAccessContext.for_execution(fixture.identity.workflow_id)
     async with fixture.sessions() as session:

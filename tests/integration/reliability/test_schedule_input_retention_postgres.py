@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 
 from api_service.db import models
@@ -21,6 +22,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactTransactionOwnership,
     TemporalArtifactRepository,
     TemporalArtifactStateError,
+    TemporalArtifactUnavailableError,
 )
 from tests.artifact_access import access_for_test
 from tests.support.isolated_postgres import isolated_postgres
@@ -557,8 +559,34 @@ async def test_shared_blob_hard_sweep_and_multi_input_schedule_do_not_deadlock(
         assert not isinstance(collected, DBAPIError), str(collected)
         assert not isinstance(written, DBAPIError), str(written)
         assert collected.hard_deleted_count == 2
+        if isinstance(written, RecurringWorkflowValidationError):
+            # Sealing deliberately uses nonblocking dependency locks. The
+            # collector can still hold the second shared blob when the writer
+            # reaches that boundary: this is a retryable admission, not a
+            # deadlock or permission failure. Retry only that exact condition,
+            # after both concurrent transactions have finished.
+            cause = written.__cause__
+            assert isinstance(cause, TemporalArtifactUnavailableError), str(written)
+            assert cause.dependency == "authority", str(written)
+            assert cause.operation == "lock_dependencies", str(written)
+            assert cause.artifact_id in {first_id, second_id}, str(written)
+            async with sessions() as retry:
+                written = await asyncio.wait_for(
+                    write_schedule(
+                        retry, first_id, adapter(), tmp_path, plan_id=second_id
+                    ),
+                    timeout=15,
+                )
+        assert not isinstance(written, BaseException), str(written)
         assert written.target["inputArtifactRef"] == first_id
+        assert written.target["planArtifactRef"] == second_id
         async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(models.RecurringWorkflowDefinition)
+                )
+                == 1
+            )
             reader = _service(session, tmp_path)
             for artifact_id in (first_id, second_id):
                 assert (
