@@ -11449,6 +11449,35 @@ async def _attach_input_attachment_artifacts_to_execution(
     await session.flush()
 
 
+async def _route_omitted_git_connection(
+    session: Any, *, principal: str, value: object
+) -> object:
+    """Select the assigned connection for a Git target that names none.
+
+    Create has no connection selector, so a repository assigned to exactly
+    one connection uses it. Without that, the omitted reference still
+    compiles to the deployment default connection.
+    """
+
+    if (
+        session is None
+        or not isinstance(value, Mapping)
+        or value.get("provider") != "git"
+        or str(value.get("connectionRef") or "").strip()
+    ):
+        return value
+    repository = value.get("repository")
+    name = repository.get("name") if isinstance(repository, Mapping) else None
+    if not isinstance(name, str) or not name.strip():
+        return value
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    connection_ref = await RepositoryConnectionService(session).routed_connection_ref(
+        name.strip(), principal_ref=principal, principal_scope=("system", None)
+    )
+    return {**value, "connectionRef": connection_ref} if connection_ref else value
+
+
 def _normalize_submitted_repository(
     value: object,
 ) -> tuple[str | dict[str, Any] | None, str | None]:
@@ -12057,7 +12086,11 @@ async def _create_execution_from_workflow_request(
         )
 
     repository_payload, repository = _normalize_submitted_repository(
-        payload.get("repository")
+        await _route_omitted_git_connection(
+            session,
+            principal=_execution_principal(user),
+            value=payload.get("repository"),
+        )
     )
     workspace_spec, repository, workspace_source_kind = _admit_workspace_source(
         payload.get("workspace"),

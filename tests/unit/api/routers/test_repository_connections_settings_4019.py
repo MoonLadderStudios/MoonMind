@@ -1069,3 +1069,59 @@ async def test_gitlab_project_is_never_a_routed_github_repository(harness, monke
             principal_scope=("system", None),
         )
     assert [candidate.connection.id for candidate in candidates] == ["personal-github"]
+
+
+async def test_omitted_git_connection_follows_the_repository_assignment(
+    harness, monkeypatch
+):
+    """Create has no connection selector, so the assignment picks the connection."""
+
+    from api_service.api.routers.executions import _route_omitted_git_connection
+
+    client = harness.client
+    for connection_id, request_id, token in (
+        ("personal-github", "req-1", TOKEN_A),
+        ("work-github", "req-2", TOKEN_B),
+    ):
+        await client.post(
+            "/api/v1/repository-connections/pat",
+            json=_create_body(connection_id, connection_id, request_id, token),
+        )
+
+    async def _observe(connection, repository):
+        return {"id": "101", "fullName": "acme/widgets"}
+
+    monkeypatch.setattr(router_module, "observe_github_repository", _observe)
+    assigned = await client.post(
+        "/api/v1/repository-connections/work-github/assignments",
+        json={"requestId": "req-assign", "repository": "acme/widgets"},
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    async def _routed(value):
+        async with harness.maker() as session:
+            return await _route_omitted_git_connection(
+                session, principal="principal:operator", value=value
+            )
+
+    target = {
+        "provider": "git",
+        "repository": {"name": "acme/widgets"},
+        "branch": {"name": "feature"},
+    }
+    assert (await _routed(target))["connectionRef"] == "work-github"
+    # An authored connection, an unassigned repository, and a bare name are
+    # left for the existing default and routed admission.
+    authored = {**target, "connectionRef": "personal-github"}
+    assert await _routed(authored) == authored
+    unassigned = {**target, "repository": {"name": "acme/gadgets"}}
+    assert await _routed(unassigned) == unassigned
+    assert await _routed("acme/widgets") == "acme/widgets"
+
+    # Two connections assigned the same repository leave nothing to choose.
+    again = await client.post(
+        "/api/v1/repository-connections/personal-github/assignments",
+        json={"requestId": "req-assign-2", "repository": "acme/widgets"},
+    )
+    assert again.status_code == 200, again.text
+    assert await _routed(target) == target

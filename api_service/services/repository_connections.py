@@ -1668,6 +1668,25 @@ class RepositoryConnectionService:
                 )
         return candidates
 
+    async def routed_connection_ref(
+        self,
+        repository: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> str | None:
+        """Return the one connection whose recorded assignment routes a repository.
+
+        ``None`` when no permitted connection is assigned or several are, so
+        the caller keeps its own default instead of guessing.
+        """
+
+        candidates = await self.launch_candidates(
+            repository, principal_ref=principal_ref, principal_scope=principal_scope
+        )
+        refs = {candidate.connection.id for candidate in candidates}
+        return next(iter(refs)) if len(refs) == 1 else None
+
     async def lore_projection_owner(self, repository: str) -> str | None:
         """Return the Lore connection whose review projection is this GitHub repo.
 
