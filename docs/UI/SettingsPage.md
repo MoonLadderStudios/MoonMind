@@ -168,7 +168,7 @@ The Defaults card shows each setting's label, its control, and an ellipsis menu 
 
 Each saved profile row shows identity, readiness, active use, capacity problems, and a broken bound secret by default. Credential source, materialization, OAuth volume and mount path, cooldown, and SecretRefs sit in that row's Details disclosure. Row actions sit in one ellipsis menu, the shared actions menu; pending or readiness-blocked actions stay listed under Unavailable with their reason, and Delete asks for confirmation. The create form opens from **Add profile** rather than staying open below the table; it shows directly only when no profile is listed. The problem alert lists a permission only when it disables an action.
 
-Stored secrets is the primary Managed Secrets view; **Add secret**, Edit, and Rotate open a focused dialog that keeps errors with the draft and confirms discarding an entered value. Broken secrets load Usage automatically.
+Managed Secrets lists stored secrets. Add, Edit, and Rotate dialogs keep errors with drafts and confirm discards. Broken secrets load Usage automatically; changes refresh profile readiness and default warnings without hiding unrelated blockers.
 
 Action results on this page (saved, reset, enabled, deleted) are toasts. A problem that lasts until someone fixes it appears in the problem alert and on the affected row, never as a toast.
 

@@ -446,3 +446,109 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
   });
 
 });
+
+describe('Providers & Secrets readiness after secret changes', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { operation: 're-enable', pendingInventory: false },
+    { operation: 'create', pendingInventory: false },
+    { operation: 're-enable', pendingInventory: true },
+    { operation: 'create', pendingInventory: true },
+    { operation: 're-enable', pendingInventory: false, disabledAgain: true },
+  ])('refreshes $operation readiness with pending inventory=$pendingInventory and later disable=$disabledAgain', async ({ operation, pendingInventory, disabledAgain }) => {
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let status: string | null = operation === 'create' ? null : 'disabled';
+    let finishInitialProfileRead: (() => void) | undefined;
+    let failMutation = true;
+    let profileReads = 0;
+    const readiness = (blocked: boolean) => ({
+      status: blocked ? 'blocked' : 'ready', launch_ready: !blocked,
+      summary: blocked ? 'Provider profile has launch blockers.' : 'Provider profile is ready for launch.',
+      checks: [{ id: 'secret_refs', label: 'SecretRef bindings', status: blocked ? 'error' : 'pass', message: blocked ? 'Secret unavailable.' : 'Valid.' }],
+    });
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const respond = (body: unknown, code = 200) => new Response(JSON.stringify(body), { status: code });
+      if (url === '/api/v1/provider-profiles') {
+        profileReads += 1;
+        const profiles = [{
+          profile_id: 'bound-profile', runtime_id: 'claude_code', provider_id: 'anthropic', enabled: true,
+          secret_refs: { ANTHROPIC_API_KEY: 'db://api-key' }, max_parallel_runs: 1,
+          credential_source: 'secret_ref', runtime_materialization_mode: 'api_key_env', readiness: readiness(status !== 'active'),
+        }, {
+          profile_id: 'unrelated-profile', runtime_id: 'codex_cli', provider_id: 'openai', enabled: true,
+          secret_refs: {}, max_parallel_runs: 1, readiness: { ...readiness(true), summary: 'Authentication expired.' },
+        }];
+        if (pendingInventory && profileReads === 1) return new Promise<Response>((resolve) => {
+          finishInitialProfileRead = () => resolve(respond(profiles));
+        });
+        return respond(profiles);
+      }
+      if (url.startsWith('/api/v1/settings/catalog')) return respond({ categories: { Workflow: [
+        { key: 'workflow.default_runtime', title: 'Harness', type: 'enum', ui: 'select', effective_value: 'claude_code', options: [{ value: 'claude_code', label: 'Claude Code' }], value_version: 1 },
+        { key: 'workflow.default_provider_profile_ref', title: 'Provider profile', type: 'string', ui: 'provider_profile_picker', effective_value: 'bound-profile', value_version: 1 },
+      ] } });
+      if (url.startsWith('/api/v1/secrets') && init?.method) {
+        if (failMutation) return respond({ detail: 'Secret change failed.' }, 500);
+        // A later disable can win after the repair commits but before inventory reloads.
+        if (init.method === 'POST' || url.endsWith('/status')) status = disabledAgain ? 'disabled' : 'active';
+        return respond({});
+      }
+      if (url === '/api/v1/secrets') return respond({ items: status ? [{ slug: 'api-key', status, details: {}, createdAt: '2026-11-06' }] : [] });
+      if (url.endsWith('/usage')) return respond({ secretRef: 'db://api-key', usages: [] });
+      return respond({ items: [] });
+    });
+    const { queryClient } = renderProvidersPage({ page: 'settings-providers-secrets', apiBase: '/api', initialData: {} });
+    await screen.findByRole('button', { name: 'Add secret' });
+    if (!pendingInventory) {
+      await screen.findByText("unrelated-profile can't launch: Authentication expired.");
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['provider-profiles'] })).toBe(0));
+    }
+    const initialProfileReads = profileReads;
+    const defaultProblem = () => screen.queryByText(/New work defaults to bound-profile, which is not launch-ready/);
+    const profileProblem = () => screen.queryByText(/bound-profile can't launch: Provider profile has launch blockers/);
+    const assertBlocked = (blocked: boolean) => {
+      expect(Boolean(defaultProblem())).toBe(blocked);
+      expect(Boolean(profileProblem())).toBe(blocked);
+      expect(within(document.getElementById('provider-profile-bound-profile')!).getByText(`Readiness: ${blocked ? 'Blocked' : 'Ready'}`)).toBeTruthy();
+      expect(screen.getByText("unrelated-profile can't launch: Authentication expired.")).toBeTruthy();
+    };
+    if (!pendingInventory) assertBlocked(true);
+    if (operation === 'create') {
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+      fireEvent.change(screen.getByLabelText('Secret slug'), { target: { value: 'api-key' } });
+      fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'replacement-value' } });
+    }
+    const submit = () => fireEvent.click(screen.getByRole('button', {
+      name: operation === 'create' ? 'Encrypt and store secret' : 'Re-enable api-key',
+    }));
+    submit();
+    await screen.findByText('Secret change failed.');
+    if (!pendingInventory) assertBlocked(true);
+    expect(profileReads).toBe(initialProfileReads);
+    failMutation = false;
+    submit();
+    await screen.findByText(operation === 'create' ? 'Secret saved successfully.' : 'Secret re-enabled.');
+    await waitFor(() => assertBlocked(Boolean(disabledAgain)));
+    expect(profileReads).toBeGreaterThan(initialProfileReads);
+    expect(document.getElementById('managed-secret-api-key')?.textContent).toContain(disabledAgain ? 'Disabled' : 'Active');
+    if (finishInitialProfileRead) {
+      await act(async () => { finishInitialProfileRead!(); });
+      assertBlocked(Boolean(disabledAgain));
+    }
+    if (operation === 're-enable' && !pendingInventory && !disabledAgain) {
+      // An external disable survives editing the value: refresh must reveal the
+      // new blocker rather than optimistically treating every success as ready.
+      status = 'disabled';
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'updated-value' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save new value' }));
+      await screen.findByText('Secret updated successfully.');
+      await waitFor(() => assertBlocked(true));
+      submit();
+      await waitFor(() => assertBlocked(false));
+    }
+  });
+});
