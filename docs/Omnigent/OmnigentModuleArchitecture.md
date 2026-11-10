@@ -187,7 +187,7 @@ Older parents retain native dispatch. Fresh preparation selects the authored
 target branch through the existing volume owner; redelivery preserves later
 branches and edits. New sandbox saves restore their captured branch and history,
 including detached HEAD; retained manifests keep their prior restore behavior.
-Explicit checkpoint-branch creation still selects its new target branch. Each
+Explicit checkpoint-branch creation and interrupted redelivery retain the admitted target. Each
 helper mounts only its admitted subtree, preserving sibling isolation.
 
 The stable runtime binding store and legacy harness binding store currently

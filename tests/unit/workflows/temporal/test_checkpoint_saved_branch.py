@@ -81,7 +81,12 @@ def restore_request(store, capture, head, manifest):
 @pytest.mark.parametrize(
     "shape", ["attached", "detached", "retained-sandbox", "retained-managed"]
 )
-async def test_checkpoint_saved_branch_and_retained_detachment(tmp_path, shape):
+@pytest.mark.parametrize(
+    "empty_override", [None, ""], ids=["absent-override", "empty-override"]
+)
+async def test_checkpoint_saved_branch_and_retained_detachment(
+    tmp_path, shape, empty_override
+):
     _source, head, store, capture = await capture_workspace(
         tmp_path, detached=shape == "detached"
     )
@@ -108,14 +113,22 @@ async def test_checkpoint_saved_branch_and_retained_detachment(tmp_path, shape):
     service = ManagedCheckpointRestoreService(
         authority_root=tmp_path / "authority", artifact_store=store
     )
-    first = await service.restore(request, access=access_for_test("workflow:source"))
+    first = await service.restore(
+        request,
+        access=access_for_test("workflow:source"),
+        admitted_target_branch=empty_override,
+    )
     restored = service.root / "new-run" / "repo"
     assert git(restored, "rev-parse", "HEAD") == head
     assert git(restored, "branch", "--show-current") == (
         "saved/accepted-work" if shape == "attached" else ""
     )
     assert (
-        await service.restore(request, access=access_for_test("workflow:source"))
+        await service.restore(
+            request,
+            access=access_for_test("workflow:source"),
+            admitted_target_branch=empty_override,
+        )
         == first
     )
     if shape in {"attached", "detached"}:
@@ -123,7 +136,11 @@ async def test_checkpoint_saved_branch_and_retained_detachment(tmp_path, shape):
         with pytest.raises(
             CheckpointRestoreError, match="CHECKPOINT_ENTRY_DIGEST_MISMATCH"
         ):
-            await service.restore(request, access=access_for_test("workflow:source"))
+            await service.restore(
+                request,
+                access=access_for_test("workflow:source"),
+                admitted_target_branch=empty_override,
+            )
 
 
 @pytest.mark.asyncio
@@ -167,3 +184,22 @@ async def test_capture_rejects_branch_switch_at_same_head(tmp_path, monkeypatch)
         activity_runtime.TemporalActivityRuntimeError, match="workspace changed"
     ):
         await capture_workspace(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_branch_override_does_not_apply_to_managed_restore(tmp_path):
+    _source, head, store, capture = await capture_workspace(tmp_path)
+    manifest = json.loads(store.get_bytes(capture["workspace"]["manifestRef"]))
+    request = restore_request(store, capture, head, manifest)
+    service = ManagedCheckpointRestoreService(
+        authority_root=tmp_path / "authority", artifact_store=store
+    )
+    with pytest.raises(
+        CheckpointRestoreError, match="CHECKPOINT_DESTINATION_IDENTITY_MISMATCH"
+    ):
+        await service.restore(
+            request,
+            access=access_for_test("workflow:source"),
+            admitted_target_branch="another-branch",
+        )
+    assert not (service.root / "new-run" / "repo").exists()

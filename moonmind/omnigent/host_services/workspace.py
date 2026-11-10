@@ -693,6 +693,7 @@ class OmnigentWorkspaceMaterializer:
     ):
         """Use the checkpoint owner's Git/history/index restore, not tar overlay."""
         from moonmind.omnigent.workspace_intent import authored_repository_source
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
         from moonmind.workflows.executions.repository_contract import (
             github_repository_name_from_value,
         )
@@ -704,6 +705,30 @@ class OmnigentWorkspaceMaterializer:
         )
 
         identity = request.step_execution
+        admitted_target_branch = None
+        restore = (request.parameters or {}).get("checkpointRestore", {})
+        if isinstance(restore, dict) and restore.get("mode") == "branch":
+            # _read_step_input_checkpoint verified the branch's source authority.
+            # Its destination name belongs to the existing branch identity, not
+            # to the reused source plan or a mutable workspace projection.
+            branch_name = (identity.branch or {}).get("gitWorkBranch")
+            if branch_name:
+                if (
+                    not isinstance(branch_name, str)
+                    or request.workspace_spec.get("targetBranch") != branch_name
+                    or any(
+                        value not in (None, "", branch_name)
+                        for value in (
+                            request.parameters.get("targetBranch"),
+                            identity.runtime_selection.get("gitWorkBranch"),
+                        )
+                    )
+                ):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                        "checkpoint target branch differs from its admitted identity",
+                    )
+                admitted_target_branch = branch_name
         previous = checkpoint.source.model_dump(by_alias=True, mode="json")
         previous_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
         repository_source = authored_repository_source(request)
@@ -791,6 +816,7 @@ class OmnigentWorkspaceMaterializer:
                 "idempotencyKey": f"{request.idempotency_key}:restore-step-input:{source.checkpoint_ref}:{generation}",
             },
             access=await step_execution_artifact_access(request),
+            admitted_target_branch=admitted_target_branch,
         )
 
     async def _resolve_remediation_workspace(

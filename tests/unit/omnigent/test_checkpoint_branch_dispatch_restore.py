@@ -69,7 +69,7 @@ def git(path, *args):
     ],
 )
 async def test_branch_producer_dispatch_restores_saved_git_work(
-    tmp_path, monkeypatch, fault
+    tmp_path, monkeypatch, fault, interrupt_before_ready=None
 ):
     model_override = fault == "model_override"
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
@@ -408,6 +408,32 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
             monkeypatch.setattr(
                 materializer, "_prepare_sandbox_workspace", clone_baseline
             )
+            if interrupt_before_ready:
+                from moonmind.omnigent.workspace_artifacts import (
+                    WorkspaceArtifactProjector,
+                )
+                from moonmind.workflows.temporal.runtime.workspace_locators import (
+                    SandboxWorkspaceRecordStore,
+                )
+
+                # Isolate branch redelivery from the pre-existing additive-path
+                # verification gap between artifact projection and readiness.
+                # Source admission, Git restore and branch ownership stay real.
+                async def no_additional_paths(*args, **kwargs):
+                    return {"attachments": []}
+
+                monkeypatch.setattr(WorkspaceArtifactProjector, "project", no_additional_paths)
+                mark_ready = SandboxWorkspaceRecordStore.mark_ready
+                interrupted = False
+
+                def interrupt_once(store, *args, **kwargs):
+                    nonlocal interrupted
+                    if not interrupted:
+                        interrupted = True
+                        raise RuntimeError("interrupted before readiness")
+                    return mark_ready(store, *args, **kwargs)
+
+                monkeypatch.setattr(SandboxWorkspaceRecordStore, "mark_ready", interrupt_once)
             monkeypatch.setattr(materializer, "_prepare_target_branch", target_branch)
             gateway = SimpleNamespace(admit_execution_plan_inputs=AsyncMock())
             monkeypatch.setattr(
@@ -479,6 +505,31 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                         )
                     assert rejected.value.code == "CHECKPOINT_SOURCE_IDENTITY_MISMATCH"
                     return AgentRunResult(summary="cross-workflow restore rejected")
+                if interrupt_before_ready and not interrupted:
+                    with pytest.raises(RuntimeError, match="interrupted before readiness"):
+                        await materializer.materialize(
+                            delivered, plan=recorded_plan,
+                            runtime_uid=os.getuid(), runtime_gid=os.getgid(),
+                        )
+                    assert git(destination, "branch", "--show-current") == delivered.workspace_spec["targetBranch"]
+                    if interrupt_before_ready == "git_drift":
+                        git(destination, "checkout", "-qb", "unrelated-branch")
+                    elif interrupt_before_ready == "request_drift":
+                        delivered.workspace_spec["targetBranch"] = "unrelated-branch"
+                    elif interrupt_before_ready == "selection_drift":
+                        delivered.step_execution.runtime_selection["gitWorkBranch"] = "unrelated-branch"
+                    if interrupt_before_ready != "admitted":
+                        expected_code = (
+                            "CHECKPOINT_ENTRY_DIGEST_MISMATCH"
+                            if interrupt_before_ready == "git_drift"
+                            else "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH"
+                        )
+                        with pytest.raises(CheckpointRestoreError, match=expected_code):
+                            await materializer.materialize(
+                                delivered, plan=recorded_plan,
+                                runtime_uid=os.getuid(), runtime_gid=os.getgid(),
+                            )
+                        return AgentRunResult(summary="changed branch rejected without replacing saved work")
                 await materializer.materialize(
                     delivered,
                     plan=recorded_plan,
@@ -530,15 +581,27 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
             assert (destination / "unstaged.txt").read_text() == "unstaged work\n"
             assert not (destination / "deleted.txt").exists()
             assert git(destination, "status", "--porcelain") == expected_status
+            if interrupt_before_ready and interrupt_before_ready != "admitted":
+                assert branch_preparations == [destination]
+                return
             assert (
                 git(destination, "branch", "--show-current")
                 == request.workspace_spec["targetBranch"]
             )
-            assert branch_preparations == [destination]
+            expected_preparations = [destination] * (2 if interrupt_before_ready else 1)
+            assert branch_preparations == expected_preparations
             redelivery = await omnigent_activities._omnigent_execute_activity(request)
             assert redelivery.failure_class is None, redelivery
-            assert branch_preparations == [destination]
+            assert branch_preparations == expected_preparations
             assert git(destination, "rev-parse", "HEAD") == head
             assert git(destination, "status", "--porcelain") == expected_status
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["admitted", "git_drift", "request_drift", "selection_drift"])
+async def test_checkpoint_branch_recovers_interrupted_readiness(tmp_path, monkeypatch, interruption):
+    await test_branch_producer_dispatch_restores_saved_git_work(
+        tmp_path, monkeypatch, None, interrupt_before_ready=interruption,
+    )
