@@ -344,10 +344,34 @@ class ManagedCheckpointRestoreService:
                 if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
 
+    def _saved_sandbox_branch(self, manifest: Mapping[str, Any]) -> str | None:
+        # Managed manifests historically recorded branch as provenance while
+        # restoring detached. Only the sandbox format newly captures restore
+        # intent here; old absent fields retain their original interpretation.
+        if manifest.get("kind") != "worktree_archive" or manifest.get("contentType") == (
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"
+        ):
+            return None
+        git = manifest.get("git", {})
+        if "branch" not in git:
+            return None
+        branch = git["branch"]
+        if not isinstance(branch, str):
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        if branch and self._git(
+            ["check-ref-format", "--branch", branch],
+            code="CHECKPOINT_MANIFEST_CORRUPTED",
+        ) != branch:
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        return branch
+
     def _verify_git_candidate(self, workspace, manifest, base):
         from .checkpoint_history import capture_git_index_patch
         if self._git(["rev-parse", "HEAD"], workspace) != base:
             raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
+        branch = self._saved_sandbox_branch(manifest)
+        if branch is not None and self._git(["branch", "--show-current"], workspace) != branch:
+            raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git branch changed")
         index = manifest.get("git", {}).get("indexPatch")
         # This compares already-authorized immutable content; it does not grant
         # export authority or re-scan a checkpoint under a different policy.
@@ -852,7 +876,11 @@ class ManagedCheckpointRestoreService:
                 self._git(
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
-                self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                branch = self._saved_sandbox_branch(manifest)
+                if branch:
+                    self._git(["checkout", "-B", branch, req.checkpoint.base_commit], staging)
+                else:
+                    self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
                 await self._restore_index(staging, manifest, access=access)
                 await self._restore_submodules(staging, manifest, access=access)
                 count, size = self._extract(

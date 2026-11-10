@@ -157,6 +157,11 @@ async def test_branch_producer_dispatch_restores_saved_git_work(
                     "includeUntracked": True,
                 },
             )
+            _, manifest_bytes = await artifacts.read(
+                artifact_id=captured["workspace"]["manifestRef"].removeprefix("artifact:").lstrip("/"),
+                access=access_for_test("operator"),
+            )
+            assert json.loads(manifest_bytes)["git"]["branch"] == "main"
             saved = await activity.run(
                 TemporalCheckpointActivities(
                     artifact_service=artifacts

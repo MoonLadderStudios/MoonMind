@@ -29,6 +29,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -907,6 +908,80 @@ def compile_workspace_source(
     )
 
 
+def has_repository_workspace_revision(spec: Mapping[str, Any]) -> bool:
+    """Keep typed revision choices on their existing native owner."""
+    source = _as_mapping(spec.get("workspaceSource"))
+    return any(
+        isinstance(target, Mapping) and target.get("revision") is not None
+        for target in (
+            source.get("repositoryTarget"), source.get("repository"),
+            spec.get("repositoryTarget"), spec.get("repository"),
+        )
+    )
+
+
+def replace_repository_workspace_source(
+    spec: Mapping[str, Any], checkpoint_ref: str
+) -> dict[str, Any]:
+    """Carry a controller's save over its initial repository source.
+
+    This deterministic projection grants no artifact or repository access.
+    Admission and restoration still verify those authorities. Validate the
+    original source before adding the controller's reference: an authored
+    source conflict must not be repaired by replacing it. The existing
+    repository-plus-checkpoint aliases retain queued restore semantics.
+    """
+    from moonmind.omnigent.workspace_intent import authored_repository_source
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.executions.repository_contract import (
+        authored_repository_access,
+    )
+
+    authored = _as_mapping(spec.get("workspaceSource"))
+    if authored.get("kind") != "repository":
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_INVALID,
+            "controller replacement requires a repository source",
+        )
+    compiled = compile_workspace_source(spec)
+    authored_repository_source(
+        AgentExecutionRequest.model_construct(workspace_spec=dict(spec), parameters={})
+    )
+    if has_repository_workspace_revision(spec):
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+            "pinned repository source cannot be replaced by a shared controller save",
+        )
+    replacement = deepcopy(dict(spec))
+    replacement.pop("workspaceSource")
+    aliases = compile_workspace_source(replacement)
+    if (
+        aliases.repository_branch
+        and aliases.repository_branch != compiled.repository_branch
+    ):
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_CONFLICT,
+            "repository source branch conflicts with its aliases",
+        )
+    target = authored.get("repositoryTarget")
+    if isinstance(target, Mapping):
+        replacement.setdefault("repositoryTarget", deepcopy(dict(target)))
+    if compiled.repository_ref:
+        replacement["repository"] = compiled.repository_ref
+    if compiled.repository_branch:
+        replacement["startingBranch"] = compiled.repository_branch
+    connection, _anonymous = authored_repository_access({"workspaceSpec": spec})
+    if connection:
+        replacement["connectionRef"] = connection
+    if "accessMode" in authored:
+        # The existing access reader owns this metadata even when source kind
+        # is derived from the controller's repository/checkpoint aliases.
+        replacement["workspaceSource"] = {"accessMode": authored["accessMode"]}
+    replacement["workspaceCheckpointRestoreRef"] = checkpoint_ref
+    compile_workspace_source(replacement)
+    return replacement
+
+
 def verify_existing_workspace_grant(
     grant: ExistingWorkspaceGrant,
     *,
@@ -1054,7 +1129,9 @@ __all__ = [
     "compute_input_manifest_digest",
     "decode_legacy_workspace_path",
     "issue_existing_workspace_grant",
+    "has_repository_workspace_revision",
     "parse_existing_workspace_grant",
+    "replace_repository_workspace_source",
     "resolve_workspace_backend",
     "verify_existing_workspace_grant",
     "verify_existing_workspace_grant_signature",

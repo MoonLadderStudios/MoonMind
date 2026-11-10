@@ -1343,6 +1343,13 @@ class AgentExecutionRequest(BaseModel):
     omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
         None, alias="omnigentExecutionPlan"
     )
+    # Only Run's patched controller handoff sets this envelope capability.
+    # Omit the default to preserve serialized requests from retained histories.
+    canonical_repository_workspace_handoff: bool = Field(
+        False,
+        alias="canonicalRepositoryWorkspaceHandoff",
+        exclude_if=lambda value: not value,
+    )
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")

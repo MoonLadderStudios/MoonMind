@@ -392,6 +392,8 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
         operation = normalized[len(expected_prefix) :]
         if operation[:2] == ["rev-parse", "HEAD"]:
             return activity_runtime_module.CmdRes(f"{base}\n".encode())
+        if operation == ["branch", "--show-current"]:
+            return activity_runtime_module.CmdRes(b"saved-branch\n")
         if operation[0] == "status":
             return activity_runtime_module.CmdRes(b"")
         if operation[0] == "ls-files":
