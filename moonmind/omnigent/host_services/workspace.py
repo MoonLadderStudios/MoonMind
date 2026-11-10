@@ -411,8 +411,6 @@ class OmnigentWorkspaceMaterializer:
                 attachment_evidence = projection.get("attachments", [])
             except WorkspaceArtifactProjectionError as exc:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
-            if record_store is not None and workspace_id is not None:
-                record_store.mark_ready(workspace_id, fingerprint)
         elif attachment_refs:
             # A ready repository is not evidence that current inputs exist or
             # remain admitted. Re-project only attachments, preserving candidate edits.
@@ -457,6 +455,22 @@ class OmnigentWorkspaceMaterializer:
                     "restored workspace ownership handoff failed",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 ) from exc
+        if not materialization_complete:
+            if checkpoint is not None and (
+                parameters.get("checkpointRestore", {}).get("mode") == "branch"
+            ):
+                # The restored Git tree must belong to the runtime UID before
+                # its existing branch owner writes .git. Preserve the index and
+                # working tree while assigning this fresh branch its own name.
+                await self._prepare_target_branch(
+                    candidate,
+                    target_branch=str(spec.get("targetBranch") or ""),
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                    allow_initialization=True,
+                )
+            if record_store is not None and workspace_id is not None:
+                record_store.mark_ready(workspace_id, fingerprint)
         # Clone-time commit identity does not survive workspace reconciliation:
         # retries reuse the attempt workspace so no clone runs, an
         # authoritative restore replaces ``.git/config``, and an additive
@@ -543,8 +557,62 @@ class OmnigentWorkspaceMaterializer:
 
         context = identity.runtime_session_context
         source_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
+        branch_restore = False
+        recovery = request.checkpoint_recovery
+        restore = (request.parameters or {}).get("checkpointRestore", {})
+        if isinstance(restore, dict) and restore.get("mode") == "branch":
+            from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+
+            saved_authority = OmnigentCheckpointIdentity.model_validate(
+                (recovery or {}).get("omnigentCheckpoint")
+            )
+            # Only the exact descriptor admitted by the branch owner may cross
+            # workflow boundaries. A branch flag or an arbitrary input ref does
+            # not waive source identity, recorded plan or byte integrity.
+            # Runtime model/Skill binding may derive a destination plan. The
+            # producer's frozen source selection remains restoration authority;
+            # dispatch verified it against the original request before binding.
+            branch_restore = bool(
+                identity.reason == "checkpoint_branch"
+                and identity.branch is not None
+                and identity.runtime_context_policy == "fresh_agent_run"
+                and recovery.get("recoveryAction") == "branch_required"
+                and saved_authority.validation.valid
+                and saved_authority.validation.branch_creation_available
+                and same_ref(saved_authority.workspace_checkpoint_ref)
+                == same_ref(source.checkpoint_ref)
+                and saved_authority.workspace_checkpoint_digest
+                == "sha256:" + hashlib.sha256(payload).hexdigest()
+                and (
+                    saved_authority.workflow_id,
+                    saved_authority.run_id,
+                    saved_authority.logical_step_id,
+                    saved_authority.attempt_ordinal,
+                )
+                == (
+                    checkpoint.source.workflow_id,
+                    checkpoint.source.run_id,
+                    checkpoint.source.logical_step_id,
+                    checkpoint.source.execution_ordinal,
+                )
+                and saved_authority.step_execution_id == source_step
+                and saved_authority.boundary == checkpoint.boundary
+                and (
+                    saved_authority.execution_plan_ref is None
+                    or saved_authority.execution_plan_ref
+                    == identity.runtime_selection.get("executionPlanRef")
+                )
+            )
+            if not branch_restore:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                    "saved workspace differs from the admitted checkpoint branch",
+                )
         if (
-            checkpoint.source.workflow_id != identity.workflow_id
+            (
+                checkpoint.source.workflow_id != identity.workflow_id
+                and not branch_restore
+            )
             or checkpoint.boundary not in {"after_execution", "before_publication"}
             or context is not None
             and context.step_execution_id != source_step

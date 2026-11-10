@@ -446,7 +446,7 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
         publication_state="none",
         model_dump=lambda **_kwargs: dict(omnigent_payload),
     )
-    checkpoint = SimpleNamespace(omnigent=omnigent_checkpoint)
+    source_checkpoint = SimpleNamespace(omnigent=omnigent_checkpoint)
     profile = SimpleNamespace(
         profile_id="profile-race",
         runtime_id="codex_cli",
@@ -458,7 +458,7 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
     }
 
     async def validated_authority(_owner, **_kwargs):
-        return checkpoint, profile, policy_snapshot
+        return source_checkpoint, profile, policy_snapshot
 
     async def stable_artifact(
         _owner,
@@ -474,8 +474,10 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
     started_workflow_ids: set[str] = set()
     start_attempts = 0
 
-    async def record_start(_owner, *, branch, turn, binding) -> None:
+    async def record_start(_owner, *, branch, turn, binding, checkpoint) -> None:
         nonlocal start_attempts
+        assert checkpoint is source_checkpoint
+        assert checkpoint.omnigent.workflow_id == workflow_id
         del branch, binding
         start_attempts += 1
         started_workflow_ids.add(turn.diagnostics["executionWorkflowId"])

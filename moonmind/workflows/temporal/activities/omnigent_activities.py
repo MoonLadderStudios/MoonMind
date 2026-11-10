@@ -556,9 +556,14 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
     checkpoint = OmnigentCheckpointIdentity.model_validate(checkpoint_payload)
     if checkpoint.execution_plan_ref is not None:
         binding = request.omnigent_execution_plan
+        parameter_ref = str(
+            (request.parameters or {}).get("executionPlanRef") or ""
+        ).strip()
+        admitted_ref = binding.plan_ref if binding is not None else parameter_ref
         if (
-            binding is None
-            or binding.plan_ref != checkpoint.execution_plan_ref
+            admitted_ref != checkpoint.execution_plan_ref
+            or parameter_ref
+            and parameter_ref != checkpoint.execution_plan_ref
         ):
             raise ValueError(
                 "checkpoint execution plan does not match the admitted request"
@@ -1241,6 +1246,26 @@ async def _omnigent_execute_activity(
     artifact_gateway = TemporalOmnigentArtifactGateway(async_session_maker)
     run_store = OmnigentBridgeSessionStore(async_session_maker)
 
+    branch_inputs = _checkpoint_branch_from_request(request)
+    if branch_inputs is not None:
+        from moonmind.omnigent.codex_execution_decisions import (
+            bind_checkpoint_branch_request,
+        )
+
+        checkpoint, candidate_workspace = branch_inputs
+        authority = await _resolve_live_recovery_authority(
+            checkpoint=checkpoint,
+            session_factory=async_session_maker,
+            host_repository=OmnigentOAuthHostRepository(async_session_maker),
+            run_store=run_store,
+        )
+        request = bind_checkpoint_branch_request(
+            request,
+            checkpoint=checkpoint,
+            current_credential_generation=authority["current_credential_generation"],
+            candidate_workspace=candidate_workspace,
+        )
+
     # --- Generic Omnigent host realizer dispatch (Phase 1) ---
     # If the request carries a v2 Agent Profile or explicit harness catalog,
     # compile a secret-free execution plan and dispatch via trusted realizer
@@ -1345,24 +1370,9 @@ async def _omnigent_execute_activity(
             ),
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
-        branch_inputs = _checkpoint_branch_from_request(request)
         recovery_payload = request.checkpoint_recovery
         if branch_inputs is not None:
-            checkpoint, candidate_workspace = branch_inputs
-            authority = await _resolve_live_recovery_authority(
-                checkpoint=checkpoint,
-                session_factory=async_session_maker,
-                host_repository=host_repository,
-                run_store=run_store,
-            )
-            return await coordinator.branch_from_checkpoint(
-                request=request,
-                checkpoint=checkpoint,
-                current_credential_generation=authority[
-                    "current_credential_generation"
-                ],
-                candidate_workspace=candidate_workspace,
-            )
+            return await coordinator.execute(request)
         if recovery_inputs is not None:
             checkpoint, candidate_workspace = recovery_inputs
             authority = await _resolve_live_recovery_authority(

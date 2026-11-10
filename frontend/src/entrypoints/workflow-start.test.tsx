@@ -22177,12 +22177,18 @@ describe("Task Create runtime switch layout stability", () => {
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
-    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    // The select can show its first option before Profile routing has settled.
+    // Start the Harness switch from the committed native Codex route.
+    await waitFor(() => {
+      expect(profile.value).toBe("native-codex");
+      expect(document.querySelector("[data-backend-summary]")?.textContent).toContain("Direct Codex");
+    });
     fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
     await waitFor(() => expect(profile.value).toBe("pinned-claude"));
-    // The broken Profile does not route to its native direct runtime.
-    expect(document.querySelector("[data-backend-summary]")).toBeNull();
     expect(await screen.findByText(/cannot be submitted: The pinned execution configuration is incompatible/)).toBeTruthy();
+    // The broken Profile does not route to its native direct runtime after
+    // asynchronous Profile selection and Backend reconciliation complete.
+    await waitFor(() => expect(document.querySelector("[data-backend-summary]")).toBeNull());
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not bypass the pinned configuration." } });
     expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
