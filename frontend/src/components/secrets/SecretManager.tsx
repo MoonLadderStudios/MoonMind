@@ -180,6 +180,14 @@ export function SecretManager({
     );
   };
 
+  const refreshSecretQueries = async () => {
+    void queryClient.invalidateQueries({ queryKey: ['secrets'] });
+    // Even the first inventory read can contain pre-mutation secret readiness.
+    const profileInventory = { queryKey: ['provider-profiles'], exact: true };
+    await queryClient.cancelQueries(profileInventory);
+    void queryClient.invalidateQueries(profileInventory);
+  };
+
   const createOp = useMutation({
     mutationFn: async ({
       slug: nextSlug,
@@ -202,7 +210,7 @@ export function SecretManager({
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret saved successfully.' });
       discardSecretDraft();
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+      void refreshSecretQueries();
     },
     onError: (error: Error) => setFormError(error.message),
   });
@@ -229,7 +237,7 @@ export function SecretManager({
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret updated successfully.' });
       discardSecretDraft();
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+      void refreshSecretQueries();
     },
     onError: (error: Error) => setFormError(error.message),
   });
@@ -256,7 +264,7 @@ export function SecretManager({
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret rotated successfully.' });
       discardSecretDraft();
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+      void refreshSecretQueries();
     },
     onError: (error: Error) => setFormError(error.message),
   });
@@ -271,7 +279,7 @@ export function SecretManager({
     },
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret deleted successfully.' });
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+      void refreshSecretQueries();
     },
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
   });
@@ -298,7 +306,7 @@ export function SecretManager({
     onSuccess: (_data, variables) => {
       const verb = variables.status === 'active' ? 're-enabled' : 'disabled';
       onNotice({ level: 'ok', text: `Secret ${verb}.` });
-      queryClient.invalidateQueries({ queryKey: ['secrets'] });
+      void refreshSecretQueries();
     },
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
   });
