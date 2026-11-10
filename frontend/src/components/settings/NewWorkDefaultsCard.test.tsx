@@ -167,6 +167,63 @@ describe('NewWorkDefaultsCard', () => {
     await screen.findByText('Defaults saved');
     expect(JSON.parse(String(patches()[0]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 8 });
   });
+  it.each(['edit', 'cancel and restart', 'cancel'])('ignores an old validation conflict after %s during its catalog refresh', async (action) => {
+    renderCard(); await screen.findByLabelText('Harness');
+    const fallback = fetchSpy.getMockImplementation()!;
+    let finishRefresh!: (response: Response) => void;
+    let refreshing = false;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/v1/settings/catalog')) {
+        refreshing = true;
+        return new Promise<Response>((resolve) => { finishRefresh = resolve; });
+      }
+      return fallback(input, init);
+    });
+    validationResponse = respond({ error: 'version_conflict', key: runtimeKey, message: 'Changed elsewhere' }, 409);
+    changeHarness();
+    await waitFor(() => expect(refreshing).toBe(true));
+    if (action !== 'edit') {
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      if (action === 'cancel and restart') changeHarness();
+    } else {
+      fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'omnigent' } });
+    }
+    current.categories.Workflow[0]!.effective_value = 'omnigent';
+    current.categories.Workflow[0]!.value_version = 8;
+    await act(async () => { finishRefresh(respond(current)); });
+    expect(patches()).toHaveLength(0);
+    if (action === 'cancel') {
+      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+      await waitFor(() => expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('omnigent'));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(patches()).toHaveLength(1));
+      expect(JSON.parse(String(patches()[0]![1]?.body)).expected_versions).toEqual({ [runtimeKey]: 3 });
+    }
+    expect(screen.queryByText(/Changed elsewhere to/)).toBeNull();
+  });
+  it('ignores a failed validation-conflict refresh after Cancel', async () => {
+    renderCard(); await screen.findByLabelText('Harness');
+    const fallback = fetchSpy.getMockImplementation()!;
+    let finishRefresh!: (response: Response) => void;
+    let refreshing = false;
+    fetchSpy.mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/v1/settings/catalog')) {
+        refreshing = true;
+        return new Promise<Response>((resolve) => { finishRefresh = resolve; });
+      }
+      return fallback(input, init);
+    });
+    validationResponse = respond({ error: 'version_conflict', key: runtimeKey, message: 'Changed elsewhere' }, 409);
+    changeHarness();
+    await waitFor(() => expect(refreshing).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await act(async () => { finishRefresh(respond({ message: 'Catalog unavailable' }, 500)); });
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Defaults for new work' }).textContent).toContain('Catalog unavailable'));
+    expect(screen.queryByLabelText('Dashboard notifications')).toBeNull();
+    expect(patches()).toHaveLength(0);
+  });
   it('identifies only the conflicted row while preserving every draft', async () => {
     renderCard(); await screen.findByLabelText('Harness');
     await screen.findByRole('option', { name: /claude-team/ });
