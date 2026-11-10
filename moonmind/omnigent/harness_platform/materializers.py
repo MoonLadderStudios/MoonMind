@@ -924,6 +924,23 @@ def codex_provider_config_endpoint(
     base_url = literals.get("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL).rstrip("/")
     if not _omnigent_egress_admits(base_url):
         return None, "the Omnigent egress profile does not admit the endpoint"
+    if private_preferences is not None:
+        from moonmind.provider_profiles.codex_configuration import (
+            validate_private_environment,
+        )
+
+        try:
+            private_environment = validate_private_environment(
+                private_preferences, require_admitted_file=True,
+            )
+        except ValueError as error:
+            return None, str(error)
+        # These references belong to the native process's relocated HOME, not
+        # the generic support directory. Keep one owner, as for custom providers.
+        templates = {
+            key: value for key, value in templates.items()
+            if key not in private_environment
+        }
     return (
         ProviderConfigEndpoint(
             family="openai", secretRole=key_role, baseUrl=base_url,
