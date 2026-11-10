@@ -319,9 +319,11 @@ admit current settings. A replay patch preserves older request payloads.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
-Supported tier publication and repository-capability defaults use the
-same frozen grant handoff, with the native resolver's explicit-parameter precedence.
-Retries preserve both supplied and absent defaults after Profile edits. Repository
+Supported tier publication and repository-capability defaults retain native
+explicit-parameter precedence in the plan's recorded tier resolution. Same-step,
+same-account recovery preserves supplied and absent defaults without consulting
+current tiers. Older plans can recover settings from their retained source grant;
+missing or conflicting evidence stops recovery instead of guessing. Repository
 work-branch parameters retain authoring metadata in that handoff; physical
 checkout branches come from the workspace specification on both paths.
 Invalid repository metadata and untranslated native context/workspaces,

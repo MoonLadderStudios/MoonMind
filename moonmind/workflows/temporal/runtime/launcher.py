@@ -13,7 +13,6 @@ import shutil
 import stat
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -2183,6 +2182,7 @@ class ManagedRuntimeLauncher:
         )
 
         from moonmind.provider_profiles.model_tiers import (
+            apply_tier_parameter_defaults,
             ensure_tier_metadata_is_credential_free,
         )
 
@@ -2199,22 +2199,6 @@ class ManagedRuntimeLauncher:
 
         # Re-resolution drops only defaults injected by the previous selection.
         # Explicit parameters remain independent of the Tier/Custom interaction.
-        previous_metadata = parameters.get("metadata")
-        previous_moonmind = (
-            previous_metadata.get("moonmind")
-            if isinstance(previous_metadata, Mapping)
-            else None
-        )
-        previous_resolution = (
-            previous_moonmind.get("modelEffortResolution")
-            if isinstance(previous_moonmind, Mapping)
-            else None
-        )
-        previous_defaults = (
-            previous_resolution.get("tierParameterDefaults")
-            if isinstance(previous_resolution, Mapping)
-            else None
-        )
         explicit_parameters = (
             authored_runtime.get("parameters", {})
             if isinstance(authored_runtime, Mapping)
@@ -2222,16 +2206,11 @@ class ManagedRuntimeLauncher:
         )
         if not isinstance(explicit_parameters, Mapping):
             explicit_parameters = {}
-        if isinstance(previous_defaults, Mapping):
-            for key, value in previous_defaults.items():
-                if key not in explicit_parameters and parameters.get(key) == value:
-                    parameters.pop(key, None)
-        parameters.update(explicit_parameters)
-        applied_tier_defaults = {}
-        for key, value in resolved.tier_parameters.items():
-            if key not in parameters:
-                parameters[key] = deepcopy(value)
-                applied_tier_defaults[key] = deepcopy(value)
+        applied_tier_defaults = apply_tier_parameter_defaults(
+            parameters,
+            tier_parameters=resolved.tier_parameters,
+            explicit_parameters=explicit_parameters,
+        )
         parameters["model"] = resolved.model
         parameters["effort"] = resolved.effort
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
-import json
-from collections.abc import Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 
@@ -37,16 +38,23 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     verify_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+from moonmind.provider_profiles.model_tiers import (
+    apply_tier_parameter_defaults,
+    ensure_tier_metadata_is_credential_free,
+)
 from moonmind.provider_profiles.plan_handoff import (
     bind_selected_pool_plan,
     selected_pool_grant_error,
 )
+from moonmind.runtime_identity import normalize_runtime_id
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     OmnigentExecutionPlanBinding,
 )
-from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
-from moonmind.runtime_identity import normalize_runtime_id
+from moonmind.schemas.temporal_models import (
+    StepExecutionCheckpointModel,
+    build_step_execution_id,
+)
 from moonmind.workflows.executions.runtime_target_selection import (
     AuthoringSurface,
     resolve_runtime_target_selection,
@@ -58,7 +66,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 
-
 # These settings already have consumers on both launch paths. Unknown native
 # options remain with their current adapter until their behavior is translated.
 _LAUNCH_PARAMETER_KEYS = frozenset({
@@ -67,6 +74,13 @@ _LAUNCH_PARAMETER_KEYS = frozenset({
     "workBranch", "workBranchId", "workBranchOrigin",
 })
 _MODEL_SELECTION_KEYS = frozenset({"model", "effort", "modelTierResolution", "metadata"})
+
+
+class _RecordedPoolStep(NamedTuple):
+    plan: OmnigentExecutionPlanEnvelope
+    snapshot: Mapping[str, Any]
+    resolution: dict[str, Any]
+    launch_parameters: dict[str, Any] | None
 
 
 def _with_frozen_launch_parameters(parameters, saved):
@@ -79,6 +93,106 @@ def _with_frozen_launch_parameters(parameters, saved):
         result.pop(key, None)
     result.update(deepcopy(dict(saved)))
     return result
+
+
+def _recorded_pool_resolution(value):
+    required = {
+        "resolvedModel",
+        "resolvedEffort",
+        "modelSource",
+        "effortSource",
+        "effectiveModelTier",
+    }
+    if not isinstance(value, Mapping) or not required <= value.keys():
+        raise ValueError("recorded pool launch resolution is incomplete")
+    defaults = value.get("tierParameterDefaults", {})
+    if not isinstance(defaults, Mapping) or not set(defaults) <= _LAUNCH_PARAMETER_KEYS:
+        raise ValueError("recorded pool launch defaults are invalid")
+    ensure_tier_metadata_is_credential_free(value)
+    return deepcopy(dict(value))
+
+
+async def _retained_pool_launch(session, *, request, checkpoint, plan):
+    """Read only the original grant's settings for plans predating tier capture.
+
+    Released grants are retained for redelivery, not permanent configuration
+    storage. Their absence cannot be filled from the account's current tiers.
+    """
+    source_id = build_step_execution_id(checkpoint.source)
+    rows = (
+        await session.scalars(
+            select(ProviderProfileSlotLease).where(
+                ProviderProfileSlotLease.runtime_id
+                == normalize_runtime_id(request.agent_id),
+                ProviderProfileSlotLease.profile_id == request.execution_profile_ref,
+                ProviderProfileSlotLease.step_execution_id == source_id,
+                ProviderProfileSlotLease.execution_plan_ref == plan.planRef,
+            )
+        )
+    ).all()
+    if len(rows) != 1:
+        raise ValueError("recorded pool launch settings are unavailable or ambiguous")
+    row = rows[0]
+    metadata = row.safe_metadata_json
+    saved = metadata.get("preparedPoolPlan") if isinstance(metadata, Mapping) else None
+    if (
+        row.owner_is_workflow is not True
+        or row.owner_kind != "workflow"
+        or row.purpose != "execution_direct"
+        or not row.owner_id
+        or row.owner_id != row.workflow_id
+        or row.owner_id != row.lease_id
+        or not str(row.idempotency_key or "").strip()
+        or not isinstance(saved, Mapping)
+        or not metadata.get("runId")
+        or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(saved.get("requestDigest") or "")
+        )
+        or not isinstance(saved.get("launchParameters"), Mapping)
+    ):
+        raise ValueError("recorded pool launch grant evidence is incomplete")
+    try:
+        binding = OmnigentExecutionPlanBinding.model_validate(saved.get("binding"))
+    except ValueError as exc:
+        raise ValueError("recorded pool launch binding is invalid") from exc
+    if (
+        binding.plan_ref != plan.planRef
+        or binding.plan_digest != checkpoint.plan_digest
+        or temporal_artifact_id(binding.plan_artifact_ref)
+        != temporal_artifact_id(checkpoint.plan_ref)
+        or temporal_artifact_id(binding.task_input_snapshot_ref)
+        != temporal_artifact_id(checkpoint.task_input_snapshot_ref)
+        or binding.task_input_snapshot_digest
+        != plan.payload.authority.taskInputSnapshotDigest
+        or temporal_artifact_id(saved.get("resolvedSkillsetRef")) is None
+        or temporal_artifact_id(saved.get("resolvedSkillsetRef"))
+        != temporal_artifact_id(plan.payload.resolvedSkills.get("resolvedSkillSetRef"))
+    ):
+        raise ValueError(
+            "recorded pool launch binding conflicts with its checkpoint plan"
+        )
+    resolution = _recorded_pool_resolution(saved.get("modelResolution"))
+    model = plan.payload.modelConfig
+    # Custom model metadata may retain an authored alias that compilation
+    # resolved once through the original Profile. Current aliases cannot
+    # reinterpret it; the verified plan still owns the launch model.
+    if resolution["resolvedEffort"] != model.effort or (
+        resolution["modelSource"] != "task_override"
+        and resolution["resolvedModel"] != model.qualifiedId
+    ):
+        raise ValueError(
+            "recorded pool launch resolution conflicts with its checkpoint plan"
+        )
+    launch = _with_frozen_launch_parameters({}, saved["launchParameters"])
+    ensure_tier_metadata_is_credential_free(launch)
+    if any(
+        key not in launch or launch[key] != value
+        for key, value in resolution.get("tierParameterDefaults", {}).items()
+    ):
+        raise ValueError(
+            "recorded pool launch defaults conflict with its frozen parameters"
+        )
+    return resolution, launch
 
 
 async def _recorded_step_plan(
@@ -149,7 +263,50 @@ async def _recorded_step_plan(
         or snapshot.get("providerProfileRef") != request.execution_profile_ref
     ):
         raise ValueError("recorded pool Agent Profile conflicts with its account")
-    return plan, snapshot
+    resolution = plan.payload.modelConfig.tierResolution
+    launch_parameters = None
+    if resolution is None:
+        resolution, launch_parameters = await _retained_pool_launch(
+            session,
+            request=request,
+            checkpoint=checkpoint,
+            plan=plan,
+        )
+    return _RecordedPoolStep(
+        plan,
+        snapshot,
+        _recorded_pool_resolution(resolution),
+        launch_parameters,
+    )
+
+
+def _authored_runtime_parameters(parameters):
+    runtime = parameters.get("runtime")
+    if not isinstance(runtime, Mapping):
+        authored = parameters.get("workflow") or parameters.get("task")
+        runtime = authored.get("runtime") if isinstance(authored, Mapping) else None
+    explicit = runtime.get("parameters") if isinstance(runtime, Mapping) else None
+    return explicit if isinstance(explicit, Mapping) else {}
+
+
+def _restore_recorded_pool_selection(request, recorded):
+    parameters = request.parameters
+    if recorded.launch_parameters is None:
+        apply_tier_parameter_defaults(
+            parameters,
+            tier_parameters=recorded.resolution.get("tierParameterDefaults", {}),
+            explicit_parameters=_authored_runtime_parameters(parameters),
+        )
+    else:
+        parameters = _with_frozen_launch_parameters(
+            parameters, recorded.launch_parameters
+        )
+        request.parameters = parameters
+    parameters["model"] = recorded.plan.payload.modelConfig.qualifiedId
+    parameters["effort"] = recorded.plan.payload.modelConfig.effort
+    _apply_model_resolution(
+        parameters, recorded.resolution, request.execution_profile_ref
+    )
 
 
 def _request_digest(request, original_profile):
@@ -428,9 +585,12 @@ async def prepare_selected_pool_plan(
         selected = request.model_copy(deep=True)
         from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 
-        ManagedRuntimeLauncher._apply_resolved_tier_policy(
-            request=selected, profile=profile, strategy=None
-        )
+        if recorded:
+            _restore_recorded_pool_selection(selected, recorded)
+        else:
+            ManagedRuntimeLauncher._apply_resolved_tier_policy(
+                request=selected, profile=profile, strategy=None
+            )
         resolution = (
             (selected.parameters.get("metadata") or {}).get("moonmind") or {}
         ).get("modelEffortResolution") or {}
@@ -452,11 +612,7 @@ async def prepare_selected_pool_plan(
                 "disposition": "native",
                 "reason": "native_repository_metadata_requires_its_current_adapter",
             }
-        authored_runtime = request.parameters.get("runtime")
-        if not isinstance(authored_runtime, Mapping):
-            authored_workflow = request.parameters.get("workflow") or request.parameters.get("task")
-            authored_runtime = authored_workflow.get("runtime") if isinstance(authored_workflow, Mapping) else None
-        explicit_parameters = authored_runtime.get("parameters") if isinstance(authored_runtime, Mapping) else None
+        explicit_parameters = _authored_runtime_parameters(request.parameters)
         # Run already flattens explicit runtime parameters. Re-resolution can
         # leave their values unchanged even when the shared path lacks a
         # consumer, so a changed-value comparison cannot admit those choices.
@@ -485,8 +641,12 @@ async def prepare_selected_pool_plan(
             for key in _LAUNCH_PARAMETER_KEYS if key in selected.parameters
         }
         snapshot = (
-            recorded[1] if recorded else await resolve_default_agent_profile_snapshot(
-                session, provider_profile_ref=profile_id, launch_policy_ref=None,
+            recorded.snapshot
+            if recorded
+            else await resolve_default_agent_profile_snapshot(
+                session,
+                provider_profile_ref=profile_id,
+                launch_policy_ref=None,
                 consumer_type="workflow",
                 consumer_id=f"{workflow_id}:{request.step_execution.logical_step_id}",
                 user=None,
@@ -506,7 +666,7 @@ async def prepare_selected_pool_plan(
         if request.workspace_spec:
             parameters["workspaceSpec"] = deepcopy(request.workspace_spec)
         if recorded:
-            recorded_plan = recorded[0]
+            recorded_plan = recorded.plan
             parameters.update(
                 model=recorded_plan.payload.modelConfig.qualifiedId,
                 effort=recorded_plan.payload.modelConfig.effort,
@@ -527,19 +687,27 @@ async def prepare_selected_pool_plan(
             task_input_snapshot_digest=original_digest,
             db_session=session,
             access=access,
+            model_tier_resolution=resolution,
             _compile_step_plans=False,
             recorded_skillset_ref=request.resolved_skillset_ref
             or request.step_execution.resolved_skillset_ref,
             **(
-                {"_recorded_provider_configuration_snapshot": recorded[0].payload.providerConfigurationSnapshot}
-                if recorded else {}
+                {
+                    "_recorded_provider_configuration_snapshot": recorded.plan.payload.providerConfigurationSnapshot
+                }
+                if recorded
+                else {}
             ),
         )
         if recorded:
-            changed = changed_admitted_intent(recorded[0].payload, admitted.envelope.payload)
+            changed = changed_admitted_intent(
+                recorded.plan.payload, admitted.envelope.payload
+            )
             changed += await changed_repository_selection(
-                artifact_service=artifacts, principal=principal,
-                recorded=recorded[0].payload, admitted=admitted.envelope.payload,
+                artifact_service=artifacts,
+                principal=principal,
+                recorded=recorded.plan.payload,
+                admitted=admitted.envelope.payload,
                 access=access._with_verified_inputs(
                     temporal_artifact_id(ref) for ref in admitted.artifact_refs
                 ),
