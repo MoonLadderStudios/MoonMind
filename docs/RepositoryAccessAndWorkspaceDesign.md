@@ -90,7 +90,7 @@ Same-repository work presents one repository and one branch, and Skill/Preset ar
 | `routed` | Absent | Deterministic selection among connections allowed for the admitted context |
 | `explicit` | Required | Validate and use only the named connection |
 
-Anonymous access is an explicit choice, not an error fallback. A connected repository picker normally authors routed access. Omitted values and documented UI defaults compile to the same intent without inspecting token presence. The resolved binding records selection origin separately, so an automatically inserted `repository-connection:git-default` never appears as an explicit user choice.
+Anonymous access is an explicit choice, not an error fallback. A connected repository picker normally authors routed access. Omitted values and documented UI defaults compile to the same intent without inspecting token presence: a submitted Git target that names no connection uses the one connection its repository is assigned to, and otherwise the default connection. The resolved binding records selection origin separately, so an automatically inserted `repository-connection:git-default` never appears as an explicit user choice.
 
 ### CONTRACT-004 Capabilities derive from the requested work
 
