@@ -65,13 +65,15 @@ export function NewWorkDefaultsCard() {
     return displayValue(value);
   }, [profilesQuery.data, profilesQuery.isSuccess]);
 
-  const handleFailure = useCallback(async (error: unknown, keys: string[], validationSignature?: string) => {
+  const handleFailure = useCallback(async (error: unknown, keys: string[], validationSignature?: string, isCurrent: () => boolean = () => true) => {
     const message = error instanceof Error ? error.message : 'Settings request failed';
     if (error instanceof ApiError) {
       const failure = (error.detail ?? {}) as SettingFailure;
       let affected = failure.key ? [failure.key] : keys;
       if (error.status === 409) {
         const refreshed = await refetchCatalog();
+        // A validation probe may outlive an edit or Cancel while it reloads.
+        if (!isCurrent()) return;
         if (refreshed.isError) { toast.error({ title: refreshed.error.message }); return; }
         const all = Object.values(refreshed.data?.categories ?? {}).flat();
         if (!failure.key) {
@@ -121,7 +123,7 @@ export function NewWorkDefaultsCard() {
           .map(([key, issues]) => [key, issues.map((issue) => issue.message)])) });
       } catch (error) {
         if (!current) return;
-        await handleFailure(error, Object.keys(proposal.changes), signature);
+        await handleFailure(error, Object.keys(proposal.changes), signature, () => current);
       }
     }, 300);
     return () => { current = false; clearTimeout(timer); controller.abort(); };
