@@ -63,13 +63,13 @@ async def authority_context(tmp_path, monkeypatch):
         monkeypatch,
         tmp_path,
         # The merge resolver child derives merge_request from its finish mode,
-        # so its connection and live assignment must admit that action.
+        # so its connection must allow that action for the assigned repository.
         github_pat_connection(
             "selected-repository", "SELECTED_REPOSITORY_PAT", operations=_OPERATIONS
         ),
         assignments=[
             github_repository_assignment(
-                "selected-repository", _REPO, operations=_OPERATIONS
+                "selected-repository", _REPO,
             )
         ],
     )

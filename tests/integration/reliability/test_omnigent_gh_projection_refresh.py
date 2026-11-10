@@ -133,7 +133,7 @@ async def app_context(tmp_path, monkeypatch):
         tmp_path,
         app,
         assignments=[
-            github_repository_assignment(_CONNECTION, _REPO, operations=_OPERATIONS)
+            github_repository_assignment(_CONNECTION, _REPO)
         ],
     )
     async with engine.begin() as connection:

@@ -98,7 +98,6 @@ def selected_b(monkeypatch, settings_user_override):
                     providerRepoId="101",
                     displayName="Acme/Widgets",
                 ),
-                operations=("read",),
             )
         ]
 

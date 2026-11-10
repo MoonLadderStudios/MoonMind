@@ -3170,11 +3170,7 @@ async def _configure_github_repository_plan_test(
             **({"operations": operations} if operations else {}),
         ),
         assignments=[
-            github_repository_assignment(
-                "review-repository",
-                repository,
-                **({"operations": operations} if operations else {}),
-            )
+            github_repository_assignment("review-repository", repository)
         ],
     )
     async with engine.begin() as connection:

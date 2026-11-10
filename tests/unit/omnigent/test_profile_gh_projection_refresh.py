@@ -192,7 +192,7 @@ async def _projected_host(monkeypatch, tmp_path, connection, provider_tokens):
         connection,
         assignments=[
             github_repository_assignment(
-                connection.id, _REPO, operations=connection.allowed_operations
+                connection.id, _REPO,
             )
         ],
     )

@@ -114,7 +114,6 @@ def _assignment(connection_id: str, identity: RepositoryIdentity) -> RepositoryA
         {
             "connectionId": connection_id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read", "write"],
             "revision": 1,
             "verified": True,
         }
@@ -1600,3 +1599,52 @@ async def test_selection_snapshot_records_full_authority() -> None:
     assert snapshot.policy_revision == 2
     assert snapshot.authorized_at
     assert snapshot.principal_ref == "principal:alice"
+
+
+@pytest.mark.parametrize("mode", [AccessMode.EXPLICIT, AccessMode.ROUTED])
+async def test_repository_membership_inherits_the_connection_operation_bundle(mode):
+    from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+
+    operations = (
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "merge_request",
+        "issues",
+        "projects",
+        "security_read",
+        "lock",
+    )
+    connection = _connection("selected", operations=operations)
+    identity = _identity()
+    assignment = RepositoryAssignment(connectionId=connection.id, identity=identity)
+
+    def select(current):
+        authority = (
+            {"explicit_connection": current, "explicit_assignment": assignment}
+            if mode == AccessMode.EXPLICIT
+            else {
+                "candidates": [
+                    ScopedRouteCandidate(connection=current, assignment=assignment)
+                ]
+            }
+        )
+        return select_repository_authority(
+            access_mode=mode,
+            identity=identity,
+            role="publisher",
+            requested_operations=operations,
+            principal_ref="principal:alice",
+            principal_scope=("system", None),
+            policy_revision=1,
+            **authority,
+        )
+
+    snapshot = select(connection)
+    assert set(snapshot.operations) == set(operations)
+    reduced = connection.model_copy(update={"allowed_operations": ("read",)})
+    with pytest.raises((BoundAccessError, RepositoryRouteError)):
+        select(reduced)
+    # Existing snapshots keep the exact originally admitted action set.
+    assert set(snapshot.operations) == set(operations)

@@ -1096,7 +1096,6 @@ async def _seed_foreign_connection(maker):
                 identity=RepositoryIdentity(
                     endpoint=ENDPOINT, providerRepoId="99", displayName=PROJECT
                 ),
-                operations=("read",),
                 verified=True,
             ),
             actor_ref=foreign[0],
@@ -1344,10 +1343,19 @@ async def test_execution_scoped_principal_is_not_connection_authority(served, tm
 async def test_run_activity_refuses_authority_its_admission_does_not_carry(
     served, tmp_path
 ):
-    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    view = await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    reduced = await served.client.patch(
+        "/api/v1/repository-connections/gitlab-main",
+        json={
+            "requestId": "reduce-base-permissions",
+            "expectedPolicyRevision": view["policyRevision"],
+            "allowedOperations": ["read"],
+        },
+    )
+    assert reduced.status_code == 200, reduced.text
     reads, requests = len(served.secret_reads), len(served.gitlab.requests)
 
-    # Read-only assignment: the admitted note cannot be posted.
+    # Read-only connection: the admitted note cannot be posted.
     _, (read_only, _records_) = await _run_step(
         served, tmp_path, _inputs(note={"body": "Summary"})
     )
@@ -1374,7 +1382,7 @@ async def test_run_activity_refuses_authority_its_admission_does_not_carry(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["disabled", "operations", "retargeted"])
+@pytest.mark.parametrize("change", ["disabled", "reassigned", "retargeted"])
 async def test_connection_changes_after_admission_refuse_the_run(
     served, tmp_path, change
 ):
@@ -1389,7 +1397,7 @@ async def test_connection_changes_after_admission_refuse_the_run(
             json={"requestId": "req-disable"},
         )
         assert disabled.status_code == 200, disabled.text
-    elif change == "operations":
+    elif change == "reassigned":
         await _assign(
             client, PROJECT, ("read", "review_request"), request_id="req-widen"
         )

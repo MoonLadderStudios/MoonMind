@@ -103,7 +103,7 @@ async def run_request(
         ("pr-resolver", "merge_request"),
     ],
 )
-async def test_resolved_skill_actions_deny_narrowed_assignment_before_secret(
+async def test_resolved_skill_actions_deny_narrowed_connection_before_secret(
     monkeypatch, tmp_path, skill_name, missing
 ):
     built = await run_request(
@@ -122,6 +122,11 @@ async def test_resolved_skill_actions_deny_narrowed_assignment_before_secret(
             )
         }
     )
+    connection = connection.model_copy(update={
+        "allowed_operations": tuple(
+            op for op in connection.allowed_operations if op != missing
+        )
+    })
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
@@ -130,9 +135,6 @@ async def test_resolved_skill_actions_deny_narrowed_assignment_before_secret(
             github_repository_assignment(
                 connection.id,
                 "owner/repo",
-                operations=[
-                    op for op in connection.allowed_operations if op != missing
-                ],
             )
         ],
     )
@@ -189,7 +191,7 @@ async def test_resolved_skill_accepts_exact_operations(
         connection,
         assignments=[
             github_repository_assignment(
-                connection.id, "owner/repo", operations=operations
+                connection.id, "owner/repo",
             )
         ],
     )
@@ -313,7 +315,6 @@ async def test_auto_merge_conflict_skill_projects_usable_git_credentials(
             github_repository_assignment(
                 connection.id,
                 "owner/repo",
-                operations=("read", "write", "branch_write"),
             )
         ],
     )
@@ -393,7 +394,10 @@ async def test_denied_action_grant_preserves_existing_host_before_binding(
 ):
     """No lease claim or cleanup can run when an existing action loses its grant."""
     built = await run_request("pr-resolver", parameters={"publishMode": "auto"})
-    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT")
+    connection = github_pat_connection(
+        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT",
+        operations=("read", "write", "branch_write", "review_request"),
+    )
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
@@ -402,7 +406,6 @@ async def test_denied_action_grant_preserves_existing_host_before_binding(
             github_repository_assignment(
                 connection.id,
                 "owner/repo",
-                operations=("read", "write", "branch_write", "review_request"),
             )
         ],
     )
@@ -564,7 +567,7 @@ async def test_metadata_preflight_is_rechecked_before_secret_access(
         DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
     ).model_copy(update={"allowed_operations": ("read", "merge_request")})
     assignment = github_repository_assignment(
-        connection.id, "owner/repo", operations=connection.allowed_operations
+        connection.id, "owner/repo",
     )
     engine = await record_repository_connections(
         monkeypatch, tmp_path, connection, assignments=[assignment]
@@ -582,8 +585,9 @@ async def test_metadata_preflight_is_rechecked_before_secret_access(
         from api_service.db.base import async_session_maker
 
         async with async_session_maker() as session:
-            await RepositoryConnectionService(session).set_assignment(
-                assignment.model_copy(update={"operations": ("read",)}),
+            await RepositoryConnectionService(session).update_connection(
+                connection.model_copy(update={"allowed_operations": ("read",)}),
+                expected_policy_revision=connection.policy_revision,
                 actor_ref="system:deployment",
                 request_id="narrowed-after-preflight",
                 principal_ref="system:deployment",
@@ -660,7 +664,10 @@ async def test_merge_gate_planner_carries_finish_mode_to_action_boundary(
     )
     assert built.parameters["skill"]["inputs"]["finishMode"] == finish
     assert ("merge_request" in authored_github_operations(built)) is (finish == "merge")
-    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT")
+    connection = github_pat_connection(
+        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT",
+        operations=("read", "write", "branch_write", "review_request"),
+    )
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
@@ -669,7 +676,6 @@ async def test_merge_gate_planner_carries_finish_mode_to_action_boundary(
             github_repository_assignment(
                 connection.id,
                 "owner/repo",
-                operations=("read", "write", "branch_write", "review_request"),
             )
         ],
     )
@@ -787,7 +793,7 @@ async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
         DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
     ).model_copy(update={"allowed_operations": ("read", "merge_request")})
     assignment = github_repository_assignment(
-        connection.id, "owner/repo", operations=connection.allowed_operations
+        connection.id, "owner/repo",
     )
     engine = await record_repository_connections(
         monkeypatch, tmp_path, connection, assignments=[assignment]
@@ -811,8 +817,9 @@ async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
 
         if revocation == "operation":
             async with async_session_maker() as session:
-                await RepositoryConnectionService(session).set_assignment(
-                    assignment.model_copy(update={"operations": ("read",)}),
+                await RepositoryConnectionService(session).update_connection(
+                    connection.model_copy(update={"allowed_operations": ("read",)}),
+                    expected_policy_revision=connection.policy_revision,
                     actor_ref="system:deployment",
                     request_id="revoke-between-admission-and-secret",
                     principal_ref="system:deployment",
@@ -889,7 +896,7 @@ async def test_action_token_is_reused_by_lazy_workspace_owner(monkeypatch, tmp_p
         connection,
         assignments=[
             github_repository_assignment(
-                connection.id, "owner/repo", operations=("read",)
+                connection.id, "owner/repo",
             )
         ],
     )
