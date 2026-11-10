@@ -190,10 +190,10 @@ async def _record_authority(
     )
 
     connection = github_pat_connection(connection_id, "SYNTHETIC_PAT").model_copy(
-        update={"allowed_operations": _OPERATIONS, "endpoint_ref": connection_endpoint}
+        update={"allowed_operations": active_operations, "endpoint_ref": connection_endpoint}
     )
     active_assignment = github_repository_assignment(
-        connection.id, "acme/repo", operations=active_operations
+        connection.id, "acme/repo",
     )
     active_assignment = active_assignment.model_copy(
         update={
@@ -214,7 +214,7 @@ async def _record_authority(
     plan = None
     if admitted_operations is not None:
         frozen_assignment = github_repository_assignment(
-            connection.id, admitted_repository, operations=_OPERATIONS
+            connection.id, admitted_repository,
         )
         frozen_assignment = frozen_assignment.model_copy(
             update={
@@ -224,7 +224,7 @@ async def _record_authority(
             }
         )
         plan, body = _plan(
-            connection,
+            connection.model_copy(update={"allowed_operations": _OPERATIONS}),
             frozen_assignment,
             admitted_operations,
             consumer=consumer,
@@ -419,7 +419,7 @@ async def test_admitted_pat_writer_cannot_be_overridden_by_service_connection(
 
 
 @pytest.mark.asyncio
-async def test_default_pat_writer_respects_its_recorded_read_only_assignment(
+async def test_default_pat_writer_respects_its_read_only_connection(
     monkeypatch, tmp_path
 ):
     requests = _transport(monkeypatch)

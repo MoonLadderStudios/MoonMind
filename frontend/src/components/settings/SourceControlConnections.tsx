@@ -686,7 +686,6 @@ function ConnectionDetail({
   const currentConnection = useRef(connection);
   currentConnection.current = connection;
   const [repository, setRepository] = useState('');
-  const [assignPublish, setAssignPublish] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
   const assignments = connection.assignments ?? [];
@@ -697,7 +696,7 @@ function ConnectionDetail({
     publish !== canPublish(connection.allowedOperations) ||
     projects !== connection.allowedOperations.includes('projects') ||
     token.length > 0 || rotationPending || pendingUpdate.current !== null;
-  const assignmentChanged = Boolean(repository || assignPublish);
+  const assignmentChanged = Boolean(repository);
 
   function discardEdit() {
     pendingUpdate.current = null;
@@ -712,7 +711,6 @@ function ConnectionDetail({
   function discardAssignment() {
     settle(`assign:${connection.id}:${repository.trim().toLowerCase()}`);
     setRepository('');
-    setAssignPublish(false);
     setAssignError(null);
   }
 
@@ -850,14 +848,12 @@ function ConnectionDetail({
         {
           requestId: requestIdFor(operation),
           repository: target,
-          operations: assignPublish ? PUBLISH_OPERATIONS : READ_OPERATIONS,
         },
       );
       settle(operation);
       onCommitted(saved);
       if (isStillSelected(connection.id)) {
         setRepository('');
-        setAssignPublish(false);
       }
     } catch (err) {
       if (err instanceof RequestError) settle(operation);
@@ -915,6 +911,9 @@ function ConnectionDetail({
 
       <section aria-label="Assigned repositories" className="space-y-2">
         <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Assigned repositories</h5>
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          All assigned repositories inherit this connection’s permissions. GitHub or GitLab must also allow the requested action.
+        </p>
         {assignments.length === 0 ? (
           <p className="text-sm text-slate-600 dark:text-slate-400">
             No repositories assigned. Workflows cannot use this connection until you assign one.
@@ -929,7 +928,7 @@ function ConnectionDetail({
                 <span className="min-w-0 break-words">
                   {assignment.repository}
                   <span className="ml-2 text-xs text-slate-500">
-                    {canPublish(assignment.operations) ? 'read and publish' : 'read only'}
+                    {canPublish(connection.allowedOperations) ? 'read and publish' : 'read only'}
                   </span>
                 </span>
                 {assignment.providerRepoId ? (
@@ -950,10 +949,6 @@ function ConnectionDetail({
             <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
               <span className="font-medium text-slate-700 dark:text-slate-200">Assign repository (owner/repo)</span>
               <input className={inputClass} value={repository} onChange={(e) => setRepository(e.target.value)} required autoComplete="off" />
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-              <input type="checkbox" checked={assignPublish} onChange={(e) => setAssignPublish(e.target.checked)} />
-              Publish
             </label>
             <button type="submit" className={primaryButton} disabled={assigning || !repository.trim()}>
               {assigning ? 'Checking…' : 'Assign'}

@@ -253,12 +253,6 @@ def select_repository_authority(
                 raise BoundAccessError(
                     BOUND_DENIED, "explicit connection does not serve this repository"
                 )
-            missing = [op for op in requested if op not in assignment.operations]
-            if missing:
-                raise BoundAccessError(
-                    BOUND_DENIED,
-                    f"explicit connection does not admit {','.join(missing)}",
-                )
         missing_conn = [op for op in requested if op not in connection.allowed_operations]
         if missing_conn:
             raise BoundAccessError(

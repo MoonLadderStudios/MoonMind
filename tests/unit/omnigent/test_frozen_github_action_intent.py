@@ -175,7 +175,7 @@ async def test_runtime_widening_fails_before_credential_provider_or_writer(
         {"workflow": {"skill": {"name": "pr-resolver"}}},
     ],
 )
-async def test_compiler_rejects_requested_merge_without_assignment(
+async def test_compiler_rejects_requested_merge_without_connection_permission(
     monkeypatch, tmp_path, parameters
 ):
     repository, engine, sessions = await _configure_github_repository_plan_test(
@@ -669,7 +669,7 @@ async def test_generic_host_rejects_action_widening_before_delivery_or_cleanup(
             async with sessions() as session:
                 await RepositoryConnectionService(session).set_assignment(
                     github_repository_assignment(
-                        "review-repository", repository, operations=("read",)
+                        "review-repository", repository,
                     ),
                     actor_ref="system:deployment",
                     request_id="narrow-after-host-ready",

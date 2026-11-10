@@ -5410,7 +5410,11 @@ export interface components {
             requestId: string;
             /** Repository */
             repository: string;
-            /** Operations */
+            /**
+             * Operations
+             * @deprecated
+             * @description Ignored: assigned repositories inherit allowedOperations from the connection. Accepted for cached clients of the v1 API.
+             */
             operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[];
             /**
              * Revision

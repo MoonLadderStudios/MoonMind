@@ -936,12 +936,11 @@ class RepositoryIdentity(BaseModel):
 
 
 class RepositoryAssignment(BaseModel):
-    """One scoped grant of a connection to a repository identity (#4005)."""
+    """Verified repository membership; permissions come from the connection."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
     connection_id: str = Field(alias="connectionId", min_length=1)
     identity: RepositoryIdentity
-    operations: tuple[str, ...] = Field(min_length=1)
     revision: int = Field(default=1, ge=1)
     verified: bool = True
     broad_rule: bool = Field(default=False, alias="broadRule")
@@ -1268,8 +1267,6 @@ def admit_scoped_route(
                 REPOSITORY_ROUTE_UNSUPPORTED, "broad deployment rules need explicit grant"
             )
         if assignment.identity.route_id() != identity.route_id():
-            continue
-        if any(op not in assignment.operations for op in requested):
             continue
         if any(op not in connection.allowed_operations for op in requested):
             continue

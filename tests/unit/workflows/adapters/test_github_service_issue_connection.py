@@ -68,7 +68,7 @@ async def _record_default(monkeypatch, tmp_path, connection, operations=_WITH_IS
         tmp_path,
         connection,
         assignments=[
-            github_repository_assignment(_DEFAULT, _REPOSITORY, operations=operations)
+            github_repository_assignment(_DEFAULT, _REPOSITORY)
         ],
     )
 
@@ -188,7 +188,7 @@ async def test_default_serving_another_host_never_receives_the_request(
         update={"endpoint_ref": "https://github.example.com"}
     )
     assignment = github_repository_assignment(
-        _DEFAULT, _REPOSITORY, operations=_WITH_ISSUES
+        _DEFAULT, _REPOSITORY,
     )
     engine = await record_repository_connections(
         monkeypatch,

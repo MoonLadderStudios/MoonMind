@@ -79,10 +79,12 @@ async def test_saved_publication_rejects_unassigned_or_insufficient_destination(
         None
         if repository is None
         else github_repository_assignment(
-            DEFAULT_GIT_CONNECTION_REF, repository, operations=operations
+            DEFAULT_GIT_CONNECTION_REF, repository,
         )
     )
-    async with recorded_destination(tmp_path, monkeypatch, assignment=assignment) as (
+    async with recorded_destination(
+        tmp_path, monkeypatch, assignment=assignment, operations=operations
+    ) as (
         state,
         _,
         _,
@@ -177,7 +179,7 @@ async def test_lost_prepare_ack_rejects_changed_authority_without_new_decision(
 async def test_branch_publication_needs_no_review_request_grant(tmp_path, monkeypatch):
     operations = ("read", "write", "branch_write")
     assignment = github_repository_assignment(
-        DEFAULT_GIT_CONNECTION_REF, REPOSITORY, operations=operations
+        DEFAULT_GIT_CONNECTION_REF, REPOSITORY,
     )
     async with recorded_destination(
         tmp_path, monkeypatch, assignment=assignment, operations=operations

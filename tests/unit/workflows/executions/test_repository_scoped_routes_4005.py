@@ -118,12 +118,11 @@ def _identity(
 
 
 def _assignment(
-    connection_id: str, repo_id: str, *, operations=("read", "write")
+    connection_id: str, repo_id: str, *, display="MoonLadderStudios/MoonMind"
 ) -> RepositoryAssignment:
     return RepositoryAssignment(
         connectionId=connection_id,
-        identity=_identity(repo_id),
-        operations=tuple(operations),
+        identity=_identity(repo_id, display=display),
         revision=1,
         verified=True,
     )
@@ -287,12 +286,12 @@ def test_route_key_is_deterministic_for_bundle() -> None:
 
 
 def test_selection_requires_one_connection_for_whole_bundle() -> None:
-    conn_a = _pat_connection("repository-connection:a", operations=("read", "write"))
-    conn_b = _pat_connection("repository-connection:b", operations=("read", "write"))
+    conn_a = _pat_connection("repository-connection:a", operations=("read",))
+    conn_b = _pat_connection("repository-connection:b", operations=("write",))
     identity = _identity("repo-id-1")
     candidates = [
-        ScopedRouteCandidate(connection=conn_a, assignment=_assignment(conn_a.id, "repo-id-1", operations=("read",))),
-        ScopedRouteCandidate(connection=conn_b, assignment=_assignment(conn_b.id, "repo-id-1", operations=("write",))),
+        ScopedRouteCandidate(connection=conn_a, assignment=_assignment(conn_a.id, "repo-id-1")),
+        ScopedRouteCandidate(connection=conn_b, assignment=_assignment(conn_b.id, "repo-id-1")),
     ]
     # Neither connection covers the whole bundle -> setup-required, not a
     # split across credentials.
@@ -304,6 +303,7 @@ def test_selection_requires_one_connection_for_whole_bundle() -> None:
             principal_ref="owner:team-a",
             principal_scope=("system", None),
         )
+    conn_b = conn_b.model_copy(update={"allowed_operations": ("read", "write")})
     ambiguous = [
         ScopedRouteCandidate(connection=conn_a, assignment=_assignment(conn_a.id, "repo-id-1")),
         ScopedRouteCandidate(connection=conn_b, assignment=_assignment(conn_b.id, "repo-id-1")),
@@ -1022,25 +1022,25 @@ async def test_assignment_revision_conflict_and_replay_returns_stored(
             # Replaying the same request identity for a different payload
             # returns the persisted assignment instead of granting the new one.
             replayed = await service.set_assignment(
-                _assignment(conn.id, "repo-id-1", operations=("read",)),
+                _assignment(conn.id, "repo-id-1", display="owner/renamed"),
                 actor_ref="owner:team-a", request_id="req-2",
                 principal_ref="owner:team-a", principal_scope=("system", None),
             )
-            assert tuple(replayed.operations) == ("read", "write")
+            assert replayed.identity.display_name == "MoonLadderStudios/MoonMind"
             assert replayed.revision == 1
-            # Concurrent editors conflict instead of losing permission edits.
+            # Concurrent editors conflict instead of losing identity edits.
             second = await service.set_assignment(
-                _assignment(conn.id, "repo-id-1", operations=("read",)),
+                _assignment(conn.id, "repo-id-1", display="owner/renamed"),
                 actor_ref="owner:team-a", request_id="req-3",
                 principal_ref="owner:team-a", principal_scope=("system", None),
             )
             assert second.revision == 2
-            assert tuple(second.operations) == ("read",)
+            assert second.identity.display_name == "owner/renamed"
             with pytest.raises(
                 RepositoryRouteError, match="REPOSITORY_POLICY_CONFLICT"
             ):
                 await service.set_assignment(
-                    _assignment(conn.id, "repo-id-1", operations=("read", "write")),
+                    _assignment(conn.id, "repo-id-1"),
                     actor_ref="owner:team-a", request_id="req-4",
                     principal_ref="owner:team-a", principal_scope=("system", None),
                 )
@@ -1191,17 +1191,17 @@ async def test_removing_last_assignment_never_restores_migrated_default_scope(
         # its merge action).
         bootstrap = await service.launch_assignment(connection, repository)
         assert "merge_request" in connection.allowed_operations
-        assert bootstrap.operations == connection.allowed_operations
+        assert bootstrap.connection_id == connection.id
         await service.launch_assignment(connection, unrelated_repository)
 
         assignment = await service.set_assignment(
-            bootstrap.model_copy(update={"operations": ("read",)}),
+            bootstrap,
             actor_ref="system:deployment",
             request_id="scope-migrated-default",
             **principal,
         )
         scoped = await service.launch_assignment(connection, repository)
-        assert scoped.operations == ("read",)
+        assert scoped.identity == bootstrap.identity
         with pytest.raises(RepositoryRouteError) as denied:
             await service.launch_assignment(connection, unrelated_repository)
         assert denied.value.code == REPOSITORY_SETUP_REQUIRED

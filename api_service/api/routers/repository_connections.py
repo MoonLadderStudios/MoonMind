@@ -446,7 +446,12 @@ class AssignmentSetRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=200, alias="requestId")
     repository: str = Field(min_length=3, max_length=200)
     operations: list[RepositoryOperation] = Field(
-        default_factory=lambda: ["read"], min_length=1
+        default_factory=list,
+        deprecated=True,
+        description=(
+            "Ignored: assigned repositories inherit allowedOperations from the connection. "
+            "Accepted for cached clients of the v1 API."
+        ),
     )
     revision: int = Field(default=1, ge=1)
 
@@ -514,7 +519,7 @@ def _connection_view(
             RepositoryAssignmentView(
                 repository=assignment.identity.display_name,
                 providerRepoId=assignment.identity.provider_repo_id,
-                operations=list(assignment.operations),
+                operations=list(connection.allowed_operations),
                 revision=assignment.revision,
                 verified=assignment.verified,
             )
@@ -1157,7 +1162,6 @@ async def set_repository_assignment(
                     providerRepoId=observed["id"],
                     displayName=observed["fullName"],
                 ),
-                operations=tuple(dict.fromkeys(request.operations)),
                 revision=request.revision,
                 verified=True,
             ),

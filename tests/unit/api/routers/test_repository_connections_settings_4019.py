@@ -1125,3 +1125,63 @@ async def test_omitted_git_connection_follows_the_repository_assignment(
     )
     assert again.status_code == 200, again.text
     assert await _routed(target) == target
+
+
+async def test_assignments_inherit_connection_permissions_and_later_changes(
+    harness, monkeypatch
+):
+    client = harness.client
+    operations = [
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "issues",
+        "projects",
+    ]
+    created = await client.post(
+        "/api/v1/repository-connections/pat",
+        json={
+            **_create_body(
+                "Personal GitHub", "personal-github", "inherit-create", TOKEN_A
+            ),
+            "allowedOperations": operations,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    async def observe(connection, repository):
+        return {"id": repository, "fullName": repository}
+
+    monkeypatch.setattr(router_module, "observe_github_repository", observe)
+    for index, legacy in enumerate(({}, {"operations": ["read"]})):
+        assigned = await client.post(
+            "/api/v1/repository-connections/personal-github/assignments",
+            json={
+                "requestId": f"inherit-assign-{index}",
+                "repository": f"acme/repo{index}",
+                **legacy,
+            },
+        )
+        assert assigned.status_code == 200, assigned.text
+        assert all(
+            item["operations"] == operations for item in assigned.json()["assignments"]
+        )
+
+    revision = assigned.json()["policyRevision"]
+    for index, current in enumerate((["read"], operations)):
+        edited = await client.patch(
+            "/api/v1/repository-connections/personal-github",
+            json={
+                "requestId": f"inherit-edit-{index}",
+                "expectedPolicyRevision": revision,
+                "allowedOperations": current,
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        revision = edited.json()["policyRevision"]
+        assert len(edited.json()["assignments"]) == 2
+        assert all(
+            item["operations"] == current and item["revision"] == 1
+            for item in edited.json()["assignments"]
+        )
