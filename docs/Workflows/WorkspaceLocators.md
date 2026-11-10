@@ -26,10 +26,11 @@ in the sandbox readiness record before writing inputs. A restoring generation
 permits no additions; only a strictly verified baseline advances to projecting.
 Retries revalidate artifact authority and bytes, reuse the recorded optional
 selection, and account only for exact verified input outputs when comparing the
-saved repository. The sandbox owner fence covers staging, promotion, ownership
-handoff and readiness. Partial downloads stay in owner-scoped import staging
-outside the repository. Previously saved inputs remain baseline work. An identical
-current input can reuse a verified saved regular file without rewriting it or
+saved repository. The sandbox owner fence covers staging, promotion, readiness
+and runtime ownership of inputs and their private parent directories. Partial
+downloads stay in owner-scoped import staging outside the repository. Previously
+saved inputs remain baseline work. An identical current input can reuse a verified
+saved regular file without rewriting it or
 excluding it from saved Git status and file checks. Conflicting saved paths and
 unbound additions are retained and reported, never cleared to make verification
 pass. Completed generations verify their current inputs without recreating later

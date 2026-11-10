@@ -19,6 +19,21 @@ def options():
     )
 
 
+def _mutation_state(path):
+    # Verification may update atime; only writes change this state.
+    info = path.stat()
+    return (
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
 @pytest.mark.asyncio
 async def test_projection_pins_all_effective_inputs_and_rejects_drift(tmp_path):
     service = FakeArtifactService(
@@ -380,3 +395,217 @@ async def test_bound_attachment_ignore_preserves_baseline_status(tmp_path):
     assert (
         (workspace / ".git/info/exclude").read_text().endswith("/" + new["path"] + "\n")
     )
+
+
+@pytest.fixture
+def directory_ownership(monkeypatch):
+    """Model a privileged worker's directory handoff on non-root test hosts."""
+    import stat
+
+    original_fstat = os.fstat
+    owners = {}
+    handoffs = []
+    watched = set()
+    identities = {}
+
+    def observed_stat(fd):
+        current = original_fstat(fd)
+        for path in watched:
+            if path.exists() and not path.is_symlink():
+                info = path.stat()
+                identities[(info.st_dev, info.st_ino)] = path
+        path = identities.get((current.st_dev, current.st_ino))
+        if path is not None:
+            assert stat.S_ISDIR(current.st_mode)
+            values = list(current)
+            values[4:6] = owners.get(path, (os.getuid() + 1, os.getgid() + 1))
+            return os.stat_result(values)
+        return current
+
+    def handoff(fd, uid, gid):
+        current = original_fstat(fd)
+        path = identities[(current.st_dev, current.st_ino)]
+        handoffs.append(path)
+        owners[path] = (uid, gid)
+
+    monkeypatch.setattr(os, "fstat", observed_stat)
+    monkeypatch.setattr(os, "fchown", handoff)
+    return watched, owners, handoffs, handoff
+
+
+@pytest.mark.asyncio
+async def test_projection_hands_off_both_private_parents_before_promotion(
+    tmp_path, monkeypatch, directory_ownership
+):
+    import stat
+
+    owner = WorkspaceArtifactProjector(
+        FakeArtifactService({"saved": b"saved", "brief": b"brief"})
+    )
+    projection = await owner.prepare_input_projection(
+        restore_refs=("artifact://saved",),
+        attachment_refs=("artifact://brief",),
+        **options(),
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    watched, owners, handoffs, _ = directory_ownership
+    root = workspace / ".moonmind"
+    watched.update((root, root / "restore", root / "attachments"))
+    link = os.link
+
+    def promote(source, destination, **kwargs):
+        parent_info = os.fstat(kwargs["dst_dir_fd"])
+        parent = next(
+            path
+            for path in watched
+            if path.exists() and path.stat().st_ino == parent_info.st_ino
+        )
+        assert owners.get(root) == (os.getuid(), os.getgid())
+        assert owners.get(parent) == (os.getuid(), os.getgid())
+        assert stat.S_IMODE(parent_info.st_mode) == 0o700
+        return link(source, destination, **kwargs)
+
+    monkeypatch.setattr(os, "link", promote)
+    previous_umask = os.umask(0o077)
+    try:
+        await owner.project_bound_inputs(workspace, projection=projection, **options())
+    finally:
+        os.umask(previous_umask)
+    assert set(handoffs) == watched
+    assert len(handoffs) == 3
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in watched)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_parent", [".moonmind", ".moonmind/attachments"])
+async def test_directory_handoff_failure_prevents_promotion_and_allows_retry(
+    tmp_path, monkeypatch, directory_ownership, failed_parent
+):
+    owner = WorkspaceArtifactProjector(FakeArtifactService({"brief": b"brief"}))
+    projection = await owner.prepare_input_projection(
+        attachment_refs=("artifact://brief",), **options()
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    saved = workspace / "saved.txt"
+    saved.write_bytes(b"saved work")
+    target = workspace / projection["entries"][0]["path"]
+    watched, _, _, handoff = directory_ownership
+    watched.update((target.parent, target.parent.parent))
+    original_fstat = os.fstat
+
+    def fail_handoff(fd, uid, gid):
+        if original_fstat(fd).st_ino == (workspace / failed_parent).stat().st_ino:
+            raise PermissionError("directory ownership transfer denied")
+        handoff(fd, uid, gid)
+
+    monkeypatch.setattr(os, "fchown", fail_handoff)
+    with pytest.raises(WorkspaceArtifactProjectionError) as caught:
+        await owner.project_bound_inputs(workspace, projection=projection, **options())
+    assert caught.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+    assert isinstance(caught.value.__cause__, PermissionError)
+    assert not target.exists()
+    assert saved.read_bytes() == b"saved work"
+    assert not list(tmp_path.glob(".moonmind-import-*"))
+    monkeypatch.setattr(os, "fchown", handoff)
+    await owner.project_bound_inputs(workspace, projection=projection, **options())
+    assert target.read_bytes() == b"brief"
+    assert saved.read_bytes() == b"saved work"
+
+
+@pytest.mark.asyncio
+async def test_projection_preserves_baseline_modes_and_verify_only_does_not_write(
+    tmp_path, monkeypatch
+):
+    owner = WorkspaceArtifactProjector(
+        FakeArtifactService({"saved": b"saved", "new": b"new"})
+    )
+    projection = await owner.prepare_input_projection(
+        attachment_refs=("artifact://saved", "artifact://new"), **options()
+    )
+    workspace = tmp_path / "repo"
+    saved = workspace / projection["entries"][0]["path"]
+    saved.parent.mkdir(parents=True)
+    saved.parent.parent.chmod(0o750)
+    saved.parent.chmod(0o710)
+    saved.write_bytes(b"saved")
+    saved.chmod(0o400)
+    before = saved.stat()
+    original_chmod = os.chmod
+
+    def no_directory_chmod(path, mode, **kwargs):
+        assert not os.path.isdir(path), "saved directory modes must not change"
+        return original_chmod(path, mode, **kwargs)
+
+    def no_fchown(*args):
+        pytest.fail("already runtime-owned directories must not be reassigned")
+
+    monkeypatch.setattr(os, "chmod", no_directory_chmod)
+    monkeypatch.setattr(os, "fchmod", no_fchown)
+    monkeypatch.setattr(os, "fchown", no_fchown)
+    await owner.project_bound_inputs(
+        workspace,
+        projection=projection,
+        baseline_paths={projection["entries"][0]["path"]},
+        **options(),
+    )
+    after = saved.stat()
+    assert (after.st_ino, after.st_mode, after.st_mtime_ns, after.st_ctime_ns) == (
+        before.st_ino,
+        before.st_mode,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    assert saved.parent.stat().st_mode & 0o7777 == 0o710
+    assert saved.parent.parent.stat().st_mode & 0o7777 == 0o750
+    snapshot = {path: _mutation_state(path) for path in workspace.rglob("*")}
+    await owner.project_bound_inputs(
+        workspace, projection=projection, verify_only=True, **options()
+    )
+    assert {path: _mutation_state(path) for path in workspace.rglob("*")} == snapshot
+    assert saved.read_bytes() == b"saved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swapped_parent", [".moonmind", ".moonmind/attachments"])
+async def test_directory_handoff_cannot_follow_parent_symlink_swap(
+    tmp_path, monkeypatch, directory_ownership, swapped_parent
+):
+    owner = WorkspaceArtifactProjector(FakeArtifactService({"brief": b"brief"}))
+    projection = await owner.prepare_input_projection(
+        attachment_refs=("artifact://brief",), **options()
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    target = workspace / projection["entries"][0]["path"]
+    watched, _, _, _ = directory_ownership
+    watched.update((target.parent, target.parent.parent))
+    outside = tmp_path / "outside"
+    (outside / "attachments").mkdir(parents=True)
+    sentinel = outside / "untouched"
+    sentinel.write_bytes(b"outside work")
+    snapshot = {path: _mutation_state(path) for path in (outside, *outside.rglob("*"))}
+    selected = workspace / swapped_parent
+    moved = tmp_path / "detached"
+    changed_inodes = []
+    original_fstat = os.fstat
+
+    def swap_then_handoff(fd, uid, gid):
+        # Both descriptors have already been pinned. A path-based chown here
+        # would act on the newly installed symlink's external destination.
+        if not selected.is_symlink():
+            selected.rename(moved)
+            selected.symlink_to(outside, target_is_directory=True)
+        changed_inodes.append(original_fstat(fd).st_ino)
+
+    monkeypatch.setattr(os, "fchown", swap_then_handoff)
+    with pytest.raises(WorkspaceArtifactProjectionError):
+        await owner.project_bound_inputs(workspace, projection=projection, **options())
+    assert len(changed_inodes) == 2
+    assert not set(changed_inodes).intersection(state[0] for state in snapshot.values())
+    assert {
+        path: _mutation_state(path) for path in (outside, *outside.rglob("*"))
+    } == snapshot
+    assert sentinel.read_bytes() == b"outside work"
+    assert not list(tmp_path.glob(".moonmind-import-*"))

@@ -521,9 +521,25 @@ class WorkspaceArtifactProjector:
                     for index, item in enumerate(projection["entries"]):
                         target = workspace / item["path"]
                         if item["path"] not in present:
-                            with open_directory(
-                                target.parent, create=True
-                            ) as parent_fd:
+                            with (
+                                open_directory(
+                                    target.parent.parent, create=True
+                                ) as inputs_fd,
+                                open_directory(target.parent, create=True) as parent_fd,
+                            ):
+                                # These parents may be worker-owned 0700 under
+                                # a restrictive umask, after the baseline's
+                                # ownership handoff. Transfer pinned directories
+                                # without rewriting saved leaves or their modes.
+                                for directory_fd in (inputs_fd, parent_fd):
+                                    current = os.fstat(directory_fd)
+                                    if (current.st_uid, current.st_gid) != (
+                                        runtime_uid,
+                                        runtime_gid,
+                                    ):
+                                        os.fchown(
+                                            directory_fd, runtime_uid, runtime_gid
+                                        )
                                 os.link(
                                     str(index),
                                     target.name,

@@ -569,7 +569,7 @@ class OmnigentWorkspaceMaterializer:
                         input_record is not None
                         and input_record["phase"] == "restoring"
                     ):
-                        input_record = record_store.advance_input_projection(
+                        record_store.advance_input_projection(
                             workspace_id,
                             fingerprint,
                             "projecting",

@@ -199,6 +199,7 @@ class SandboxWorkspaceRecordStore:
                         Path(f"{workspace_id}.materialized").name, dir_fd=directory
                     )
                 except FileNotFoundError:
+                    # First admission or an earlier reset already has no marker.
                     pass
             descriptor, temporary = tempfile.mkstemp(
                 prefix=f".{path.name}.", suffix=".tmp", dir=self.store_root
@@ -219,6 +220,7 @@ class SandboxWorkspaceRecordStore:
                 try:
                     os.unlink(staging.name, dir_fd=directory)
                 except FileNotFoundError:
+                    # Successful atomic replacement consumed the staging name.
                     pass
 
     def bind_input_projection(
