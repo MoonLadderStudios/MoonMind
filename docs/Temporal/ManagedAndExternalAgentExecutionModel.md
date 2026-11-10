@@ -968,7 +968,7 @@ identities, and authority is released in the normal release-last order
 
 ## 18. Error and rate-limit behavior
 
-Failures are normalized into stable classes and bounded diagnostics. The responsible boundary records whether retry, reroute, reconnect, cleanup, janitor, or operator correction is useful.
+Bounded failure diagnostics retain stable classes and identify useful retry, reroute, reconnect, cleanup, janitor, or operator actions.
 
 Rules:
 
@@ -978,7 +978,7 @@ Rules:
 - cleanup failure remains visible and may keep capacity held until reconciliation;
 - malformed or ambiguous first-message/session state blocks duplicate side effects;
 - policy denial records the selected policy version and rationale;
-- raw provider responses and command output are redacted before persistence.
+- provider responses and command output share redaction before persistence; direct Codex diagnostics redact before truncation.
 
 ---
 
