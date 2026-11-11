@@ -238,6 +238,346 @@ class WorkspaceArtifactProjector:
     def __init__(self, artifact_service: Any | None) -> None:
         self._service = self._as_artifact_service(artifact_service)
 
+    async def prepare_input_projection(
+        self,
+        *,
+        restore_refs=(),
+        attachment_refs=(),
+        named_refs=None,
+        evidence_bundles=None,
+        mandatory_refs=None,
+        workflow_id,
+        runtime_uid,
+        runtime_gid,
+        retained=None,
+    ) -> dict[str, Any]:
+        """Admit one bounded input selection, or revalidate its retained identity."""
+
+        def clean(refs):
+            return list(
+                dict.fromkeys(str(ref).strip() for ref in refs if str(ref).strip())
+            )
+
+        def conflict(message):
+            return WorkspaceArtifactProjectionError(
+                message, code="WORKSPACE_AUTHORITY_MISMATCH"
+            )
+
+        restores, attachments = clean(restore_refs), clean(attachment_refs)
+        names = {key: str(ref).strip() for key, ref in (named_refs or {}).items()}
+        bundles = (
+            [clean(group) for group in evidence_bundles]
+            if isinstance(evidence_bundles, (list, tuple))
+            else evidence_bundles
+        )
+        mandatory = clean(mandatory_refs or ())
+        contract = {
+            "restoreRefs": restores,
+            "attachmentRefs": attachments,
+            "namedRefs": names,
+            "evidenceBundles": bundles,
+            "mandatoryRefs": mandatory,
+        }
+        if retained is not None and (
+            retained.get("version") != "input-projection-v1"
+            or retained.get("inputContract") != contract
+        ):
+            raise conflict("checkpoint input contract changed within its attempt")
+        if len(restores) > MAX_INPUT_REFS or (
+            bundles is None and len(attachments) > MAX_INPUT_REFS
+        ):
+            raise conflict("checkpoint input projection exceeds its ref bound")
+        if bundles is not None:
+            self._validate_evidence_groups(attachments, bundles, mandatory)
+        if any(ref not in attachments for ref in names.values()):
+            raise conflict("named input is not an admitted attachment")
+        if any(
+            not isinstance(value, int) or value < 0
+            for value in (runtime_uid, runtime_gid)
+        ):
+            raise conflict("checkpoint input runtime identity is invalid")
+        artifacts = []
+        for role, refs in (("restore", restores), ("attachments", attachments)):
+            for ref in refs:
+                access = ArtifactAccessContext.for_execution(
+                    workflow_id,
+                    **({"principal": RESTORE_PRINCIPAL} if role == "restore" else {}),
+                )
+                admitted = await self._validate_metadata(
+                    self._require_service(role),
+                    artifact_id=self._artifact_id(ref, noun=role),
+                    budget_bytes=MAX_INPUT_BYTES,
+                    access=access,
+                    required_workflow_id=workflow_id if role == "attachments" else None,
+                    strict_metadata=True,
+                )
+                if (
+                    not admitted.digest
+                    or not admitted.digest.startswith("sha256:")
+                    or len(admitted.digest) != 71
+                    or any(c not in "0123456789abcdef" for c in admitted.digest[7:])
+                    or not isinstance(admitted.size_bytes, int)
+                    or admitted.size_bytes < 0
+                ):
+                    raise conflict(
+                        "checkpoint input lacks immutable digest and size evidence"
+                    )
+                artifacts.append(
+                    {
+                        "role": role,
+                        "ref": ref,
+                        "digest": admitted.digest,
+                        "bytes": admitted.size_bytes,
+                    }
+                )
+        if retained is not None and retained.get("artifacts") != artifacts:
+            raise conflict(
+                "checkpoint input artifact metadata changed within its attempt"
+            )
+        sizes = {
+            item["ref"]: item["bytes"]
+            for item in artifacts
+            if item["role"] == "attachments"
+        }
+        proposed = attachments
+        if bundles is not None:
+            proposed = list(
+                await self._select_evidence_attachments(
+                    refs=attachments,
+                    bundles=bundles,
+                    mandatory_refs=mandatory,
+                    workflow_id=workflow_id,
+                    admitted_sizes=sizes,
+                )
+            )
+        selected = (
+            list(retained["selectedAttachments"]) if retained is not None else proposed
+        )
+        optional = {ref for group in (bundles or ()) for ref in group}
+        required = set(mandatory) | (set(attachments) - optional)
+        if (
+            len(selected) != len(set(selected))
+            or not set(selected).issubset(attachments)
+            or not required.issubset(selected)
+            or len(selected) > MAX_INPUT_REFS
+            or any(
+                set(group).intersection(selected) and not set(group).issubset(selected)
+                for group in (bundles or ())
+            )
+        ):
+            raise conflict("retained checkpoint input selection is invalid")
+        entries = []
+        for role, refs in (("restore", restores), ("attachments", selected)):
+            role_items = {
+                item["ref"]: item for item in artifacts if item["role"] == role
+            }
+            if sum(role_items[ref]["bytes"] for ref in refs) > MAX_TOTAL_BYTES:
+                raise conflict("checkpoint input projection exceeds its byte bound")
+            for ref in refs:
+                item = role_items[ref]
+                entries.append(
+                    {
+                        "path": f".moonmind/{role}/"
+                        + hashlib.sha256(ref.encode()).hexdigest()[:24],
+                        "ref": ref,
+                        "digest": item["digest"],
+                        "bytes": item["bytes"],
+                        "mode": 0o400,
+                        "uid": runtime_uid,
+                        "gid": runtime_gid,
+                    }
+                )
+        if len({item["path"] for item in entries}) != len(entries):
+            raise conflict("checkpoint input projection paths collide")
+        projection = {
+            "version": "input-projection-v1",
+            "inputContract": contract,
+            "artifacts": artifacts,
+            "selectedAttachments": selected,
+            "entries": entries,
+        }
+        if retained is not None and projection != retained:
+            raise conflict("checkpoint input projection changed within its attempt")
+        return projection
+
+    async def project_bound_inputs(
+        self,
+        workspace: Path,
+        *,
+        projection,
+        workflow_id,
+        runtime_uid,
+        runtime_gid,
+        verify_only=False,
+        baseline_paths=frozenset(),
+    ) -> dict[str, Any]:
+        """Promote only this generation's verified inputs, retaining unknown work."""
+        from moonmind.utils.workspace_paths import open_directory, open_regular_file
+
+        contract = projection["inputContract"]
+        projection = await self.prepare_input_projection(
+            restore_refs=contract["restoreRefs"],
+            attachment_refs=contract["attachmentRefs"],
+            named_refs=contract["namedRefs"],
+            evidence_bundles=contract["evidenceBundles"],
+            mandatory_refs=contract["mandatoryRefs"],
+            retained=projection,
+            workflow_id=workflow_id,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+        )
+        expected = {item["path"]: item for item in projection["entries"]}
+
+        def verify_present():
+            present = set()
+            # The canonical restore owns the complete baseline path set.
+            # This projector owns only current input targets, so saved leaves
+            # from earlier turns remain baseline work, never runtime garbage.
+            with open_directory(workspace):
+                pass
+            for name, item in expected.items():
+                try:
+                    with open_regular_file(workspace / name) as stream:
+                        info = os.fstat(stream.fileno())
+                        body = stream.read(item["bytes"] + 1)
+                except FileNotFoundError:
+                    continue
+                if (
+                    len(body) != item["bytes"]
+                    or "sha256:" + hashlib.sha256(body).hexdigest() != item["digest"]
+                    or stat.S_IMODE(info.st_mode) != item["mode"]
+                    or (info.st_uid, info.st_gid) != (item["uid"], item["gid"])
+                ):
+                    raise WorkspaceArtifactProjectionError(
+                        "checkpoint input content or ownership changed",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    )
+                present.add(name)
+            return present
+
+        try:
+            original_present = verify_present()
+            if not set(baseline_paths).issubset(original_present):
+                raise WorkspaceArtifactProjectionError(
+                    "saved checkpoint input is missing",
+                    code="WORKSPACE_AUTHORITY_MISMATCH",
+                )
+            if verify_only and original_present != set(expected):
+                raise WorkspaceArtifactProjectionError(
+                    "completed checkpoint input is missing",
+                    code="WORKSPACE_AUTHORITY_MISMATCH",
+                )
+            evidence = {"restoreInputs": [], "attachments": []}
+            if not expected:
+                return evidence
+            # The sandbox owner holds its existing claims fence through cleanup,
+            # staging and promotion. Crashes leave only import-owned scratch
+            # outside the candidate, never arbitrary .input-* exceptions in it.
+            with tempfile.TemporaryDirectory(
+                prefix=STAGING_PREFIX, dir=workspace.parent
+            ) as temporary:
+                staging = Path(temporary)
+                for index, item in enumerate(projection["entries"]):
+                    role = item["path"].split("/")[1]
+                    access = ArtifactAccessContext.for_execution(
+                        workflow_id,
+                        **(
+                            {"principal": RESTORE_PRINCIPAL}
+                            if role == "restore"
+                            else {}
+                        ),
+                    )
+                    target = staging / str(index)
+                    written = await self._write_payload(
+                        self._require_service(role),
+                        artifact_id=self._artifact_id(item["ref"], noun=role),
+                        target=target,
+                        budget_bytes=item["bytes"],
+                        access=access,
+                        expected_digest=item["digest"],
+                    )
+                    if written != item["bytes"]:
+                        raise WorkspaceArtifactProjectionError(
+                            "checkpoint input size changed",
+                            code="WORKSPACE_AUTHORITY_MISMATCH",
+                        )
+                    self._make_runtime_readable(
+                        target,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                        noun=role,
+                    )
+                # Downloads yield to other work. Recheck saved leaves before
+                # promotion and never replace one, even if it arrives after
+                # verification. A link publishes completed bytes atomically
+                # without clobbering concurrent writes to the candidate.
+                present = verify_present()
+                if not original_present.issubset(present):
+                    raise WorkspaceArtifactProjectionError(
+                        "checkpoint input disappeared during download",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    )
+                with open_directory(staging) as staging_fd:
+                    for index, item in enumerate(projection["entries"]):
+                        target = workspace / item["path"]
+                        if item["path"] not in present:
+                            with (
+                                open_directory(
+                                    target.parent.parent, create=True
+                                ) as inputs_fd,
+                                open_directory(target.parent, create=True) as parent_fd,
+                            ):
+                                # These parents may be worker-owned 0700 under
+                                # a restrictive umask, after the baseline's
+                                # ownership handoff. Transfer pinned directories
+                                # without rewriting saved leaves or their modes.
+                                for directory_fd in (inputs_fd, parent_fd):
+                                    current = os.fstat(directory_fd)
+                                    if (current.st_uid, current.st_gid) != (
+                                        runtime_uid,
+                                        runtime_gid,
+                                    ):
+                                        os.fchown(
+                                            directory_fd, runtime_uid, runtime_gid
+                                        )
+                                os.link(
+                                    str(index),
+                                    target.name,
+                                    src_dir_fd=staging_fd,
+                                    dst_dir_fd=parent_fd,
+                                    follow_symlinks=False,
+                                )
+                        role = item["path"].split("/")[1]
+                        evidence[
+                            "restoreInputs" if role == "restore" else "attachments"
+                        ].append(
+                            {
+                                "ref": item["ref"],
+                                "bytes": item["bytes"],
+                                "path": item["path"],
+                            }
+                        )
+                if verify_present() != set(expected):
+                    raise WorkspaceArtifactProjectionError(
+                        "checkpoint input disappeared during promotion",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    )
+            if evidence["attachments"] and not verify_only:
+                self._exclude_attachments_from_git(
+                    workspace,
+                    paths=[
+                        item["path"]
+                        for item in evidence["attachments"]
+                        if item["path"] not in baseline_paths
+                    ],
+                )
+            return evidence
+        except OSError as exc:
+            raise WorkspaceArtifactProjectionError(
+                "checkpoint input path is unsafe or unavailable",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            ) from exc
+
     async def project(
         self,
         workspace: Path,
@@ -376,16 +716,9 @@ class WorkspaceArtifactProjector:
             self._exclude_attachments_from_git(workspace)
         return evidence
 
-    async def _select_evidence_attachments(
-        self, *, refs, bundles, mandatory_refs, workflow_id
-    ):
-        """Fit optional whole receipt groups beside ordinary admitted inputs.
-
-        Stored byte sizes and existing artifact authority own this decision.
-        Neither a producer's manifest nor a caller-supplied size raises an
-        attachment limit or grants access. Materialization revalidates bytes.
-        """
-
+    @staticmethod
+    def _validate_evidence_groups(refs, bundles, mandatory_refs):
+        """Bound the existing optional-input proposal before metadata reads."""
         def invalid(message):
             return WorkspaceArtifactProjectionError(
                 message, code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
@@ -419,9 +752,31 @@ class WorkspaceArtifactProjector:
         selected = [ref for ref in refs if ref in required]
         if len(selected) > MAX_INPUT_REFS:
             raise invalid("too many required attachments for the authorized workspace")
-        sizes = {}
+        return refs, groups, selected
+
+    async def _select_evidence_attachments(
+        self, *, refs, bundles, mandatory_refs, workflow_id, admitted_sizes=None
+    ):
+        """Fit optional whole receipt groups beside ordinary admitted inputs.
+
+        Stored byte sizes and existing artifact authority own this decision.
+        Neither a producer's manifest nor a caller-supplied size raises an
+        attachment limit or grants access. Materialization revalidates bytes.
+        """
+
+        def invalid(message):
+            return WorkspaceArtifactProjectionError(
+                message, code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+            )
+
+        refs, groups, selected = self._validate_evidence_groups(
+            refs, bundles, mandatory_refs
+        )
+        sizes = dict(admitted_sizes or {})
         service = self._require_service("attachments")
         for ref in refs:
+            if admitted_sizes is not None:
+                continue
             admitted = await self._validate_metadata(
                 service,
                 artifact_id=self._artifact_id(ref, noun="attachments"),
@@ -1959,18 +2314,23 @@ class WorkspaceArtifactProjector:
         return len(payload)
 
     @staticmethod
-    def _exclude_attachments_from_git(workspace: Path) -> None:
+    def _exclude_attachments_from_git(workspace: Path, *, paths=None) -> None:
         info = workspace / ".git" / "info"
         if not info.is_dir():
             return
         exclude = info / "exclude"
-        rule = "/.moonmind/attachments/"
+        rules = (
+            ["/.moonmind/attachments/"]
+            if paths is None
+            else ["/" + path for path in paths]
+        )
         existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if rule not in existing.splitlines():
+        rules = [rule for rule in rules if rule not in existing.splitlines()]
+        if rules:
             with exclude.open("a", encoding="utf-8") as stream:
                 if existing and not existing.endswith("\n"):
                     stream.write("\n")
-                stream.write(f"{rule}\n")
+                stream.write("\n".join(rules) + "\n")
 
     @staticmethod
     def _as_artifact_service(gateway: Any | None) -> Any | None:
