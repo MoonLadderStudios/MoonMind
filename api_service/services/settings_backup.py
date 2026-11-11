@@ -67,6 +67,7 @@ class SettingsBackupOverrideRecord(BaseModel):
     value_json: Any = None
     schema_version: int
     value_version: int
+    is_reset: bool = False
     is_secret_ref: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -185,6 +186,7 @@ async def export_settings_backup(
                 value_json=row.value_json,
                 schema_version=row.schema_version,
                 value_version=row.value_version,
+                is_reset=row.is_reset,
                 is_secret_ref=is_secret_ref,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
@@ -251,7 +253,9 @@ async def scan_broken_references(
 
     override_rows = (
         await session.execute(
-            select(SettingsOverride).where(SettingsOverride.scope.is_(None))
+            select(SettingsOverride).where(
+                SettingsOverride.scope.is_(None), SettingsOverride.is_reset.is_(False)
+            )
         )
     ).scalars().all()
 

@@ -1771,6 +1771,10 @@ class SettingsOverride(Base):
     value_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
+    # A reset removes the value, not the optimistic-concurrency generation.
+    is_reset: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     updated_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -553,3 +553,40 @@ async def test_scan_returns_broken_references_as_pydantic_models(
     # affected instance override.
     assert set(dump) >= {"key", "code", "severity", "details", "message"}
     assert "scope" not in dump
+
+
+@pytest.mark.asyncio
+async def test_backup_retains_reset_generation_and_does_not_report_a_reference(
+    settings_session_maker,
+):
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(session=session, env={})
+        session.add(SettingsOverride(
+            key="workflow.default_provider_profile_ref", value_json="removed-profile",
+            value_version=4,
+        ))
+        await session.commit()
+        reset = await service.reset_override("workflow.default_provider_profile_ref")
+        bundle = await export_settings_backup(
+            session=session, registry=_backup_registry()
+        )
+        restored = SettingsBackupBundle.model_validate_json(bundle.model_dump_json())
+        row = next(
+            row
+            for row in restored.overrides
+            if row.key == "workflow.default_provider_profile_ref"
+        )
+        assert row.is_reset is True
+        assert row.value_json is None
+        assert row.value_version == reset.value_version
+        assert (
+            await scan_broken_references(
+                session=session, registry=_backup_registry(), env={}
+            )
+            == []
+        )
+        # Old bundles remain active overrides, including intentional nulls.
+        legacy = row.model_dump(exclude={"is_reset"})
+        assert type(row).model_validate(legacy).is_reset is False
