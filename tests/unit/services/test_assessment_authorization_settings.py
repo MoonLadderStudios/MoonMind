@@ -41,7 +41,14 @@ async def test_saved_authorizations_have_server_generation_and_optimistic_versio
             )
         ).one()
         assert row.value_json == {"authorizations": []}
+        assert row.is_reset is False
         assert row.value_version == 3
+        from api_service.services.assessment_authorizations import (
+            AssessmentAuthorizationDenied,
+            load_assessment_authorization,
+        )
+        with pytest.raises(AssessmentAuthorizationDenied):
+            await load_assessment_authorization(session, first["ref"])
         recreated = await service.apply_overrides(
             changes={SETTINGS_KEY: {"authorizations": [first]}},
             expected_versions={SETTINGS_KEY: 3},
@@ -103,3 +110,36 @@ def test_shared_authorization_form_fixture_matches_native_schema():
         / "frontend/src/runtime/fixtures/assessment-authorization-scope.json"
     )
     assert json.loads(fixture.read_text()) == authorization_scope_input_schema()
+
+
+@pytest.mark.asyncio
+async def test_worker_pause_state_cannot_become_a_catalog_reset_marker(
+    settings_session_maker,
+):
+    key = "operations.workers.pause_state"
+    async with settings_session_maker() as session:
+        session.add(
+            SettingsOverride(
+                key=key, value_json={"workersPaused": True}, value_version=7
+            )
+        )
+        await session.commit()
+        service = SettingsCatalogService(session=session, env={})
+        assert key not in service._entries_by_key
+        with pytest.raises(SettingsValidationError):
+            await service.apply_overrides(changes={key: None})
+        with pytest.raises(SettingsValidationError):
+            await service.apply_overrides(
+                changes={"workflow.default_runtime": "codex_cli"},
+                expected_versions={key: 7},
+            )
+        with pytest.raises(KeyError):
+            await service.reset_override(key)
+        row = (
+            await session.scalars(
+                select(SettingsOverride).where(SettingsOverride.key == key)
+            )
+        ).one()
+        assert row.value_json == {"workersPaused": True}
+        assert row.value_version == 7
+        assert row.is_reset is False

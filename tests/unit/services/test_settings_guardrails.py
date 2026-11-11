@@ -470,14 +470,45 @@ def test_section29_8_effective_value_always_explains_source():
     assert "source_explanation" in required_fields
 
 
-def test_section29_9_reset_returns_to_inheritance_not_default_mutation():
-    """§29.9 — a reset returns to inheritance rather than mutating defaults."""
-    source = inspect.getsource(SettingsCatalogService.reset_override)
-    # Reset operates on the override row only — it deletes the row to
-    # restore inheritance and never mutates the descriptor default value.
-    assert "_get_override" in source
-    assert "session.delete" in source
-    assert "default_value" not in source
+@pytest.mark.asyncio
+async def test_section29_9_reset_returns_to_inheritance_not_default_mutation(
+    settings_async_session,
+):
+    """A reset restores live inheritance without mutating the default."""
+    from sqlalchemy import select
+
+    from api_service.db.models import SettingsOverride
+
+    entry = SettingRegistryEntry(
+        key="test.inherited",
+        title="Inherited",
+        category="Test",
+        section="user-workspace",
+        value_type="integer",
+        ui="number",
+        default_value=3,
+        env_aliases=("TEST_INHERITED",),
+        order=1,
+    )
+    environment = {"TEST_INHERITED": "7"}
+    async with settings_async_session() as session:
+        service = SettingsCatalogService(
+            registry=(entry,),
+            env=environment,
+            session=session,
+        )
+        await service.apply_overrides(changes={entry.key: 9})
+        reset = await service.reset_override(entry.key)
+        assert (reset.value, reset.source, reset.value_version) == (7, "environment", 3)
+        assert entry.default_value == 3
+        environment["TEST_INHERITED"] = "8"
+        inherited = await service.effective_value_async(entry.key)
+        assert (inherited.value, inherited.value_version) == (8, 3)
+        environment.clear()
+        default = await service.effective_value_async(entry.key)
+        assert (default.value, default.source) == (3, "default")
+        row = (await session.scalars(select(SettingsOverride))).one()
+        assert row.is_reset and row.value_json is None and row.value_version == 3
 
 
 def test_section29_10_operator_lock_blocks_user_workspace_apis():
