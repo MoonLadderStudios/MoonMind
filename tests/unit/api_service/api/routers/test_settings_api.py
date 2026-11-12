@@ -157,7 +157,7 @@ async def test_settings_catalog_endpoint_reports_persisted_override_versions(set
             "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "none"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
+                "expected_versions": {"workflow.default_publish_mode": 2},
             },
         )
         response = await client.get(
@@ -173,7 +173,7 @@ async def test_settings_catalog_endpoint_reports_persisted_override_versions(set
     )
     assert descriptor["effective_value"] == "none"
     assert descriptor["source"] == "instance_override"
-    assert descriptor["value_version"] == 2
+    assert descriptor["value_version"] == 3
 
 
 @pytest.mark.asyncio
@@ -409,7 +409,7 @@ async def test_patch_workspace_setting_persists_override(settings_api_db):
     value = body["values"]["workflow.default_publish_mode"]
     assert value["value"] == "branch"
     assert value["source"] == "instance_override"
-    assert value["value_version"] == 1
+    assert value["value_version"] == 2
     assert effective.json()["source"] == "instance_override"
 
 
@@ -438,7 +438,7 @@ async def test_clients_share_committed_configuration_and_conflict_on_stale_versi
             "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "env://NEWER_TOKEN"},
-                "expected_versions": {"integrations.github.token_ref": 1},
+                "expected_versions": {"integrations.github.token_ref": seen.json()["value_version"]},
             },
         )
         conflict = await second.patch(
@@ -462,7 +462,7 @@ async def test_clients_share_committed_configuration_and_conflict_on_stale_versi
     assert conflict.status_code == 409
     assert conflict.json()["error"] == "version_conflict"
     assert final.json()["value"] == "env://NEWER_TOKEN"
-    assert final.json()["value_version"] == 2
+    assert final.json()["value_version"] == 3
 
 
 @pytest.mark.asyncio
@@ -558,7 +558,7 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
             "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "ghp_raw_plaintext"},
-                "expected_versions": {"integrations.github.token_ref": 1},
+                "expected_versions": {"integrations.github.token_ref": 2},
             },
         )
 
@@ -1244,7 +1244,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                 "changes": {
                     "integrations.github.token_ref": "db://disabled-github-token"
                 },
-                "expected_versions": {"integrations.github.token_ref": 1},
+                "expected_versions": {"integrations.github.token_ref": 2},
             },
         )
         missing = await client.patch(
@@ -1253,7 +1253,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                 "changes": {
                     "integrations.github.token_ref": "db://missing-github-token"
                 },
-                "expected_versions": {"integrations.github.token_ref": 1},
+                "expected_versions": {"integrations.github.token_ref": 2},
             },
         )
 

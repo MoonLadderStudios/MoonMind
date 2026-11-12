@@ -35,7 +35,7 @@ Validate at write and pre-persistence boundaries, during effective-value preview
 
 ## 10. Resolution Model
 
-The target resolution is built-in/deployment defaults, then applicable instance/context overrides, with explicit operator locks winning. An override does not mutate the underlying default. Reset removes the override and reveals the remaining source; it is not a write of the presently inherited value.
+The target resolution is built-in/deployment defaults, then applicable instance/context overrides, with explicit operator locks winning. An override does not mutate the underlying default. Reset clears the override value while retaining its generation, and reveals the remaining source; it is not a write of the presently inherited value.
 
 `SettingsCatalogService._resolve_value_from_overrides` gives a lock precedence, then the instance override (`instance_override`), then rename-aware migration handling and configured defaults. `_resolve_value` checks declared environment aliases before the configured settings path and descriptor default. Source badges report the actual resolved source.
 
@@ -62,9 +62,9 @@ The new contract requires a coordinated cutover of the backend descriptor/config
 
 ## Persistence, APIs, and concurrent changes
 
-The `settings_overrides` and `settings_audit_events` models are the source for exact schema. Overrides hold small non-secret JSON values or references, schema/value versions, and provenance; a partial unique index allows one instance row per key. Audit holds event identity, key, reason, request id, and redacted before/after values.
+The `settings_overrides` and `settings_audit_events` models are the source for exact schema. Overrides hold small non-secret JSON values or references, schema/value versions, provenance, and an `is_reset` marker for inherited values; a partial unique index allows one instance row per key. Audit holds event identity, key, reason, request id, and redacted before/after values.
 
-The router provides `GET /api/v1/settings/catalog`, `/effective`, `/effective/{key}`, `/diagnostics` and `/audit`, `POST /validate` and `/preview`, `PATCH /api/v1/settings` for updates, and `DELETE /api/v1/settings/{key}` for reset. Writes use server validation and expected-version protection, so a stale version cannot overwrite another client's accepted change. Reset honors the same lock and authorization boundary as update.
+The router provides `GET /api/v1/settings/catalog`, `/effective`, `/effective/{key}`, `/diagnostics` and `/audit`, `POST /validate` and `/preview`, `PATCH /api/v1/settings` for updates, and `DELETE /api/v1/settings/{key}` for reset. Writes use server validation and expected-version protection, so a stale version cannot overwrite another client's accepted change. The first accepted override advances inherited version 1 to 2. Reset advances the retained generation; resetting an already inherited value is a no-op. Preconditions can include unchanged, read-only companion keys without writing those values. Missing companions retain an inherited generation row, preventing concurrent first inserts from bypassing a multi-key precondition. Reset honors the same lock and authorization boundary as update.
 
 ## Reusable assessment projects
 
@@ -104,9 +104,11 @@ Back up settings overrides and audit with their dependent managed-secret and pro
 
 ### Backup contents and exclusions
 
-[export_settings_backup](../../api_service/services/settings_backup.py) produces a `SettingsBackupBundle` with keys, non-sensitive values, SecretRefs, resource references, versions, and audit/migration provenance. It excludes redaction-marked non-SecretRef override values and lists their keys in `excluded_keys`. SecretRef values remain references; malformed secret-reference values or redacted audit rows that still contain payloads raise `SettingsBackupViolation` instead of emitting a leaking bundle.
+[export_settings_backup](../../api_service/services/settings_backup.py) produces a `SettingsBackupBundle` with keys, non-sensitive values, SecretRefs, resource references, versions, reset markers, and audit/migration provenance. It excludes redaction-marked non-SecretRef override values and lists their keys in `excluded_keys`. SecretRef values remain references; malformed secret-reference values or redacted audit rows that still contain payloads raise `SettingsBackupViolation` instead of emitting a leaking bundle.
 
-Custom database backups must preserve the same confidentiality expectations. The Settings-only exporter is not a substitute for backing up encrypted secrets, provider profiles, OAuth credential volumes, or external key custody.
+Revision 414 adds reset markers without changing existing values, versions, subjects or audit. Older applications cannot interpret those markers: do not start an older binary against the upgraded database. The API’s Compose dependency requires successful selected-image `init-db`, whose Alembic graph rejects an unknown newer revision. Worker fleets do not share that gate. The predecessor worker readers use the unchanged pause-state and assessment-authorization representations; this is not a guarantee for arbitrary older binaries or direct/mixed-version launches with incompatible consumers. Downgrade refuses while reset markers exist rather than deleting generations or turning inherited values into explicit nulls. Repair forward after markers are in use.
+
+Custom database backups must preserve reset state and the same confidentiality expectations. The Settings-only exporter is not a substitute for backing up encrypted secrets, provider profiles, OAuth credential volumes, or external key custody.
 
 ### Partial restore and recovery procedure
 
@@ -124,7 +126,7 @@ Registry migration metadata and row migration are separate. `SettingMigrationRul
 
 ### 24.1 Renaming Settings
 
-`apply_rename` preserves the instance value, schema version, and value version at the new key, and records `settings.migration.renamed`. Retained predecessor rows are left for the guarded conversion. A pre-existing target raises `SettingsMigrationCollisionError` unless explicitly skipped. Preserve effective values and report collisions rather than overwriting accepted configuration.
+`apply_rename` preserves the instance value, schema version, value version, and reset state at the new key, and records `settings.migration.renamed`. Retained predecessor rows are left for the guarded conversion. A pre-existing target raises `SettingsMigrationCollisionError` unless explicitly skipped. Preserve effective values and report collisions rather than overwriting accepted configuration.
 
 ### 24.2 Removing Settings
 

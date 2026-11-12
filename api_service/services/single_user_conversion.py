@@ -852,6 +852,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                             str(getattr(r, "user_id", "") or ""),
                             key,
                             _canonical(getattr(r, "value_json", None)),
+                            str(bool(getattr(r, "is_reset", False))),
                         )
                     )
                 )
@@ -2222,7 +2223,8 @@ def _legacy_settings_choices(
     for row in rows:
         if row.key in pending:
             tier = personal if row.scope == "user" else shared
-            tier.setdefault(row.key, {})[_canonical(row.value_json)] = row
+            if not row.is_reset:
+                tier.setdefault(row.key, {})[_canonical(row.value_json)] = row
             if row.scope is None:
                 instance[row.key] = row
     choices: dict[str, dict[str, Any]] = {}
@@ -2230,7 +2232,7 @@ def _legacy_settings_choices(
         choices[key] = dict(personal.get(key) or shared[key])
         if key in instance_edited:
             row = instance.get(key)
-            if row is None:
+            if row is None or row.is_reset:
                 choices[key][_INSTANCE_RESET_CHOICE] = None
             else:
                 choices[key].setdefault(_canonical(row.value_json), row)
@@ -2294,13 +2296,14 @@ async def settings_transform(
         superseded = {
             _canonical(row.value_json): row.value_json
             for row in group
-            if _canonical(row.value_json) != chosen
+            if not row.is_reset and _canonical(row.value_json) != chosen
         }
         survivor = group[0]
         if len(group) > 1:
             # A client holding any pre-conversion version must re-read.
             survivor.value_version = max(row.value_version for row in group) + 1
         survivor.value_json = source.value_json
+        survivor.is_reset = False
         survivor.schema_version = source.schema_version
         for duplicate in group[1:]:
             await session.delete(duplicate)

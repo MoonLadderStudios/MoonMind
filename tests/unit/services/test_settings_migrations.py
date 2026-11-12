@@ -655,3 +655,90 @@ async def test_orchestrator_rejects_duplicate_rules():
             session=_DummySession(),  # type: ignore[arg-type]
             migration_rules=(rule_a, rule_b),
         )
+
+
+@pytest.mark.asyncio
+async def test_reset_marker_survives_rename_without_becoming_an_override(
+    settings_session_maker,
+):
+    rule = SettingMigrationRule(
+        old_key="test.old_runtime",
+        new_key="test.new_runtime",
+        state="renamed",
+        message="Renamed runtime.",
+    )
+    async with settings_session_maker() as session:
+        session.add(
+            SettingsOverride(
+                key=rule.old_key, value_json=None, is_reset=True, value_version=8
+            )
+        )
+        await session.commit()
+        service = SettingsCatalogService(
+            session=session,
+            registry=_new_runtime_registry(),
+            migration_rules=(rule,),
+            env={},
+        )
+        before = await service.effective_value_async(rule.new_key)
+        assert before.value == "default-runtime"
+        assert before.source == "default"
+        await SettingsMigrationOrchestrator(session, (rule,)).apply_rename(rule)
+        await session.commit()
+        after = await service.effective_value_async(rule.new_key)
+        assert after.value == before.value
+        assert after.source == before.source
+        assert after.value_version == 8
+        assert not after.diagnostics
+        written = await service.apply_overrides(
+            changes={rule.new_key: "chosen"}, expected_versions={rule.new_key: 8}
+        )
+        assert written.values[rule.new_key].value_version == 9
+
+
+@pytest.mark.asyncio
+async def test_reset_skips_value_coercion_and_deprecation_diagnostics(
+    settings_session_maker,
+):
+    type_rule = SettingMigrationRule(
+        old_key="test.retry_limit",
+        state="type_changed",
+        expected_schema_version=2,
+        message="Use integers.",
+    )
+    removed = SettingMigrationRule(
+        old_key="test.removed", state="removed", message="Removed."
+    )
+    async with settings_session_maker() as session:
+        session.add_all(
+            [
+                SettingsOverride(
+                    key=rule.old_key, value_json=None, is_reset=True, value_version=5
+                )
+                for rule in (type_rule, removed)
+            ]
+        )
+        await session.commit()
+
+        def fail_coercion(value):
+            raise AssertionError("A reset marker is not a configured value")
+
+        orchestrator = SettingsMigrationOrchestrator(session, (type_rule, removed))
+        assert (
+            await orchestrator.apply_type_change(
+                type_rule, TypeChangeCoercion(fail_coercion, 2)
+            )
+            == []
+        )
+        assert await orchestrator.apply_removal(removed) == []
+        service = SettingsCatalogService(
+            session=session,
+            registry=_retry_registry(),
+            migration_rules=(type_rule, removed),
+            env={},
+        )
+        value = await service.effective_value_async(type_rule.old_key)
+        assert (value.value, value.value_version, value.source) == (0, 5, "default")
+        assert not value.diagnostics
+        diagnostics = await service.diagnostics()
+        assert removed.old_key not in diagnostics.values

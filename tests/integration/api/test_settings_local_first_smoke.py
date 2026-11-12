@@ -20,7 +20,6 @@ by other suites (see §9 of the walkthrough doc).
 
 from __future__ import annotations
 
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -107,6 +106,10 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
                 }
                 assert descriptor["source_explanation"]
 
+        inherited = await client.get(f"/api/v1/settings/effective/{TOKEN_KEY}")
+        assert inherited.status_code == 200, inherited.text
+        inherited_body = inherited.json()
+
         # --- §2 Managed secret creation (§14.1, §22.2) ---
         created = await client.post(
             "/api/v1/secrets",
@@ -168,6 +171,32 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
         # (default/config/environment) — never to a SecretRef-typed source.
         assert reset_body["source"] in {"default", "config_file", "environment"}
         assert reset_body["source"] != "secret_ref"
+        assert reset_body["source"] == inherited_body["source"]
+        assert reset_body["value"] == inherited_body["value"]
+        assert reset_body["value_version"] > token_value["value_version"]
+
+        # An editor loaded before reset must not silently recreate the binding.
+        stale = await client.patch(
+            "/api/v1/settings",
+            json={
+                "changes": {TOKEN_KEY: LOCAL_SECRET_REF},
+                "expected_versions": {TOKEN_KEY: token_value["value_version"]},
+            },
+        )
+        assert stale.status_code == 409, stale.text
+        assert stale.json()["error"] == "version_conflict"
+        after_stale = await client.get(f"/api/v1/settings/effective/{TOKEN_KEY}")
+        assert after_stale.status_code == 200, after_stale.text
+        for field in ("value", "source", "value_version"):
+            assert after_stale.json()[field] == reset_body[field]
+
+        reset_usage = await client.get(f"/api/v1/secrets/{LOCAL_SECRET_SLUG}/usage")
+        assert reset_usage.status_code == 200, reset_usage.text
+        assert not any(
+            consumer["settingKey"] == TOKEN_KEY
+            for consumer in reset_usage.json()["usages"]
+        )
+        assert PLACEHOLDER_PLAINTEXT not in reset_usage.text
 
     # --- Persistence-level guarantees (§22.1, §22.8, §29.4) ---
     async with local_first_db() as session:
@@ -176,7 +205,12 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
                 select(SettingsOverride).where(SettingsOverride.key == TOKEN_KEY)
             )
         ).scalars().all()
-        assert leftover == [], "Reset must remove the override row, not mutate defaults."
+        # Reset removes the value but retains its generation, without changing
+        # inherited defaults or resurrecting the secret reference after conflict.
+        assert len(leftover) == 1
+        assert leftover[0].is_reset is True
+        assert leftover[0].value_json is None
+        assert leftover[0].value_version == reset_body["value_version"]
 
         audit_rows = (
             await session.execute(
@@ -186,6 +220,9 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
             )
         ).scalars().all()
         assert audit_rows, "Settings changes must be audited."
+        assert {"settings.override.updated", "settings.override.reset"} <= {
+            row.event_type for row in audit_rows
+        }
         for row in audit_rows:
             # Audit policy for `integrations.github.token_ref` declares
             # `redact=True`. SecretRef descriptors are allowed to keep the

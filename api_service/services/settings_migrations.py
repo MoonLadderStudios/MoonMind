@@ -169,6 +169,7 @@ class SettingsMigrationOrchestrator:
                 value_json=old_value,
                 schema_version=schema_version,
                 value_version=value_version,
+                is_reset=row.is_reset,
                 created_by=row.created_by,
                 updated_by=row.updated_by,
             )
@@ -223,7 +224,7 @@ class SettingsMigrationOrchestrator:
 
         outcomes: list[SettingsMigrationOutcome] = []
         for row in await self._fetch_overrides(rule.old_key):
-            if row.schema_version == coercion.target_schema_version:
+            if row.is_reset or row.schema_version == coercion.target_schema_version:
                 continue
             old_value = row.value_json
             old_schema_version = row.schema_version
@@ -271,6 +272,8 @@ class SettingsMigrationOrchestrator:
         self._require_state(rule, "removed", "deprecated")
         outcomes: list[SettingsMigrationOutcome] = []
         for row in await self._fetch_overrides(rule.old_key):
+            if row.is_reset:
+                continue
             event = self._record_audit_event(
                 event_type="settings.migration.removed",
                 key=rule.old_key,
