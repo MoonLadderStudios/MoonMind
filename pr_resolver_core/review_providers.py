@@ -636,6 +636,20 @@ def latest_automatic_review_summary(
         for line in _PROVIDER_FOOTER_RE.sub("", body).splitlines()
         if line.strip()
     ]
+    # The collapsed presentation keeps the same machine state and table. Only
+    # unwrap its known complete shell; extra content, missing state or an
+    # unfinished wrapper must not turn a newer summary into clean evidence.
+    if (
+        len(lines) == 9
+        and lines[1].startswith("<!-- codex-review-state:v1 ")
+        and lines[2:4]
+        == [
+            "<details>",
+            "<summary><strong>Codex Review Summary</strong>: ✅ Completed</summary>",
+        ]
+        and lines[-1] == "</details>"
+    ):
+        lines = lines[:2] + ["## Codex Review Summary"] + lines[4:-1]
     state_commit = None
     if len(lines) == 7:
         state_line = re.fullmatch(r"<!-- codex-review-state:v1 (.+) -->", lines[1])
