@@ -286,24 +286,26 @@ export function CollectionSidebar({
             </div>
           </div>
         </div>}
-        {isLoading ? <SidebarState>{loadingCopy}</SidebarState> : null}
-        {error ? (
-          <SidebarState role="status">
-            <p>{errorCopy}</p>
-            {onRetry ? <Button variant="secondary" type="button" onClick={onRetry}>Retry</Button> : null}
-          </SidebarState>
-        ) : null}
-        {!isLoading && visiblePinnedRow ? (
-          <div role="rowgroup" className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label={currentRowCopy}>
-            {renderRow(visiblePinnedRow, true)}
-          </div>
-        ) : null}
-        {!isLoading && !error && filteredRows.length === 0 ? <SidebarState>{normalizedFilter ? filteredEmptyCopy : emptyCopy}</SidebarState> : null}
-        {!isLoading && filteredRows.length > 0 ? (
-          <div role="rowgroup" className="workflow-workspace-sidebar-list" aria-label={`${header} navigation list`}>
-            {filteredRows.map((row) => renderRow(row))}
-          </div>
-        ) : null}
+        <div className="workflow-workspace-sidebar-body">
+          {isLoading ? <SidebarState>{loadingCopy}</SidebarState> : null}
+          {error ? (
+            <SidebarState role="status">
+              <p>{errorCopy}</p>
+              {onRetry ? <Button variant="secondary" type="button" onClick={onRetry}>Retry</Button> : null}
+            </SidebarState>
+          ) : null}
+          {!isLoading && visiblePinnedRow ? (
+            <div role="rowgroup" className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label={currentRowCopy}>
+              {renderRow(visiblePinnedRow, true)}
+            </div>
+          ) : null}
+          {!isLoading && !error && filteredRows.length === 0 ? <SidebarState>{normalizedFilter ? filteredEmptyCopy : emptyCopy}</SidebarState> : null}
+          {!isLoading && filteredRows.length > 0 ? (
+            <div role="rowgroup" className="workflow-workspace-sidebar-list" aria-label={`${header} navigation list`}>
+              {filteredRows.map((row) => renderRow(row))}
+            </div>
+          ) : null}
+        </div>
       </div>
     </aside>
   );

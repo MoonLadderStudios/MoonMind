@@ -61,7 +61,7 @@ Workflows, Recurring, and Skills use one entity-neutral `CollectionSidebar`/`Col
 Shared anatomy and behavior:
 
 1. labelled navigation landmark;
-2. table-compatible header row;
+2. full-width table-compatible header row, outside the scrolling row area so its background meets the divider even with classic scrollbar gutters;
 3. optional compact filter/search control;
 4. optional pinned current row;
 5. independently scrolling rows;
