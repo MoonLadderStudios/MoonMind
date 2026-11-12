@@ -199,9 +199,9 @@ export function NewWorkDefaultsCard() {
       {catalogQuery.isLoading ? <p role="status">Loading defaults…</p> : catalogQuery.isError ? <p role="alert">{catalogQuery.error.message}</p> :
         <div data-setting-row className="space-y-2">
           <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="new-work-default" className="text-sm font-medium">Default for new work</label>
+            <label htmlFor="new-work-default" className="w-full text-sm font-medium sm:w-auto">Default for new work</label>
             <select id="new-work-default" disabled={busy || readOnly} value={selection} onChange={(event) => updateSelection(event.target.value)}
-              className="min-w-0 flex-1 rounded-xl border border-mm-border bg-mm-surface px-3 py-2 text-sm">
+              className="min-w-0 w-full flex-none rounded-xl border border-mm-border bg-mm-surface px-3 py-2 text-sm sm:w-auto sm:flex-1">
               {runtime?.options?.map((option) => <option key={option.value} value={`runtime:${option.value}`} disabled={optionDisabled(option.value, null)}>
                 {option.label}{option.value === 'omnigent' ? ' (basic)' : ' (preferred profile)'}
               </option>)}
