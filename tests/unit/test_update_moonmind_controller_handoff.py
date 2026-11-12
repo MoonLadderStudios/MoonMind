@@ -101,6 +101,9 @@ def _stub_host_docker(
     commands: list[list[str]] = []
 
     def command(args, **kwargs):
+        if update._CONTROLLER_ENSURE_NETWORK in args:
+            commands.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "describe-installation" in args:
             repo = args[args.index("--repo") + 1]
             return SimpleNamespace(
@@ -226,6 +229,8 @@ def test_refresh_preserves_installed_bind_sources_and_uses_linux_container_paths
 
     def run(command, **kwargs):
         commands.append(command)
+        if update._CONTROLLER_ENSURE_NETWORK in command:
+            return ""
         if "describe-installation" in command:
             return json.dumps(
                 {
@@ -1233,6 +1238,8 @@ def test_host_retries_with_the_requested_release_controller_after_installed_one_
 
     def run(command, **kwargs):
         nonlocal refreshed
+        if update._CONTROLLER_ENSURE_NETWORK in command:
+            return ""
         if "describe-installation" in command:
             return json.dumps(
                 {
