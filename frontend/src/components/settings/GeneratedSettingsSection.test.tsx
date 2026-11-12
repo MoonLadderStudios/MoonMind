@@ -362,6 +362,37 @@ describe('GeneratedSettingsSection', () => {
     vi.restoreAllMocks();
   });
 
+  it('omits audit access for both new-work defaults while keeping reset and other audit history', async () => {
+    const defaults = [
+      { key: 'workflow.default_runtime', title: 'Default Harness', effective_value: 'codex_cli', ui: 'select', type: 'enum', options: [{ value: 'codex_cli', label: 'Codex' }] },
+      { key: 'workflow.default_provider_profile_ref', title: 'Default Provider Profile', effective_value: null, ui: 'provider_profile_picker', type: 'string', options: null },
+    ];
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes('/settings/catalog')) return Promise.resolve(jsonResponse({ ...workspaceCatalog, categories: {
+        ...workspaceCatalog.categories, Defaults: defaults.map((item) => ({ ...workspaceCatalog.categories.Workflow[0], ...item, source: 'instance_override' })),
+      } }));
+      if (url === '/api/v1/provider-profiles') return Promise.resolve(jsonResponse([]));
+      if (init?.method === 'DELETE') { requests.push({ url, init }); return Promise.resolve(jsonResponse({})); }
+      return fallback(input, init);
+    });
+    renderWithClient(<ControlledGeneratedSettingsSection />);
+    await screen.findByText('Default Harness');
+    for (const item of defaults) {
+      const row = screen.getByText(item.title).closest<HTMLElement>('[data-setting-key]')!;
+      expect(within(row).queryByRole('button', { name: /audit|history/i })).toBeNull();
+      expect(row.textContent).not.toMatch(/audit history|view audit|view history/i);
+      expect(screen.queryByRole('region', { name: `Audit history for ${item.title}` })).toBeNull();
+      fireEvent.click(within(row).getByRole('button', { name: `Reset ${item.title}` }));
+      await waitFor(() => expect(requests.some((request) => request.url === `/api/v1/settings/${item.key}` && request.init?.method === 'DELETE')).toBe(true));
+    }
+    expect(requests.some((request) => request.url.includes('/audit'))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'View audit for Default Publish Mode' }));
+    await screen.findByRole('region', { name: 'Audit history for Default Publish Mode' });
+    await waitFor(() => expect(requests.some((request) => request.url.includes('/audit'))).toBe(true));
+    expect(requests.filter((request) => request.url.includes('/audit')).every((request) => new URL(request.url, window.location.origin).searchParams.get('key') === 'workflow.default_publish_mode')).toBe(true);
+  });
   it('keeps activation and overrides visible while per-setting metadata sits in Details', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 

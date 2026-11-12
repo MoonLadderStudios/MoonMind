@@ -200,23 +200,21 @@ export function NewWorkDefaultsCard() {
         <div data-setting-row className="space-y-2">
           <div className="flex flex-wrap items-center gap-3">
             <label htmlFor="new-work-default" className="text-sm font-medium">Default for new work</label>
-            <fieldset disabled={busy || readOnly} className="min-w-0 flex-1">
-              <select id="new-work-default" value={selection} onChange={(event) => updateSelection(event.target.value)}
-                className="w-full rounded-xl border border-mm-border bg-mm-surface px-3 py-2 text-sm">
-                {runtime?.options?.map((option) => <option key={option.value} value={`runtime:${option.value}`} disabled={optionDisabled(option.value, null)}>
-                  {option.label}{option.value === 'omnigent' ? ' (basic)' : ' (preferred profile)'}
-                </option>)}
-                {!runtime?.options?.some((option) => option.value === savedRuntime) ?
-                  <option value={`runtime:${savedRuntime ?? ''}`} disabled={optionDisabled(savedRuntime, null)}>{String(savedRuntime ?? 'Not set')} (saved custom harness)</option> : null}
-                {profiles.map((item) => <option key={item.profile_id} value={`profile:${item.profile_id}`} disabled={optionDisabled(item.runtime_id, item.profile_id)}>{providerProfileOptionLabel(item)}</option>)}
-                {savedProfile && (!retainedProfile || retainedMismatch) ? <option value={retainedSelection} disabled={optionDisabled(savedRuntime, savedProfile)}>
-                  {retainedProfile ? `${providerProfileOptionLabel(retainedProfile)} (saved; harness differs)` : `${savedProfile}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
-                </option> : null}
-                {profileValue && (!selectedProfile || mismatched) && selection !== retainedSelection ? <option value={selection} disabled={optionDisabled(runtimeValue, profileValue)}>
-                  {selectedProfile ? `${providerProfileOptionLabel(selectedProfile)} (draft; harness differs)` : `${profileValue}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
-                </option> : null}
-              </select>
-            </fieldset>
+            <select id="new-work-default" disabled={busy || readOnly} value={selection} onChange={(event) => updateSelection(event.target.value)}
+              className="min-w-0 flex-1 rounded-xl border border-mm-border bg-mm-surface px-3 py-2 text-sm">
+              {runtime?.options?.map((option) => <option key={option.value} value={`runtime:${option.value}`} disabled={optionDisabled(option.value, null)}>
+                {option.label}{option.value === 'omnigent' ? ' (basic)' : ' (preferred profile)'}
+              </option>)}
+              {!runtime?.options?.some((option) => option.value === savedRuntime) ?
+                <option value={`runtime:${savedRuntime ?? ''}`} disabled={optionDisabled(savedRuntime, null)}>{String(savedRuntime ?? 'Not set')} (saved custom harness)</option> : null}
+              {profiles.map((item) => <option key={item.profile_id} value={`profile:${item.profile_id}`} disabled={optionDisabled(item.runtime_id, item.profile_id)}>{providerProfileOptionLabel(item)}</option>)}
+              {savedProfile && (!retainedProfile || retainedMismatch) ? <option value={retainedSelection} disabled={optionDisabled(savedRuntime, savedProfile)}>
+                {retainedProfile ? `${providerProfileOptionLabel(retainedProfile)} (saved; harness differs)` : `${savedProfile}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
+              </option> : null}
+              {profileValue && (!selectedProfile || mismatched) && selection !== retainedSelection ? <option value={selection} disabled={optionDisabled(runtimeValue, profileValue)}>
+                {selectedProfile ? `${providerProfileOptionLabel(selectedProfile)} (draft; harness differs)` : `${profileValue}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
+              </option> : null}
+            </select>
             {dirty ? <><Button variant="ghost" disabled={busy} onClick={discard}>Cancel</Button>
               <Button disabled={busy || !pairAllowed(Object.fromEntries(descriptors.map((d) => [d.key, currentValue(d)])))} onClick={() => { void save(); }}>Save</Button></> : null}
           </div>
@@ -229,7 +227,7 @@ export function NewWorkDefaultsCard() {
             {[...(validation?.signature === signature ? validation.issues[descriptor.key] ?? [] : []), ...(errors[descriptor.key] ?? [])]
               .map((message, index) => <p role="alert" key={`${index}-${message}`} className="text-sm text-rose-700 dark:text-rose-400">{issueMessage(descriptor.key, message)}</p>)}
           </div>)}
-          <a href="/settings/instance" className="text-sm underline">View history and reset in Instance settings</a>
+          <a href="/settings/instance" className="text-sm underline">Advanced default settings and reset</a>
         </div>}
       {dirty ? <div className="border-t border-mm-border pt-3" aria-label="Unsaved defaults">
         <ul className="space-y-1 text-sm">{changed.map((descriptor) => <li key={descriptor.key}>

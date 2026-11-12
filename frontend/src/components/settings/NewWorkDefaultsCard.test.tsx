@@ -70,6 +70,14 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('NewWorkDefaultsCard', () => {
+  it('renders the normal select without a fieldset box or default history access', async () => {
+    renderCard(); const picker = await screen.findByLabelText('Default for new work');
+    expect(picker.closest('fieldset')).toBeNull();
+    const card = screen.getByRole('region', { name: 'Defaults for new work' });
+    expect(card.textContent).not.toMatch(/history|audit/i);
+    expect(within(card).getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/instance');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/audit'))).toBe(false);
+  });
   it('offers one default picker and protects both values when only runtime changes', async () => {
     renderCard();
     const picker = await screen.findByLabelText('Default for new work');
@@ -158,7 +166,7 @@ describe('NewWorkDefaultsCard', () => {
     fetchSpy.mockImplementation((input, init) => init?.method === 'PATCH'
       ? new Promise<Response>((resolve) => { finishSave = resolve; }) : fallback(input, init));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect((picker.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+    expect((picker as HTMLSelectElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(picker, { target: { value: 'runtime:omnigent' } });
     expect(picker.value).toBe('runtime:claude_code');
@@ -217,7 +225,7 @@ describe('NewWorkDefaultsCard', () => {
       ? Promise.resolve(respond(['codex-a', 'codex-b'].map((id) => ({ profile_id: id, runtime_id: 'codex_cli', enabled: true })))) : fallback(input, init));
     renderCard(); const picker = await screen.findByLabelText('Default for new work');
     const option = await screen.findByRole('option', { name: /codex-b/ }) as HTMLOptionElement;
-    expect((picker.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    expect((picker as HTMLSelectElement).disabled).toBe(false);
     expect(option.disabled).toBe(false);
     fireEvent.change(picker, { target: { value: 'profile:codex-b' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -229,7 +237,7 @@ describe('NewWorkDefaultsCard', () => {
   it.each(['claude_code', 'omnigent'])('allows %s with a locked null profile', async (nextRuntime) => {
     Object.assign(current.categories.Workflow[1]!, { read_only: true, read_only_reason: 'Profile locked' });
     renderCard(); const picker = await screen.findByLabelText('Default for new work');
-    expect((picker.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    expect((picker as HTMLSelectElement).disabled).toBe(false);
     const profileOption = await screen.findByRole('option', { name: /claude-team/ }) as HTMLOptionElement;
     expect(profileOption.disabled).toBe(true);
     fireEvent.change(picker, { target: { value: profileOption.value } });
@@ -276,14 +284,14 @@ describe('NewWorkDefaultsCard', () => {
     renderCard(); const picker = await screen.findByLabelText('Default for new work') as HTMLSelectElement;
     await screen.findByRole('option', { name: /claude-team/ });
     expect(picker.value).toBe(selected);
-    expect((picker.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(allLocked);
+    expect((picker as HTMLSelectElement).disabled).toBe(allLocked);
     const incompatible = screen.getByRole('option', { name: 'Claude Code (preferred profile)' }) as HTMLOptionElement;
     expect(incompatible.disabled).toBe(true);
     fireEvent.change(picker, { target: { value: incompatible.value } });
     expect(picker.value).toBe(selected);
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
     expect(patches()).toHaveLength(0);
-    expect(screen.getByRole('link', { name: 'View history and reset in Instance settings' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Advanced default settings and reset' })).toBeTruthy();
   });
   it('blocks saving a draft whose changed value becomes locked on refresh', async () => {
     const { queryClient } = renderCard();
@@ -580,9 +588,9 @@ describe('NewWorkDefaultsCard', () => {
     const toast = await screen.findByText('Settings storage unavailable');
     expect(toast.closest('[aria-label="Dashboard notifications"]')).toBeTruthy();
   });
-  it('links to advanced history and reset without offering a non-atomic reset', async () => {
+  it('links to advanced defaults and reset without offering a non-atomic reset', async () => {
     renderCard(); await screen.findByLabelText('Default for new work');
-    expect(screen.getByRole('link', { name: 'View history and reset in Instance settings' }).getAttribute('href')).toBe('/settings/instance');
+    expect(screen.getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/instance');
     expect(screen.queryByRole('button', { name: /actions/ })).toBeNull();
     expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
   });
@@ -598,7 +606,7 @@ describe('NewWorkDefaultsCard', () => {
     current.categories.Workflow[1]!.effective_value = 'gone';
     renderCard();
     await screen.findByText(/Deployment policy/);
-    expect((screen.getByRole('combobox', { name: 'Default for new work' }).closest('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    expect((screen.getByRole('combobox', { name: 'Default for new work' }) as HTMLSelectElement).disabled).toBe(false);
     await screen.findByRole('option', { name: 'gone (not found)' });
     expect(screen.getByRole('option', { name: /disabled.*disabled/ })).toBeTruthy();
   });
