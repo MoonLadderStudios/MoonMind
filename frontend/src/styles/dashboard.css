@@ -2135,18 +2135,6 @@ h1 {
   margin-top: 0.35rem;
 }
 
-.collection-sidebar {
-  --collection-sidebar-header-height: 5.5rem;
-}
-
-.collection-sidebar .workflow-workspace-sidebar-pinned-list {
-  top: var(--collection-sidebar-header-height);
-}
-
-.workflow-collection-sidebar {
-  --collection-sidebar-header-height: var(--workflow-list-header-row-height);
-}
-
 .collection-sidebar-filter input {
   width: 100%;
   min-height: 1.9rem;
@@ -8336,8 +8324,8 @@ td {
 }
 
 .workflow-workspace-sidebar-header {
-  position: sticky;
-  top: 0;
+  position: relative;
+  flex: 0 0 auto;
   z-index: 8;
   display: grid;
   min-height: var(--workflow-list-header-row-height);
@@ -8385,42 +8373,37 @@ td {
 }
 
 .workflow-workspace-sidebar-table {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  /* Pack the header and list rows at the top. The rail now owns a full
-   * `--mm-collection-workspace-block-size` height and this table fills it
-   * (flex: 1 1 auto), so a short list leaves free vertical space. Without an
-   * explicit `align-content`, a grid defaults to `stretch` and would grow the
-   * auto rows — most visibly ballooning the sticky header — to absorb that
-   * slack. `start` keeps the header and rows at their natural height and lets
-   * the leftover space fall below the list instead. */
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0;
+}
+
+.workflow-workspace-sidebar-body {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  border-radius: 0;
-  box-shadow: none;
-  margin: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
-  /* Reserve the scrollbar gutter so the header and rows keep a constant width
-   * whether or not a classic scrollbar is painted. The rail's right border is
-   * outside this element and stays put regardless. This is purely cosmetic —
-   * no separator geometry depends on the scrollbar width. */
+  /* Keep row widths stable without reserving a gap in the full-width header. */
   scrollbar-gutter: stable;
 }
 
-.workflow-workspace-sidebar-table::-webkit-scrollbar {
+.workflow-workspace-sidebar-body::-webkit-scrollbar {
   width: 6px;
 }
 
-.workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {
+.workflow-workspace-sidebar-body::-webkit-scrollbar-thumb {
   background: rgb(var(--mm-border) / 0.55);
   border-radius: 999px;
 }
 
-.workflow-workspace-sidebar-table::-webkit-scrollbar-track {
+.workflow-workspace-sidebar-body::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -8436,7 +8419,7 @@ td {
 
 .workflow-workspace-sidebar-pinned-list {
   position: sticky;
-  top: var(--workflow-list-header-row-height);
+  top: 0;
   z-index: 6;
   flex: 0 0 auto;
   overflow: visible;
@@ -8451,7 +8434,7 @@ td {
   border-bottom: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
-.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child {
+.workflow-workspace-sidebar-body > :last-child .workflow-workspace-sidebar-row-frame:last-child {
   border-bottom: 0;
 }
 

@@ -3114,8 +3114,8 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1116 presents the workflow sidebar list region as a table slice rather than cards or menus', async () => {
     const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
-    expect(sidebarTableBlock).toContain('display: grid');
-    expect(sidebarTableBlock).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(sidebarTableBlock).toContain('display: flex');
+    expect(sidebarTableBlock).toContain('flex-direction: column');
     expect(sidebarTableBlock).toContain('border-radius: 0');
     expect(sidebarTableBlock).toContain('box-shadow: none');
     expect(sidebarTableBlock).not.toContain('menu');
@@ -3125,7 +3125,7 @@ describe('Dashboard shared entry', () => {
 
     const sidebarLastRowFrameBlock = cssRuleBlock(
       dashboardCss,
-      '.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child',
+      '.workflow-workspace-sidebar-body > :last-child .workflow-workspace-sidebar-row-frame:last-child',
     );
     expect(sidebarLastRowFrameBlock).toContain('border-bottom: 0');
 
@@ -3134,7 +3134,7 @@ describe('Dashboard shared entry', () => {
 
     const pinnedListBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-pinned-list');
     expect(pinnedListBlock).toContain('position: sticky');
-    expect(pinnedListBlock).toContain('top: var(--workflow-list-header-row-height)');
+    expect(pinnedListBlock).toContain('top: 0');
 
     const pinnedRowTitleBlock = cssRuleBlock(
       dashboardCss,
@@ -3196,13 +3196,15 @@ describe('Dashboard shared entry', () => {
     // The list stays the scroll container; its scrollbar styling is cosmetic and
     // no separator geometry references a scrollbar-width token anywhere.
     const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
-    expect(sidebarTableBlock).toContain('overflow-y: auto');
-    expect(sidebarTableBlock).toContain('scrollbar-width: thin');
-    expect(sidebarTableBlock).toContain('scrollbar-gutter: stable');
+    expect(sidebarTableBlock).not.toContain('overflow-y: auto');
+    const sidebarBodyBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-body');
+    expect(sidebarBodyBlock).toContain('overflow-y: auto');
+    expect(sidebarBodyBlock).toContain('scrollbar-width: thin');
+    expect(sidebarBodyBlock).toContain('scrollbar-gutter: stable');
 
     const scrollbarBlock = cssRuleBlock(
       dashboardCss,
-      '.workflow-workspace-sidebar-table::-webkit-scrollbar',
+      '.workflow-workspace-sidebar-body::-webkit-scrollbar',
     );
     expect(scrollbarBlock).toContain('width: 6px');
 
