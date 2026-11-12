@@ -353,3 +353,72 @@ def test_native_review_does_not_hide_authored_agent_account_requirement():
     task["mergeAutomation"] = {"enabled": True, "finishMode": "review_only"}
     task["steps"].append({"id": "agent", "instructions": "Use an agent"})
     assert execution_contract.workflow_requires_agent(task, {"workflow": task})
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        {"targetRuntime": "omnigent"},
+        {"profileId": "chosen"},
+        {"runtime": {"profileSelector": {"tagsAll": ["private"]}}},
+        {"agentProfile": {"profileId": "custom"}},
+        {"agentProfileSnapshot": {"profileId": "retained"}},
+        {"omnigentExecutionPlan": {"artifactRef": "recorded"}},
+        {"runtimeCutover": {"runtimeId": "omnigent", "selectionSource": "recorded"}},
+        {"runtime": {"model": "chosen"}},
+        {"runtime": {"model": None, "effort": None}},
+        {"planArtifactRef": "art_plan"},
+        {"publish": {"mode": "pr"}},
+        {
+            "publish": {
+                "mergeAutomation": {"enabled": True, "finishMode": "review_only"}
+            }
+        },
+    ],
+)
+def test_tool_only_default_does_not_replace_explicit_authority(authority):
+    workflow = {"steps": [{"type": "tool", "tool": {"id": "document.discover"}}]}
+    assert not execution_contract.workflow_uses_unselected_tools(
+        workflow, {"workflow": workflow, **authority}
+    )
+
+
+@pytest.mark.parametrize(
+    "tool", ["document.discover", "container.run", "github.resolve_pull_request_target"]
+)
+def test_untouched_runtime_preview_is_not_tool_execution_authority(tool):
+    workflow = {
+        "runtime": {"mode": "omnigent", "authored": False},
+        "steps": [{"type": "tool", "tool": {"id": tool}}],
+    }
+    assert execution_contract.workflow_uses_unselected_tools(
+        workflow, {"workflow": workflow, "targetRuntime": "omnigent"}
+    )
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        {
+            "targetRuntime": "omnigent",
+            "runtime": {"mode": "codex_cli", "authored": False},
+        },
+        {"runtime": "omnigent"},
+        {"runtime": {"authored": False}, "target_runtime": "omnigent"},
+        {
+            "runtime": {
+                "mode": "omnigent",
+                "authored": False,
+                "targetRuntime": "claude_code",
+            }
+        },
+    ],
+)
+def test_tool_preview_cannot_hide_conflicting_or_opaque_runtime(authority):
+    workflow = {
+        "steps": [{"type": "tool", "tool": {"id": "document.discover"}}],
+        **authority,
+    }
+    assert not execution_contract.workflow_uses_unselected_tools(
+        workflow, {"workflow": workflow}
+    )

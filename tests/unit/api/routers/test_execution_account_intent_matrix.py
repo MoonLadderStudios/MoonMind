@@ -428,18 +428,17 @@ async def test_omnigent_default_retains_required_product_admission(
         assert not agent_requests(recorded), recorded
         assert "agentProfileSnapshot" not in recorded
         assert "omnigentExecutionPlan" not in recorded
-    elif not requires_agent and entrypoint == "raw":
-        assert response.status_code == 422, response.text
-        assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
     elif not requires_agent:
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"] == (
-            "default Omnigent Agent Profile is unavailable"
-        )
+        recorded = await stored_parameters(ctx, response)
+        assert not agent_requests(recorded), recorded
+        assert not recorded.get("agentProfileSnapshot")
+        assert not recorded.get("omnigentExecutionPlan")
+        ctx.service._client_adapter.start_workflow.assert_awaited_once()
     assert len(ctx.settings_reads) == 1
     if entrypoint != "recurring" or requires_agent:
         ctx.schedule.assert_not_awaited()
-    ctx.service._client_adapter.start_workflow.assert_not_awaited()
+    if entrypoint == "recurring" or requires_agent:
+        ctx.service._client_adapter.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

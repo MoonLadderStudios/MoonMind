@@ -19425,6 +19425,175 @@ describe("Task Create governed Tool authoring", () => {
     if (!wasAdvanced) fireEvent.click(advanced);
   }
 
+  function renderUnavailableToolDefault(noAccounts = false) {
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve(new Response(JSON.stringify(noAccounts ? [] : [{
+          profile_id: "profile:codex-default", account_label: "Unavailable default", is_default: true,
+          execution_selection_error: { message: "Default agent account is unavailable." },
+        }])));
+      }
+      return originalFetch(input, init);
+    });
+    const unavailablePayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: { ...mockDashboardConfig.system, defaultRepository: "", defaultPublishMode: "none", ...(noAccounts ? { defaultAgentRuntime: "omnigent" } : {}) },
+      } },
+    };
+    renderWithClient(<WorkflowStartPage payload={unavailablePayload} />);
+  }
+
+  async function chooseKnownTool() {
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), { target: { value: "Fetch the issue." } });
+    selectStepType(step, "Tool");
+    fireEvent.click(await within(step).findByRole("button", { name: "jira.get_issue" }));
+    return step;
+  }
+
+  it("submits unselected tool-only Create despite unavailable default agent", async () => {
+    renderUnavailableToolDefault();
+    await chooseKnownTool();
+    expect(screen.queryByText(/cannot be submitted:|Settings before starting this workflow|Pick a profile, or/)).toBeNull();
+    expect(document.querySelector("[data-runtime-unavailable]")).toBeNull();
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = latestCreateRequest() as { payload: { targetRuntime: string; task: { runtime: Record<string, unknown>; steps: unknown[] } } };
+    expect(request.payload.task.runtime).toEqual({ mode: request.payload.targetRuntime, authored: false });
+    expect(request.payload.task.steps).toEqual([expect.objectContaining({ type: "tool", tool: expect.objectContaining({ id: "jira.get_issue" }) })]);
+  });
+
+  it("submits tool-only Create without any configured LLM account", async () => {
+    renderUnavailableToolDefault(true);
+    await chooseKnownTool();
+    expect(screen.queryByText(/cannot be submitted:|Settings before starting this workflow|Pick a profile, or/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = latestCreateRequest() as { payload: { targetRuntime: string; task: { runtime: Record<string, unknown> } } };
+    expect(request.payload.task.runtime).toEqual({ mode: request.payload.targetRuntime, authored: false });
+    expect(request.payload).not.toHaveProperty("agentProfile");
+    expect(request.payload).not.toHaveProperty("omnigent");
+  });
+
+  it.each(["profile", "model"])("retains explicit %s in the tool-only Create request", async (choice) => {
+    renderWithClient(<WorkflowStartPage payload={{ ...mockPayload, initialData: { dashboardConfig: {
+      ...mockDashboardConfig, system: { ...mockDashboardConfig.system, defaultRepository: "", defaultPublishMode: "none" },
+    } } }} />);
+    await chooseKnownTool();
+    if (choice === "profile") {
+      fireEvent.change(screen.getByLabelText("Provider Profile"), { target: { value: "profile:codex-default" } });
+    } else {
+      fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "explicit-model" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = latestCreateRequest() as { payload: { task: { runtime: Record<string, unknown> } } };
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "profile:codex-default" });
+    expect(request.payload.task.runtime).not.toHaveProperty("authored");
+    if (choice === "model") expect(request.payload.task.runtime.model).toBe("explicit-model");
+  });
+
+  it.each(["profile", "model", "harness", "step model", "publishing", "mixed", "unknown tool"])(
+    "preserves tool-only Create agent admission for %s intent", async (choice) => {
+      renderUnavailableToolDefault();
+      await chooseKnownTool();
+      const start = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
+      expect(start.disabled).toBe(false);
+      if (choice === "profile") {
+        fireEvent.change(screen.getByLabelText("Provider Profile"), { target: { value: "profile:codex-default" } });
+      } else if (choice === "harness") {
+        fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "codex_cli" } });
+      } else if (choice === "publishing") {
+        fireEvent.change(screen.getByLabelText("Publish Mode"), { target: { value: "pr" } });
+      } else if (choice === "mixed") {
+        fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+      } else if (choice === "unknown tool") {
+        fireEvent.change(screen.getByLabelText("Tool ID"), { target: { value: "unknown.operation" } });
+      } else {
+        fireEvent.click(screen.getByLabelText("Advanced mode"));
+        fireEvent.change(screen.getByLabelText(choice === "model" ? "Workflow Model" : "Step 1 Model"), { target: { value: "explicit-model" } });
+      }
+      expect(start.disabled).toBe(true);
+      // Even a direct submit event cannot bypass the preserved checks.
+      fireEvent.submit(start.closest("form")!);
+      await waitFor(() => expect(start.getAttribute("aria-busy")).not.toBe("true"));
+      expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
+    },
+  );
+
+  it("keeps tool-only Create conservative until trusted discovery resolves", async () => {
+    let resolveTools!: (response: Response) => void;
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/mcp/tools" ? new Promise<Response>((resolve) => { resolveTools = resolve; }) : originalFetch(input, init));
+    renderUnavailableToolDefault();
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Tool");
+    fireEvent.change(screen.getByLabelText("Tool ID"), { target: { value: "jira.get_issue" } });
+    const start = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    await act(async () => resolveTools(toolDiscoveryResponse));
+    await waitFor(() => expect(start.disabled).toBe(false));
+  });
+
+  it.each(["tools", "materialized tools", "mixed", "unknown", "explicit runtime", "finishing", "review_only"])(
+    "resolves tool-only Create preset %s before deciding agent admission", async (kind) => {
+      const originalFetch = fetchSpy.getMockImplementation()!;
+      const preset = { slug: "tool-check", title: "Tool check", description: "", tags: [], inputs: [] };
+      const generatedSteps = [{ type: "tool", tool: { id: kind === "unknown" ? "unknown.operation" : "jira.get_issue", inputs: {} },
+        ...(kind === "explicit runtime" ? { runtime: { mode: "codex_cli" } } : {}),
+      }, ...(kind === "mixed" ? [{ type: "skill", instructions: "Analyze it.", skill: { id: "auto" } }] : [])];
+      fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/presets") return Promise.resolve(new Response(JSON.stringify({ items: [preset] })));
+        if (url === "/api/presets/tool-check") return Promise.resolve(new Response(JSON.stringify(preset)));
+        if (url === "/api/presets/tool-check:expand") return Promise.resolve(new Response(JSON.stringify({
+          steps: generatedSteps,
+          ...(["finishing", "review_only"].includes(kind) ? { publish: { mode: "none", mergeAutomation: { enabled: true, finishMode: kind === "review_only" ? "review_only" : "merge" } } } : {}),
+        })));
+        return originalFetch(input, init);
+      });
+      renderUnavailableToolDefault();
+      const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+      selectStepType(step, "Preset");
+      await screen.findByRole("option", { name: "Tool check" });
+      fireEvent.change(within(step).getByLabelText("Preset Template"), { target: { value: "tool-check" } });
+      if (kind === "materialized tools") {
+        fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+        await screen.findByRole("button", { name: "jira.get_issue" });
+      }
+      const start = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/mcp/tools")).toBe(true));
+      expect(start.disabled).toBe(false);
+      fireEvent.click(start);
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/presets/tool-check:expand")).toBe(true));
+      if (kind === "tools" || kind === "materialized tools") {
+        await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+        const request = latestCreateRequest() as { payload: { task: { runtime: Record<string, unknown>; steps: Array<Record<string, unknown>> } } };
+        expect(request.payload.task.runtime).toEqual({ mode: "codex_cli", authored: false });
+        expect(request.payload.task.steps[0]?.tool).toEqual({ id: "jira.get_issue", inputs: {} });
+      } else {
+        await waitFor(() => expect(start.getAttribute("aria-busy")).not.toBe("true"));
+        expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
+      }
+    },
+  );
+
+  it("preserves tool-only Create report contracts without an agent selector", async () => {
+    renderUnavailableToolDefault();
+    await chooseKnownTool();
+    fireEvent.click(screen.getByLabelText("Produce report artifact"));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = latestCreateRequest() as { payload: { task: Record<string, unknown> } };
+    expect(request.payload.task.runtime).toEqual({ mode: "codex_cli", authored: false });
+    expect(request.payload.task.reportOutput).toEqual({ enabled: true, required: true, reportType: "agent_run_report" });
+  });
+
   it('keeps ordinary Create focused on steps without assessment or scanner controls', async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await screen.findByText('Step 1');
