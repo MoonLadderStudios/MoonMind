@@ -131,6 +131,12 @@ async def test_saved_unavailable_agent_default_does_not_gate_tool_dispatch(
     monkeypatch.setattr(run_module.workflow, "execute_child_workflow", child)
     owner = run_module.MoonMindRunWorkflow()
     owner._owner_id = "tool-owner"
+    # Use the same runtime-context owners as normal Run startup.
+    owner._target_runtime = owner._runtime_visibility_from_parameters(parameters)
+    owner._runtime_inheritance_parameters = (
+        owner._runtime_inheritance_parameters_from_parameters(parameters)
+    )
+    assert owner._target_runtime == default_runtime
     agent = Mock(
         side_effect=AssertionError("Tool work must not build an agent request")
     )
@@ -152,5 +158,9 @@ async def test_saved_unavailable_agent_default_does_not_gate_tool_dispatch(
         payload, kwargs = tools[0]
         assert payload["invocation_payload"]["tool"]["name"] == "document.discover"
         assert kwargs["task_queue"] == "mm.activity.sandbox"
+        selection = payload["context"]["runtime_selection"]
+        assert selection["targetRuntime"] == default_runtime
+        assert selection["workflow"]["runtime"]["mode"] == default_runtime
+        assert "profileId" not in selection
     agent.assert_not_called()
     child.assert_not_awaited()
