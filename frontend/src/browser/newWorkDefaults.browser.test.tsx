@@ -77,6 +77,58 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Keep these soft so an expected-red layout run still captures both the initial
+// and pending-Save states rather than stopping before the most cramped state.
+function expectReadableMobilePicker(picker: HTMLSelectElement, state: string) {
+  const row = picker.parentElement!;
+  const rowStyle = getComputedStyle(row);
+  const rowRect = row.getBoundingClientRect();
+  const rect = picker.getBoundingClientRect();
+  const leftInset = parseFloat(rowStyle.borderLeftWidth) + parseFloat(rowStyle.paddingLeft);
+  const rightInset = parseFloat(rowStyle.borderRightWidth) + parseFloat(rowStyle.paddingRight);
+  const available = rowRect.width - leftInset - rightInset;
+  expect.soft(rect.width, `${state}: picker spans the available mobile row`).toBeGreaterThanOrEqual(available - 1.5);
+  expect.soft(Math.abs(rect.left - rowRect.left - leftInset), `${state}: picker starts at the row's content edge`).toBeLessThanOrEqual(1.5);
+  const style = getComputedStyle(picker);
+  const textWidth = rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth) - 24; // native dropdown indicator
+  const context = document.createElement('canvas').getContext('2d')!;
+  context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const harnessName = picker.selectedOptions[0]!.textContent!.trim().split(' (')[0]!;
+  expect.soft(textWidth, `${state}: selected harness name ${harnessName} remains readable`).toBeGreaterThanOrEqual(context.measureText(harnessName).width);
+  for (const button of row.querySelectorAll('button')) {
+    expect.soft(button.getBoundingClientRect().top, `${state}: actions do not compete with the mobile picker row`).toBeGreaterThanOrEqual(rect.bottom - 1.5);
+  }
+}
+
+async function captureVisibleRegion(element: HTMLElement, filename: string) {
+  // The production dashboard scroll containers remain intact. Capture a row or
+  // audit panel only after scrolling it into view, not an oversized region that
+  // crosses clipped scrollports and produces black or truncated screenshots.
+  element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+  await waitFor(() => {
+    const rect = element.getBoundingClientRect();
+    let top = 0; let bottom = window.innerHeight; let left = 0; let right = window.innerWidth;
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      const bounds = ancestor.getBoundingClientRect();
+      if (/^(auto|scroll|hidden|clip)$/.test(style.overflowY)) {
+        top = Math.max(top, bounds.top + ancestor.clientTop);
+        bottom = Math.min(bottom, bounds.top + ancestor.clientTop + ancestor.clientHeight);
+      }
+      if (/^(auto|scroll|hidden|clip)$/.test(style.overflowX)) {
+        left = Math.max(left, bounds.left + ancestor.clientLeft);
+        right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth);
+      }
+    }
+    expect(rect.top).toBeGreaterThanOrEqual(top - 1.5);
+    expect(rect.bottom).toBeLessThanOrEqual(bottom + 1.5);
+    expect(rect.left).toBeGreaterThanOrEqual(left - 1.5);
+    expect(rect.right).toBeLessThanOrEqual(right + 1.5);
+  });
+  await page.screenshot({ element, path: `../../../artifacts/browser-layout/${filename}.png` });
+}
+
 describe('new-work default control presentation', () => {
   it.each([1280, 390])('keeps the rounded select without a second border at %i px, including Save', async (width) => {
     await page.viewport(width, 850);
@@ -93,12 +145,14 @@ describe('new-work default control presentation', () => {
     expect(picker.getBoundingClientRect().right).toBeLessThanOrEqual(card.getBoundingClientRect().right);
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
     expect(card.textContent).not.toMatch(/history|audit/i);
+    if (width === 390) expectReadableMobilePicker(picker, 'initial');
     await page.screenshot({ path: `../../../artifacts/browser-layout/new-work-default-${width}.png` });
     await userEvent.selectOptions(picker, 'runtime:claude_code');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await waitFor(() => expect(finishSave).toBeDefined());
     expect(picker.disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+    if (width === 390) expectReadableMobilePicker(picker, 'pending Save');
     await page.screenshot({ path: `../../../artifacts/browser-layout/new-work-default-${width}-saving.png` });
     finishSave!(respond({}));
     await screen.findByText('Defaults saved');
@@ -119,7 +173,8 @@ describe('new-work default control presentation', () => {
     expect(card.textContent).not.toMatch(/audit|history/i);
     expect(within(card).queryByRole('button', { name: 'Save' })).toBeNull();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
-    await page.screenshot({ element: card, path: `../../../artifacts/browser-layout/new-work-default-${width}-locked.png` });
+    if (width === 390) expectReadableMobilePicker(picker, 'locked');
+    await captureVisibleRegion(card, `new-work-default-${width}-locked`);
     expect(requests.some((request) => request.method === 'PATCH' || request.url.includes('/audit'))).toBe(false);
   });
 
@@ -130,7 +185,6 @@ describe('new-work default control presentation', () => {
     </SettingsDraftGuardProvider></MemoryRouter>, { container: panel });
     await screen.findByLabelText('Default Harness');
     await screen.findByRole('option', { name: /codex-team/ });
-    const instance = screen.getByRole('region', { name: 'Instance settings' });
     for (const title of ['Default Harness', 'Default Provider Profile']) {
       const control = screen.getByLabelText(title);
       const row = control.closest<HTMLElement>('[data-setting-key]')!;
@@ -147,7 +201,10 @@ describe('new-work default control presentation', () => {
     expect(requests.some((request) => request.url.includes('/audit'))).toBe(false);
     expect(screen.getByRole('button', { name: 'View audit for Default Publish Mode' })).toBeTruthy();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
-    await page.screenshot({ element: instance, path: `../../../artifacts/browser-layout/new-work-default-instance-${width}.png` });
+    for (const [title, slug] of [['Default Harness', 'harness'], ['Default Provider Profile', 'profile'], ['Default Publish Mode', 'publish']]) {
+      const row = screen.getByLabelText(title!).closest<HTMLElement>('[data-setting-key]')!;
+      await captureVisibleRegion(row, `new-work-default-instance-${width}-${slug}`);
+    }
 
     await page.getByRole('button', { name: 'Reset Default Harness', exact: true }).click();
     await screen.findByText('Default Harness reset.');
@@ -165,7 +222,7 @@ describe('new-work default control presentation', () => {
     const auditRequests = requests.filter((request) => request.url.includes('/audit'));
     expect(auditRequests.length).toBeGreaterThan(0);
     expect(auditRequests.every((request) => new URL(request.url, window.location.origin).searchParams.get('key') === publishKey)).toBe(true);
-    await page.screenshot({ element: instance, path: `../../../artifacts/browser-layout/new-work-default-instance-${width}-other-audit.png` });
+    await captureVisibleRegion(screen.getByRole('region', { name: 'Audit history for Default Publish Mode' }), `new-work-default-instance-${width}-other-audit`);
     await page.getByRole('button', { name: 'Close audit history for Default Publish Mode', exact: true }).click();
     descriptors = descriptors.map((descriptor) => descriptor.key === runtimeKey
       ? { ...descriptor, read_only: true, read_only_reason: 'Harness managed by deployment policy' } : descriptor);
@@ -174,7 +231,7 @@ describe('new-work default control presentation', () => {
     expect((screen.getByRole('combobox', { name: 'Default Harness' }) as HTMLSelectElement).disabled).toBe(true);
     expect(screen.getByRole('combobox', { name: 'Default Provider Profile' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'View audit for Default Harness' })).toBeNull();
-    await page.screenshot({ element: instance, path: `../../../artifacts/browser-layout/new-work-default-instance-${width}-locked.png` });
+    await captureVisibleRegion(screen.getByRole('combobox', { name: 'Default Harness' }).closest<HTMLElement>('[data-setting-key]')!, `new-work-default-instance-${width}-locked`);
   }, 20000);
 
 });

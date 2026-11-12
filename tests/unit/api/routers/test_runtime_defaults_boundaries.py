@@ -157,7 +157,7 @@ def dedicated_body():
     [("claude_code", "omnigent"), ("omnigent", "claude_code")],
 )
 @pytest.mark.parametrize("missing_saved_account", [False, True])
-async def test_tool_only_saved_runtime_matches_explicit_without_account_consumption(
+async def test_tool_only_saved_runtime_is_passive_without_erasing_explicit_authority(
     dedicated_context,
     monkeypatch,
     entrypoint,
@@ -221,11 +221,14 @@ async def test_tool_only_saved_runtime_matches_explicit_without_account_consumpt
     )
     explicit_parameters["targetRuntime"] = saved_runtime
     ctx.settings_reads.clear()
-    for request_body in (explicit, body):
+    for authored_runtime, request_body in ((True, explicit), (False, body)):
         response = await client.post(url, json=request_body)
+        # Omitted model defaults are passive tool-routing provenance. Authored
+        # runtime choices still go through their original admission boundary.
         expected = (
             201
-            if saved_runtime == "claude_code"
+            if not authored_runtime
+            or saved_runtime == "claude_code"
             or entrypoint in {"recurring", "dedicated"}
             else 422 if entrypoint == "raw" else 409
         )
