@@ -20533,6 +20533,65 @@ describe("Task Create governed Tool authoring", () => {
     });
   });
 
+  it("derives GitHub access for branch publication like PR publication", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Merge main into the pull request branch and push." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const derivedChip = (
+      await within(step).findByText("GitHub CLI / PRs")
+    ).closest("li") as HTMLElement;
+    expect(derivedChip.getAttribute("title")).toContain("from publish mode");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.publishMode).toBe("branch");
+    expect(payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  it("does not derive GitHub access when publication is off", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Summarize the repository without publishing." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "none" },
+    });
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    expect(within(step).queryByText("GitHub CLI / PRs")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.publishMode).toBe("none");
+    expect(payload.requiredCapabilities).toEqual(["git"]);
+  });
+
   it("renders selected images and capability chips in one compact step context bar", async () => {
     renderWithClient(
       <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,

@@ -108,6 +108,62 @@ async def test_plan_freezes_canonical_parameters_and_resolved_skill_actions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "required_capabilities, collaboration",
+    [
+        (["git", "gh"], ["read", "write", "branch_write"]),
+        (["git"], None),
+    ],
+)
+async def test_branch_publication_gives_agent_its_connection_only_with_gh(
+    monkeypatch, tmp_path, required_capabilities, collaboration
+):
+    """Create declares gh for branch publication so the agent can fetch and push.
+
+    The agent-facing ``collaboration`` slot is the only source of the agent's
+    git/gh credential; the ``destination`` slot stays with the managed
+    publisher. Both use the repository's own (here non-default) connection.
+    """
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    try:
+        compiled = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            extra_parameters={
+                "repository": repository,
+                "publishMode": "branch",
+                "requiredCapabilities": required_capabilities,
+            },
+        )
+        access = compiled.envelope.payload.resolvedTools["repositoryAccess"]
+
+        def selection(slot):
+            artifact_id = access[slot]["artifactRef"].removeprefix("artifact:")
+            return json.loads(artifacts.payloads[artifact_id])["selection"]
+
+        assert selection("destination")["operations"] == ["write", "branch_write"]
+        if collaboration is None:
+            assert "collaboration" not in access
+            assert not OmnigentGithubCredentialService.required(
+                compiled.envelope.payload.resolvedTools
+            )
+        else:
+            assert selection("collaboration")["operations"] == collaboration
+            assert selection("collaboration")["connectionId"] == "review-repository"
+            assert OmnigentGithubCredentialService.anticipated_attachment(
+                compiled.envelope.payload.resolvedTools, owner_ref="branch-agent"
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "extra, canonical_skill",
     [
         ({"githubOperations": ["merge_request"]}, None),
