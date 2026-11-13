@@ -868,7 +868,12 @@ def test_network_ref_resolves_configured_override(monkeypatch):
         importlib.reload(egress_module)
 
 
-PACKAGE_REGISTRY_HOSTS = {"pypi.org", "files.pythonhosted.org", "registry.npmjs.org"}
+PACKAGE_REGISTRY_HOSTS = {
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "api.nuget.org",
+}
 
 
 def test_package_registry_egress_is_allowed_by_default(configured_egress):

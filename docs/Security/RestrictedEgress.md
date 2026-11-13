@@ -126,11 +126,12 @@ path.
 
 ## Package registry egress
 
-Agent sandboxes reach `pypi.org`, `files.pythonhosted.org`, and
-`registry.npmjs.org` by default, on TCP/443 like every other approved
-destination. A sandbox that cannot install a repository's declared
-dependencies cannot run that repository's tests, so this class is on by
-default rather than opt-in.
+Agent sandboxes reach `pypi.org`, `files.pythonhosted.org`,
+`registry.npmjs.org`, and `api.nuget.org` by default, on TCP/443 like every
+other approved destination. A sandbox that cannot install a repository's
+declared dependencies cannot run that repository's tests, so this class is on
+by default rather than opt-in. NuGet restore needs only `api.nuget.org`; its
+plain-HTTP revocation checks are denied without failing the restore.
 
 `MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=false` denies the whole class. Only
 an explicit false disables it; an unset or unrecognized value keeps the
