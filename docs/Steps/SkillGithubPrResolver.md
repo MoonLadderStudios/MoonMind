@@ -132,6 +132,8 @@ An older-commit review is not fresh for a new head. ProgressSignature includes h
 The portable collector also recognizes Codex's automatic PR-opened completion
 summary without manufacturing an explicit request. The registered bot must
 publish the supported completed Code Review table on the exact repository/PR.
+The original Markdown heading and the collapsed HTML summary are supported; the
+collapsed form requires its machine-state header and complete wrapper.
 An optional machine-state header must agree with the table and name a completed,
 finding-free review of the full commit; it never replaces the confirming reaction.
 An abbreviated reviewed commit without that header requires a complete PR commit

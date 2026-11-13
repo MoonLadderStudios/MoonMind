@@ -106,17 +106,32 @@ def test_captured_pr4773_automatic_review_opens_the_current_head_gate(
     )
 
 
-def _current_format_capture():
-    return json.loads(
+@pytest.fixture(params=["markdown", "details"])
+def summary_format(request):
+    return request.param
+
+
+def _current_format_capture(summary_format="markdown"):
+    captured = json.loads(
         FIXTURE.with_name("codex_automatic_review_with_state.json").read_text()
     )
+    if summary_format == "details":
+        comment = captured["comments"][0]
+        comment["body"] = (
+            comment["body"].replace(
+                "## Codex Review Summary",
+                "<details>\n<summary><strong>Codex Review Summary</strong>: ✅ Completed</summary>",
+            )
+            + "\n\n</details>"
+        )
+    return captured
 
 
 @pytest.mark.parametrize("full_table_sha", [False, True])
 def test_captured_machine_state_summary_qualifies_the_exact_reviewed_head(
-    snapshot_module, monkeypatch, full_table_sha
+    snapshot_module, monkeypatch, full_table_sha, summary_format
 ):
-    captured = _current_format_capture()
+    captured = _current_format_capture(summary_format)
     if full_table_sha:
         captured["comments"][0]["body"] = captured["comments"][0]["body"].replace(
             "`17799e0`", "`" + captured["head_sha"] + "`"
@@ -152,9 +167,9 @@ def test_captured_machine_state_summary_qualifies_the_exact_reviewed_head(
     ],
 )
 def test_machine_state_cannot_disagree_with_clean_current_head_completion(
-    snapshot_module, monkeypatch, field, value
+    snapshot_module, monkeypatch, field, value, summary_format
 ):
-    captured = _current_format_capture()
+    captured = _current_format_capture(summary_format)
     summary = captured["comments"][0]
     lines = summary["body"].splitlines()
     prefix, suffix = "<!-- codex-review-state:v1 ", " -->"
@@ -180,9 +195,9 @@ def test_machine_state_cannot_disagree_with_clean_current_head_completion(
     ],
 )
 def test_malformed_or_ambiguous_machine_state_cannot_complete(
-    snapshot_module, monkeypatch, fault
+    snapshot_module, monkeypatch, fault, summary_format
 ):
-    captured = _current_format_capture()
+    captured = _current_format_capture(summary_format)
     lines = captured["comments"][0]["body"].splitlines()
     if fault == "malformed":
         lines[1] = "<!-- codex-review-state:v1 {invalid} -->"
@@ -212,9 +227,9 @@ def test_malformed_or_ambiguous_machine_state_cannot_complete(
     ["reaction-absent", "human", "wrong-repo", "later-refusal", "later-request"],
 )
 def test_machine_state_does_not_replace_independent_review_authority(
-    snapshot_module, monkeypatch, blocker
+    snapshot_module, monkeypatch, blocker, summary_format
 ):
-    captured = _current_format_capture()
+    captured = _current_format_capture(summary_format)
     if blocker == "reaction-absent":
         captured["reactions"] = []
     elif blocker == "human":
@@ -892,3 +907,79 @@ def test_snapshot_refreshes_automatic_completion_before_opening_gate(
         assert decision.reason_code == "comments_unavailable"
     else:
         assert snapshot["automatedReview"]["freshReviewForHead"] is False
+
+
+def _details_capture():
+    return json.loads(
+        FIXTURE.with_name("codex_automatic_review_details.json").read_text()
+    )
+
+
+def test_captured_details_summary_qualifies_exact_head(snapshot_module, monkeypatch):
+    captured = _details_capture()
+    evidence = _evidence(snapshot_module, monkeypatch, captured)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionId"] == 6821038011
+    assert evidence["automaticSummary"]["reviewedCommitSha"] == captured["head_sha"]
+    assert evidence["automaticSummary"]["reactionId"] == 648367708
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong-author",
+        "wrong-pr",
+        "missing-reaction",
+        "stale-reaction",
+        "newer-start",
+        "newer-failure",
+        "missing-close",
+        "extra-close",
+        "wrong-wrapper-status",
+        "unknown-content",
+        "missing-state",
+    ],
+)
+def test_details_summary_preserves_authority_and_structure(
+    snapshot_module, monkeypatch, fault
+):
+    captured = _details_capture()
+    comment = captured["comments"][0]
+    if fault == "wrong-author":
+        comment["user"] = "operator"
+    elif fault == "wrong-pr":
+        comment["url"] = comment["url"].replace("/5306#", "/5305#")
+    elif fault == "missing-reaction":
+        captured["reactions"] = []
+    elif fault == "stale-reaction":
+        captured["reactions"][0]["created_at"] = "2026-11-12T10:26:35Z"
+    elif fault in ("newer-start", "newer-failure"):
+        newer = copy.deepcopy(comment)
+        newer.update(
+            _feedback(captured, body=comment["body"], at="2026-11-12T10:27:00Z")
+        )
+        newer["body"] = newer["body"].replace(
+            "Completed", "In Progress" if fault == "newer-start" else "Failed"
+        )
+        captured["comments"].append(newer)
+    elif fault == "missing-close":
+        comment["body"] = comment["body"].rsplit("</details>", 1)[0]
+    elif fault == "extra-close":
+        comment["body"] += "\n</details>"
+    elif fault == "wrong-wrapper-status":
+        comment["body"] = comment["body"].replace(
+            "✅ Completed</summary>", "❌ Failed</summary>"
+        )
+    elif fault == "missing-state":
+        comment["body"] = "\n".join(
+            line
+            for line in comment["body"].splitlines()
+            if not line.startswith("<!-- codex-review-state:")
+        )
+    else:
+        comment["body"] = comment["body"].replace(
+            "\n</details>", "\nFix the guard\n</details>"
+        )
+    assert (
+        _evidence(snapshot_module, monkeypatch, captured)["freshReviewForHead"] is False
+    )
