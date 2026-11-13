@@ -1231,7 +1231,8 @@ for path in [root, *root.rglob('*')]:
         # generation so a stale lease can never fence a replacement home.
         # Normalize the enrollment-owned layout to the exact-host contract
         # (root 0700, top-level files 0600, owned 1000:1000) so helper-synced
-        # or imported volumes pass attestation without manual repair.
+        # or imported volumes pass attestation without manual repair. Hidden
+        # files are included: Claude's login lives in .credentials.json.
         stage_script = (
             "set -eu; "
             "chown 1000:1000 /credential; "
@@ -1241,7 +1242,7 @@ for path in [root, *root.rglob('*')]:
             'if [ "$current" -gt "$1" ]; then '
             "echo 'credential home generation is newer than the acquired lease' >&2; "
             "exit 79; fi; fi; "
-            'for f in /credential/*; do [ -e "$f" ] || continue; '
+            "for f in /credential/* /credential/.[!.]* /credential/..?*; do "
             '[ -f "$f" ] || continue; '
             'chown 1000:1000 "$f"; chmod 0600 "$f"; done; '
             "printf '%s\\n' \"$1\" > /credential/.moonmind-generation.tmp; "
