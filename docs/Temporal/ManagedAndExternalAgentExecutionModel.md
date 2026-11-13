@@ -896,12 +896,13 @@ Each lane reconciles its own side effects:
 
 No lane silently creates replacement authority while the original may still be active.
 
-The scheduled host janitor bounds OAuth and generic-host cleanup independently.
-A historical credential-generation failure stays fenced and visible while
-unrelated leases continue. Generic reclamation needs positive closure evidence
-for the exact Temporal workflow/run owner; stale age alone cannot release a host.
-When direct-runtime startup reconciliation proves that the recorded PID no
-longer exists, the result carries a typed process-loss code. A one-shot lane may
+The host janitor bounds OAuth and generic cleanup independently. API observation
+retries failed schedule registration, logging deferral without provider errors.
+Credential-generation failures stay fenced while unrelated cleanup proceeds.
+Generic reclamation requires confirmed closure of the exact Temporal workflow/run
+owner, never stale age alone.
+When direct-runtime startup reconciliation confirms a missing recorded PID,
+it reports a typed process-loss code. A one-shot lane may
 perform one replacement attempt with the same immutable request, Provider
 Profile, idempotency key, and authoritative workspace. The replacement inspects
 local and remotely visible side effects before repeating work. A second process
