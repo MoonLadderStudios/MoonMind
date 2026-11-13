@@ -225,6 +225,8 @@ There is one selector for the authored workflow/batch policy:
 | Create pull request | `pr` |
 | PR with merge automation | `pr_with_merge_automation` |
 
+Push to branch and Create pull request add a non-removable `gh` capability to the primary step, so the agent can fetch, push, and use `gh` against the repository with its own connection's credential; None and Auto add it only when a Skill or the operator declares it.
+
 Compiled execution `auto` is the Skill-owned protocol, not another UI option. The backend retains the authored selection separately from each step/coordinator's derived execution mode. Reconstructing a batch must not replace its PR policy with local coordinator `none`.
 
 The selector shows only supported choices or disabled choices with reasons. Its hover tooltip states the selected outcome (saved only, the branch pushed, or the pull request opened on the named repository); visible publication messages are reserved for errors. It never silently switches a selected value to make a new step fit. Selection of Auto follows declared definition metadata and current task inputs, not model improvisation. An unresolved or conflicting default blocks submission rather than guessing a permissive policy.

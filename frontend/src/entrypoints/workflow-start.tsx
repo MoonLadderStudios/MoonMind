@@ -3471,6 +3471,13 @@ function validateAttachmentTargets(
   return { ok: messages.length === 0, errors, messages };
 }
 
+// The agent receives the repository connection's credential (for git fetch,
+// push, and gh) only when its step declares gh. Branch and PR publication both
+// write to the repository the agent is editing, so both declare it.
+function publishModeRequiresGh(publishMode: string): boolean {
+  return publishMode === "pr" || publishMode === "branch";
+}
+
 function deriveRequiredCapabilities(args: {
   publishMode: string;
   repositoryBacked: boolean;
@@ -3484,7 +3491,7 @@ function deriveRequiredCapabilities(args: {
     new Set(
       [
         ...(args.repositoryBacked ? ["git"] : []),
-        ...(args.publishMode === "pr" ? ["gh"] : []),
+        ...(publishModeRequiresGh(args.publishMode) ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
         ...args.toolRequiredCapabilities,
@@ -7484,9 +7491,10 @@ function WorkflowStartPageContent({
   const workflowTierPreviewError = modelTierPreviewsQuery.data?.errors.workflow;
 
   // MM-936: the primary step always carries the publish-mode capability (gh)
-  // when publishing as a PR, surfaced as a non-removable derived chip.
-  const stepPublishModeRequiresGh =
-    normalizePublishModeForSubmit(publishMode) === "pr";
+  // when publishing to a branch or PR, surfaced as a non-removable derived chip.
+  const stepPublishModeRequiresGh = publishModeRequiresGh(
+    normalizePublishModeForSubmit(publishMode),
+  );
   const attachmentTargetValidation = useMemo(
     () =>
       validateAttachmentTargets(
