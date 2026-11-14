@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { commands, page, userEvent } from 'vitest/browser';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import '../styles/dashboard.css';
+
+declare module 'vitest/browser' {
+  interface BrowserCommands {
+    captureViewport(fileName: string, width: number, height: number): Promise<void>;
+  }
+}
 
 // Production Create page with controlled catalog responses. Seed-specific metadata
 // is covered by the catalog tests; this journey exercises rendering and input retention.
@@ -101,7 +107,6 @@ describe('Search preset progressive disclosure', () => {
       help.focus();
       await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).toBeVisible();
       expectInsideViewport(panel);
-      await page.screenshot({ element: document.documentElement, path: `../../../artifacts/browser-layout/search-preset-help-${viewport.width}.png` });
       await userEvent.keyboard('{Escape}');
       await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
       await userEvent.click(help);
@@ -126,7 +131,12 @@ describe('Search preset progressive disclosure', () => {
       expect(expandedInputs[0]).toMatchObject({ issue_search: 'label:bug', run_verify: true, include_all_authors: true, constraints: 'Preserve existing work.' });
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 2);
       for (const control of [search, verify, authors, help]) expectInsideViewport(control);
-      await page.screenshot({ element: document.documentElement, path: `../../../artifacts/browser-layout/search-preset-${viewport.width}.png` });
+      window.scrollTo(0, 0);
+      await commands.captureViewport(`search-preset-${viewport.width}.png`, viewport.width, viewport.height);
+      help.focus();
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).toBeVisible();
+      expectInsideViewport(panel);
+      await commands.captureViewport(`search-preset-help-${viewport.width}.png`, viewport.width, viewport.height);
     });
   }
 });

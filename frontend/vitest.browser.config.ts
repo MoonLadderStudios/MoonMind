@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
@@ -34,6 +35,21 @@ export default defineConfig({
       headless: true,
       provider: playwright(),
       commands: {
+        captureViewport: async ({ page, iframe }, fileName: string, width: number, height: number) => {
+          // Vitest scales its test iframe to fit the runner. Capture the actual
+          // viewport unscaled so fixed portals are not clipped by that transform.
+          const viewport = page.viewportSize();
+          const owner = iframe.owner();
+          const transform = await owner.evaluate(element => element.parentElement!.style.transform);
+          try {
+            await page.setViewportSize({ width: width + 64, height: height + 64 });
+            await owner.evaluate(element => { element.parentElement!.style.transform = 'none'; });
+            await owner.screenshot({ path: resolve('artifacts/browser-layout', fileName) });
+          } finally {
+            await owner.evaluate((element, value) => { element.parentElement!.style.transform = value; }, transform);
+            if (viewport) await page.setViewportSize(viewport);
+          }
+        },
         replaceInputByKeyboard: async ({ iframe }, label: string, text: string) => {
           const input = iframe.getByLabel(label, { exact: true });
           await input.click();

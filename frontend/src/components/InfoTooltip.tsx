@@ -11,6 +11,7 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -18,29 +19,49 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
   const [dismissed, setDismissed] = useState(false);
   const [position, setPosition] = useState({ left: 8, top: 8 });
   const visible = (hovered || focused || pinned) && !dismissed;
-  const enter = () => {
+  const enterTrigger = () => {
+    clearTimeout(leaveTimer.current);
+    clearTimeout(hoverTimer.current);
+    // Brief pointer transit must not open help over the next form control.
+    // Keyboard focus and an explicit click remain immediate.
+    hoverTimer.current = setTimeout(() => {
+      setHovered(true);
+      setDismissed(false);
+    }, 350);
+  };
+  const enterPanel = () => {
     clearTimeout(leaveTimer.current);
     setHovered(true);
     setDismissed(false);
   };
   const leave = () => {
+    clearTimeout(hoverTimer.current);
     leaveTimer.current = setTimeout(() => setHovered(false), 120);
   };
   const dismiss = () => {
+    clearTimeout(hoverTimer.current);
+    clearTimeout(leaveTimer.current);
+    setHovered(false);
     setPinned(false);
     setDismissed(true);
   };
-  useEffect(() => () => clearTimeout(leaveTimer.current), []);
+  useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(leaveTimer.current); }, []);
   useEffect(() => {
     if (!visible) return;
     const outside = (event: PointerEvent) => {
       if (!trigger.current?.contains(event.target as Node) && !panel.current?.contains(event.target as Node)) {
+        clearTimeout(hoverTimer.current);
+        clearTimeout(leaveTimer.current);
+        setHovered(false);
         setPinned(false);
         setDismissed(true);
       }
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        clearTimeout(hoverTimer.current);
+        clearTimeout(leaveTimer.current);
+        setHovered(false);
         setPinned(false);
         setDismissed(true);
       }
@@ -75,10 +96,11 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
   return <span className={`queue-info-tooltip${className ? ` ${className}` : ''}`}>
     <button ref={trigger} type="button" className="queue-step-icon-button queue-info-toggle"
       aria-label={label} aria-describedby={panelId} aria-expanded={visible} title={title}
-      onMouseEnter={enter} onMouseLeave={leave}
-      onFocus={() => { setFocused(true); setDismissed(false); }}
+      onMouseEnter={enterTrigger} onMouseLeave={leave}
+      onFocus={() => { clearTimeout(hoverTimer.current); setFocused(true); setDismissed(false); }}
       onBlur={() => { setFocused(false); setPinned(false); }}
       onClick={() => {
+        clearTimeout(hoverTimer.current);
         if (pinned) dismiss();
         else { setPinned(true); setDismissed(false); }
       }}>
@@ -90,7 +112,7 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
     </button>
     {createPortal(<div ref={panel} id={panelId} role="tooltip" hidden={!visible}
       className="queue-info-tooltip-panel"
-      style={position} onMouseEnter={enter} onMouseLeave={leave}>
+      style={position} onMouseEnter={enterPanel} onMouseLeave={leave}>
       {children}
     </div>, document.body)}
   </span>;
