@@ -177,6 +177,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         run_store: OmnigentBridgeSessionStore,
         execution_runner: ExecutionRunner,
         artifact_gateway: Any,
+        request_input_binder: Callable[
+            [AgentExecutionRequest], Awaitable[AgentExecutionRequest]
+        ],
         artifact_service: Any | None = None,
         workspace_owner: RemediationWorkspaceOwner | None = None,
         execution_plan: OmnigentExecutionPlanEnvelope | None = None,
@@ -198,6 +201,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._run_store = run_store
         self._execute = execution_runner
         self._artifact_gateway = artifact_gateway
+        self._bind_request_inputs = request_input_binder
         self._artifact_service = artifact_service or artifact_gateway
         self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
@@ -813,6 +817,23 @@ class OmnigentProfileBoundExecutionCoordinator:
             },
         )
 
+    async def _apply_remediation_outcome(self, request, result):
+        if (
+            result.failure_class is None
+            and request.terminal_contract is not None
+            and request.terminal_contract.contract_id
+            == "remediate_workflow_terminal.v1"
+        ):
+            from moonmind.workflows.terminal_evidence import (
+                apply_remediation_terminal_evaluation,
+            )
+
+            evaluation = await self._workspace_preservation.inspect_request_terminal(
+                request
+            )
+            return apply_remediation_terminal_evaluation(result, evaluation)
+        return result
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         # Validate before binding an existing recovery host: rejecting ambiguous
         # actions must not claim or clean up the only surviving workspace.
@@ -851,6 +872,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "admittedProviderCapacityCleanupCompleted"
                 ] = True
             return budget_rejection
+        request = await self._bind_request_inputs(request)
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = request_identity(request)
         await self._run_store.get_or_create(
@@ -1893,6 +1915,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
                     runtime_binding_ref = updated_binding.runtimeBindingRef
             publication_requested = publish_mode in {"branch", "pr"}
+            if not publication_requested and running_turn_recovery is None:
+                result = await self._apply_remediation_outcome(request, result)
             if result.failure_class is None and (
                 publication_requested or running_turn_recovery is not None
             ):
@@ -1946,6 +1970,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         completion.get("terminalAssistantAfterWork") is True
                         and not recovering_running_turn
                     ):
+                        result = await self._apply_remediation_outcome(request, result)
+                        if result.failure_class is not None:
+                            break
                         if not publication_requested:
                             result = result.model_copy(
                                 update={

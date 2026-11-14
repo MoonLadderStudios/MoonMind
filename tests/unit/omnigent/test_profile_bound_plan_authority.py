@@ -13,6 +13,9 @@ from moonmind.omnigent.profile_bound_execution import (
 )
 from moonmind.omnigent.settings import generic_codex_qualified
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _configure_ready_host_image_pair,
@@ -65,6 +68,7 @@ async def _admit_codex_plan(
     assert generic_codex_qualified() is True
     assert plan.payload.executionRealizerRef == "codex-profile-bound@1"
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=object(),
         host_repository=object(),

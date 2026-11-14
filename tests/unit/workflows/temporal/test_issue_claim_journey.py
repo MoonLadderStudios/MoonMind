@@ -78,7 +78,11 @@ async def journey(tmp_path, monkeypatch, request):
             elif path.endswith("/issues/3971/comments") and "extra_state" in state:
                 self.respond(state["extra_state"]["comments"])
             elif path.endswith("/comments"):
-                self.respond(state["comments"])
+                if state.get("stale_comment_reads", 0):
+                    state["stale_comment_reads"] -= 1
+                    self.respond(state["stale_comment_snapshot"])
+                else:
+                    self.respond(state["comments"])
             elif path.endswith("/issues/3971") and "extra_state" in state:
                 self.respond(self.issue(3971))
             elif path.endswith("/issues/3970"):
@@ -165,6 +169,14 @@ async def journey(tmp_path, monkeypatch, request):
             if "/issues/comments/" not in self.path:
                 self.respond({}, 404)
                 return
+            state["patches"] = state.get("patches", 0) + 1
+            if state.get("reject_updates"):
+                self.respond({"message": "fixture permanent denial"}, 403)
+                return
+            if state.get("lose_updates_before_apply", 0):
+                state["lose_updates_before_apply"] -= 1
+                self.close_connection = True
+                return
             comment = next(
                 item
                 for item in state["comments"]
@@ -174,6 +186,9 @@ async def journey(tmp_path, monkeypatch, request):
             if released and state.get("reject_release"):
                 self.respond({"message": "fixture temporary failure"}, 503)
                 return
+            if state.get("stale_reads_per_update"):
+                state["stale_comment_snapshot"] = [dict(item) for item in state["comments"]]
+                state["stale_comment_reads"] = state["stale_reads_per_update"]
             comment["body"] = payload["body"]
             if state.get("fail_reads_after_update"):
                 # The update is accepted; its confirmation read then fails.
@@ -1369,6 +1384,131 @@ def _safe_terminal_inputs(**overrides):
         "nextAction": "fresh_retry",
         **overrides,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("applied_before_transport_loss", [False, True])
+async def test_owned_comment_update_reconciles_transport_loss_before_retry(
+    journey, applied_before_transport_loss
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-transport"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = render_attempt_comment(
+        replace(
+            parse_attempt_comment(receipt.comment_body).handoff,
+            activity="awaiting-review",
+            outcome="implemented",
+            next_action="continue_review",
+            pr_url="https://github.com/example/repo/pull/42",
+        )
+    )
+    if applied_before_transport_loss:
+        state["lose_update_ack"] = True
+    else:
+        state["lose_updates_before_apply"] = 1
+
+    await publish_claim_comment(store, receipt, service, body)
+
+    assert state["patches"] == (1 if applied_before_transport_loss else 2)
+    assert state["posts"] == 1
+    assert state["comments"][0]["body"] == body
+    confirmed = await store.get(receipt.owner)
+    assert confirmed.comment_body == body
+    assert confirmed.pending_comment_body is None
+
+
+@pytest.mark.asyncio
+async def test_owned_comment_update_exhaustion_retains_intent_and_transport_error(
+    journey,
+):
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-outage"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = receipt.comment_body + "\n\nPreserved implementation pull request."
+    state["lose_updates_before_apply"] = 10
+
+    with pytest.raises(ValueError, match="claim_update_pending:.*RemoteProtocolError"):
+        await publish_claim_comment(store, receipt, service, body)
+
+    assert state["patches"] == 3
+    assert state["posts"] == 1
+    assert state["comments"][0]["body"] == receipt.comment_body
+    pending = await store.get(receipt.owner)
+    assert pending.pending_comment_body == body
+    assert pending.comment_body == receipt.comment_body
+
+
+@pytest.mark.asyncio
+async def test_owned_comment_update_does_not_retry_permanent_denial(journey):
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-denied"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = receipt.comment_body + "\n\nPreserved implementation pull request."
+    state["reject_updates"] = True
+
+    with pytest.raises(ValueError, match="claim_update_failed:.*HTTP 403"):
+        await publish_claim_comment(store, receipt, service, body)
+
+    assert state["patches"] == 1
+    assert (await store.get(receipt.owner)).pending_comment_body == body
+
+
+@pytest.mark.asyncio
+async def test_owned_comment_update_polls_acknowledged_write_without_repeating(journey):
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-readback"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = receipt.comment_body + "\n\nPreserved implementation pull request."
+    state["stale_reads_per_update"] = 1
+
+    await publish_claim_comment(store, receipt, service, body)
+
+    assert state["patches"] == 1
+    assert state["comments"][0]["body"] == body
+    assert (await store.get(receipt.owner)).pending_comment_body is None
 
 
 @pytest.mark.asyncio

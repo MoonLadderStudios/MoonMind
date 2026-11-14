@@ -139,6 +139,9 @@ from moonmind.security.egress_conformance_evidence import (
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -594,6 +597,7 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
         record_lifecycle_event=AsyncMock(),
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=lease_client,
         host_repository=hosts,
@@ -3116,6 +3120,7 @@ async def test_profile_bound_execution_heartbeats_host_lease_until_runner_finish
         heartbeat_host_lease=AsyncMock(side_effect=heartbeat_host_lease)
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=AsyncMock(),
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -4176,6 +4181,7 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
     )
     runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
@@ -4285,6 +4291,7 @@ async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_
         checkpointDigest="sha256:" + "b" * 64,
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
@@ -4839,6 +4846,7 @@ async def test_coordinator_waits_for_canceled_host_cleanup_before_rerun(
     )
     emit = AsyncMock()
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -4882,6 +4890,7 @@ def _drain_wait_coordinator(hosts, *, provider_lease_active: bool = True):
         inspect_lease=AsyncMock(return_value={"active": provider_lease_active})
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=lease_client,
         host_repository=hosts,
@@ -5109,6 +5118,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup(exposure) 
         return AgentRunResult(summary="done")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -5187,6 +5197,8 @@ async def _drive_authority_chain_coordinator(
     credential_resolver=None,
     resolve_source_credential: bool = False,
     materialized_input_paths: dict | None = None,
+    terminal_contract: dict | None = None,
+    workspace_preservation=None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -5319,6 +5331,8 @@ async def _drive_authority_chain_coordinator(
             ordered.append("host_cleanup")
 
         async def publish_workspace(self, **_kwargs):
+            if terminal_contract is not None:
+                ordered.append("workspace_publication")
             if isinstance(publication, Exception):
                 raise publication
             return publication or {
@@ -5372,6 +5386,7 @@ async def _drive_authority_chain_coordinator(
             ordered.append(f"bridge_terminal:{idempotency_key}")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -5379,6 +5394,7 @@ async def _drive_authority_chain_coordinator(
         run_store=Store(),
         execution_runner=execute,
         artifact_gateway=object(),
+        workspace_preservation=workspace_preservation,
     )
     # Repository credential selection has its own coverage; this harness has no
     # repository connection store.
@@ -5410,6 +5426,7 @@ async def _drive_authority_chain_coordinator(
             executionProfileRef="codex",
             correlationId="workflow-1",
             idempotencyKey="idem-1",
+            terminalContract=terminal_contract,
             workspaceSpec={
                 "workspaceLocator": {
                     "kind": "sandbox",
@@ -5435,6 +5452,151 @@ async def _drive_authority_chain_coordinator(
         dict(coordinator_result.metadata or {}),
         coordinator_result,
     )
+
+
+def _remediation_outcome_workspace(workspace_root):
+    workspace_id = hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24]
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "idem-1", "repo")
+    )
+    workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    return workspace
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["blocked", "missing", "succeeded"])
+@pytest.mark.parametrize("root_source", ["configured", "explicit"])
+async def test_profile_bound_remediation_verdict_prevents_false_publication(
+    tmp_path, monkeypatch, status, root_source
+):
+    workspace = _remediation_outcome_workspace(tmp_path)
+    if root_source == "configured":
+        monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+        workspace_preservation = None
+    else:
+        monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path / "other-root"))
+        workspace_preservation = OmnigentWorkspacePublicationService(tmp_path)
+
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "outcome.json",
+        "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "idem-1",
+    }
+    if status != "missing":
+        (workspace / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": contract["expectedSchemaVersion"],
+                    "executionRef": "idem-1",
+                    "status": status,
+                    "summary": (
+                        "Remediation prerequisite unavailable."
+                        if status == "blocked"
+                        else "Diagnosed a transient failure; retry the interrupted step."
+                    ),
+                }
+            )
+        )
+
+    async def execute(request, **kwargs):
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            summary="Omnigent session completed",
+        )
+
+    ordered, _, _, result = await _drive_authority_chain_coordinator(
+        execute,
+        terminal_contract=contract,
+        workspace_preservation=workspace_preservation,
+        request_parameters={
+            "stepExecution": {"workflowId": "workflow-1", "stepExecutionId": "idem-1"}
+        },
+    )
+    assert result.objective_outcome == (
+        "succeeded" if status == "succeeded" else "failed"
+    )
+    assert ("workspace_publication" in ordered) is (status == "succeeded")
+    if status != "succeeded":
+        assert result.publication_state == "not_published"
+        assert result.failure_class == "execution_error"
+        assert result.provider_error_code == (
+            "REMEDIATION_BLOCKED"
+            if status == "blocked"
+            else "INCOMPLETE_TERMINAL_CONTRACT"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running_recovery", [False, True])
+async def test_profile_bound_continuation_rechecks_remediation_before_publishing(
+    tmp_path,
+    running_recovery,
+):
+    workspace = _remediation_outcome_workspace(tmp_path)
+
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "outcome.json",
+        "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "idem-1",
+    }
+    calls = []
+
+    async def execute(request, **kwargs):
+        calls.append(request.idempotency_key)
+        if len(calls) == 1 and running_recovery:
+            raise OmnigentSameSessionContinuationRequired(
+                "completed response remains active",
+                session_id="session-1",
+                snapshot={"status": "running", "items": []},
+            )
+        if len(calls) == 2:
+            (workspace / "outcome.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": contract["expectedSchemaVersion"],
+                        "executionRef": "idem-1",
+                        "status": "blocked",
+                        "summary": "Required remediation context was not delivered.",
+                    }
+                )
+            )
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            summary="provider turn ended",
+            metadata={
+                "omnigentSessionId": "session-1",
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {"summary": "turn completed"},
+                },
+            },
+        )
+
+    ordered, _, _, result = await _drive_authority_chain_coordinator(
+        execute,
+        terminal_contract=contract,
+        workspace_preservation=OmnigentWorkspacePublicationService(tmp_path),
+        request_parameters={
+            "stepExecution": {"workflowId": "workflow-1", "stepExecutionId": "idem-1"}
+        },
+        completion_evidence=[
+            {
+                "sessionStatus": "running" if running_recovery else "completed",
+                "terminalAssistantAfterWork": running_recovery,
+            },
+            {"sessionStatus": "idle", "terminalAssistantAfterWork": True},
+        ],
+    )
+    assert len(calls) == 2
+    assert "workspace_publication" not in ordered
+    assert result.objective_outcome == "failed"
+    assert result.provider_error_code == "REMEDIATION_BLOCKED"
 
 
 @pytest.mark.asyncio
@@ -6257,6 +6419,7 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6412,6 +6575,7 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6558,6 +6722,7 @@ async def test_coordinator_fails_closed_on_smuggled_runtime_shortcut() -> None:
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6932,15 +7097,14 @@ async def _run_coordinator_failure_case(
             return await super().write_bytes(**kwargs)
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
         host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
-        artifact_gateway=LaunchEvidenceFailureGateway(
-            root=artifact_directory.name
-        ),
+        artifact_gateway=LaunchEvidenceFailureGateway(root=artifact_directory.name),
     )
 
     async def resolve_policy_snapshot(policy_ref: str) -> dict:

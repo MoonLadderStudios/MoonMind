@@ -111,6 +111,9 @@ from moonmind.provider_profiles.lease_client import (
 )
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
     build_default_activity_catalog,
@@ -1027,6 +1030,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             control_plane = OmnigentControlPlaneStore(sessions)
             capacity, credentials = fleet.route()
             realizer = GenericOmnigentHostRealizer(
+                request_input_binder=bind_remediation_context_inputs,
                 execution_owner=current_delivery_owner,
                 runtime_binding_store=DbRuntimeBindingStore(sessions),
                 provider_lease_coordinator=capacity,

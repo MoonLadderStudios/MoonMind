@@ -14,7 +14,10 @@ from moonmind.schemas.agent_runtime_models import (
     ExecutionBudgetContext,
     resolve_execution_budget,
 )
-from moonmind.workflows.terminal_evidence import terminal_evidence_repair_instruction
+from moonmind.workflows.terminal_evidence import (
+    apply_remediation_terminal_evaluation,
+    terminal_evidence_repair_instruction,
+)
 
 MAX_CONTINUATIONS = 2
 VERIFICATION_READ_BUDGET_SECONDS = 90
@@ -215,7 +218,12 @@ async def complete_skill_turns(
                     "metadata": evaluation.metadata,
                 },
             )
+        remediation_contract = (
+            request.terminal_contract.contract_id == "remediate_workflow_terminal.v1"
+        )
         if evaluation.satisfied or evaluation.outcome == "continuation_requested":
+            if remediation_contract:
+                return apply_remediation_terminal_evaluation(result, evaluation)
             return result
         continuation = evaluation.metadata.get("skillContinuation")
         # A validated terminal verdict is final. Only an explicit portable
@@ -241,6 +249,13 @@ async def complete_skill_turns(
                 # The Skill reported the same blocker after a continuation, so
                 # its recorded disposition is the answer (see terminal_evidence).
                 metadata["terminalContractContinuationStalled"] = True
+            if remediation_contract:
+                # A completed provider turn is not a completed diagnosis. Apply
+                # the Skill's verdict before finalization can publish a PR.
+                return apply_remediation_terminal_evaluation(
+                    result.model_copy(update={"metadata": metadata}),
+                    evaluation,
+                )
             return result.model_copy(update={"metadata": metadata})
         if not sink.binding.omnigentSessionId:
             raise ValueError("Contract continuation has no authoritative session")

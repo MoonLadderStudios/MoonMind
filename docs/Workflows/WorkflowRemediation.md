@@ -69,7 +69,7 @@ Admission builds `reports/remediation_context.json` before the remediation start
 
 The context is bounded (64 KB per embedded document, 4,000 characters per string, 60 steps) and redacted. A failed step-ledger query or artifact read is recorded as unavailable evidence; it does not fail the remediation. The target's evidence is read with the target workflow's artifact scope, since its lifecycle manifests are owned by its workflow principal.
 
-For an Omnigent remediation run, the plan-bound request adds the context artifact to the step's input refs. The host materializes it under `.moonmind/attachments/`, which is excluded from Git, and the first message lists materialized input paths when the host reports them. The task-input snapshot is sealed before the context exists, so the remediation link, not the snapshot, records which context belongs to the run.
+Both direct and supervised Omnigent execution add the admitted context to the step's required input refs before dispatch; a missing context stops new work. Cleanup and confirmed results remain readable without fresh input resolution. The host materializes the context under `.moonmind/attachments/`, excluded from Git, and the first message lists the paths. The task-input snapshot is sealed before the context exists, so the remediation link records which context belongs to the run.
 
 ## 6. The remediate-workflow skill
 
@@ -84,7 +84,9 @@ It ends with the cause and its evidence, what changed and how it was verified, a
 
 ## 7. Results
 
-The remediation's result is its own: its publication (for example a pull request), its report, and its link status. A prevention pull request does not prove the target is repaired, and the target stays failed until the operator retries or reruns it. Target detail lists inbound remediations, and remediation detail shows its target.
+The skill records an execution-bound `artifacts/remediation-result.json` verdict before publication. A blocked or failed diagnosis, or missing/invalid outcome evidence, fails the remediation and prevents new automatic publication. The generic runtime can repair incomplete evidence with bounded same-session turns; the canonical supervisor and legacy coordinator fail closed. Confirmed earlier publication remains recorded. An evidence-backed transient diagnosis or concrete proposal can succeed without code changes. Provider turn completion alone does not establish success.
+
+The remediation's publication, report, and link status describe its own result. A prevention pull request does not prove the target is repaired; the target stays failed until the operator retries or reruns it. Target detail lists inbound remediations, and remediation detail shows its target.
 
 ## 8. Authority and safety
 

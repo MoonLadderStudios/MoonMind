@@ -1490,6 +1490,15 @@ class OmnigentOAuthHostRuntime:
             self._workspace_root, artifact_gateway=artifact_gateway,
         ).save_request_workspace(request)
 
+    async def inspect_request_terminal(self, request):
+        """Inspect Skill evidence through the authoritative workspace owner."""
+        from moonmind.omnigent.workspace_publication import (
+            OmnigentWorkspacePublicationService,
+        )
+        return await OmnigentWorkspacePublicationService(
+            self._workspace_root,
+        ).inspect_request_terminal(request)
+
     async def publish_workspace(
         self,
         *,

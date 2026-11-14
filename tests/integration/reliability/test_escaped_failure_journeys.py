@@ -156,6 +156,9 @@ from moonmind.workflows.provider_failures import (
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -6029,6 +6032,7 @@ async def test_active_omnigent_execution_renews_host_lease_until_terminal() -> N
         heartbeat_host_lease=AsyncMock(side_effect=heartbeat_host_lease)
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=AsyncMock(),
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -7817,6 +7821,7 @@ async def test_omnigent_canceled_host_rerun_waits_for_admission(
     )
     emit = AsyncMock()
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -7866,6 +7871,7 @@ async def test_omnigent_recovery_dispatch_waits_for_janitor_drained_host(
     hosts = SimpleNamespace(get_host_lease=AsyncMock(side_effect=[draining, stopped]))
     emit = AsyncMock()
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(
             inspect_lease=AsyncMock(return_value={"active": True})
@@ -8361,6 +8367,7 @@ def _no_commit_publication_realizer(
         raise AssertionError("session driving is outside the publication boundary")
 
     return GenericOmnigentHostRealizer(
+        request_input_binder=bind_remediation_context_inputs,
         runtime_binding_store=SimpleNamespace(),
         provider_lease_coordinator=SimpleNamespace(),
         credential_provisioning_service=SimpleNamespace(),

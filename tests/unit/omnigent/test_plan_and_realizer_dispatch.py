@@ -1743,8 +1743,13 @@ async def test_production_composition_installs_the_durable_artifact_gateway(
     read durable refs.
     """
 
+    from unittest.mock import AsyncMock
+
     from moonmind.omnigent import production
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        AgentRunResult,
+    )
 
     for key, value in {
         "MOONMIND_OMNIGENT_HOST_SERVER_URL": "http://omnigent-host:8000",
@@ -1762,6 +1767,26 @@ async def test_production_composition_installs_the_durable_artifact_gateway(
         artifact_gateway=deployment_gateway,
         run_store=object(),
     )
+
+    from moonmind.workflows.temporal.activities import omnigent_session_activities
+
+    missing_context = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_context_input_ref", missing_context
+    )
+    with pytest.raises(ValueError, match="remediation context"):
+        await services.generic_realizer._bind_request_inputs(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="workflow-remediation",
+                idempotencyKey="step-remediation",
+                parameters={
+                    "workflow": {"remediation": {"target": {"workflowId": "failed"}}}
+                },
+            )
+        )
+    missing_context.assert_awaited_once_with("workflow-remediation")
 
     installed: dict[str, Any] = {}
 
@@ -1792,3 +1817,7 @@ async def test_production_composition_installs_the_durable_artifact_gateway(
 
     assert result.summary == "codex lifecycle ran"
     assert installed["artifact_gateway"] is deployment_gateway
+    assert (
+        installed["request_input_binder"]
+        is services.generic_realizer._bind_request_inputs
+    )

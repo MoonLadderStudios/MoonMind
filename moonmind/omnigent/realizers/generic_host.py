@@ -224,12 +224,16 @@ class GenericOmnigentHostRealizer:
         session_driver: Callable[..., Awaitable[AgentRunResult]],
         session_cleanup_service: Any,
         workspace_publisher: Any,
+        request_input_binder: Callable[
+            [AgentExecutionRequest], Awaitable[AgentExecutionRequest]
+        ],
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
         cleanup_authority: Any | None = None,
         host_capacity_admission: Any | None = None,
-        execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
-        | None = None,
+        execution_state_notifier: (
+            Callable[[str, str, str], Awaitable[None]] | None
+        ) = None,
         deployment_validator: Callable[[Any], Awaitable[None]] | None = None,
         execution_owner: Callable[[], dict[str, str] | None] | None = None,
         heartbeat_interval_seconds: float = 60.0,
@@ -245,6 +249,7 @@ class GenericOmnigentHostRealizer:
             session_driver,
             session_cleanup_service,
             workspace_publisher,
+            request_input_binder,
         )
         if any(item is None for item in dependencies):
             raise HarnessPlatformError(
@@ -260,6 +265,7 @@ class GenericOmnigentHostRealizer:
         self._session_driver = session_driver
         self._session_cleanup = session_cleanup_service
         self._workspace_publisher = workspace_publisher
+        self._bind_request_inputs = request_input_binder
         self._artifacts = artifact_gateway
         self._execution_owner = execution_owner
         self._turn_commands = turn_command_service
@@ -367,6 +373,7 @@ class GenericOmnigentHostRealizer:
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, prior)
+
         workflow_id, step_execution_id = _execution_identity(request)
         acquired: tuple[Any, ...] = ()
         credential_handles: tuple[CredentialRuntimeHandle, ...] = ()
@@ -546,6 +553,7 @@ class GenericOmnigentHostRealizer:
                     RuntimeBindingState.session_creating,
                     RuntimeBindingState.session_active,
                 }:
+                    request = await self._bind_request_inputs(request)
                     await self._validate_bound_host_identity(
                         plan=plan,
                         host_context=host_context,
@@ -587,6 +595,7 @@ class GenericOmnigentHostRealizer:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
 
+            request = await self._bind_request_inputs(request)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan, request=request)
             static_selection = host_class.runtime.get("staticHostSelection")

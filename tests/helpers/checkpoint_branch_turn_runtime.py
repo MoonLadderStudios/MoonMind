@@ -35,6 +35,9 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 
 ArtifactWriter = Callable[[str, str, bytes], Awaitable[str]]
 
@@ -551,6 +554,7 @@ async def execute_checkpoint_branch_request(
         )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),

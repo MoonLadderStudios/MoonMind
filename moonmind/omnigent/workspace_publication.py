@@ -228,8 +228,11 @@ class OmnigentWorkspacePublicationService:
 
     def resolve_request_workspace(self, request: AgentExecutionRequest, *, must_exist=True) -> Path:
         """Resolve only the workspace attested for this exact workflow step."""
+        from moonmind.omnigent.codex_execution_decisions import request_identity
         from moonmind.omnigent.realizers.turn_delivery import execution_identity
-        workflow_id, step_id = execution_identity(request)
+        workflow_id, step_id = request_identity(request)
+        if step_id is None:
+            workflow_id, step_id = execution_identity(request)
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(
             (request.workspace_spec or {}).get("workspaceLocator")
         )
