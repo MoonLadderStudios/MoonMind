@@ -1328,6 +1328,17 @@ async def test_generic_omnigent_production_projection_crosses_temporal_boundary(
     )
     monkeypatch.setenv("MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER", "moonmind-test")
 
+    async def hold_execution_for_projection(self, **_kwargs):
+        # A real execution emits lifecycle signals only after Run has entered
+        # its execution stage. Keep this stub alive until both projections are
+        # observed; a one-second timer races assertions on loaded CI workers.
+        self._set_state("executing", summary="Fixture execution is active.")
+        await workflow.sleep(timedelta(minutes=5))
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_run_execution_stage", hold_execution_for_projection
+    )
+
     async with await WorkflowEnvironment.start_time_skipping() as env:
         injected_adapter = TemporalClientAdapter(env.client)
         monkeypatch.setattr(
@@ -1358,25 +1369,32 @@ async def test_generic_omnigent_production_projection_crosses_temporal_boundary(
                 run_store=object(),
             )
 
-            await services.generic_realizer._notify_execution_state(
-                workflow_id,
-                "awaiting_slot",
-                "Waiting for Provider Profile capacity.",
-            )
-            status = await handle.query("get_status")
-            assert status["state"] == STATE_AWAITING_SLOT
-            assert status["waiting_reason"] == "provider_profile_slot"
-            assert status["summary"] == "Waiting for Provider Profile capacity."
+            with env.auto_time_skipping_disabled():
+                async with asyncio.timeout(30):
+                    while (await handle.query("get_status"))[
+                        "summary"
+                    ] != "Fixture execution is active.":
+                        await asyncio.sleep(0.02)
 
-            await services.generic_realizer._notify_execution_state(
-                workflow_id,
-                "running",
-                "Agent is running.",
-            )
-            status = await handle.query("get_status")
-            assert status["state"] == "executing"
-            assert status["waiting_reason"] is None
-            assert status["summary"] == "Agent is running."
+                await services.generic_realizer._notify_execution_state(
+                    workflow_id,
+                    "awaiting_slot",
+                    "Waiting for Provider Profile capacity.",
+                )
+                status = await handle.query("get_status")
+                assert status["state"] == STATE_AWAITING_SLOT
+                assert status["waiting_reason"] == "provider_profile_slot"
+                assert status["summary"] == "Waiting for Provider Profile capacity."
+
+                await services.generic_realizer._notify_execution_state(
+                    workflow_id,
+                    "running",
+                    "Agent is running.",
+                )
+                status = await handle.query("get_status")
+                assert status["state"] == "executing"
+                assert status["waiting_reason"] is None
+                assert status["summary"] == "Agent is running."
 
             result = await handle.result()
             assert result["status"] == "success"
@@ -1417,6 +1435,7 @@ def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatc
     workflow_instance.child_state_changed("running", "Agent restarted.")
     assert workflow_instance._started_at == first_started
     assert len(upserts) == 1
+
 
 def test_mm_started_at_not_stamped_for_awaiting_slot(monkeypatch):
     """Awaiting a provider slot must not stamp mm_started_at — that is

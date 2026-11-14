@@ -47,9 +47,14 @@ def db_path(tmp_path):
 @pytest.fixture
 def engine(db_path):
     engine = sa.create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(
-        engine, tables=[Base.metadata.tables[name] for name in _TABLES]
+    # These migrations run before assignment permissions were retired.
+    metadata = sa.MetaData()
+    for name in _TABLES:
+        Base.metadata.tables[name].to_metadata(metadata)
+    metadata.tables["repository_connection_assignments"].append_column(
+        sa.Column("operations", sa.JSON(), nullable=False)
     )
+    metadata.create_all(engine)
     yield engine
     engine.dispose()
 
@@ -171,7 +176,7 @@ def test_pre_merge_default_with_full_assignment_admits_a_merging_resolver(
 
     _map_pre_merge_default(engine)
     _assign(engine, PRE_MERGE_OPERATIONS)
-    with pytest.raises(BoundAccessError, match="does not admit merge_request"):
+    with pytest.raises(BoundAccessError, match="does not allow merge_request"):
         _admit_resolver(db_path)
 
     _upgrade(engine, migration)

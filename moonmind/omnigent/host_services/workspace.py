@@ -68,6 +68,26 @@ _LOGGER = logging.getLogger(__name__)
 _CLONE_MAX_ATTEMPTS = 4
 
 
+async def _chown_restored_workspace(path: Path, uid: int, gid: int) -> None:
+    """Keep the sandbox fence until an ownership handoff really stops."""
+    handoff = asyncio.create_task(asyncio.to_thread(chown_tree, path, uid, gid))
+    try:
+        await asyncio.shield(handoff)
+    except asyncio.CancelledError:
+        while not handoff.done():
+            try:
+                await asyncio.shield(handoff)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        # Consume a background failure without replacing cancellation or
+        # releasing the fence while the ownership writer is still running.
+        if not handoff.cancelled():
+            handoff.exception()
+        raise
+
+
 def _is_transient_clone_failure(stderr: str) -> bool:
     """Return True when git stderr shows a transient transport failure."""
     return publication_failure_is_transient(stderr)
@@ -257,6 +277,84 @@ class OmnigentWorkspaceMaterializer:
         repository_owner_ref: str | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
+        # A checkpoint generation uses the existing sandbox owner fence, which
+        # also excludes deletion and sibling cleanup. Other source contracts
+        # retain their existing preparation and grant owners.
+        spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        identity = getattr(request, "step_execution", None)
+        fenced = False
+        if identity is not None and plan is not None:
+            try:
+                source = compile_workspace_source(
+                    spec,
+                    workflow_id=identity.workflow_id,
+                    step_execution_id=identity.step_execution_id,
+                    runtime="omnigent",
+                )
+                fenced = source.kind == "checkpoint"
+            except WorkspaceSourceError:
+                # The normal materializer supplies the public failure envelope.
+                pass
+        arguments = dict(
+            mutation=mutation,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+            plan=plan,
+            repository_owner_ref=repository_owner_ref,
+            authority_sink=authority_sink,
+        )
+        try:
+            if fenced:
+                # Reject invalid saved authority before even preparing the
+                # owner-record directory. Revalidate again under the fence;
+                # this early read is not cached authority for mutation.
+                await self._read_step_input_checkpoint(source, request, plan)
+                locator = SandboxWorkspaceLocator.model_validate(
+                    spec.get("workspaceLocator")
+                )
+                store = SandboxWorkspaceRecordStore(self._root)
+                async with store.materialization_locked(locator.workspace_id):
+                    return await self._materialize(
+                        request, **arguments, workspace_fenced=True
+                    )
+            return await self._materialize(request, **arguments)
+        except WorkspaceArtifactProjectionError as exc:
+            raise HarnessPlatformError(str(exc), code=exc.code) from exc
+
+    async def _handoff_restored_workspace(self, spec, runtime_uid, runtime_gid):
+        locator = spec["workspaceLocator"]
+        owned_path = (
+            self._root
+            / "temporal_sandbox"
+            / locator["workspaceId"]
+            / locator["relativePath"]
+        )
+        try:
+            # Canonical cold restore creates a worker-owned staging tree.
+            # Transfer the root, Git directories and saved content through
+            # the existing descriptor-safe owner before input reuse.
+            # Use the original locator so a link cannot redirect chown.
+            await _chown_restored_workspace(owned_path, runtime_uid, runtime_gid)
+        except OSError as exc:
+            raise HarnessPlatformError(
+                "restored workspace ownership handoff failed",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+
+    async def _materialize(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        mutation: str = "allowed",
+        runtime_uid: int = 1000,
+        runtime_gid: int = 1000,
+        plan: Any | None = None,
+        repository_owner_ref: str | None = None,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        workspace_fenced: bool = False,
+    ) -> dict[str, Any]:
         if mutation not in {"allowed", "read_only", "checkpoint_branch"}:
             raise HarnessPlatformError(
                 "workspace mutation policy is unsupported",
@@ -316,18 +414,22 @@ class OmnigentWorkspaceMaterializer:
             record_store = SandboxWorkspaceRecordStore(self._root)
             workspace_id = remediation_resolution["workspaceLocator"]["workspaceId"]
         else:
-            candidate, record_store, workspace_id = await self._resolve_source_directory(
-                source,
-                spec=spec,
-                owner_workflow_id=owner_workflow_id,
-                owner_step_execution_id=owner_step_execution_id,
-                runtime_uid=runtime_uid,
-                runtime_gid=runtime_gid,
-                request=request,
-                plan=plan,
-                repository_owner_ref=repository_owner_ref or request.idempotency_key,
-                authority_sink=authority_sink,
-                defer_restore=checkpoint is not None,
+            candidate, record_store, workspace_id = (
+                await self._resolve_source_directory(
+                    source,
+                    spec=spec,
+                    owner_workflow_id=owner_workflow_id,
+                    owner_step_execution_id=owner_step_execution_id,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                    request=request,
+                    plan=plan,
+                    repository_owner_ref=repository_owner_ref
+                    or request.idempotency_key,
+                    authority_sink=authority_sink,
+                    defer_restore=checkpoint is not None,
+                    workspace_fenced=workspace_fenced,
+                )
             )
         if candidate == self._root or not candidate.is_relative_to(self._root):
             raise HarnessPlatformError(
@@ -342,14 +444,6 @@ class OmnigentWorkspaceMaterializer:
         fingerprint = source.readiness_fingerprint(
             target_owner_workflow_id=owner_workflow_id,
             attempt_id=owner_step_execution_id,
-        )
-        materialization_complete = bool(
-            record_store is not None and workspace_id is not None
-            and candidate.is_dir()
-            and record_store.is_ready(workspace_id, fingerprint)
-            # A recreated base is not the previously projected attempt save,
-            # even when its old readiness marker survived the host loss.
-            and (remediation_resolution is None or remediation_resolution.get("reusedAttempt"))
         )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         # These are existing execution-contract fields, including persisted
@@ -377,6 +471,67 @@ class OmnigentWorkspaceMaterializer:
                 *evidence_options["mandatory_refs"],
                 *named_refs.values(),
             ]
+        input_projection = None
+        input_record = None
+        if (
+            checkpoint is not None
+            and record_store is not None
+            and workspace_id is not None
+        ):
+            previous = record_store.read_readiness(workspace_id)
+            legacy_ready = bool(
+                previous
+                and previous.get("version") == "ready-v1"
+                and record_store.is_ready(workspace_id, fingerprint)
+            )
+            # Completed legacy candidates can contain later agent work; retain
+            # their established ready behavior rather than demanding evidence
+            # their historical producer never wrote.
+            if not legacy_ready:
+                input_projection = (
+                    await self._artifact_projector.prepare_input_projection(
+                        restore_refs=tuple(spec.get("restoreInputRefs") or ()),
+                        attachment_refs=attachment_refs,
+                        named_refs=named_refs,
+                        **evidence_options,
+                        workflow_id=owner_workflow_id,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                        retained=(
+                            previous.get("inputProjection")
+                            if previous and previous.get("version") == "ready-v2"
+                            else None
+                        ),
+                    )
+                )
+                input_record = record_store.bind_input_projection(
+                    workspace_id,
+                    fingerprint,
+                    input_projection,
+                )
+                fingerprint = input_record["fingerprint"]
+                try:
+                    candidate.lstat()
+                except FileNotFoundError:
+                    if input_record["phase"] == "ready":
+                        # Whole-directory loss starts strict reconstruction of
+                        # this same bound generation. Publish the incomplete
+                        # phase before restoration can recreate the directory.
+                        input_record = record_store.restart_input_projection(
+                            workspace_id, fingerprint
+                        )
+        materialization_complete = bool(
+            record_store is not None
+            and workspace_id is not None
+            and candidate.is_dir()
+            and record_store.is_ready(workspace_id, fingerprint)
+            # A recreated base is not the previously projected attempt save,
+            # even when its old readiness marker survived the host loss.
+            and (
+                remediation_resolution is None
+                or remediation_resolution.get("reusedAttempt")
+            )
+        )
         attachment_evidence = []
         if not materialization_complete:
             # A retry reconciles the same generation; changed inputs are an
@@ -388,31 +543,78 @@ class OmnigentWorkspaceMaterializer:
                 restore_refs = ()
             checkpoint_ref = source.checkpoint_ref or source.artifact_ref
             try:
+                baseline_input_paths = frozenset()
                 if checkpoint is not None:
-                    await self._restore_step_input_checkpoint(
-                        checkpoint, source, request, plan, remediation_resolution,
+                    baseline_input_paths = await self._restore_step_input_checkpoint(
+                        checkpoint,
+                        source,
+                        request,
+                        plan,
+                        remediation_resolution,
+                        input_projection=input_projection,
+                        allow_projected_outputs=bool(
+                            input_record
+                            and input_record["phase"] in {"projecting", "ready"}
+                        ),
+                    )
+                    # Baseline inputs can be reused without rewriting bytes.
+                    # Complete the existing ownership handoff first so both
+                    # cold baseline leaves and warm additions have the same
+                    # runtime identity when the projector verifies them.
+                    await self._handoff_restored_workspace(
+                        spec, runtime_uid, runtime_gid
                     )
                     checkpoint_ref = None
-                projection = await self._artifact_projector.project(
-                    candidate,
-                    checkpoint_ref=checkpoint_ref,
-                    checkpoint_digest=source.artifact_digest,
-                    checkpoint_contract=source.restore_contract,
-                    restore_refs=tuple(str(ref) for ref in restore_refs),
-                    attachment_refs=tuple(str(ref) for ref in attachment_refs),
-                    **evidence_options,
-                    workflow_id=owner_workflow_id,
-                    runtime_uid=runtime_uid,
-                    runtime_gid=runtime_gid,
-                    strict_admission=not source.historical
-                    and source.kind in {"artifact", "checkpoint"},
-                    overlay_policy=source.overlay_policy,
-                )
+                    if (
+                        input_record is not None
+                        and input_record["phase"] == "restoring"
+                    ):
+                        record_store.advance_input_projection(
+                            workspace_id,
+                            fingerprint,
+                            "projecting",
+                        )
+                if input_projection is not None:
+                    projection = await self._artifact_projector.project_bound_inputs(
+                        candidate,
+                        projection=input_projection,
+                        baseline_paths=baseline_input_paths,
+                        workflow_id=owner_workflow_id,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                    )
+                else:
+                    projection = await self._artifact_projector.project(
+                        candidate,
+                        checkpoint_ref=checkpoint_ref,
+                        checkpoint_digest=source.artifact_digest,
+                        checkpoint_contract=source.restore_contract,
+                        restore_refs=tuple(str(ref) for ref in restore_refs),
+                        attachment_refs=tuple(str(ref) for ref in attachment_refs),
+                        **evidence_options,
+                        workflow_id=owner_workflow_id,
+                        runtime_uid=runtime_uid,
+                        runtime_gid=runtime_gid,
+                        strict_admission=not source.historical
+                        and source.kind in {"artifact", "checkpoint"},
+                        overlay_policy=source.overlay_policy,
+                    )
                 attachment_evidence = projection.get("attachments", [])
             except WorkspaceArtifactProjectionError as exc:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
-            if record_store is not None and workspace_id is not None:
-                record_store.mark_ready(workspace_id, fingerprint)
+        elif input_projection is not None:
+            # Generation/authority checks above run even after readiness. The
+            # selected read-only inputs are immutable; do not restore later
+            # repository edits or silently select a new optional subset.
+            projection = await self._artifact_projector.project_bound_inputs(
+                candidate,
+                projection=input_projection,
+                verify_only=True,
+                workflow_id=owner_workflow_id,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+            )
+            attachment_evidence = projection["attachments"]
         elif attachment_refs:
             # A ready repository is not evidence that current inputs exist or
             # remain admitted. Re-project only attachments, preserving candidate edits.
@@ -440,23 +642,26 @@ class OmnigentWorkspaceMaterializer:
                 if ref not in named_refs.values() and ref in paths_by_ref
             }
         )
-        if remediation_resolution is not None or checkpoint is not None:
-            locator = spec["workspaceLocator"]
-            owned_path = (
-                self._root / "temporal_sandbox" / locator["workspaceId"]
-                / locator["relativePath"]
-            )
-            try:
-                # Canonical cold restore creates a worker-owned staging tree.
-                # Transfer the root, Git directories and content only after
-                # all projection, through the existing descriptor-safe owner.
-                # Use the original locator so a link cannot redirect chown.
-                await asyncio.to_thread(chown_tree, owned_path, runtime_uid, runtime_gid)
-            except OSError as exc:
-                raise HarnessPlatformError(
-                    "restored workspace ownership handoff failed",
-                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-                ) from exc
+        if remediation_resolution is not None or (
+            checkpoint is not None and materialization_complete
+        ):
+            await self._handoff_restored_workspace(spec, runtime_uid, runtime_gid)
+        if not materialization_complete:
+            if checkpoint is not None and (
+                parameters.get("checkpointRestore", {}).get("mode") == "branch"
+            ):
+                # The restored Git tree must belong to the runtime UID before
+                # its existing branch owner writes .git. Preserve the index and
+                # working tree while assigning this fresh branch its own name.
+                await self._prepare_target_branch(
+                    candidate,
+                    target_branch=str(spec.get("targetBranch") or ""),
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                    allow_initialization=True,
+                )
+            if record_store is not None and workspace_id is not None:
+                record_store.mark_ready(workspace_id, fingerprint)
         # Clone-time commit identity does not survive workspace reconciliation:
         # retries reuse the attempt workspace so no clone runs, an
         # authoritative restore replaces ``.git/config``, and an additive
@@ -543,8 +748,62 @@ class OmnigentWorkspaceMaterializer:
 
         context = identity.runtime_session_context
         source_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
+        branch_restore = False
+        recovery = request.checkpoint_recovery
+        restore = (request.parameters or {}).get("checkpointRestore", {})
+        if isinstance(restore, dict) and restore.get("mode") == "branch":
+            from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+
+            saved_authority = OmnigentCheckpointIdentity.model_validate(
+                (recovery or {}).get("omnigentCheckpoint")
+            )
+            # Only the exact descriptor admitted by the branch owner may cross
+            # workflow boundaries. A branch flag or an arbitrary input ref does
+            # not waive source identity, recorded plan or byte integrity.
+            # Runtime model/Skill binding may derive a destination plan. The
+            # producer's frozen source selection remains restoration authority;
+            # dispatch verified it against the original request before binding.
+            branch_restore = bool(
+                identity.reason == "checkpoint_branch"
+                and identity.branch is not None
+                and identity.runtime_context_policy == "fresh_agent_run"
+                and recovery.get("recoveryAction") == "branch_required"
+                and saved_authority.validation.valid
+                and saved_authority.validation.branch_creation_available
+                and same_ref(saved_authority.workspace_checkpoint_ref)
+                == same_ref(source.checkpoint_ref)
+                and saved_authority.workspace_checkpoint_digest
+                == "sha256:" + hashlib.sha256(payload).hexdigest()
+                and (
+                    saved_authority.workflow_id,
+                    saved_authority.run_id,
+                    saved_authority.logical_step_id,
+                    saved_authority.attempt_ordinal,
+                )
+                == (
+                    checkpoint.source.workflow_id,
+                    checkpoint.source.run_id,
+                    checkpoint.source.logical_step_id,
+                    checkpoint.source.execution_ordinal,
+                )
+                and saved_authority.step_execution_id == source_step
+                and saved_authority.boundary == checkpoint.boundary
+                and (
+                    saved_authority.execution_plan_ref is None
+                    or saved_authority.execution_plan_ref
+                    == identity.runtime_selection.get("executionPlanRef")
+                )
+            )
+            if not branch_restore:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
+                    "saved workspace differs from the admitted checkpoint branch",
+                )
         if (
-            checkpoint.source.workflow_id != identity.workflow_id
+            (
+                checkpoint.source.workflow_id != identity.workflow_id
+                and not branch_restore
+            )
             or checkpoint.boundary not in {"after_execution", "before_publication"}
             or context is not None
             and context.step_execution_id != source_step
@@ -621,10 +880,19 @@ class OmnigentWorkspaceMaterializer:
         return checkpoint
 
     async def _restore_step_input_checkpoint(
-        self, checkpoint, source, request, plan, remediation
+        self,
+        checkpoint,
+        source,
+        request,
+        plan,
+        remediation,
+        *,
+        input_projection=None,
+        allow_projected_outputs=False,
     ):
         """Use the checkpoint owner's Git/history/index restore, not tar overlay."""
         from moonmind.omnigent.workspace_intent import authored_repository_source
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
         from moonmind.workflows.executions.repository_contract import (
             github_repository_name_from_value,
         )
@@ -636,6 +904,30 @@ class OmnigentWorkspaceMaterializer:
         )
 
         identity = request.step_execution
+        admitted_target_branch = None
+        restore = (request.parameters or {}).get("checkpointRestore", {})
+        if isinstance(restore, dict) and restore.get("mode") == "branch":
+            # _read_step_input_checkpoint verified the branch's source authority.
+            # Its destination name belongs to the existing branch identity, not
+            # to the reused source plan or a mutable workspace projection.
+            branch_name = (identity.branch or {}).get("gitWorkBranch")
+            if branch_name:
+                if (
+                    not isinstance(branch_name, str)
+                    or request.workspace_spec.get("targetBranch") != branch_name
+                    or any(
+                        value not in (None, "", branch_name)
+                        for value in (
+                            request.parameters.get("targetBranch"),
+                            identity.runtime_selection.get("gitWorkBranch"),
+                        )
+                    )
+                ):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                        "checkpoint target branch differs from its admitted identity",
+                    )
+                admitted_target_branch = branch_name
         previous = checkpoint.source.model_dump(by_alias=True, mode="json")
         previous_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
         repository_source = authored_repository_source(request)
@@ -670,60 +962,75 @@ class OmnigentWorkspaceMaterializer:
         service = ManagedCheckpointRestoreService(
             authority_root=self._root, artifact_service=self._remediation_artifacts
         )
-        return await service.restore(
-            {
-                "schemaVersion": "v1",
-                "recoveryIdentity": {
-                    "workflowId": identity.workflow_id,
-                    "runId": identity.run_id,
-                    "logicalStepId": identity.logical_step_id,
-                    "executionOrdinal": identity.execution_ordinal,
-                },
-                "source": {
-                    **previous,
-                    "checkpointRef": source.checkpoint_ref,
-                    "checkpointBoundary": checkpoint.boundary,
-                    "sourceWorkspaceLocator": {
-                        "kind": "sandbox",
-                        "relativePath": "repo",
-                        "workspaceId": hashlib.sha256(
-                            f"{checkpoint.source.workflow_id}:{previous_step}".encode()
-                        ).hexdigest()[:24],
-                    },
-                },
-                "checkpoint": checkpoint.workspace.model_dump(
-                    by_alias=True,
-                    include={
-                        "kind",
-                        "base_commit",
-                        "archive_ref",
-                        "archive_digest",
-                        "manifest_ref",
-                        "manifest_digest",
-                    },
-                ),
-                "destination": {
-                    **request.workspace_spec["workspaceLocator"],
-                    "stepExecutionId": identity.step_execution_id,
-                    "repository": repository or None,
-                    **(
-                        {
-                            "repositoryIdentity": repository_identity.model_dump(
-                                by_alias=True, mode="json"
-                            )
-                        }
-                        if repository_identity is not None
-                        else {}
-                    ),
-                },
-                "workspacePolicy": "restore_step_input",
-                "resumePhase": "rerun_failed_step",
-                "capabilitySetVersion": "omnigent-plan/v1",
-                "capabilityDigest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
-                "idempotencyKey": f"{request.idempotency_key}:restore-step-input:{source.checkpoint_ref}:{generation}",
+        restore_request = {
+            "schemaVersion": "v1",
+            "recoveryIdentity": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "logicalStepId": identity.logical_step_id,
+                "executionOrdinal": identity.execution_ordinal,
             },
-            access=await step_execution_artifact_access(request),
+            "source": {
+                **previous,
+                "checkpointRef": source.checkpoint_ref,
+                "checkpointBoundary": checkpoint.boundary,
+                "sourceWorkspaceLocator": {
+                    "kind": "sandbox",
+                    "relativePath": "repo",
+                    "workspaceId": hashlib.sha256(
+                        f"{checkpoint.source.workflow_id}:{previous_step}".encode()
+                    ).hexdigest()[:24],
+                },
+            },
+            "checkpoint": checkpoint.workspace.model_dump(
+                by_alias=True,
+                include={
+                    "kind",
+                    "base_commit",
+                    "archive_ref",
+                    "archive_digest",
+                    "manifest_ref",
+                    "manifest_digest",
+                },
+            ),
+            "destination": {
+                **request.workspace_spec["workspaceLocator"],
+                "stepExecutionId": identity.step_execution_id,
+                "repository": repository or None,
+                **(
+                    {
+                        "repositoryIdentity": repository_identity.model_dump(
+                            by_alias=True, mode="json"
+                        )
+                    }
+                    if repository_identity is not None
+                    else {}
+                ),
+            },
+            "workspacePolicy": "restore_step_input",
+            "resumePhase": "rerun_failed_step",
+            "capabilitySetVersion": "omnigent-plan/v1",
+            "capabilityDigest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
+            "idempotencyKey": f"{request.idempotency_key}:restore-step-input:{source.checkpoint_ref}:{generation}",
+        }
+        access = await step_execution_artifact_access(request)
+        await service.restore(
+            restore_request,
+            access=access,
+            admitted_target_branch=admitted_target_branch,
+            **(
+                {"admitted_projection": input_projection}
+                if allow_projected_outputs
+                else {}
+            ),
         )
+        if input_projection is not None:
+            return await service.validate_input_projection(
+                restore_request,
+                access=access,
+                admitted_projection=input_projection,
+            )
+        return frozenset()
 
     async def _resolve_remediation_workspace(
         self,
@@ -806,6 +1113,7 @@ class OmnigentWorkspaceMaterializer:
         repository_owner_ref: str,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None,
         defer_restore: bool = False,
+        workspace_fenced: bool = False,
     ) -> tuple[Path, SandboxWorkspaceRecordStore | None, str | None]:
         """Resolve the attempt-owned directory for the single compiled source."""
 
@@ -859,6 +1167,8 @@ class OmnigentWorkspaceMaterializer:
                 f"sandbox workspace owner identity cannot be verified: {exc}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
+        if workspace_fenced:
+            cleanup_import_staging(candidate.parent)
         existed = candidate.exists()
         if not existed and defer_restore:
             # The canonical data plane creates and promotes its own staging
@@ -921,11 +1231,12 @@ class OmnigentWorkspaceMaterializer:
                 runtime_uid=runtime_uid, runtime_gid=runtime_gid,
                 allow_initialization=not existed,
             )
-        if existed:
-            # Reclaim leftover import-owned staging from a crashed attempt.
-            # This touches only `.moonmind-import-*` generations, never the
-            # live authorized workspace or another owner's content.
-            cleanup_import_staging(candidate.parent)
+        if existed and not workspace_fenced:
+            # Reclaim scratch only under the same owner fence as projection.
+            async with record_store.materialization_locked(
+                sandbox_locator.workspace_id
+            ):
+                cleanup_import_staging(candidate.parent)
         return candidate, record_store, sandbox_locator.workspace_id
 
     async def _prepare_target_branch(

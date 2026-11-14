@@ -48,8 +48,10 @@ function workspaceMarkup(rowCount: number, blockSizePx: number): string {
               </div>
             </div>
           </div>
+          <div class="workflow-workspace-sidebar-body">
           <div role="rowgroup" class="workflow-workspace-sidebar-list" aria-label="Workflow navigation list">
             ${rows}
+          </div>
           </div>
         </div>
       </aside>
@@ -69,7 +71,7 @@ function render(rowCount: number, blockSizePx: number): {
   container.innerHTML = workspaceMarkup(rowCount, blockSizePx);
   const shell = container.querySelector<HTMLElement>('.workflow-workspace-shell')!;
   const sidebar = container.querySelector<HTMLElement>('.collection-sidebar')!;
-  const list = container.querySelector<HTMLElement>('.workflow-workspace-sidebar-table')!;
+  const list = container.querySelector<HTMLElement>('.workflow-workspace-sidebar-body')!;
   return { shell, sidebar, list };
 }
 
@@ -98,7 +100,7 @@ describe('collection sidebar rail separator and height', () => {
     expect(after.content).toBe('none');
 
     // The list is the scroll container.
-    const list = container.querySelector<HTMLElement>('.workflow-workspace-sidebar-table')!;
+    const list = container.querySelector<HTMLElement>('.workflow-workspace-sidebar-body')!;
     expect(getComputedStyle(list).overflowY).toBe('auto');
   });
 
@@ -140,19 +142,15 @@ describe('collection sidebar rail separator and height', () => {
     expect(getComputedStyle(long.sidebar).borderRightWidth).toBe('1px');
   });
 
-  it('keeps the sticky header at its natural height instead of stretching it to fill the rail', () => {
-    // The rail owns a full-height block size and the table fills it, so a short
-    // list leaves free vertical space. A grid without `align-content: start`
-    // defaults to `stretch` and balloons the auto header row to absorb the
-    // slack. The header height must not depend on how much slack there is: a
-    // three-row list (lots of free space) and a thirty-row list (none) must
-    // render the same header height.
+  it('keeps the fixed header at its natural height instead of stretching it to fill the rail', () => {
+    // The header keeps its natural height while only the body fills remaining
+    // rail space, whether the rows fit or need scrolling.
     const short = render(3, 600);
-    const shortHeader = short.list.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
+    const shortHeader = short.sidebar.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
     const shortHeaderHeight = shortHeader.getBoundingClientRect().height;
 
     const long = render(30, 600);
-    const longHeader = long.list.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
+    const longHeader = long.sidebar.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
     const longHeaderHeight = longHeader.getBoundingClientRect().height;
 
     // Same natural height regardless of list length...

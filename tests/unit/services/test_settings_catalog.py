@@ -437,7 +437,7 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             ),
             (
                 {"skills.canary_percent": 50},
-                {"skills.canary_percent": 1},
+                {"skills.canary_percent": 2},
                 "skills.canary_percent",
                 "feature_disabled_canary_percent",
             ),
@@ -476,7 +476,7 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                     "workflow.default_publish_mode": valid.values[
                         "workflow.default_publish_mode"
                     ].value_version,
-                    "skills.canary_percent": 1,
+                    "skills.canary_percent": 2,
                 },
             )
         _assert_validation_issue(
@@ -1182,17 +1182,17 @@ async def _instance_override_persists_and_reports_version(settings_session):
     effective = response.values["workflow.default_publish_mode"]
     assert effective.value == "branch"
     assert effective.source == "instance_override"
-    assert effective.value_version == 1
+    assert effective.value_version == 2
     assert effective.activation_state == "active"
     assert effective.active is True
     assert effective.pending_value is None
 
     updated = await service.apply_overrides(
         changes={"workflow.default_publish_mode": "none"},
-        expected_versions={"workflow.default_publish_mode": 1},
+        expected_versions={"workflow.default_publish_mode": 2},
     )
     assert updated.values["workflow.default_publish_mode"].value == "none"
-    assert updated.values["workflow.default_publish_mode"].value_version == 2
+    assert updated.values["workflow.default_publish_mode"].value_version == 3
     assert updated.values["workflow.default_publish_mode"].activation_state == "active"
     assert updated.values["workflow.default_publish_mode"].active is True
     assert updated.values["workflow.default_publish_mode"].pending_value is None
@@ -1901,8 +1901,8 @@ async def test_async_list_and_batch_write_avoid_per_key_override_queries(
                 "skills.canary_percent": 50,
             },
             expected_versions={
-                "workflow.default_publish_mode": 1,
-                "skills.canary_percent": 1,
+                "workflow.default_publish_mode": 2,
+                "skills.canary_percent": 2,
             },
         )
 
@@ -1935,14 +1935,14 @@ async def test_instance_override_and_explicit_null_differ_from_inherited(
 
         await service.apply_overrides(
             changes={"integrations.github.token_ref": None},
-            expected_versions={"integrations.github.token_ref": 1},
+            expected_versions={"integrations.github.token_ref": 2},
         )
         intentional_null = await service.effective_value_async(
             "integrations.github.token_ref"
         )
         assert intentional_null.value is None
         assert intentional_null.source == "instance_override"
-        assert intentional_null.value_version == 2
+        assert intentional_null.value_version == 3
         assert intentional_null.diagnostics[0].code == "intentional_null_override"
 
         reset = await service.reset_override("integrations.github.token_ref")
@@ -2146,9 +2146,13 @@ async def test_reset_edge_cases_restore_inheritance_without_touching_retained_ro
 
     assert instance_reset.source in {"config_file", "environment", "default"}
     assert absent_reset.source == instance_reset.source
-    assert [(row.scope, row.value_json) for row in remaining] == [
+    assert [(row.scope, row.value_json) for row in remaining if not row.is_reset] == [
         ("user", "env://PERSONAL_TOKEN")
     ]
+    marker = next(row for row in remaining if row.is_reset)
+    assert marker.scope is None
+    assert marker.value_json is None
+    assert marker.value_version == instance_reset.value_version == absent_reset.value_version
 
 
 @pytest.mark.asyncio
@@ -3265,3 +3269,40 @@ def test_catalog_redacts_sensitive_reset_values(sensitive, audit, value):
     )
     service = SettingsCatalogService(env={}, registry=(entry,))
     assert service.catalog().categories["Test"][0].reset_value is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,state",
+    [("worker_reload", "pending_reload"), ("process_restart", "pending_restart")],
+)
+async def test_reset_generation_does_not_report_pending_override(
+    settings_session_maker, mode, state
+):
+    entry = SettingRegistryEntry(
+        key="test.pending",
+        title="Pending",
+        category="Test",
+        section="operations",
+        value_type="integer",
+        ui="number",
+        default_value=1,
+        order=1,
+        apply_mode=mode,
+        requires_reload=mode == "worker_reload",
+        requires_process_restart=mode == "process_restart",
+        applies_to=("worker",),
+    )
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(session=session, registry=(entry,), env={})
+        saved = await service.apply_overrides(changes={entry.key: 2})
+        assert saved.values[entry.key].activation_state == state
+        reset = await service.reset_override(entry.key)
+        assert reset.value_version == 3
+        assert reset.value == 1
+        assert reset.source == "default"
+        assert reset.activation_state == "active"
+        assert reset.pending_value is None
+        descriptor = (await service.catalog_async()).categories[entry.category][0]
+        assert descriptor.value_version == reset.value_version
+        assert descriptor.activation_state == "active"

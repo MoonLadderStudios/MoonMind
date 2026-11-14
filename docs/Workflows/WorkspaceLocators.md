@@ -21,6 +21,24 @@ profile file. A volume's reported storage mountpoint is not a portable bind
 source: Docker Desktop can expose an empty directory at that path. Initialization
 and host launch must resolve the same written projection through the volume.
 
+Checkpoint step-input materialization binds its complete current input selection
+in the sandbox readiness record before writing inputs. A restoring generation
+permits no additions; only a strictly verified baseline advances to projecting.
+Retries revalidate artifact authority and bytes, reuse the recorded optional
+selection, and account only for exact verified input outputs when comparing the
+saved repository. The sandbox owner fence covers staging, promotion, readiness
+and runtime ownership of inputs and their private parent directories. Partial
+downloads stay in owner-scoped import staging outside the repository. Previously
+saved inputs remain baseline work. An identical current input can reuse a verified
+saved regular file without rewriting it or
+excluding it from saved Git status and file checks. Conflicting saved paths and
+unbound additions are retained and reported, never cleared to make verification
+pass. Completed generations verify their current inputs without recreating later
+deletions. Whole-directory loss reopens the same generation for strict checkpoint
+reconstruction before any candidate writes. Completed legacy readiness keeps its
+existing behavior; an interrupted legacy projection without enough selection
+evidence stays blocked with its work intact.
+
 Sandbox archive safety checks use the same membership rules as archive capture.
 Excluded Skill projection trees (`.agents/skills` and `.gemini/skills`) are neither
 archived nor grounds for rejecting a checkpoint because of their links or owner.

@@ -1,3 +1,4 @@
 pypi.org
 files.pythonhosted.org
 registry.npmjs.org
+api.nuget.org

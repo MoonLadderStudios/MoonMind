@@ -19,6 +19,7 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.automation import models as automation_models
 from moonmind.workflows.automation.preflight import CodexPreflightResult
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
@@ -612,10 +613,87 @@ def test_app_server_rpc_trace_summary_includes_redacted_error_message() -> None:
 
 
 def test_redaction_preserves_falsy_non_none_values() -> None:
+    assert CodexAppServerRpcClient._redact_trace_text(None) == ""
     assert CodexAppServerRpcClient._redact_trace_text(0) == "0"
     assert CodexAppServerRpcClient._redact_trace_text(False) == "False"
     assert CodexManagedSessionRuntime._redact_diagnostic_text(0) == "0"
     assert CodexManagedSessionRuntime._redact_diagnostic_text(False) == "False"
+    assert CodexManagedSessionRuntime._redact_diagnostic_text(None) == ""
+
+
+@pytest.mark.parametrize(
+    "credential,secret",
+    [
+        ("Authorization: Bearer synthetic-bearer-value", "synthetic-bearer-value"),
+        ("Authorization: Basic c3ludGhldGljOnNlY3JldA==", "c3ludGhldGljOnNlY3JldA=="),
+        ('password="two word synthetic secret"', "two word synthetic secret"),
+        ("token=synthetic-token-value", "synthetic-token-value"),
+        *[
+            (prefix + "a" * 32, prefix + "a" * 32)
+            for prefix in (
+                "ghp_",
+                "gho_",
+                "ghu_",
+                "ghs_",
+                "ghr_",
+                "github_pat_",
+                "AIza",
+                "ATATT",
+            )
+        ],
+        ("AKIA" + "A" * 16, "AKIA" + "A" * 16),
+        *[
+            (json.dumps({"message": "provider failed\n" + token}), token)
+            for token in ("AIza" + "a" * 32, "AKIA" + "A" * 16)
+        ],
+    ],
+    ids=[
+        "authorization-bearer",
+        "authorization-basic",
+        "password-assignment",
+        "token-assignment",
+        "github-classic",
+        "github-oauth",
+        "github-user",
+        "github-installation",
+        "github-refresh",
+        "github-fine-grained",
+        "google-api-token",
+        "opaque-provider-token",
+        "aws-access-key",
+        "serialized-google-token",
+        "serialized-aws-key",
+    ],
+)
+def test_runtime_diagnostics_share_credential_redaction(
+    credential: str,
+    secret: str,
+) -> None:
+    text = f"provider request failed: {credential}"
+    summary = CodexAppServerRpcClient._message_summary(
+        {"error": {"code": -32600, "message": text}}
+    )
+
+    for safe in (
+        summary["errorMessage"],
+        CodexManagedSessionRuntime._redact_diagnostic_text(text),
+    ):
+        assert secret not in safe
+        assert safe == redact_sensitive_text(text)
+        assert "provider request failed:" in safe
+        assert redact_sensitive_text(safe) == safe
+    assert summary["hasError"] is True
+    assert summary["errorCode"] == -32600
+
+
+def test_runtime_diagnostics_truncate_only_after_redaction() -> None:
+    text = 'password="' + "synthetic secret " * 100 + '"'
+    for redact in (
+        CodexAppServerRpcClient._redact_trace_text,
+        CodexManagedSessionRuntime._redact_diagnostic_text,
+    ):
+        assert redact(text, max_chars=30) == "password=[REDACTED]"
+        assert redact("useful failure details", max_chars=6) == "useful...[truncated]"
 
 
 def test_empty_assistant_failure_reason_normalizes_text() -> None:
@@ -986,6 +1064,53 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
     stderr_path = Path(request.artifact_spool_path) / "stderr.log"
     assert stderr_path.exists()
     assert "turn failed:" in stderr_path.read_text(encoding="utf-8")
+
+
+def test_runtime_turn_failure_evidence_redacts_provider_log_credentials(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    secret = "synthetic-bearer-secret-123456789"
+    _write_fake_codex_logs(
+        request.codex_home_path,
+        entries=[f"vendor-turn-1 Authorization: Bearer {secret}"],
+    )
+    script = write_fake_app_server(tmp_path, assistant_text="")
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    try:
+        runtime.launch_session(request)
+        response = runtime.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+    finally:
+        runtime.close()
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["session"]["vendorTurnId"] == "vendor-turn-1"
+    assert evidence["runtimeLogExcerpts"]
+    assert secret not in json.dumps(evidence)
+    safe = evidence["runtimeLogExcerpts"][0]["text"]
+    assert "vendor-turn-1" in safe
+    assert redact_sensitive_text(safe) == safe
 
 
 def test_runtime_send_turn_reads_completed_assistant_items_from_item_list(

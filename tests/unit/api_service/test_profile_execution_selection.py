@@ -659,6 +659,88 @@ def _codex_configuration(name, *, credential_source, rollout_metadata=None):
     return row, version
 
 
+@pytest.mark.parametrize("private_home", ["codex-home", "operator-home"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_plain_codex_key_private_file_reference_uses_shared_configuration(private_home, schema):
+    from moonmind.omnigent.harness_platform.materializers import (
+        snapshot_provider_configuration,
+    )
+
+    home = "{{runtime_support_dir}}/" + private_home
+    profile = _codex_api_key_provider(
+        INSTRUCTIONS_FILE="{{ runtime_support_dir }}/" + private_home + "/AGENTS.md",
+        REPORT_DIR="{{workspace_path}}/reports",
+        CACHE_DIR="{{runtime_support_dir}}/cache",
+    )
+    profile.home_path_overrides = {"CODEX_HOME": home}
+    profile.file_templates = [{
+        "path": home + "/AGENTS.md", "format": "text",
+        "content_template": "Use the selected instructions.", "permissions": "0600",
+    }]
+    candidate = _codex_configuration("codex-api-team", credential_source="secret_ref")
+    if schema == "v2":
+        candidate[1].document.update(
+            schemaVersion="moonmind.omnigent-agent-profile.v2",
+            harness={"id": "codex-native", "implementationRef": "omnigent-native@1"},
+            credentialSlots=[{
+                "acceptedProviderIds": ["openai"],
+                "acceptedAuthModels": ["omnigent-provider-config"],
+            }],
+        )
+    assert configuration_accepts_profile(candidate[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [candidate])
+    selection = select_execution_configuration(profile, [candidate])
+    assert selection["providerProfileRef"] == profile.profile_id
+    assert selection["harnessId"] == "codex-native"
+    endpoint = snapshot_provider_configuration(profile)
+    assert endpoint.secretRole == "openai_api_key"
+    assert endpoint.baseUrl == "https://api.openai.com/v1"
+    assert endpoint.codexConfiguration["environmentTemplates"] == {
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md",
+    }
+    assert endpoint.environmentTemplates == {
+        "REPORT_DIR": "{{workspace_path}}/reports",
+        "CACHE_DIR": "{{runtime_support_dir}}/cache",
+    }
+    frozen = endpoint.model_dump_json()
+    profile.env_template["INSTRUCTIONS_FILE"] = "{{workspace_path}}/changed.md"
+    profile.file_templates = []
+    assert endpoint.model_dump_json() == frozen
+
+
+@pytest.mark.parametrize("reference", [
+    "{{runtime_support_dir}}/codex-home/missing.md",
+    "{{runtime_support_dir}}/codex-home/../AGENTS.md",
+    "{{runtime_support_dir}}/codex-home//AGENTS.md",
+    "{{runtime_support_dir}}/codex-home/./AGENTS.md",
+    "{{runtime_support_dir}}/codex-home/auth.json",
+    "{{runtime_support_dir}}/codex-home/AGENTS.md{{unknown}}",
+    "{{runtime_support_dir}}/codex-home/AGENTS.md:{{runtime_support_dir}}/cache",
+])
+def test_plain_codex_key_untranslated_private_reference_keeps_native_route(reference):
+    profile = _codex_api_key_provider(INSTRUCTIONS_FILE=reference)
+    profile.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"}
+    profile.file_templates = [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        "content_template": "Selected instructions.", "permissions": "0600",
+    }]
+    candidate = _codex_configuration("codex-api-team", credential_source="secret_ref")
+    assert not configuration_accepts_profile(candidate[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [candidate])
+
+
+def test_plain_codex_key_enrolled_home_literal_keeps_native_route():
+    profile = _codex_api_key_provider(INSTRUCTIONS_FILE="/home/app/.codex/AGENTS.md")
+    profile.home_path_overrides = {"CODEX_HOME": "/home/app/.codex"}
+    profile.file_templates = [{
+        "path": "/home/app/.codex/AGENTS.md", "format": "text",
+        "content_template": "Retained native instructions.", "permissions": "0600",
+    }]
+    candidate = _codex_configuration("codex-api-team", credential_source="secret_ref")
+    assert not configuration_accepts_profile(candidate[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [candidate])
+
+
 def test_api_key_codex_profile_moves_to_managed_api_key_configuration():
     bootstrap = _codex_configuration(
         "omnigent-bootstrap-default", credential_source="oauth_volume"
@@ -1020,3 +1102,19 @@ async def test_unauthored_preset_keeps_its_profile_route_preview(monkeypatch, pr
         authored_runtime=None,
         task_payload=preset,
     ) == "omnigent"
+
+
+def test_authored_claude_files_use_shared_configuration_without_changing_native_gaps():
+    from tests.unit.omnigent.test_claude_profile_configuration import configuration
+
+    stock = _claude_api_key_configuration("omnigent-claude-api-key")
+    profile = _claude_api_key_provider()
+    files = configuration()
+    profile.home_path_overrides = files["homePathOverrides"]
+    profile.file_templates = files["fileTemplates"]
+    assert configuration_accepts_profile(stock[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [stock])
+    assert select_execution_configuration(profile, [stock])["harnessId"] == "claude-native"
+    profile.file_templates[0]["content_template"] = {"apiKeyHelper": "other authority"}
+    assert not configuration_accepts_profile(stock[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [stock])

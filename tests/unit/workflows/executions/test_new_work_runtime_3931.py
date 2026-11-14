@@ -149,3 +149,24 @@ def test_version_evolution_only_requires_parseable_evidence():
     assert versions_compatible("0.13.0", "0.14.0") is True
     assert versions_compatible("0.13.0", "1.0.0") is True
     assert versions_compatible("", "0.13.0") is False
+
+
+def test_unselected_tools_keep_retired_default_as_metadata(monkeypatch):
+    monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2026-01-01T00:00:00Z")
+    selection = resolve_new_work_selection(
+        surface=AuthoringSurface.workflow_create,
+        workflow_settings=_settings("codex_cli"),
+        policy=_policy(),
+        unselected_tools=True,
+    )
+    assert selection.runtime_id == "codex_cli"
+    # An authored target still goes through normal admission, even if a caller
+    # incorrectly marks its task as unselected tools.
+    with pytest.raises(NewWorkAdmissionRejected):
+        resolve_new_work_selection(
+            surface=AuthoringSurface.workflow_create,
+            workflow_settings=_settings("codex_cli"),
+            policy=_policy(),
+            authored_runtime="codex_cli",
+            unselected_tools=True,
+        )

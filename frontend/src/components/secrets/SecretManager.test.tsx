@@ -337,8 +337,38 @@ describe('SecretManager', () => {
           </QueryClientProvider>
         </MemoryRouter>,
       );
-      return { fetchMock, onNotice };
+      return { fetchMock, onNotice, queryClient };
     }
+
+    it.each(['edit', 'rotate', 'delete'])('refreshes cached profile readiness after %s succeeds, not after failure', async (operation) => {
+      let failed = true;
+      const fetchMock = vi.fn().mockImplementation(async () => ({
+        ok: !failed, json: async () => failed ? { detail: 'Secret change failed.' } : {},
+      }));
+      const { queryClient, onNotice } = renderGuardedSecretManager(fetchMock);
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      queryClient.setQueryData(['provider-profiles'], [{ profile_id: 'bound-profile' }]);
+      queryClient.setQueryData(['provider-profiles', 'creation-choices'], {});
+      if (operation !== 'delete') {
+        fireEvent.click(screen.getByRole('button', { name: operation === 'edit' ? 'Edit' : 'Rotate' }));
+        fireEvent.change(screen.getByLabelText(operation === 'edit' ? 'Secure value' : 'New secure value'), {
+          target: { value: 'replacement-value' },
+        });
+      }
+      const submit = () => fireEvent.click(screen.getByRole('button', {
+        name: operation === 'edit' ? 'Save new value' : operation === 'rotate' ? 'Rotate now' : 'Delete',
+      }));
+      submit();
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      if (operation === 'delete') await waitFor(() => expect(onNotice).toHaveBeenCalledWith({ level: 'error', text: 'Secret change failed.' }));
+      else await screen.findByText('Secret change failed.');
+      expect(queryClient.getQueryState(['provider-profiles'])?.isInvalidated).toBe(false);
+      failed = false;
+      submit();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() => expect(queryClient.getQueryState(['provider-profiles'])?.isInvalidated).toBe(true));
+      expect(queryClient.getQueryState(['provider-profiles', 'creation-choices'])?.isInvalidated).toBe(false);
+    });
 
     it('shows stored secrets as the primary view with no creation form until Add secret', () => {
       renderGuardedSecretManager();

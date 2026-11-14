@@ -1,7 +1,7 @@
 """A replacement attempt preserves the configuration admitted for its step."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,12 +11,13 @@ import pytest
 from sqlalchemy import select
 
 from api_service.db.models import ManagedAgentProviderProfile, ProviderProfileSlotLease
+from api_service.services import native_pool_execution_plan as pool_plans
 from api_service.services.native_pool_execution_plan import prepare_selected_pool_plan
-from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+from moonmind.omnigent import credential_materializers
 from moonmind.omnigent.harness_platform.execution_plan import (
     create_execution_plan_envelope,
 )
-from moonmind.omnigent import credential_materializers
+from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_services import docker_backend
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -51,7 +52,11 @@ _CODEX = {
     "oauthPrivateConfiguration": True,
     "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
 }
-_CLAUDE = {"harness": "claude-native", "oauthTuning": {"API_TIMEOUT_MS": "300000"}}
+_CLAUDE = {
+    "harness": "claude-native",
+    "oauthTuning": {"API_TIMEOUT_MS": "300000"},
+    "claudeOauthFiles": True,
+}
 
 
 @pytest.mark.parametrize(
@@ -76,6 +81,102 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
     edit_profile,
     tamper,
 ):
+    await _assert_selected_pool_replacement(
+        native_journey,
+        monkeypatch,
+        same_step=same_step,
+        edit_profile=edit_profile,
+        tamper=tamper,
+    )
+
+
+@pytest.mark.parametrize(
+    "native_journey", [_CODEX, _CLAUDE], indirect=True, ids=["codex", "claude"]
+)
+@pytest.mark.parametrize(
+    "tier_scenario",
+    ["tier_launch_defaults", "tier_launch_explicit", "absent_defaults"],
+)
+@pytest.mark.parametrize(
+    "native_tier_edit", [False, True], ids=["defaults-edit", "native-only-edit"]
+)
+async def test_selected_pool_replacement_preserves_admitted_tier_parameters(
+    native_journey, monkeypatch, tier_scenario, native_tier_edit
+):
+    await _assert_selected_pool_replacement(
+        native_journey,
+        monkeypatch,
+        same_step=True,
+        edit_profile=True,
+        tamper=None,
+        tier_scenario=tier_scenario,
+        native_tier_edit=native_tier_edit,
+    )
+
+
+@pytest.mark.parametrize(
+    "native_journey", [_CODEX, _CLAUDE], indirect=True, ids=["codex", "claude"]
+)
+async def test_selected_pool_fresh_step_uses_current_tier_parameters(
+    native_journey, monkeypatch
+):
+    await _assert_selected_pool_replacement(
+        native_journey,
+        monkeypatch,
+        same_step=False,
+        edit_profile=True,
+        tamper=None,
+        tier_scenario="tier_launch_defaults",
+    )
+
+
+@pytest.mark.parametrize(
+    "native_journey", [_CODEX, _CLAUDE], indirect=True, ids=["codex", "claude"]
+)
+async def test_selected_pool_tier_recovery_survives_removed_lease_metadata(
+    native_journey, monkeypatch
+):
+    await _assert_selected_pool_replacement(
+        native_journey,
+        monkeypatch,
+        same_step=True,
+        edit_profile=True,
+        tamper=None,
+        tier_scenario="tier_launch_defaults",
+        retained_metadata=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "native_journey", [_CODEX, _CLAUDE], indirect=True, ids=["codex", "claude"]
+)
+@pytest.mark.parametrize("legacy", ["matching", "missing", "conflicting"])
+async def test_selected_pool_legacy_tier_recovery_requires_retained_launch_evidence(
+    native_journey, monkeypatch, legacy
+):
+    await _assert_selected_pool_replacement(
+        native_journey,
+        monkeypatch,
+        same_step=True,
+        edit_profile=True,
+        tamper=None,
+        tier_scenario="tier_launch_defaults",
+        legacy=legacy,
+    )
+
+
+async def _assert_selected_pool_replacement(
+    native_journey,
+    monkeypatch,
+    *,
+    same_step,
+    edit_profile,
+    tamper,
+    tier_scenario=None,
+    native_tier_edit=False,
+    legacy=None,
+    retained_metadata=True,
+):
     journey = native_journey
     codex = journey.harness == "codex-native"
     runtime = "codex_cli" if codex else "claude_code"
@@ -87,6 +188,18 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
             return json.loads(
                 journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"]
             )["document"]["developer_instructions"]
+        assert json.loads(journey.docker.claude_preferences["settings.json"])[
+            "language"
+        ] == (
+            "Later language"
+            if journey.docker.launch_env["API_TIMEOUT_MS"] == "100000"
+            else "English"
+        )
+        assert (
+            journey.docker.claude_preferences["CLAUDE.md"]
+            == "Admitted instructions for /workspaces/run.\n"
+        )
+        assert journey.docker.volumes == {"journey_oauth": {}}
         return journey.docker.launch_env["API_TIMEOUT_MS"]
 
     first_now = datetime.now(timezone.utc) - timedelta(seconds=10)
@@ -109,14 +222,58 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
     async def interrupted_first(journey):
         return await execute_first(journey, "failed")
 
+    if tier_scenario == "absent_defaults":
+        async with journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
+            profile.model_tiers = [{"model": journey.server.model}]
+            await session.commit()
+
     with monkeypatch.context() as first_transport:
         first_transport.setattr(pool, "agent_requests", budgeted_requests)
         first_transport.setattr(
             native, "assert_native_turn_saved_and_cleaned", interrupted_first
         )
+        if legacy:
+            compile_plan = pool_plans.compile_and_persist_execution_plan
+
+            async def compile_legacy_plan(**kwargs):
+                # Simulate the previous writer before capture, so the saved
+                # artifact, digest and lease all describe the actual old plan.
+                kwargs.pop("model_tier_resolution", None)
+                return await compile_plan(**kwargs)
+
+            first_transport.setattr(
+                pool_plans, "compile_and_persist_execution_plan", compile_legacy_plan
+            )
         first = await pool.execute_selected_pool_source(
-            journey, monkeypatch, include_successor=True
+            journey,
+            monkeypatch,
+            include_successor=True,
+            scenario=(
+                tier_scenario
+                if tier_scenario not in {None, "absent_defaults"}
+                else "ordinary"
+            ),
+            runtime_selection={"modelTier": 1} if tier_scenario else None,
         )
+    first_parameters = deepcopy(journey.request.parameters)
+    first_plan = journey.plan
+    if tier_scenario:
+        first_resolution = first_parameters["metadata"]["moonmind"][
+            "modelEffortResolution"
+        ]
+        if tier_scenario == "absent_defaults":
+            assert "commitMessage" not in first_parameters
+            assert "publishBaseBranch" not in first_parameters
+        else:
+            assert first_parameters["commitMessage"] == (
+                "Explicit runtime commit"
+                if tier_scenario == "tier_launch_explicit"
+                else "Tier-selected commit"
+            )
+            assert first_parameters["publishBaseBranch"] == "tier-selected-target"
+    if legacy:
+        assert first_plan.payload.modelConfig.tierResolution is None
     assert first.result.failure_class is not None
     assert observed_configuration() == original_setting
     assert not journey.server.workspace.exists()
@@ -226,6 +383,12 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
             successor.workspace_spec["workspaceCheckpointRestoreRef"]
             == first.result.metadata["savedWorkspaceCheckpoint"]["archiveRef"]
         )
+        original_ref = successor.parameters["metadata"]["moonmind"][
+            "sharedStepCheckpointRef"
+        ]
+        original_bytes = await journey.gateway.read_bytes(original_ref)
+        archive_ref = first.result.metadata["savedWorkspaceCheckpoint"]["archiveRef"]
+        archive_bytes = await journey.gateway.read_bytes(archive_ref)
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         if edit_profile:
@@ -236,10 +399,39 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
                 )
                 profile.file_templates = templates
             else:
+                templates = deepcopy(profile.file_templates)
+                templates[0]["content_template"]["language"] = "Later language"
+                profile.file_templates = templates
                 profile.env_template = {
                     **profile.env_template,
                     "API_TIMEOUT_MS": edited_setting,
                 }
+        if tier_scenario:
+            later_parameters = {
+                "commitMessage": "A later Profile edit",
+                "publishBaseBranch": "later-target",
+            }
+            if native_tier_edit:
+                later_parameters["envOverrides"] = {"MODE": "later-profile-choice"}
+            profile.model_tiers = [
+                {"model": journey.server.model, "parameters": later_parameters}
+            ]
+        if legacy in {"missing", "conflicting"} or not retained_metadata:
+            source_lease = (
+                await session.scalars(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id == first.owner,
+                    )
+                )
+            ).one()
+            metadata = deepcopy(source_lease.safe_metadata_json)
+            if legacy == "missing" or not retained_metadata:
+                metadata.pop("preparedPoolPlan")
+            else:
+                metadata["preparedPoolPlan"]["binding"]["planDigest"] = (
+                    "sha256:" + "f" * 64
+                )
+            source_lease.safe_metadata_json = metadata
         await session.commit()
 
     activities = TemporalArtifactActivities(None)
@@ -359,10 +551,12 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
             "originalProfileRef": successor.execution_profile_ref,
             "request": successor.model_dump(mode="json", by_alias=True),
         }
-        if tamper:
+        if tamper or legacy in {"missing", "conflicting"}:
             expected_refusal = (
                 "not admitted" if tamper == "unadmitted-plan" else "checkpoint|plan"
             )
+            if legacy:
+                expected_refusal = "recorded pool launch"
             with pytest.raises(ValueError, match=expected_refusal):
                 await prepare_selected_pool_plan(
                     session, runtime_id=runtime, payload=payload, client=transport
@@ -376,6 +570,7 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
             ).one()
             assert lease.execution_plan_ref is None and lease.lease_state == "held"
             assert await journey.gateway.read_bytes(original_ref) == original_bytes
+            assert await journey.gateway.read_bytes(archive_ref) == archive_bytes
             assert journey.docker.create_count == 1
             return
         compiled = await prepare_selected_pool_plan(
@@ -391,6 +586,20 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
         ).one()
         lease_id = lease.id
     shared = AgentExecutionRequest.model_validate(compiled["request"])
+    if tier_scenario:
+        expected_parameters = first_parameters if same_step else later_parameters
+        for key in ("commitMessage", "publishBaseBranch"):
+            assert (key in shared.parameters) == (key in expected_parameters)
+            assert shared.parameters.get(key) == expected_parameters.get(key)
+        assert "envOverrides" not in shared.parameters
+        if same_step:
+            assert (
+                shared.parameters["metadata"]["moonmind"]["modelEffortResolution"]
+                == first_resolution
+            )
+            assert shared.parameters.get("modelTierResolution") == first_parameters.get(
+                "modelTierResolution"
+            )
     plan = await DbExecutionPlanStore(journey.session_factory).load(
         shared.omnigent_execution_plan.plan_ref
     )
@@ -459,3 +668,30 @@ async def test_selected_pool_replacement_uses_its_admitted_configuration(
     assert observed_configuration() == expected
     assert observed_saved_bytes == ([native.GENERATED] if same_step else [None])
     assert journey.docker.create_count == 2
+    if tier_scenario:
+        if not legacy:
+            assert first_plan.payload.modelConfig.tierResolution == first_resolution
+        if same_step:
+            assert plan.payload.modelConfig.tierResolution == first_resolution
+        else:
+            assert (
+                plan.payload.modelConfig.tierResolution
+                == shared.parameters["metadata"]["moonmind"]["modelEffortResolution"]
+            )
+            assert plan.payload.modelConfig.tierResolution != first_resolution
+
+
+@pytest.mark.parametrize("native_journey", [_CLAUDE], indirect=True)
+async def test_fixed_serialized_claude_oauth_files_use_the_shared_lifecycle(
+    native_journey,
+    monkeypatch,
+):
+    journey = native_journey
+    await pool.execute_selected_pool_source(journey, monkeypatch, fixed_serialized=True)
+    assert json.loads(journey.docker.claude_preferences["settings.json"]) == {
+        "language": "English"
+    }
+    assert journey.docker.claude_preferences["CLAUDE.md"] == (
+        "Admitted instructions for /workspaces/run.\n"
+    )
+    assert journey.docker.volumes == {"journey_oauth": {}}

@@ -897,6 +897,8 @@ async def _observe_manual_schedule_requests():
     )
 
     while True:
+        if not getattr(app.state, "omnigent_host_janitor_schedule_ready", False):
+            await ensure_omnigent_oauth_host_janitor_schedule_started()
         if not getattr(app.state, "github_claim_recovery_schedule_ready", False):
             await _ensure_github_claim_recovery_schedule()
         try:
@@ -2752,17 +2754,23 @@ async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
 
 
 async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
-    """Best-effort startup install for profile-bound OAuth host cleanup."""
+    """Register host cleanup; the API observer retries deferred registration."""
 
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     try:
-        await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
-            enabled=True
-        )
+        async with asyncio.timeout(25):
+            await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
+                enabled=True
+            )
+        app.state.omnigent_host_janitor_schedule_ready = True
     except Exception:
         # This boundary can surface credential-derived provider errors. Keep
-        # startup best-effort without sending the exception through a log sink.
+        # registration observable without logging the exception or credentials.
+        app.state.omnigent_host_janitor_schedule_ready = False
+        logger.warning(
+            "Omnigent host janitor schedule registration deferred; API observer will retry"
+        )
         return
     logger.info("Ensured Omnigent OAuth host janitor schedule")
 

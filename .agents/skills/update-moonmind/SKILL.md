@@ -27,6 +27,11 @@ Skill directory: `bash "$UPDATE_MOONMIND_SKILL_DIR/scripts/run-update-moonmind.s
 
 ## Release authority and completion
 
+The same entrypoint deploys a new installation, starts a stopped installation,
+and updates a running one. Docker must be available, but the MoonMind API and
+workers need not be running. Existing configuration, volumes, and deployment
+records are retained; missing services do not imply an empty installation.
+
 The entrypoint updates to `latest`: it pulls `<image-repository>:latest` once and installs whatever that is. It never consults Git, fetches a branch, selects a `sha-<commit>` tag, waits for a particular build to publish, walks ancestors, or compares the image's source revision with anything. It never checks out or resets local files. The image's revision label is only reported. The digest that pull resolved is recorded so every service in this one update runs the same image; it is not a pin on future updates, and the next run pulls `latest` again.
 
 The selected image supplies the canonical application code, migrations, and portable Skills. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The standalone controller (`deploy/controller`, running in its own `moonmind-controller` Compose project) is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool: it stages the pulled image, recreates changed services with `pull --policy always` then detached `up -d --pull never --no-build --remove-orphans`, and owns bounded readiness observation, the local operation record and recovery independently of MoonMind health. The entrypoint installs and starts it by default: when no controller secret exists, or bootstrap left a secret but the controller never started (no reachable endpoint, operation record, or Compose container), it runs the selected release image's own `deploy/controller/bootstrap.py install` and `start`, and that same pulled image runs the controller. No flag or manual endpoint alignment is needed. The host CLI also updates and restores the controller, which never replaces itself. The entrypoint reads an installed controller's loopback port from its deployment-owned identity. Settings Operations and a workflow's `deployment.update_compose_stack` tool submit to and observe the same controller, so every entrypoint shares one operation per target. There is no other updater to fall back to: a controller with recorded work keeps recovery authority, an unreachable explicitly selected controller is reported rather than bypassed, and explicit `--controller-url`, `--controller-secret-file`, or corresponding environment settings always select the controller without reinstalling it. The controller defers its apply while a legacy application-owned writer is still active.
@@ -37,8 +42,11 @@ Before a default host submission, the entrypoint refreshes an idle controller
 through the release's existing bootstrap, including when journal support is
 already advertised. A temporary trusted image container runs that host-owned
 lifecycle with the existing controller state, socket, and private network so
-root-owned records and locks remain accessible. Compose preserves an unchanged
-controller. Active controller work retains its owner and is observed instead;
+root-owned records and locks remain accessible. Before launching this helper,
+the release bootstrap creates the private API-link network if it is missing,
+using the recorded network and project identity. This avoids requiring the
+stopped stack to create the network needed for its own repair. Compose preserves
+an unchanged controller. Active controller work retains its owner and is observed instead;
 explicit controller selections retain their release choice. A rollback target
 without the bootstrap can use the installed application's repair source.
 

@@ -173,14 +173,6 @@ def github_app_provider_edge(
 def github_repository_assignment(
     connection_id: str,
     repository: str,
-    *,
-    operations: Sequence[str] = (
-        "read",
-        "write",
-        "branch_write",
-        "review_request",
-        "merge_request",
-    ),
 ) -> RepositoryAssignment:
     """A verified grant of ``connection_id`` to the GitHub ``owner/name``."""
 
@@ -192,7 +184,6 @@ def github_repository_assignment(
                 "providerRepoId": f"github-id:{repository.lower()}",
                 "displayName": repository,
             },
-            "operations": list(operations),
         }
     )
 

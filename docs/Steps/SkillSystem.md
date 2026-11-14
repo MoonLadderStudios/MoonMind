@@ -684,8 +684,9 @@ never receive inferred broader permissions. Retained work remains available.
 Generic Omnigent plans compose the selected resolved Skill metadata and authored
 action declarations through this same canonical reader before freezing
 collaboration authority. At credential use, the current agent's required actions
-have to remain within that frozen snapshot, and the current connection and
-assignment have to still admit its full operation set. Source reads, trusted native review,
+have to remain within that frozen snapshot. The current connection must allow
+the full operation set, and its repository assignment must still be valid.
+Source reads, trusted native review,
 and publisher destination operations retain their distinct roles. Conflicting
 workspace and runtime repository projections fail before credentials or host
 mutation; equivalent GitHub slug/URL spellings retain one canonical target for

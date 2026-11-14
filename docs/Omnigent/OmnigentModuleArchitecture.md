@@ -179,13 +179,16 @@ interpretation. Restored directories and contents transfer to the
 selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
-Fresh repository preparation selects the authored local target branch through
-the same volume owner and records completion in repository-local metadata. Its
-unprivileged helper mounts only the admitted repository subtree, retaining the
-private parent permissions and isolation of sibling attempts.
-Redelivery preserves later candidate branches and edits; an unproven existing
-candidate is retained with an uncertainty error instead of being reset.
-Checkpoint restores retain their saved branch and history.
+Unpinned canonical GitHub repository sources use the selected account's shared plan when
+the controller supports repository-to-save handoffs. The workspace-source owner
+preserves repository, connection, access mode and branch intent when a controller
+save replaces the initial checkout; authored source conflicts remain errors.
+Older parents retain native dispatch. Fresh preparation selects the authored
+target branch through the existing volume owner; redelivery preserves later
+branches and edits. New sandbox saves restore their captured branch and history,
+including detached HEAD; retained manifests keep their prior restore behavior.
+Explicit checkpoint-branch creation and interrupted redelivery retain the admitted target. Each
+helper mounts only its admitted subtree, preserving sibling isolation.
 
 The stable runtime binding store and legacy harness binding store currently
 share a table and binding-ID prefix, but not a serialized authority schema.
@@ -319,9 +322,11 @@ admit current settings. A replay patch preserves older request payloads.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
-Supported tier publication and repository-capability defaults use the
-same frozen grant handoff, with the native resolver's explicit-parameter precedence.
-Retries preserve both supplied and absent defaults after Profile edits. Repository
+Supported tier publication and repository-capability defaults retain native
+explicit-parameter precedence in the plan's recorded tier resolution. Same-step,
+same-account recovery preserves supplied and absent defaults without consulting
+current tiers. Older plans can recover settings from their retained source grant;
+missing or conflicting evidence stops recovery instead of guessing. Repository
 work-branch parameters retain authoring metadata in that handoff; physical
 checkout branches come from the workspace specification on both paths.
 Invalid repository metadata and untranslated native context/workspaces,

@@ -14,7 +14,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
 from moonmind.omnigent.harness_platform.failures import (
@@ -43,6 +43,30 @@ class CredentialAttachment(BaseModel):
     sourceRef: str = Field(alias="sourceRef")
     targetPath: str = Field(alias="targetPath")
     accessMode: str = Field(alias="accessMode")
+    subPath: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    contentDigest: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def _validate_file_projection(self):
+        if self.subPath is not None or self.contentDigest is not None:
+            from pathlib import PurePosixPath
+
+            if (
+                self.kind != "volume"
+                or self.accessMode != "read-only"
+                or not self.subPath
+                or self.subPath.startswith("/")
+                or ".." in PurePosixPath(self.subPath).parts
+                or "," in self.subPath
+                or any(ord(c) < 32 or ord(c) == 127 for c in self.subPath)
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", self.contentDigest or "")
+            ):
+                raise ValueError(
+                    "invalid read-only credential preference file projection"
+                )
+        return self
 
 
 class CredentialRuntimeHandle(BaseModel):
@@ -333,11 +357,54 @@ _OAUTH_HOME_MATERIALIZER_TARGETS = OAUTH_HOME_MATERIALIZER_TARGETS
 _CREDENTIAL_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
+def _claude_oauth_projection(acquired, launch_environment):
+    if launch_environment is None or launch_environment.claudeConfiguration is None:
+        return [], {}
+    from moonmind.provider_profiles.claude_configuration import (
+        OAUTH_PROJECTION_PATH,
+        render_oauth_files,
+    )
+    from moonmind.omnigent.host_services.runtime_scripts import _RUNTIME_CONTEXT_DIR
+
+    # All shared workspace projections use this host-side location. This is
+    # rendering context, never a daemon path or the host's source workspace.
+    files = render_oauth_files(
+        launch_environment.claudeConfiguration,
+        runtime_support_dir=_RUNTIME_CONTEXT_DIR,
+        workspace_path="/workspaces/run",
+    )
+    _runtime, digest = credential_runtime_identity(acquired, "claude-oauth-home@1")
+    volume = f"mm-omnigent-claude-preferences-{digest[:32]}"
+    attachments = [
+        {
+            "kind": "volume",
+            "sourceRef": volume,
+            "targetPath": OAUTH_PROJECTION_PATH,
+            "accessMode": "read-only",
+        }
+    ]
+    attachments.extend(
+        {
+            "kind": "volume",
+            "sourceRef": volume,
+            "subPath": "files/" + name,
+            "targetPath": OAUTH_HOME_MATERIALIZER_TARGETS["claude-oauth-home@1"]
+            + "/"
+            + name,
+            "accessMode": "read-only",
+            "contentDigest": "sha256:" + hashlib.sha256(content).hexdigest(),
+        }
+        for name, content in files.items()
+    )
+    return attachments, files
+
+
 def anticipated_credential_handle(
     acquired: AcquiredProviderLease,
     materializer_ref: str,
     *,
     profile_credential_home: ProfileCredentialHome | None = None,
+    provider_launch_environment: ProviderLaunchEnvironment | None = None,
 ) -> CredentialRuntimeHandle:
     runtime_ref, digest = credential_runtime_identity(acquired, materializer_ref)
     attachments: list[dict[str, Any]] = []
@@ -372,6 +439,11 @@ def anticipated_credential_handle(
                 "accessMode": "read-write",
             }
         )
+        if materializer_ref == "claude-oauth-home@1":
+            projection, _files = _claude_oauth_projection(
+                acquired, provider_launch_environment
+            )
+            attachments.extend(projection)
     elif materializer_ref == "opencode-auth-json@1":
         attachments.append(
             {
@@ -586,6 +658,8 @@ class DockerOpencodeAuthJsonMaterializer(_DockerMaterializerBackendMixin):
         self,
         handle: CredentialRuntimeHandle,
         expected_generation: int,
+        *,
+        retain_static_projection: bool = False,
     ) -> CredentialCleanupResult:
         if handle.credentialGeneration != expected_generation:
             raise HarnessPlatformError(
@@ -639,6 +713,32 @@ class DockerOpencodeAuthJsonMaterializer(_DockerMaterializerBackendMixin):
                 "credential volume ownership or generation fence mismatch",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
             )
+        if retain_static_projection:
+            code, stdout, _stderr = await self._backend.run(
+                [
+                    "docker",
+                    "ps",
+                    "--all",
+                    "--filter",
+                    f"volume={volume}",
+                    "--format",
+                    '{{.Label "moonmind.static_host"}}',
+                ]
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "preference projection consumer inspection is deferred",
+                    code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+                )
+            consumers = stdout.decode("utf-8").splitlines()
+            if consumers and all(value == "true" for value in consumers):
+                # A drained static host keeps its mounts. The static launch
+                # owner reclaims this nonsecret projection after replacement.
+                return CredentialCleanupResult(
+                    cleanupRef=handle.cleanupRef,
+                    removed=False,
+                    evidence={"staticProjectionRetained": True, "volumeRef": volume},
+                )
         code, _stdout, _stderr = await self._backend.run(
             ["docker", "volume", "rm", volume]
         )
@@ -707,6 +807,10 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     if endpoint is not None and endpoint.codexConfiguration is not None
                     else {}
                 ),
+                **(
+                    {"_moonmind_claude_configuration": endpoint.claudeConfiguration}
+                    if endpoint is not None and endpoint.claudeConfiguration is not None else {}
+                ),
                 "providers": {
                     "moonmind": {
                         "kind": "key",
@@ -742,10 +846,13 @@ root = pathlib.Path('/credential')
 root.mkdir(mode=0o700, exist_ok=True)
 os.chown(root, 1000, 1000); root.chmod(0o700)
 payload = json.load(sys.stdin)
+claude_configuration = payload.pop('_moonmind_claude_configuration', None)
 configuration = payload.pop('_moonmind_codex_configuration', None)
 files = {'config.yaml': json.dumps(payload)}
 if configuration is not None:
     files['codex-profile.json'] = json.dumps(configuration)
+if claude_configuration is not None:
+    files['claude-profile.json'] = json.dumps(claude_configuration)
 files['.moonmind-generation'] = sys.argv[-1] + '\n'
 for name, content in files.items():
     descriptor, staged = tempfile.mkstemp(prefix='.' + name + '.', dir=root)
@@ -771,17 +878,20 @@ finally:
                     'assert d["providers"]["moonmind"]["kind"]=="key"\'',
                 )
             )
-            if endpoint is not None and endpoint.codexConfiguration is not None:
-                expected_config = json.dumps(
-                    endpoint.codexConfiguration, sort_keys=True
-                )
+            for harness, configuration in (
+                ("codex", endpoint.codexConfiguration if endpoint else None),
+                ("claude", endpoint.claudeConfiguration if endpoint else None),
+            ):
+                if configuration is None:
+                    continue
+                config_path = f"/credential/{harness}-profile.json"
                 verify_config_script += (
-                    '; test "$(stat -c %u:%g /credential/codex-profile.json)" = 1000:1000; '
-                    'test "$(stat -c %a /credential/codex-profile.json)" = 600; '
+                    f'; test "$(stat -c %u:%g {config_path})" = 1000:1000; '
+                    f'test "$(stat -c %a {config_path})" = 600; '
                     "python3 -c "
                     + shlex.quote(
-                        "import json; assert json.load(open('/credential/codex-profile.json')) == "
-                        + repr(json.loads(expected_config))
+                        f"import json; assert json.load(open({config_path!r})) == "
+                        + repr(configuration)
                     )
                 )
             writer_ref = await self._resolve_writer_ref(
@@ -893,6 +1003,8 @@ finally:
                         and endpoint.codexConfiguration is not None
                         else {}
                     ),
+                    **({"MOONMIND_CLAUDE_PROFILE_CONFIG_FILE": self._TARGET + "/claude-profile.json"}
+                       if endpoint is not None and endpoint.claudeConfiguration is not None else {}),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
                 "runtimeEnvironmentTemplates": endpoint.environmentTemplates if endpoint is not None else None,
@@ -916,6 +1028,139 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
 
     target_path: str = ""
 
+    async def _materialize_preferences(self, context, attachments, files):
+        """Stage only nonsecret files in the already anticipated attempt volume."""
+        if not attachments:
+            return
+        volume = attachments[0]["sourceRef"]
+        runtime_ref, _digest = credential_runtime_identity(context.acquired, self.ref)
+        generation = context.acquired.credential_generation
+        await self._run(
+            [
+                "docker",
+                "volume",
+                "create",
+                "--label",
+                "moonmind.owner=generic-omnigent-claude-preferences",
+                "--label",
+                f"moonmind.credential_runtime_ref={runtime_ref}",
+                "--label",
+                f"moonmind.credential_generation={generation}",
+                volume,
+            ],
+            failure="Claude preference volume creation failed",
+        )
+        # Re-delivery compares the exact bytes instead of appending again.
+        writer = r"""import hashlib, json, os, pathlib, stat, sys, tempfile, uuid
+root = pathlib.Path('/preferences')
+if root.is_symlink():
+    raise ValueError('Claude preference root contains a symlink')
+payload = json.load(sys.stdin)
+expected = payload['files']
+# runc creates absent bind targets in the enrolled volume. Publish harmless
+# mountpoints atomically first, so untuned siblings never see invalid empty
+# settings JSON or this attempt's authored content. Never follow home symlinks.
+for name in expected:
+    parent = os.open('/credential', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parts = pathlib.PurePosixPath(name).parts
+        for part in parts[:-1]:
+            created = False
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=parent)
+                created = True
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+            if created:
+                os.fchown(parent, 1000, 1000)
+        leaf = parts[-1]
+        try:
+            observed = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            staged = '.moonmind-mountpoint-' + uuid.uuid4().hex
+            fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'{}\n' if name == 'settings.json' else b'')
+                    stream.flush()
+                    os.fchown(stream.fileno(), 1000, 1000)
+                    os.fsync(stream.fileno())
+                try:
+                    os.link(staged, leaf, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(staged, dir_fd=parent)
+            observed = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISREG(observed.st_mode):
+            raise ValueError('Claude preference mount target must be a regular file')
+    finally:
+        os.close(parent)
+generation = str(payload['generation']) + '\n'
+marker = root / '.moonmind-generation'
+if marker.is_symlink() or (root / 'profile.json').is_symlink():
+    raise ValueError('Claude preference metadata contains a symlink')
+if marker.exists() and marker.read_text() != generation:
+    raise ValueError('Claude preference generation mismatch')
+for name, content in expected.items():
+    path = root / 'files' / name
+    if any(parent.is_symlink() for parent in path.parents if parent != root.parent):
+        raise ValueError('Claude preference source contains a symlink')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.is_symlink() or path.read_text() != content:
+            raise ValueError('Claude preference files are already owned')
+    else:
+        fd, staged = tempfile.mkstemp(dir=path.parent)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(content); stream.flush(); os.fsync(stream.fileno())
+        os.replace(staged, path)
+marker.write_text(generation)
+(root / 'profile.json').write_text(json.dumps(expected, sort_keys=True))
+for path in [root, *root.rglob('*')]:
+    if path.is_symlink():
+        raise ValueError('Claude preference volume contains a symlink')
+    os.chown(path, 1000, 1000)
+    path.chmod(0o700 if path.is_dir() else 0o600)
+"""
+        await self._run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--read-only",
+                "--mount",
+                f"type=volume,src={volume},dst=/preferences",
+                "--mount",
+                f"type=volume,src={context.profile_credential_home.volume_ref},dst=/credential",
+                "--entrypoint",
+                "python3",
+                await self._resolve_writer_ref(
+                    context.writer_image_ref,
+                    expected_omnigent_version=context.expected_omnigent_version,
+                ),
+                "-c",
+                writer,
+            ],
+            input_bytes=json.dumps(
+                {
+                    "generation": generation,
+                    "files": {
+                        name: content.decode("utf-8") for name, content in files.items()
+                    },
+                }
+            ).encode(),
+            failure="Claude preference volume staging failed",
+        )
+
     async def materialize(
         self, context: CredentialMaterializationContext
     ) -> CredentialRuntimeHandle:
@@ -938,6 +1183,16 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             context.secrets.clear()
             raise HarnessPlatformError(
                 "Codex preferences require their enrolled Codex credential home",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        if (
+            launch_environment is not None
+            and launch_environment.claudeConfiguration is not None
+            and self.ref != "claude-oauth-home@1"
+        ):
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                "Claude preferences require their enrolled Claude credential home",
                 code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
         if home is None or home.volume_ref == "" or home.target_path == "":
@@ -976,7 +1231,8 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
         # generation so a stale lease can never fence a replacement home.
         # Normalize the enrollment-owned layout to the exact-host contract
         # (root 0700, top-level files 0600, owned 1000:1000) so helper-synced
-        # or imported volumes pass attestation without manual repair.
+        # or imported volumes pass attestation without manual repair. Hidden
+        # files are included: Claude's login lives in .credentials.json.
         stage_script = (
             "set -eu; "
             "chown 1000:1000 /credential; "
@@ -986,7 +1242,7 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             'if [ "$current" -gt "$1" ]; then '
             "echo 'credential home generation is newer than the acquired lease' >&2; "
             "exit 79; fi; fi; "
-            'for f in /credential/*; do [ -e "$f" ] || continue; '
+            "for f in /credential/* /credential/.[!.]* /credential/..?*; do "
             '[ -f "$f" ] || continue; '
             'chown 1000:1000 "$f"; chmod 0600 "$f"; done; '
             "printf '%s\\n' \"$1\" > /credential/.moonmind-generation.tmp; "
@@ -1026,6 +1282,8 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             "targetPath": expected_target,
             "accessMode": "read-write",
         }
+        projection, files = _claude_oauth_projection(acquired, launch_environment)
+        await self._materialize_preferences(context, projection, files)
         evidence = {
             "schemaVersion": "moonmind.credential-materialization-attestation.v1",
             "credentialRuntimeRef": runtime_ref,
@@ -1057,17 +1315,27 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "providerLeaseRef": acquired.provider_lease_ref,
                 "credentialGeneration": acquired.credential_generation,
                 "materializerRef": self.ref,
-                "attachments": [attachment],
+                "attachments": [attachment, *projection],
                 "runtimeEnvironment": (
                     {
                         **launch_environment.launchEnvironment,
-                        **({OAUTH_CONFIGURATION_ENV: json.dumps(launch_environment.codexConfiguration)}
-                           if launch_environment.codexConfiguration is not None else {}),
+                        **(
+                            {
+                                OAUTH_CONFIGURATION_ENV: json.dumps(
+                                    launch_environment.codexConfiguration
+                                )
+                            }
+                            if launch_environment.codexConfiguration is not None
+                            else {}
+                        ),
                     }
-                    if launch_environment is not None else {}
+                    if launch_environment is not None
+                    else {}
                 ),
                 "runtimeEnvironmentTemplates": (
-                    launch_environment.environmentTemplates if launch_environment is not None else None
+                    launch_environment.environmentTemplates
+                    if launch_environment is not None
+                    else None
                 ),
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
@@ -1097,6 +1365,27 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "credential cleanup generation is fenced",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
             )
+        from moonmind.provider_profiles.claude_configuration import (
+            OAUTH_PROJECTION_PATH,
+        )
+
+        projection = next(
+            (
+                item
+                for item in handle.attachments
+                if item.targetPath == OAUTH_PROJECTION_PATH
+            ),
+            None,
+        )
+        projection_evidence = {}
+        if projection is not None:
+            result = await DockerOpencodeAuthJsonMaterializer.cleanup(
+                self,
+                handle.model_copy(update={"attachments": (projection,)}),
+                expected_generation,
+                retain_static_projection=True,
+            )
+            projection_evidence = {"preferences": result.model_dump(mode="json")}
         volume = handle.attachments[0].sourceRef
         present = await self._volume_presence(
             volume, failure="credential home cleanup attestation is deferred"
@@ -1107,7 +1396,11 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
             return CredentialCleanupResult(
                 cleanupRef=handle.cleanupRef,
                 removed=False,
-                evidence={"profileOwned": True, "alreadyAbsent": True},
+                evidence={
+                    "profileOwned": True,
+                    "alreadyAbsent": True,
+                    **projection_evidence,
+                },
             )
         # Profile-owned state is preserved: never delete the enrollment volume,
         # never wipe credential contents. The mount dies with the run's host.
@@ -1118,6 +1411,7 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "profileOwned": True,
                 "preserved": True,
                 "state": "detached",
+                **projection_evidence,
             },
         )
 
@@ -1388,6 +1682,14 @@ class OmnigentCredentialProvisioningService:
                         acquired,
                         binding.materializerRef,
                         profile_credential_home=profile_credential_home,
+                        provider_launch_environment=(
+                            configurations.get(slot)
+                            if configurations is not None
+                            and isinstance(
+                                configurations.get(slot), ProviderLaunchEnvironment
+                            )
+                            else None
+                        ),
                     )
                     await self._persist_handle(
                         anticipated, cleanup_state="materializing"

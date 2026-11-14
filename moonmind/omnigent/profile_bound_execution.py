@@ -19,6 +19,7 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.git_identity import publication_git_identity_projection
 from moonmind.omnigent.codex_execution_decisions import (
     bind_candidate_workspace,
+    bind_checkpoint_branch_request,
     bind_cold_restore_workspace_spec,
     bind_exact_host,
     classify_launch_failure_evidence,
@@ -3256,50 +3257,12 @@ class OmnigentProfileBoundExecutionCoordinator:
     ) -> AgentRunResult:
         """Create a new capacity-gated host lease and session from checkpoint refs."""
 
-        validate_cold_restore_target(
-            checkpoint,
-            provider_profile_id=str(request.execution_profile_ref or ""),
-            credential_generation=current_credential_generation,
-        )
-        if request.idempotency_key == checkpoint.idempotency_key:
-            raise ValueError("checkpoint branch requires a new idempotency key")
-        parameters = dict(request.parameters or {})
-        restore_material = materialize_cold_restore_inputs(
-            checkpoint, checkpoint.validation
-        )
-        parameters["checkpointRestore"] = {
-            "mode": "branch",
-            "externalStateRef": checkpoint.external_state_ref,
-            "sourceBridgeSessionId": checkpoint.bridge_session_id,
-            "restoreMaterial": restore_material.model_dump(
-                by_alias=True, mode="json", exclude_none=True
-            ),
-            "candidateWorkspace": candidate_workspace.model_dump(
-                by_alias=True, mode="json"
-            ),
-        }
-        workspace_spec = bind_cold_restore_workspace_spec(
-            request.workspace_spec,
-            restore_material=restore_material,
-            candidate_workspace=candidate_workspace,
-        )
         return await self.execute(
-            request.model_copy(
-                update={
-                    "parameters": parameters,
-                    "workspace_spec": workspace_spec,
-                    "input_refs": list(
-                        dict.fromkeys(
-                            [
-                                *request.input_refs,
-                                *restore_material.immutable_input_refs,
-                                checkpoint.external_state_ref,
-                                candidate_workspace.head_ref,
-                                candidate_workspace.checkpoint_ref,
-                            ]
-                        )
-                    ),
-                }
+            bind_checkpoint_branch_request(
+                request,
+                checkpoint=checkpoint,
+                current_credential_generation=current_credential_generation,
+                candidate_workspace=candidate_workspace,
             )
         )
 

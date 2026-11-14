@@ -844,7 +844,6 @@ async def test_launch_connection_loader_distinguishes_deleted_from_absent(
                 repo_key="id:1",
                 provider_repo_id="1",
                 display_name="MoonLadderStudios/MoonMind",
-                operations=["read"],
                 revision=1,
                 verified=True,
             )
@@ -1038,7 +1037,6 @@ async def test_recorded_connection_is_selected_only_for_its_assigned_repository(
             github_repository_assignment(
                 "repository-connection:team-b",
                 "MoonLadderStudios/MoonMind",
-                operations=("read",),
             )
         ],
     )
@@ -1058,8 +1056,8 @@ async def test_recorded_connection_is_selected_only_for_its_assigned_repository(
     finally:
         await engine.dispose()
 
-    # The assignment's operations bound the launch, not the connection's.
-    assert assigned.allowed_operations == ("read",)
+    # The assignment admits the repository with all connection permissions.
+    assert assigned.allowed_operations == github_pat_connection("unused", "UNUSED").allowed_operations
     assert "is not assigned to MoonLadderStudios/unassigned" in str(excinfo.value)
 
 
@@ -1233,7 +1231,7 @@ async def test_default_connection_denies_unassigned_repository_before_reading_se
         await engine.dispose()
 
 
-async def test_default_connection_assignment_bounds_repository_operations(
+async def test_default_connection_assignment_inherits_repository_operations(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     from moonmind.workflows.executions.repository_contract import (
@@ -1255,7 +1253,6 @@ async def test_default_connection_assignment_bounds_repository_operations(
             github_repository_assignment(
                 DEFAULT_GIT_CONNECTION_REF,
                 "MoonLadderStudios/MoonMind",
-                operations=("read",),
             )
         ],
     )
@@ -1270,7 +1267,7 @@ async def test_default_connection_assignment_bounds_repository_operations(
     finally:
         await engine.dispose()
 
-    assert selected.allowed_operations == ("read",)
+    assert selected.allowed_operations == github_pat_connection("unused", "UNUSED").allowed_operations
     assert resolved.token == "selected-default-token"
 
 
@@ -1334,7 +1331,7 @@ async def test_default_connection_without_repository_preserves_readiness_and_reg
         for operation in operations
     ],
 )
-async def test_profile_bound_publication_denies_missing_assignment_operation_before_secret(
+async def test_profile_bound_publication_denies_missing_connection_operation_before_secret(
     monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, missing_operation
 ) -> None:
     from unittest.mock import AsyncMock
@@ -1361,6 +1358,9 @@ async def test_profile_bound_publication_denies_missing_assignment_operation_bef
         "moonmind.auth.github_credentials._resolve_secret_ref", read_secret
     )
     connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT")
+    connection = connection.model_copy(update={"allowed_operations": tuple(
+        op for op in connection.allowed_operations if op != missing_operation
+    )})
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
@@ -1369,11 +1369,6 @@ async def test_profile_bound_publication_denies_missing_assignment_operation_bef
             github_repository_assignment(
                 connection.id,
                 "owner/repo",
-                operations=tuple(
-                    op
-                    for op in connection.allowed_operations
-                    if op != missing_operation
-                ),
             )
         ],
     )
@@ -1403,7 +1398,7 @@ async def test_profile_bound_publication_denies_missing_assignment_operation_bef
         ("pr", ("read", "write", "branch_write", "review_request")),
     ],
 )
-async def test_profile_bound_publication_accepts_exact_assignment_operations(
+async def test_profile_bound_publication_accepts_exact_connection_operations(
     monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, operations
 ) -> None:
     from moonmind.omnigent.profile_bound_execution import (
@@ -1422,14 +1417,14 @@ async def test_profile_bound_publication_accepts_exact_assignment_operations(
     _clear_deployment_github_env(monkeypatch)
     monkeypatch.setenv("SELECTED_PAT", "selected-only")
     _read_recorded_store(monkeypatch)
-    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT")
+    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT", operations=operations)
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
         connection,
         assignments=[
             github_repository_assignment(
-                connection.id, "owner/repo", operations=operations
+                connection.id, "owner/repo",
             )
         ],
     )

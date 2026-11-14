@@ -139,6 +139,10 @@ class OmnigentRuntimeScriptService:
         generation_checks: list[str] = []
         for handle in credential_handles:
             for attachment in handle.get("attachments", []):
+                if attachment.get("contentDigest") is not None:
+                    # Read-only preference files are fenced by their sibling
+                    # projection-root marker, not a marker beneath the file.
+                    continue
                 target = str(attachment.get("targetPath") or "")
                 generation = int(handle["credentialGeneration"])
                 if target:
@@ -201,8 +205,10 @@ class OmnigentRuntimeScriptService:
         )
         allowed_runtime_environment = {
             "OMNIGENT_CONFIG_HOME",
+            "MOONMIND_CLAUDE_PROFILE_CONFIG_FILE",
             "MOONMIND_CODEX_PROFILE_CONFIG_FILE",
         }
+        claude_configuration = False
         codex_configuration = False
         oauth_configuration = None
         private_environment_keys: set[str] = set()
@@ -301,6 +307,12 @@ class OmnigentRuntimeScriptService:
                     raise ValueError(
                         f"conflicting credential runtime environment {key}"
                     )
+                if key == "MOONMIND_CLAUDE_PROFILE_CONFIG_FILE":
+                    if (handle.get("materializerRef") != "omnigent-provider-config@1"
+                        or not enable_claude_runtime
+                        or value != "/home/app/.moonmind-provider-config/claude-profile.json"):
+                        raise ValueError("Claude configuration requires its selected materializer projection")
+                    claude_configuration = True
                 if key == "MOONMIND_CODEX_PROFILE_CONFIG_FILE":
                     if (
                         handle.get("materializerRef") != "omnigent-provider-config@1"
@@ -320,6 +332,9 @@ class OmnigentRuntimeScriptService:
             environment["MOONMIND_CODEX_PROFILE_CONFIG_FILE"] = (
                 f"{_RUNTIME_CONTEXT_DIR}/provider-{OAUTH_CONFIGURATION_ENV}"
             )
+        if claude_configuration:
+            provider_environment["CLAUDE_CONFIG_DIR"] = f"{_RUNTIME_CONTEXT_DIR}/claude-home"
+            environment.update(provider_environment)
         profile_environment = dict(provider_environment)
         codex_wrapper = codex_configuration or require_codex_context or (
             enable_codex_runtime and bool(profile_environment)
@@ -427,7 +442,7 @@ class OmnigentRuntimeScriptService:
             + " "
             f"'  export GIT_CONFIG_VALUE_0=\"!{_RUNTIME_BIN_DIR}/gh auth git-credential\"' "
             f"'fi' > {context_profile}; "
-            f"chmod 0600 {runtime_context_dir}/*; "
+            f"find {runtime_context_dir} -maxdepth 1 -type f -exec chmod 0600 {{}} +; "
             f"printf '%s\\n' '. {context_profile}' > /home/app/.bash_profile; "
             "cp /home/app/.bash_profile /home/app/.profile; "
             "chmod 0600 /home/app/.bash_profile /home/app/.profile; "
@@ -463,6 +478,23 @@ class OmnigentRuntimeScriptService:
             )
         claude_wrapper = f"{_RUNTIME_BIN_DIR}/claude"
         claude_setup = f"rm -f {claude_wrapper}; "
+        if claude_configuration:
+            source_path = Path(__file__).resolve().parents[2] / "provider_profiles" / "claude_configuration.py"
+            helper = f"{runtime_context_dir}/claude_configuration.py"
+            renderer = f"{runtime_context_dir}/template_renderer.py"
+            initialize = (
+                "import json, sys; sys.path.insert(0, " + repr(runtime_context_dir) + "); "
+                "from claude_configuration import materialize_configuration; "
+                "materialize_configuration(json.load(open(sys.argv[1])), "
+                "runtime_support_dir=" + repr(runtime_context_dir) + ", workspace_path=sys.argv[2])"
+            )
+            if not workspace_path:
+                raise ValueError("Claude configuration requires the admitted workspace path")
+            claude_setup += (
+                f"printf '%s\\n' {shlex.quote(source_path.read_text())} > {helper}; chmod 0600 {helper}; "
+                f"printf '%s\\n' {shlex.quote(source_path.with_name('template_renderer.py').read_text())} > {renderer}; chmod 0600 {renderer}; "
+                f'python3 -c {shlex.quote(initialize)} "$MOONMIND_CLAUDE_PROFILE_CONFIG_FILE" {shlex.quote(workspace_path)}; '
+            )
         if enable_claude_runtime and profile_environment:
             claude_setup += (
                 'claude_binary=$(command -v claude); test -n "$claude_binary"; '

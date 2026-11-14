@@ -402,7 +402,7 @@ def test_stack_dump_precedes_timeout_under_xdist(tmp_path: Path) -> None:
 def _reliability_deadline_options() -> tuple[str, str]:
     run = _workflow_steps()["Run hermetic reliability shard"]["run"]
     invocation = re.search(
-        r'timeout ([^\n]*?)"\$\{step_budget\}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 --',
+        r'tools/gnu_timeout\.sh ([^\n]*?)"\$\{step_budget\}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 --',
         run,
     )
     assert (
@@ -429,7 +429,7 @@ def _run_under_deadline(
     quoted = " ".join(shlex.quote(part) for part in command)
     script = (
         "set -euo pipefail\nset +e\n"
-        f"timeout --signal={signal_name} --kill-after={kill_after} {budget} {quoted} "
+        f"tools/gnu_timeout.sh --signal={signal_name} --kill-after={kill_after} {budget} {quoted} "
         f"2>&1 | tee {shlex.quote(str(log))}\n"
         "status=${PIPESTATUS[0]}\n"
         "exit $status\n"

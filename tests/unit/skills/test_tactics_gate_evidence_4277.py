@@ -68,7 +68,7 @@ def _system_tools_without_docker(tmp_path: Path) -> Path:
     for directory in (Path("/usr/bin"), Path("/bin")):
         for tool in directory.iterdir():
             target = tools / tool.name
-            if tool.name != "docker" and not target.exists():
+            if tool.name != "docker" and not os.path.lexists(target):
                 target.symlink_to(tool)
     return tools
 
@@ -233,3 +233,28 @@ def test_standalone_zero_test_run_is_not_test_success(tmp_path: Path) -> None:
     current = json.loads(gate.read_text(encoding="utf-8"))
     assert (current["status"], current["testStatus"]) == ("FAIL", "no_tests")
     assert completed.returncode != 0
+
+
+def test_system_tools_handles_duplicate_dangling_links(tmp_path: Path, monkeypatch) -> None:
+    """Merged-/usr hosts can expose the same broken package link twice."""
+    usr_bin = tmp_path / "usr-bin"
+    bin_dir = tmp_path / "bin-alias"
+    usr_bin.mkdir()
+    bin_dir.mkdir()
+    for directory in (usr_bin, bin_dir):
+        (directory / "dangling-tool").symlink_to(tmp_path / "missing-target")
+        (directory / "docker").write_text("excluded")
+        (directory / "usable-tool").write_text("included")
+    original_iterdir = Path.iterdir
+
+    def system_iterdir(path):
+        replacements = {Path("/usr/bin"): usr_bin, Path("/bin"): bin_dir}
+        return original_iterdir(replacements.get(path, path))
+
+    monkeypatch.setattr(Path, "iterdir", system_iterdir)
+    tools = _system_tools_without_docker(tmp_path)
+    assert (tools / "dangling-tool").is_symlink()
+    assert (tools / "dangling-tool").readlink() == usr_bin / "dangling-tool"
+    assert not (tools / "dangling-tool").exists()
+    assert (tools / "usable-tool").readlink() == usr_bin / "usable-tool"
+    assert not (tools / "docker").is_symlink()

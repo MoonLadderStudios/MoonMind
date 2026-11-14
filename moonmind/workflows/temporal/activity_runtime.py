@@ -3156,6 +3156,7 @@ class TemporalSandboxActivities:
             high_security_mode = resolve_high_security_mode()
             head = model.base_commit
             history = None
+            branch = None
             if (workspace / ".git").exists():
                 head = (
                     await _run_command(
@@ -3164,6 +3165,9 @@ class TemporalSandboxActivities:
                         )
                     )
                 ).stdout.strip()
+                branch = (await _run_command(_sandbox_workspace_git_command(
+                    workspace, "branch", "--show-current",
+                ))).stdout.strip()
             pre_status = None
             index_payload = b""
             index_paths = []
@@ -3257,12 +3261,16 @@ class TemporalSandboxActivities:
                 post_head = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "rev-parse", "HEAD",
                 ))).stdout.strip()
+                post_branch = (await _run_command(_sandbox_workspace_git_command(
+                    workspace, "branch", "--show-current",
+                ))).stdout.strip()
                 post_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
                 if (
                     head != post_head
+                    or branch != post_branch
                     or pre_status != post_status
                     or (index_payload, index_paths) != (post_index, post_index_paths)
                     or (members, repositories, exclusions)
@@ -3303,7 +3311,7 @@ class TemporalSandboxActivities:
                     index_payload, content_type="application/vnd.moonmind.git-index-patch",
                     metadata={"artifact_kind": "checkpoint_index"},
                 ) if index_payload else None
-                manifest_body["git"] = {"indexPatch": {
+                manifest_body["git"] = {"branch": branch, "indexPatch": {
                     "ref": index_ref, "digest": "sha256:" + hashlib.sha256(index_payload).hexdigest(),
                     "paths": index_paths,
                 }}

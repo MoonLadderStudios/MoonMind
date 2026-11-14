@@ -965,6 +965,12 @@ def _controller_ca_options(bootstrap):
     ]
 
 
+_CONTROLLER_ENSURE_NETWORK = (
+    "import runpy,sys; bootstrap=runpy.run_path(sys.argv[1]); "
+    "bootstrap['ensure_target_network'](sys.argv[2],sys.argv[3])"
+)
+
+
 def _controller_bootstrap_command(
     bootstrap,
     record,
@@ -988,6 +994,21 @@ def _controller_bootstrap_command(
             f"{record['project']}_deployment-controller-network"
         )
         if privileged:
+            # The helper joins this link before its `ensure` command runs.
+            # Reuse the image-owned bootstrap's network owner on the host so
+            # a clean install or `compose down` cannot make repair depend on
+            # a network that repair itself would otherwise create.
+            run(
+                [
+                    sys.executable,
+                    "-c",
+                    _CONTROLLER_ENSURE_NETWORK,
+                    str(bootstrap),
+                    network,
+                    str(identity.get("targetProject") or record["project"]),
+                ],
+                cwd=repo,
+            )
             controller_url = f"http://moonmind-controller:{identity.get('port', 8472)}"
         else:
             # The private link is Docker-internal, with no route to the

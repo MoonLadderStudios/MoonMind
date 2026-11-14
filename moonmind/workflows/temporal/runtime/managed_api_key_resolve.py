@@ -93,8 +93,8 @@ async def load_repository_connection_for_launch(
     from an absent one, and a deleted or disabled connection raises
     ``RepositoryRouteError``: only true absence may select the deployment
     declaration. A recorded connection admits only a named
-    ``repository`` it has a verified assignment for, and only that
-    assignment's operations. The connection service classifies the migrated
+    ``repository`` it has a verified assignment for, with the connection's
+    allowed operations. The connection service classifies the migrated
     default's historical unscoped exception; its identity alone grants none.
     A default read without a repository serves repository-independent
     readiness, registry, and deployment operations, not repository admission.
@@ -119,16 +119,8 @@ async def load_repository_connection_for_launch(
         if connection is not None:
             if connection_ref == DEFAULT_GIT_CONNECTION_REF and repository is None:
                 return connection
-            assignment = await service.launch_assignment(connection, repository)
-            return connection.model_copy(
-                update={
-                    "allowed_operations": tuple(
-                        operation
-                        for operation in connection.allowed_operations
-                        if operation in assignment.operations
-                    )
-                }
-            )
+            await service.launch_assignment(connection, repository)
+            return connection
         deleted = (
             await session.execute(
                 select(RepositoryConnectionRecord.connection_id).where(

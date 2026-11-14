@@ -1771,6 +1771,10 @@ class SettingsOverride(Base):
     value_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
+    # A reset removes the value, not the optimistic-concurrency generation.
+    is_reset: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     updated_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -5303,9 +5307,6 @@ class RepositoryConnectionAssignment(Base):
     provider_repo_id: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     canonical_remote: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     display_name: Mapped[str] = mapped_column(String(2000), nullable=False)
-    operations: Mapped[list[str]] = mapped_column(
-        mutable_json_list(), nullable=False, default=list
-    )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )

@@ -553,3 +553,101 @@ async def test_scan_returns_broken_references_as_pydantic_models(
     # affected instance override.
     assert set(dump) >= {"key", "code", "severity", "details", "message"}
     assert "scope" not in dump
+
+
+@pytest.mark.asyncio
+async def test_backup_retains_reset_generation_and_does_not_report_a_reference(
+    settings_session_maker,
+):
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(session=session, env={})
+        session.add(
+            SettingsOverride(
+                key="workflow.default_provider_profile_ref",
+                value_json="removed-profile",
+                value_version=4,
+            )
+        )
+        await session.commit()
+        reset = await service.reset_override("workflow.default_provider_profile_ref")
+        bundle = await export_settings_backup(
+            session=session, registry=_backup_registry()
+        )
+        restored = SettingsBackupBundle.model_validate_json(bundle.model_dump_json())
+        row = next(
+            row
+            for row in restored.overrides
+            if row.key == "workflow.default_provider_profile_ref"
+        )
+        assert row.is_reset is True
+        assert row.value_json is None
+        assert row.value_version == reset.value_version
+        assert (
+            await scan_broken_references(
+                session=session, registry=_backup_registry(), env={}
+            )
+            == []
+        )
+        # Old bundles remain active overrides, including intentional nulls.
+        legacy = row.model_dump(exclude={"is_reset"})
+        assert type(row).model_validate(legacy).is_reset is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("workflow.default_runtime", "claude_code"),
+        ("workflow.default_provider_profile_ref", None),
+    ],
+)
+async def test_setting_save_reset_export_restore_preserves_inheritance_and_stale_guard(
+    settings_session_maker, key, value
+):
+    from sqlalchemy import select
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(session=session, env={})
+        saved = await service.apply_overrides(
+            changes={key: value}, expected_versions={key: 1}
+        )
+        saved_version = saved.values[key].value_version
+        reset = await service.reset_override(key)
+        bundle = await export_settings_backup(
+            session=session, registry=_backup_registry()
+        )
+        restored = SettingsBackupBundle.model_validate_json(bundle.model_dump_json())
+        record = next(record for record in restored.overrides if record.key == key)
+        assert record.is_reset
+        assert record.value_version > saved_version
+        assert record.value_json is None
+        # Restore the serialized row, not a live ORM object or service cache.
+        original = (
+            await session.scalars(
+                select(SettingsOverride).where(SettingsOverride.key == key)
+            )
+        ).one()
+        await session.delete(original)
+        await session.flush()
+        session.add(SettingsOverride(**record.model_dump(exclude={"is_secret_ref"})))
+        await session.commit()
+
+    async with settings_session_maker() as session:
+        service = SettingsCatalogService(session=session, env={})
+        effective = await service.effective_value_async(key)
+        assert effective.value == reset.value
+        assert effective.source == reset.source
+        assert effective.inheritance_state == reset.inheritance_state
+        assert effective.value_version == reset.value_version
+        with pytest.raises(ValueError, match="version_conflict"):
+            await service.apply_overrides(
+                changes={key: value}, expected_versions={key: saved_version}
+            )
+        await session.rollback()
+        rewritten = await service.apply_overrides(
+            changes={key: value}, expected_versions={key: reset.value_version}
+        )
+        assert rewritten.values[key].value_version == reset.value_version + 1

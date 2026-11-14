@@ -347,6 +347,31 @@ def _declared_access_is_writable(access_mode: Any) -> bool:
     return str(access_mode or "").strip().replace("_", "-").lower() == "read-write"
 
 
+#: Exact-host proof for one mounted credential directory; prints its generation.
+#: Hidden files count as credentials because a fresh Claude login is only
+#: ``.claude.json`` and ``.credentials.json``. Each rejection names its reason,
+#: since a bare ``test`` failure leaves only an exit code.
+CREDENTIAL_DIRECTORY_VERIFY_SCRIPT = "".join(
+    (
+        'fail() { printf "%s\\n" "$*" >&2; exit 1; }; ',
+        'test "$(stat -c %u:%g "$1")" = 1000:1000 ',
+        '|| fail "credential directory is not owned by 1000:1000"; ',
+        'test "$(stat -c %a "$1")" = 700 || fail "credential directory mode is not 0700"; ',
+        'test -f "$1/.moonmind-generation" ',
+        '|| fail "credential generation marker is missing"; ',
+        'count=0; for file in "$1"/* "$1"/.[!.]* "$1"/..?*; do ',
+        'test -f "$file" || continue; name=${file##*/}; ',
+        'test "$(stat -c %u:%g "$file")" = 1000:1000 ',
+        '|| fail "credential file $name is not owned by 1000:1000"; ',
+        'test "$(stat -c %a "$file")" = 600 ',
+        '|| fail "credential file $name mode is not 0600"; ',
+        'test "$name" = .moonmind-generation || count=$((count + 1)); done; ',
+        'test "$count" -ge 1 || fail "credential directory has no credential file"; ',
+        'cat "$1/.moonmind-generation"',
+    )
+)
+
+
 async def credential_mount_access(
     backend: DockerCommandBackend,
     container_name: str,
@@ -1119,20 +1144,48 @@ class DockerOmnigentHostAttestor:
                     )
                 generation = int(handle["credentialGeneration"])
                 target = str(attachment["targetPath"])
-                verify_credential_script = "".join(
-                    (
-                        'test "$(stat -c %u:%g "$1")" = 1000:1000; ',
-                        'test "$(stat -c %a "$1")" = 700; ',
-                        'test "$(stat -c %u:%g "$1/.moonmind-generation")" = 1000:1000; ',
-                        'test "$(stat -c %a "$1/.moonmind-generation")" = 600; ',
-                        'count=0; for file in "$1"/*; do ',
-                        'test -f "$file" || continue; ',
-                        'test "$(stat -c %u:%g "$file")" = 1000:1000; ',
-                        'test "$(stat -c %a "$file")" = 600; ',
-                        'count=$((count + 1)); done; test "$count" -ge 1; ',
-                        'cat "$1/.moonmind-generation"',
+                if attachment.get("contentDigest") is not None:
+                    # A nested read-only file mount must expose the exact frozen
+                    # bytes. The root projection attachment separately proves
+                    # the same attempt's generation and ownership.
+                    verify_file = (
+                        'test ! -L "$1"; test -f "$1"; '
+                        'test "$(stat -c %u:%g "$1")" = 1000:1000; '
+                        'test "$(stat -c %a "$1")" = 600; '
+                        'observed=$(sha256sum "$1"); observed=${observed%% *}; '
+                        'test "sha256:$observed" = "$2"; printf verified'
                     )
-                )
+                    _code, observed, _err = await self._backend.run(
+                        [
+                            "docker",
+                            "exec",
+                            launch_result["containerName"],
+                            "/bin/sh",
+                            "-ceu",
+                            verify_file,
+                            "--",
+                            target,
+                            attachment["contentDigest"],
+                        ],
+                        failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    )
+                    if observed.strip() != "verified":
+                        raise HarnessPlatformError(
+                            "Claude preference file differs on the exact host",
+                            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                        )
+                    credential_mount_evidence.append(
+                        {
+                            "credentialRuntimeRef": handle["credentialRuntimeRef"],
+                            "targetPath": target,
+                            "accessMode": "read-only",
+                            "owner": "1000:1000",
+                            "fileMode": "0600",
+                            "generation": generation,
+                            "contentDigest": attachment["contentDigest"],
+                        }
+                    )
+                    continue
                 _code, observed, _err = await self._backend.run(
                     [
                         "docker",
@@ -1140,7 +1193,7 @@ class DockerOmnigentHostAttestor:
                         launch_result["containerName"],
                         "/bin/sh",
                         "-ceu",
-                        verify_credential_script,
+                        CREDENTIAL_DIRECTORY_VERIFY_SCRIPT,
                         "--",
                         target,
                     ],

@@ -288,6 +288,7 @@ from moonmind.workflows.executions.execution_contract import (
     validate_publish_mode_repository_authority,
     validate_workflow_runtime_targets,
     workflow_requires_agent,
+    workflow_uses_unselected_tools,
 )
 from moonmind.workflows.executions.execution_contract import (
     snapshot_workflow_from_artifact_payload as _snapshot_workflow_from_artifact_payload,
@@ -8341,7 +8342,7 @@ async def _workflow_creation_defaults(
         defaults = await SettingsCatalogService(
             session=session
         ).workflow_creation_defaults()
-    # Account-free work still needs the saved runtime for its admission route.
+    # Tool work keeps the saved runtime as metadata, without inheriting an account.
     if (
         not workflow_requires_agent(task_payload, parameter_payload)
         or agent_profile is not None
@@ -11449,6 +11450,35 @@ async def _attach_input_attachment_artifacts_to_execution(
     await session.flush()
 
 
+async def _route_omitted_git_connection(
+    session: Any, *, principal: str, value: object
+) -> object:
+    """Select the assigned connection for a Git target that names none.
+
+    Create has no connection selector, so a repository assigned to exactly
+    one connection uses it. Without that, the omitted reference still
+    compiles to the deployment default connection.
+    """
+
+    if (
+        session is None
+        or not isinstance(value, Mapping)
+        or value.get("provider") != "git"
+        or str(value.get("connectionRef") or "").strip()
+    ):
+        return value
+    repository = value.get("repository")
+    name = repository.get("name") if isinstance(repository, Mapping) else None
+    if not isinstance(name, str) or not name.strip():
+        return value
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    connection_ref = await RepositoryConnectionService(session).routed_connection_ref(
+        name.strip(), principal_ref=principal, principal_scope=("system", None)
+    )
+    return {**value, "connectionRef": connection_ref} if connection_ref else value
+
+
 def _normalize_submitted_repository(
     value: object,
 ) -> tuple[str | dict[str, Any] | None, str | None]:
@@ -12057,7 +12087,11 @@ async def _create_execution_from_workflow_request(
         )
 
     repository_payload, repository = _normalize_submitted_repository(
-        payload.get("repository")
+        await _route_omitted_git_connection(
+            session,
+            principal=_execution_principal(user),
+            value=payload.get("repository"),
+        )
     )
     workspace_spec, repository, workspace_source_kind = _admit_workspace_source(
         payload.get("workspace"),
@@ -12452,6 +12486,10 @@ async def _create_execution_from_workflow_request(
             not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
         )
 
+    unselected_tools = workflow_uses_unselected_tools(
+        task_payload, {**payload, "publish": publish_payload}
+    )
+
     # --- Model resolution ---
     runtime_was_authored = runtime_payload.get("authored") is not False
     authored_runtime = (
@@ -12495,6 +12533,7 @@ async def _create_execution_from_workflow_request(
             profile_runtime=profile_runtime,
             profile_harness_id=profile_harness_id(_provider_profile),
             workflow_settings=creation_defaults,
+            unselected_tools=unselected_tools,
         )
         raw_target_runtime = new_work_selection.runtime_id
         new_work_runtime_evidence = new_work_evidence(new_work_selection)
@@ -12745,7 +12784,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             "agentProfile is supported only for targetRuntime='omnigent'."
         )
-    if canonical_target_runtime == "omnigent":
+    if canonical_target_runtime == "omnigent" and not unselected_tools:
         if agent_profile_selection is not None and not isinstance(
             agent_profile_selection, Mapping
         ):
@@ -12888,7 +12927,7 @@ async def _create_execution_from_workflow_request(
 
     persisted_omnigent_plan = None
     prelaunch_task_input_snapshot_ref = ""
-    if canonical_target_runtime == "omnigent":
+    if canonical_target_runtime == "omnigent" and not unselected_tools:
         if session is None:
             raise _invalid_workflow_request(
                 "Omnigent execution-plan compilation requires durable storage."
@@ -13311,12 +13350,33 @@ async def _resolve_recurring_runtime_selection(
         task_payload=task_payload,
         parameter_payload=parameter_payload,
         session=session,
+        infer_native_profile=False,
         payloads=(
             raw_runtime_payload,
             task_payload,
             parameter_payload,
             request_payload,
         ),
+    )
+    expanded_workflow = None
+    if session is not None and has_unexpanded_task_template(
+        {"workflow": task_payload}
+    ):
+        await _expand_goal_preset_for_workflow_submission(
+            task_payload=task_payload,
+            request_payload=parameter_payload,
+            session=session,
+            user=user,
+            workflow_settings=creation_defaults,
+        )
+        expanded_workflow = task_payload
+        raw_runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+    creation_defaults = await _workflow_creation_defaults(
+        task_payload=task_payload,
+        parameter_payload=parameter_payload,
+        session=session,
+        payloads=(raw_runtime_payload, task_payload, parameter_payload, request_payload),
+        defaults=creation_defaults,
     )
     default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
@@ -13383,6 +13443,13 @@ async def _resolve_recurring_runtime_selection(
             profile_runtime=profile_runtime,
             profile_harness_id=profile_harness_id(provider_profile),
             workflow_settings=creation_defaults,
+            # Nested schedule envelopes also retain outer artifact and launch
+            # authority. Prove both layers independently; merging them could
+            # hide an outer pin behind an omitted/preview inner value.
+            unselected_tools=all(
+                workflow_uses_unselected_tools(task_payload, source)
+                for source in (parameter_payload, request_payload)
+            ),
         )
         raw_target_runtime = new_work_selection.runtime_id
         new_work_runtime_evidence = new_work_evidence(new_work_selection)
@@ -13437,6 +13504,8 @@ async def _resolve_recurring_runtime_selection(
         "targetRuntime": canonical_target_runtime,
         "runtimeCutover": dict(new_work_runtime_evidence),
     }
+    if expanded_workflow is not None:
+        metadata["_expandedWorkflow"] = expanded_workflow
     if raw_profile_id:
         metadata["profileId"] = raw_profile_id
     if normalized_steps is not None:
@@ -13581,6 +13650,8 @@ def _stamp_recurring_runtime_metadata(
     task_key, task_payload = _recurring_workflow_payload(initial_parameters)
     if task_key is None:
         return
+    if isinstance(runtime_metadata.get("_expandedWorkflow"), Mapping):
+        task_payload = dict(runtime_metadata["_expandedWorkflow"])
     if isinstance(runtime_metadata.get("_normalizedSteps"), list):
         task_payload["steps"] = runtime_metadata["_normalizedSteps"]
 
@@ -15849,6 +15920,21 @@ async def create_execution(
         workflow_request = (
             _fresh_serialized_workflow_request(request) if existing is None else None
         )
+        if workflow_request is not None and has_unexpanded_task_template(
+            request.initial_parameters
+        ):
+            # Preset contents, not their opaque reference, decide whether an
+            # account is needed. The product owner expands before final admission.
+            return await _create_execution_from_workflow_request(
+                request=workflow_request,
+                service=service,
+                user=user,
+                session=session,
+                principal_context=principal_context,
+                access=access,
+                serialized_request=request,
+                assessment_already_admitted=True,
+            )
         initial_parameters = dict(request.initial_parameters)
         if assessment_project is not None:
             initial_parameters["assessmentProject"] = assessment_project
@@ -15897,6 +15983,14 @@ async def create_execution(
                 ),
                 None,
             )
+            unselected_tools = workflow_uses_unselected_tools(
+                task_payload, initial_parameters
+            ) and not any((
+                request.input_artifact_ref,
+                request.plan_artifact_ref,
+                request.manifest_artifact_ref,
+                agent_profile_selection,
+            ))
             creation_defaults = await _workflow_creation_defaults(
                 task_payload=task_payload,
                 parameter_payload=initial_parameters,
@@ -15950,6 +16044,7 @@ async def create_execution(
                     profile_runtime=profile_runtime,
                     profile_harness_id=profile_harness_id(provider_profile),
                     workflow_settings=creation_defaults,
+                    unselected_tools=unselected_tools,
                 )
             except ValueError as exc:
                 raise _invalid_workflow_request(str(exc)) from exc
@@ -15975,6 +16070,8 @@ async def create_execution(
                     "targetRuntime": selection.runtime_id,
                 },
             )
+            if unselected_tools:
+                selects_omnigent = False
             if provider_profile is not None and not selects_omnigent:
                 for runtime_id in (
                     *authored_runtimes,

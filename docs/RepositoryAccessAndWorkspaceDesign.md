@@ -90,7 +90,7 @@ Same-repository work presents one repository and one branch, and Skill/Preset ar
 | `routed` | Absent | Deterministic selection among connections allowed for the admitted context |
 | `explicit` | Required | Validate and use only the named connection |
 
-Anonymous access is an explicit choice, not an error fallback. A connected repository picker normally authors routed access. Omitted values and documented UI defaults compile to the same intent without inspecting token presence. The resolved binding records selection origin separately, so an automatically inserted `repository-connection:git-default` never appears as an explicit user choice.
+Anonymous access is an explicit choice, not an error fallback. A connected repository picker normally authors routed access. Omitted values and documented UI defaults compile to the same intent without inspecting token presence: a submitted Git target that names no connection uses the one connection its repository is assigned to, and otherwise the default connection. The resolved binding records selection origin separately, so an automatically inserted `repository-connection:git-default` never appears as an explicit user choice.
 
 ### CONTRACT-004 Capabilities derive from the requested work
 
@@ -178,7 +178,7 @@ Managed clones scope credential-helper responses to the admitted HTTPS repositor
 
 Git and hosting CLIs run with isolated home/configuration and scrubbed token variables, authorization headers, credential helpers, `.netrc`, and login caches unless the admitted adapter supplies them. Workspaces persist only credential-free remotes, and raw material never enters arguments, Docker metadata, durable environments, Temporal payloads, errors, digests, logs, checkpoints, or exports. Delivery objects belong to an attempt with generation-fenced cleanup. Anonymous access creates no token file or materializer. Where a CLI needs authentication for a declared operation, the runtime provides a supported unauthenticated interface or rejects the combination.
 
-In Omnigent delivery, realizers clone with a Git environment that keeps only proxy and CA settings, and agent-side `gh` reads an attempt-owned `hosts.yml` written atomically by the shared projection writer rather than a container variable (on the profile-bound host, only when the step declares `gh`). Expiring App tokens are re-issued ten minutes before expiry with a reserve/acquire/publish order so an older writer cannot replace a newer projection; re-issue keeps the same binding and fails if the connection was disabled or its revision changed. PATs are not re-issued.
+In Omnigent delivery, realizers clone with a Git environment that keeps only proxy and CA settings, and agent-side `gh` and Git read an attempt-owned `hosts.yml` written atomically by the shared projection writer rather than a container variable, only when the step declares `gh`. Expiring App tokens are re-issued ten minutes before expiry with a reserve/acquire/publish order so an older writer cannot replace a newer projection; re-issue keeps the same binding and fails if the connection was disabled or its revision changed. PATs are not re-issued.
 
 ### QUALITY-003 Routing and confinement are separate guarantees
 

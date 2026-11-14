@@ -38,7 +38,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
     "explicit_scratch", [False, True], ids=["implicit-scratch", "explicit-scratch"]
 )
 async def test_pool_context_survives_source_host_and_worker_cleanup(
-    native_journey, monkeypatch, fixed_serialized, explicit_scratch
+    native_journey, monkeypatch, fixed_serialized, explicit_scratch, expected_restore_key="archiveRef"
 ):
     journey = native_journey
     first = await pool.execute_selected_pool_source(
@@ -67,7 +67,7 @@ async def test_pool_context_survives_source_host_and_worker_cleanup(
     assert successor.step_execution.runtime_session_context is not None
     assert (
         successor.workspace_spec["workspaceCheckpointRestoreRef"]
-        == (first.result.metadata["savedWorkspaceCheckpoint"]["archiveRef"])
+        == (first.result.metadata["savedWorkspaceCheckpoint"][expected_restore_key])
     )
     source_ref = first.result.metadata["runtimeSessionContext"]["runtimeBindingRef"]
     source = await journey.services.runtime_binding_store.get(source_ref)

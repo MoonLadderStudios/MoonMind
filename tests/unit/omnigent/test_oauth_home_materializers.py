@@ -12,6 +12,10 @@ Covers ``codex-oauth-home@1`` and ``claude-oauth-home@1``:
 - secret-free handles, evidence, and commands
 """
 
+import os
+import stat
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -274,6 +278,65 @@ async def test_materialize_attaches_profile_owned_home_and_stages_generation(
     assert _FAKE_TOKEN not in str(evidence)
     # Secrets are released immediately: the enrollment volume is the state.
     assert context.secrets.cleared
+
+
+@pytest.mark.asyncio
+async def test_imported_claude_login_is_staged_into_an_attestable_home(tmp_path: Path):
+    """Hidden Claude login files are normalized and satisfy exact-host proof."""
+
+    from moonmind.omnigent.host_services.attestation import (
+        CREDENTIAL_DIRECTORY_VERIFY_SCRIPT,
+    )
+
+    backend = FakeDockerBackend()
+    await DockerClaudeOauthHomeMaterializer(backend).materialize(
+        _context(
+            backend,
+            home=_home(volume="claude_auth_volume", target="/home/app/.claude"),
+        )
+    )
+    writer_cmd = next(cmd for cmd in backend.commands if cmd[:2] == ["docker", "run"])
+    stage_script = writer_cmd[writer_cmd.index("-ceu") + 1]
+    home = tmp_path / "home"
+    home.mkdir(mode=0o755)
+    for name in (".claude.json", ".credentials.json"):
+        (home / name).write_text("{}")
+        (home / name).chmod(0o644)
+    (home / "backups").mkdir()
+    # The writer and exact host run as root and 1000:1000; substitute this
+    # test's account and directory for both.
+    owner = f"{os.getuid()}:{os.getgid()}"
+
+    staged = subprocess.run(
+        [
+            "/bin/sh",
+            "-ceu",
+            stage_script.replace("/credential", str(home)).replace("1000:1000", owner),
+            "--",
+            "4",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert staged.returncode == 0, staged.stderr
+    for name in (".claude.json", ".credentials.json", ".moonmind-generation"):
+        assert stat.S_IMODE((home / name).stat().st_mode) == 0o600, name
+
+    attested = subprocess.run(
+        [
+            "/bin/sh",
+            "-ceu",
+            CREDENTIAL_DIRECTORY_VERIFY_SCRIPT.replace("1000:1000", owner),
+            "--",
+            str(home),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert attested.returncode == 0, attested.stderr
+    assert attested.stdout.strip() == "4"
 
 
 @pytest.mark.asyncio

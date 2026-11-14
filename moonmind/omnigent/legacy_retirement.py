@@ -201,7 +201,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config, "
             "including developer instructions, project-document discovery and history preferences. "
-            "Serialized inputs without original admitted snapshots, untranslated native contexts/workspaces and tier "
+            "Serialized inputs without original admitted snapshots, native contexts/workspaces beyond unpinned canonical GitHub repository handoffs and tier "
             "parameters still need equivalent shared-plan handoffs. Pool accounts bind "
             "their selected plan to the existing fenced grant; Codex same-epoch successors "
             "carry selected account, context and verified workspace through the parent. "
@@ -256,7 +256,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "with their endpoint, model pins and non-secret launch tuning. "
             "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness. "
-            "Serialized inputs without original admitted snapshots, native contexts/workspaces and tier parameters "
+            "Serialized inputs without original admitted snapshots, native contexts/workspaces beyond unpinned canonical GitHub repository handoffs and tier parameters "
             "still need an equivalent immutable shared-plan handoff. Fresh fixed, "
             "implicit and pool accounts bind their selected plan to the existing fenced grant."
         ),

@@ -11,7 +11,7 @@ Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Tempo
 
 ## 1. Purpose
 
-An operator can update or repair MoonMind without depending on the healthy application they are trying to repair. The normal operation is image pull followed by changed-service recreation, with useful local progress and an honest result.
+`./tools/update-moonmind.sh` deploys MoonMind for the first time, starts a stopped installation, or updates a running one. It does not require a healthy API or worker. Existing configuration and data retain their authority; a stopped stack is not treated as a new empty installation. The normal operation is image pull followed by changed-service recreation, with useful local progress and an honest result.
 
 ```text
 resolve and verify target -> persist deployment intent

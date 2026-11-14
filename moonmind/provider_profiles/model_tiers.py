@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -315,6 +316,34 @@ def ensure_tier_metadata_is_credential_free(value: Any) -> None:
 
     if _contains_sensitive_key(value):
         raise ValueError("tier metadata must not contain raw credential-like keys")
+
+
+def apply_tier_parameter_defaults(
+    parameters: dict[str, Any],
+    *,
+    tier_parameters: Mapping[str, Any],
+    explicit_parameters: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Replace only previously injected defaults, preserving authored choices."""
+    metadata = parameters.get("metadata")
+    hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+    previous = (
+        hints.get("modelEffortResolution") if isinstance(hints, Mapping) else None
+    )
+    defaults = (
+        previous.get("tierParameterDefaults") if isinstance(previous, Mapping) else None
+    )
+    if isinstance(defaults, Mapping):
+        for key, value in defaults.items():
+            if key not in explicit_parameters and parameters.get(key) == value:
+                parameters.pop(key, None)
+    parameters.update(explicit_parameters)
+    applied = {}
+    for key, value in tier_parameters.items():
+        if key not in parameters:
+            parameters[key] = deepcopy(value)
+            applied[key] = deepcopy(value)
+    return applied
 
 
 def _contains_sensitive_key(value: Any) -> bool:

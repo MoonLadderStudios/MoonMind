@@ -1,3 +1,4 @@
+import json
 import os
 from unittest.mock import patch
 
@@ -69,6 +70,30 @@ def test_is_non_secret_sentinel(value, expected):
 )
 def test_scrub_github_tokens(input_text, expected_text):
     assert scrub_github_tokens(input_text) == expected_text
+
+
+def test_shared_redaction_preserves_native_atlassian_token_coverage():
+    token = "ATATT" + "synthetic_token-value_123456789"
+    text = f"provider request failed: {token}"
+    assert scrub_github_tokens(text) == "provider request failed: [REDACTED]"
+    assert redact_sensitive_text(text) == "provider request failed: [REDACTED]"
+    assert redact_sensitive_payload({"message": text}) == {
+        "message": "provider request failed: [REDACTED]"
+    }
+    assert redact_sensitive_text("ATATTshort") == "ATATTshort"
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["AIza" + "a" * 32, "AKIA" + "A" * 16],
+    ids=["google-api-token", "aws-access-key"],
+)
+def test_cloud_tokens_in_serialized_log_messages_are_redacted(token):
+    text = json.dumps({"message": "provider request failed\n" + token})
+    safe = redact_sensitive_text(text)
+    assert token not in safe
+    assert "provider request failed" in safe
+
 
 @pytest.mark.parametrize(
     ("text", "expected"),

@@ -8685,7 +8685,7 @@ async def test_coordinator_defers_git_only_source_auth_until_materialization():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publish_mode", ["branch", "pr"])
 @pytest.mark.parametrize("destination_only", [False, True])
-async def test_prepared_workspace_publication_checks_assignment_without_early_source_read(
+async def test_prepared_workspace_publication_checks_connection_without_early_source_read(
     tmp_path, monkeypatch, publish_mode, destination_only
 ):
     from moonmind.workflows.executions.repository_contract import (
@@ -8700,16 +8700,15 @@ async def test_prepared_workspace_publication_checks_assignment_without_early_so
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
-        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT"),
+        github_pat_connection(
+            DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT",
+            operations=("write", "branch_write", "review_request")
+            if destination_only else ("read",),
+        ),
         assignments=[
             github_repository_assignment(
                 DEFAULT_GIT_CONNECTION_REF,
                 "owner/repo",
-                operations=(
-                    ("write", "branch_write", "review_request")
-                    if destination_only
-                    else ("read",)
-                ),
             )
         ],
     )
@@ -8754,7 +8753,7 @@ async def test_prepared_workspace_publication_checks_assignment_without_early_so
 
 
 @pytest.mark.asyncio
-async def test_cached_source_credential_cannot_bypass_later_publication_assignment(
+async def test_cached_source_credential_cannot_bypass_publication_permissions(
     tmp_path, monkeypatch
 ):
     from moonmind.workflows.executions.repository_contract import (
@@ -8769,10 +8768,12 @@ async def test_cached_source_credential_cannot_bypass_later_publication_assignme
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
-        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT"),
+        github_pat_connection(
+            DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT", operations=("read",)
+        ),
         assignments=[
             github_repository_assignment(
-                DEFAULT_GIT_CONNECTION_REF, "owner/repo", operations=("read",)
+                DEFAULT_GIT_CONNECTION_REF, "owner/repo",
             )
         ],
     )

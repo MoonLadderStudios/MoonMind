@@ -56,6 +56,8 @@ session_factory = native_fixture.session_factory
         "profile_default_tier",
         "requested_model_tier",
         "claude_oauth_tuning",
+        "claude_authored_files",
+        "claude_authored_files_implicit",
         "shell_environment",
         "templated_environment",
         "support_environment",
@@ -67,8 +69,13 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
     native_journey, monkeypatch, option
 ):
     journey = native_journey
+    implicit_runtime = option.endswith("_implicit")
+    option = option.removesuffix("_implicit")
     runtime = "codex_cli" if journey.harness == "codex-native" else "claude_code"
-    if option == "claude_oauth_tuning" and runtime != "claude_code":
+    if (
+        option in {"claude_oauth_tuning", "claude_authored_files"}
+        and runtime != "claude_code"
+    ):
         pytest.skip("These tuning values belong to the Claude harness.")
     monkeypatch.setattr(settings.workflow, "default_runtime", runtime)
     monkeypatch.setattr(settings.workflow, "github_repository", "")
@@ -79,6 +86,13 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                 "path": "{{runtime_support_dir}}/accepted-settings.txt",
                 "format": "text",
                 "content_template": "accepted-setting",
+            }
+        ],
+        "claude_authored_files": [
+            {
+                "path": "/home/app/.claude/CLAUDE.md",
+                "format": "text",
+                "content_template": "Keep the admitted instructions.\n",
             }
         ],
         "home_path_overrides": {"HOME": "{{runtime_support_dir}}/accepted-home"},
@@ -102,13 +116,25 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         )
         field = (
             "env_template"
-            if option in {
-                "claude_oauth_tuning", "shell_environment", "templated_environment",
-                "support_environment", "unavailable_environment", "secret_environment",
+            if option
+            in {
+                "claude_oauth_tuning",
+                "shell_environment",
+                "templated_environment",
+                "support_environment",
+                "unavailable_environment",
+                "secret_environment",
             }
-            else option
-            if option in {"env_template", "file_templates", "home_path_overrides"}
-            else "model_overrides"
+            else (
+                "file_templates"
+                if option == "claude_authored_files"
+                else (
+                    option
+                    if option
+                    in {"env_template", "file_templates", "home_path_overrides"}
+                    else "model_overrides"
+                )
+            )
         )
         setattr(profile, field, values[option])
         if option in {"profile_default_tier", "requested_model_tier"}:
@@ -136,16 +162,23 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                         "workflow": {
                             "instructions": "Preserve my selected Profile settings.",
                             "runtime": {
-                                "mode": runtime,
+                                **({} if implicit_runtime else {"mode": runtime}),
                                 "providerProfileRef": native_fixture.PROFILE,
                                 **(
                                     {"model": "selected-model-alias"}
                                     if option == "model_overrides"
-                                    else {"model": journey.server.model}
-                                    if option in {
-                                        "claude_oauth_tuning", "shell_environment",
-                                        "templated_environment", "support_environment",
-                                    } else {}
+                                    else (
+                                        {"model": journey.server.model}
+                                        if option
+                                        in {
+                                            "claude_oauth_tuning",
+                                            "shell_environment",
+                                            "templated_environment",
+                                            "support_environment",
+                                            "claude_authored_files",
+                                        }
+                                        else {}
+                                    )
                                 ),
                                 **(
                                     {"modelTier": 1}
@@ -177,8 +210,11 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         )
         request = agent_requests(record.parameters)["work"]
         if field == "model_overrides" or option in {
-            "claude_oauth_tuning", "shell_environment", "templated_environment",
+            "claude_oauth_tuning",
+            "shell_environment",
+            "templated_environment",
             "support_environment",
+            "claude_authored_files",
         }:
             assert record.parameters["targetRuntime"] == "omnigent"
             assert request.agent_kind == "external" and request.agent_id == "omnigent"
@@ -197,7 +233,11 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             }.get(option)
             if expected_source:
                 assert record.parameters["modelSource"] == expected_source
-            if option in {"templated_environment", "support_environment"}:
+            if option in {
+                "templated_environment",
+                "support_environment",
+                "claude_authored_files",
+            }:
                 saved = plan.payload.providerConfigurationSnapshot
                 assert saved is not None
                 _artifact, content = await TemporalArtifactService(
@@ -210,7 +250,15 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                     content, saved, plan.payload.credentialBindings
                 )
                 configuration = configurations["primary-model"]
-                assert configuration.environmentTemplates == values[option]
+                if option == "claude_authored_files":
+                    assert (
+                        configuration.claudeConfiguration["fileTemplates"][0][
+                            "content_template"
+                        ]
+                        == "Keep the admitted instructions.\n"
+                    )
+                else:
+                    assert configuration.environmentTemplates == values[option]
                 assert configuration.launchEnvironment == {}
         else:
             assert record.parameters["targetRuntime"] == runtime

@@ -3,10 +3,79 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.host_services.attestation import credential_mount_access
+from moonmind.omnigent.host_services.attestation import (
+    CREDENTIAL_DIRECTORY_VERIFY_SCRIPT,
+    credential_mount_access,
+)
+
+
+def _credential_home(root: Path, files: dict[str, int]) -> Path:
+    home = root / "home"
+    home.mkdir()
+    home.chmod(0o700)
+    for name, mode in {".moonmind-generation": 0o600, **files}.items():
+        path = home / name
+        path.write_text("4\n" if name == ".moonmind-generation" else "{}")
+        path.chmod(mode)
+    for directory in ("backups", "projects", "sessions"):
+        (home / directory).mkdir(mode=0o755)
+    return home
+
+
+def _verify_credential_directory(home: Path) -> subprocess.CompletedProcess[str]:
+    # The exact host's runtime account (1000:1000) owns credential homes; the
+    # test substitutes whichever account is running it.
+    script = CREDENTIAL_DIRECTORY_VERIFY_SCRIPT.replace(
+        "1000:1000", f"{os.getuid()}:{os.getgid()}"
+    )
+    return subprocess.run(
+        ["/bin/sh", "-ceu", script, "--", str(home)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "files",
+    (
+        # A fresh Claude login keeps every credential file hidden.
+        {".claude.json": 0o600, ".credentials.json": 0o600},
+        {"auth.json": 0o600},
+    ),
+    ids=("claude-fresh-login", "codex"),
+)
+def test_enrolled_credential_directory_attests_its_generation(
+    tmp_path: Path, files: dict[str, int]
+) -> None:
+    result = _verify_credential_directory(_credential_home(tmp_path, files))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "4"
+
+
+@pytest.mark.parametrize(
+    ("files", "reason"),
+    (
+        ({}, "no credential file"),
+        ({".credentials.json": 0o644}, ".credentials.json"),
+        ({"auth.json": 0o644}, "auth.json"),
+    ),
+    ids=("empty", "readable-hidden-login", "readable-login"),
+)
+def test_credential_directory_rejection_names_its_reason(
+    tmp_path: Path, files: dict[str, int], reason: str
+) -> None:
+    result = _verify_credential_directory(_credential_home(tmp_path, files))
+
+    assert result.returncode != 0
+    assert reason in result.stderr
 
 
 class TemplateDockerBackend:

@@ -18,9 +18,10 @@ _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
     re.IGNORECASE,
 )
-_CLOUD_TOKEN_PATTERN = re.compile(
-    r"\b(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
-)
+# Provider logs may contain serialized text, where a preceding ``\n`` escape
+# ends in a word character. Token prefixes must not require word boundaries.
+_CLOUD_TOKEN_PATTERN = re.compile(r"(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})")
+_ATLASSIAN_TOKEN_PATTERN = re.compile(r"ATATT[0-9A-Za-z_-]{20,}")
 _SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b", re.IGNORECASE)
 _COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b((?:set-)?cookie\s*:)\s*[^\r\n]+")
 _SECRET_ASSIGNMENT_KEY = (
@@ -137,6 +138,7 @@ def scrub_github_tokens(text: str) -> str:
     if not text:
         return ""
     redacted = _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
+    redacted = _ATLASSIAN_TOKEN_PATTERN.sub("[REDACTED]", redacted)
     return _CLOUD_TOKEN_PATTERN.sub("[REDACTED]", redacted)
 
 def _redact_private_key_blocks(text: str) -> str:

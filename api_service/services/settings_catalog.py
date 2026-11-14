@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1408,14 +1408,24 @@ class SettingsCatalogService:
             for entry in effective_entries
         }
 
-        for key in entries:
-            row = overrides.get(key)
-            current_version = row.value_version if row is not None else 1
-            expected = expected_versions.get(key)
+        for key, expected in expected_versions.items():
+            entry = self._entries_by_key.get(key)
+            if entry is None:
+                validation_issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        code="setting_not_exposed",
+                        message=f"Setting {key} is not exposed through the Settings API.",
+                        boundary="write_request",
+                        rule="exposed_setting",
+                    )
+                )
+                continue
+            current_version = current_resolved[key][2]
             if expected is not None and expected != current_version:
                 validation_issues.append(
                     self._validation_issue(
-                        entries[key],
+                        entry,
                         code="version_conflict",
                         message="Expected setting version does not match current version.",
                         boundary="write_request",
@@ -1564,15 +1574,34 @@ class SettingsCatalogService:
         if validation_issues:
             raise SettingsValidationError(validation_issues)
 
-        current_rows = await self._get_overrides(
-            keys=validated.keys(),
-            for_update=True,
-        )
-        for key in validated:
-            row = current_rows.get(key)
-            current_version = row.value_version if row is not None else 1
-            expected = expected_versions.get(key)
-            if expected is not None and expected != current_version:
+        # Preconditions may include unchanged (even read-only) companion keys.
+        # They participate in the same transaction without becoming writes.
+        guarded_keys = set(validated) | set(expected_versions)
+        for key in expected_versions:
+            if key not in self._entries_by_key:
+                raise SettingsValidationError([
+                    self._validation_issue_for_key(
+                        key,
+                        code="setting_not_exposed",
+                        message=f"Setting {key} is not exposed through the Settings API.",
+                        boundary="write_request",
+                        rule="exposed_setting",
+                    )
+                ])
+        lock_keys = guarded_keys | {
+            rule.old_key
+            for key in guarded_keys
+            if (rule := self._rename_rules_by_new_key.get(key)) is not None
+        }
+        current_rows = await self._get_overrides(keys=lock_keys, for_update=True)
+        versions = {
+            key: self._resolve_value_from_overrides(
+                self._entries_by_key[key], overrides=current_rows,
+            )[2]
+            for key in guarded_keys
+        }
+        for key, expected in expected_versions.items():
+            if expected != versions[key]:
                 raise ValueError("version_conflict")
 
         proposed_values = await self._proposed_effective_values(
@@ -1613,32 +1642,30 @@ class SettingsCatalogService:
                 validated[key], row.value_json if row is not None else None
             )
 
+        # Reserve missing changed and unchanged keys in one deterministic order.
+        # Missing rows cannot be locked by FOR UPDATE: a concurrent first insert
+        # must lose the unique-key race and roll back the entire batch. Keeping
+        # inherited markers does not advance unchanged companion generations.
+        for key in sorted(guarded_keys):
+            if key not in current_rows:
+                row = SettingsOverride(
+                    key=key,
+                    value_json=None,
+                    value_version=versions[key],
+                    is_reset=True,
+                )
+                self._session.add(row)
+                current_rows[key] = row
+
         changed_at = datetime.now(timezone.utc)
         change_events: list[SettingsChangeEvent] = []
         for key, value in validated.items():
             entry = entries[key]
-            row = current_rows.get(key)
-            old_value = row.value_json if row is not None else None
-            if row is None:
-                # The shared collection's first write must invalidate another
-                # editor that loaded the inherited empty document at version 1.
-                first_version = (
-                    2
-                    if key
-                    in {
-                        "security.assessment_projects",
-                        "security.assessment_authorizations",
-                    }
-                    else 1
-                )
-                row = SettingsOverride(
-                    key=key, value_json=value, value_version=first_version
-                )
-                self._session.add(row)
-                current_rows[key] = row
-            else:
-                row.value_json = value
-                row.value_version += 1
+            row = current_rows[key]
+            old_value = row.value_json
+            row.value_json = value
+            row.is_reset = False
+            row.value_version += 1
             self._session.add(
                 self._audit_event(
                     entry,
@@ -1723,7 +1750,7 @@ class SettingsCatalogService:
             raise KeyError(key)
         rows = await self._get_overrides(keys=[key], for_update=True)
         row = rows.get(key)
-        if row is not None:
+        if row is not None and not row.is_reset:
             old_value = row.value_json
             if key in {
                 "security.assessment_projects",
@@ -1738,9 +1765,10 @@ class SettingsCatalogService:
                     else "authorizations"
                 )
                 row.value_json = {collection: []}
-                row.value_version += 1
             else:
-                await self._session.delete(row)
+                row.value_json = None
+                row.is_reset = True
+            row.value_version += 1
             self._session.add(
                 self._audit_event(
                     entry,
@@ -2208,7 +2236,7 @@ class SettingsCatalogService:
         values: dict[str, SettingsDiagnosticRead] = {}
         for rule in deprecated_rules:
             row = overrides.get(rule.old_key)
-            if row is not None:
+            if row is not None and not row.is_reset:
                 values[rule.old_key] = SettingsDiagnosticRead(
                     key=rule.old_key,
                     source="deprecated_override",
@@ -2318,10 +2346,11 @@ class SettingsCatalogService:
     ) -> tuple[Any, str, int, bool]:
         diagnostics = self._migration_diagnostics_by_key if record_diagnostics else {}
         diagnostics.pop(entry.key, None)
-        if self._is_operator_locked(entry):
-            return entry.operator_locked_value, "operator_lock", 1, False
         override = overrides.get(entry.key)
-        if override is not None:
+        version = override.value_version if override is not None else 1
+        if self._is_operator_locked(entry):
+            return entry.operator_locked_value, "operator_lock", version, False
+        if override is not None and not override.is_reset:
             type_migration = self._type_migration_diagnostic(entry, override)
             if type_migration is not None:
                 diagnostics[entry.key] = type_migration
@@ -2348,11 +2377,11 @@ class SettingsCatalogService:
             return (
                 _canonical_setting_value(entry.key, row.value_json),
                 "instance_override",
-                row.value_version,
+                version if override is not None else row.value_version,
                 True,
             )
         value, source = self._resolve_value(entry)
-        return _canonical_setting_value(entry.key, value), source, 1, False
+        return _canonical_setting_value(entry.key, value), source, version, False
 
     def _type_migration_diagnostic(
         self,
@@ -2384,7 +2413,7 @@ class SettingsCatalogService:
         if rule is None:
             return None
         row = overrides.get(rule.old_key)
-        return (row, rule) if row is not None else None
+        return (row, rule) if row is not None and not row.is_reset else None
 
     async def _get_effective_overrides(
         self,
@@ -2419,7 +2448,21 @@ class SettingsCatalogService:
             SettingsOverride.key.in_(key_list),
         )
         if for_update:
-            statement = statement.with_for_update()
+            # SQLite ignores FOR UPDATE. A no-op write acquires its writer lock
+            # before the read. PostgreSQL uses ordered row locks below.
+            # Preserve timestamps for unchanged concurrency preconditions.
+            if self._session.get_bind().dialect.name == "sqlite":
+                await self._session.execute(
+                    update(SettingsOverride).where(
+                        SettingsOverride.scope.is_(None),
+                        SettingsOverride.key.in_(sorted(key_list)),
+                    ).values(
+                        value_version=SettingsOverride.value_version,
+                        updated_at=SettingsOverride.updated_at,
+                    ).execution_options(synchronize_session=False)
+                )
+            statement = statement.order_by(SettingsOverride.key).with_for_update()
+            statement = statement.execution_options(populate_existing=True)
         result = await self._session.execute(statement)
         return {row.key: row for row in result.scalars().all()}
 

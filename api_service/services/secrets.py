@@ -1318,7 +1318,8 @@ class SecretsService:
     async def _instance_setting_rows(cls, db: AsyncSession):
         return await db.execute(
             select(SettingsOverride.key, SettingsOverride.value_json).where(
-                SettingsOverride.scope.is_(None)
+                SettingsOverride.scope.is_(None),
+                SettingsOverride.is_reset.is_(False),
             )
         )
 
@@ -1474,6 +1475,7 @@ class SecretsService:
         pattern = f"%db://{cls._like_escape(slug)}%"
         try:
             override_stmt = select(SettingsOverride.value_json).where(
+                SettingsOverride.is_reset.is_(False),
                 func.cast(SettingsOverride.value_json, Text).like(
                     pattern, escape="\\"
                 )

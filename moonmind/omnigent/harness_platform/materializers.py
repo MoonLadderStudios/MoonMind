@@ -330,6 +330,9 @@ class ProviderConfigEndpoint(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+    claudeConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     codexConfiguration: dict[str, Any] | None = Field(
         None,
         alias="codexConfiguration",
@@ -351,6 +354,12 @@ class ProviderConfigEndpoint(BaseModel):
             launchEnvironment=self.launchEnvironment,
             environmentTemplates=self.environmentTemplates,
         )
+        if self.claudeConfiguration is not None:
+            from moonmind.provider_profiles.claude_configuration import validate_configuration
+
+            if self.family != "anthropic":
+                raise ValueError("Claude configuration requires the Anthropic family")
+            validate_configuration(self.claudeConfiguration)
         if self.codexConfiguration is not None:
             from moonmind.provider_profiles.codex_configuration import validate_private_environment
 
@@ -375,6 +384,22 @@ class ProviderLaunchEnvironment(BaseModel):
     codexConfiguration: dict[str, Any] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+
+    claudeConfiguration: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("claudeConfiguration")
+    @classmethod
+    def _validate_claude_configuration(cls, value):
+        if value is not None:
+            from moonmind.provider_profiles.claude_configuration import (
+                validate_oauth_configuration,
+            )
+
+            return validate_oauth_configuration(value)
+        return None
 
     @field_validator("codexConfiguration")
     @classmethod
@@ -417,7 +442,9 @@ class ProviderLaunchEnvironment(BaseModel):
         return self
 
 
-def _oauth_launch_environment(profile, *, configuration=None):
+def _oauth_launch_environment(
+    profile, *, configuration=None, claude_configuration=None
+):
     from moonmind.provider_profiles.template_renderer import template_context_names
 
     values = dict(getattr(profile, "env_template", None) or {})
@@ -425,9 +452,12 @@ def _oauth_launch_environment(profile, *, configuration=None):
         values.pop(key, None)
     templates = {key: value for key, value in values.items() if template_context_names(value)}
     return ProviderLaunchEnvironment(
-        launchEnvironment={key: value for key, value in values.items() if key not in templates},
+        launchEnvironment={
+            key: value for key, value in values.items() if key not in templates
+        },
         environmentTemplates=templates or None,
         codexConfiguration=configuration,
+        claudeConfiguration=claude_configuration,
         codexNativeDefault=_codex_native_default_selection(profile),
     )
 
@@ -456,20 +486,40 @@ class ProviderConfigurationSlot(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
 
+    claudeConfiguration: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
     @model_validator(mode="after")
     def _validate_delivery(self):
         if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
             if self.endpoint is not None:
                 raise ValueError("OAuth configuration cannot replace its credential owner")
+            if (
+                self.claudeConfiguration is not None
+                and self.materializerRef != "claude-oauth-home@1"
+            ):
+                raise ValueError(
+                    "Claude preferences require their enrolled Claude home"
+                )
             if self.codexConfiguration is not None and self.materializerRef != "codex-oauth-home@1":
                 raise ValueError("Codex preferences require their enrolled Codex home")
             if self.codexNativeDefault is not None and self.materializerRef != "codex-oauth-home@1":
                 raise ValueError("Codex model-default selection requires its Codex materializer")
             ProviderLaunchEnvironment(
-                launchEnvironment=self.launchEnvironment, codexConfiguration=self.codexConfiguration,
+                launchEnvironment=self.launchEnvironment,
+                codexConfiguration=self.codexConfiguration,
+                claudeConfiguration=self.claudeConfiguration,
                 environmentTemplates=self.environmentTemplates,
             )
-        elif self.launchEnvironment or self.codexConfiguration is not None or self.environmentTemplates is not None or self.codexNativeDefault is not None:
+        elif (
+            self.launchEnvironment
+            or self.codexConfiguration is not None
+            or self.claudeConfiguration is not None
+            or self.environmentTemplates is not None
+            or self.codexNativeDefault is not None
+        ):
             raise ValueError("provider-config tuning belongs to its endpoint")
         return self
 
@@ -479,21 +529,35 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
         slot: ProviderConfigurationSlot(
             providerProfileRef=bindings[slot].providerProfileRef,
             materializerRef=bindings[slot].materializerRef,
-            endpoint=endpoint if not isinstance(endpoint, ProviderLaunchEnvironment) else None,
+            endpoint=(
+                endpoint
+                if not isinstance(endpoint, ProviderLaunchEnvironment)
+                else None
+            ),
             codexNativeDefault=(
-                endpoint.codexNativeDefault if isinstance(endpoint, ProviderLaunchEnvironment) else None
+                endpoint.codexNativeDefault
+                if isinstance(endpoint, ProviderLaunchEnvironment)
+                else None
             ),
             launchEnvironment=(
                 endpoint.launchEnvironment
-                if isinstance(endpoint, ProviderLaunchEnvironment) else {}
+                if isinstance(endpoint, ProviderLaunchEnvironment)
+                else {}
             ),
             codexConfiguration=(
                 endpoint.codexConfiguration
-                if isinstance(endpoint, ProviderLaunchEnvironment) else None
+                if isinstance(endpoint, ProviderLaunchEnvironment)
+                else None
+            ),
+            claudeConfiguration=(
+                endpoint.claudeConfiguration
+                if isinstance(endpoint, ProviderLaunchEnvironment)
+                else None
             ),
             environmentTemplates=(
                 endpoint.environmentTemplates
-                if isinstance(endpoint, ProviderLaunchEnvironment) else None
+                if isinstance(endpoint, ProviderLaunchEnvironment)
+                else None
             ),
         ).model_dump(mode="json")
         for slot, endpoint in configurations.items()
@@ -532,11 +596,14 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
             raise ValueError("provider configuration snapshot account does not match")
         result[slot] = (
             ProviderLaunchEnvironment(
-                launchEnvironment=saved.launchEnvironment, codexConfiguration=saved.codexConfiguration,
+                launchEnvironment=saved.launchEnvironment,
+                codexConfiguration=saved.codexConfiguration,
+                claudeConfiguration=saved.claudeConfiguration,
                 environmentTemplates=saved.environmentTemplates,
                 codexNativeDefault=saved.codexNativeDefault,
             )
-            if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
+            if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}
+            else saved.endpoint
         )
     return result
 
@@ -561,6 +628,12 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     if getattr(profile, "file_templates", None):
         if str(profile.runtime_id) == "codex_cli":
             from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+            private_configuration, _reason = oauth_configuration_for_profile(profile)
+        elif str(profile.runtime_id) == "claude_code":
+            from moonmind.provider_profiles.claude_configuration import (
+                oauth_configuration_for_profile,
+            )
 
             private_configuration, _reason = oauth_configuration_for_profile(profile)
         if private_configuration is None:
@@ -609,10 +682,24 @@ def snapshot_provider_configuration(
             )
         configuration = None
         if getattr(profile, "file_templates", None):
-            from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
-
+            if str(profile.runtime_id) == "claude_code":
+                from moonmind.provider_profiles.claude_configuration import (
+                    oauth_configuration_for_profile,
+                )
+            else:
+                from moonmind.provider_profiles.codex_configuration import (
+                    oauth_configuration_for_profile,
+                )
             configuration, _reason = oauth_configuration_for_profile(profile)
-        return _oauth_launch_environment(profile, configuration=configuration)
+        return _oauth_launch_environment(
+            profile,
+            configuration=(
+                configuration if str(profile.runtime_id) == "codex_cli" else None
+            ),
+            claude_configuration=(
+                configuration if str(profile.runtime_id) == "claude_code" else None
+            ),
+        )
     if not is_api_key_launch_profile(profile):
         return None
     endpoint, reason = provider_config_endpoint(profile)
@@ -721,8 +808,13 @@ def claude_provider_config_endpoint(
     there with that reason.
     """
 
+    configuration = None
     if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
-        return None, "file templates and home path overrides are direct-launch only"
+        from moonmind.provider_profiles.claude_configuration import configuration_for_profile
+
+        configuration, reason = configuration_for_profile(profile)
+        if configuration is None:
+            return None, reason
 
     from moonmind.provider_profiles.template_renderer import (
         PROVIDER_LITERAL_LAUNCH_ENV,
@@ -755,6 +847,7 @@ def claude_provider_config_endpoint(
     return (
         ProviderConfigEndpoint(
             family="anthropic",
+            claudeConfiguration=configuration,
             secretRole=key_role,
             baseUrl=base_url,
             defaultModel=literals.get("ANTHROPIC_MODEL"),
@@ -831,6 +924,23 @@ def codex_provider_config_endpoint(
     base_url = literals.get("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL).rstrip("/")
     if not _omnigent_egress_admits(base_url):
         return None, "the Omnigent egress profile does not admit the endpoint"
+    if private_preferences is not None:
+        from moonmind.provider_profiles.codex_configuration import (
+            validate_private_environment,
+        )
+
+        try:
+            private_environment = validate_private_environment(
+                private_preferences, require_admitted_file=True,
+            )
+        except ValueError as error:
+            return None, str(error)
+        # These references belong to the native process's relocated HOME, not
+        # the generic support directory. Keep one owner, as for custom providers.
+        templates = {
+            key: value for key, value in templates.items()
+            if key not in private_environment
+        }
     return (
         ProviderConfigEndpoint(
             family="openai", secretRole=key_role, baseUrl=base_url,

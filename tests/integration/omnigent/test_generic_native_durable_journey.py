@@ -621,6 +621,7 @@ class NativeDocker(StaticCodexDocker):
         self.volumes = {"journey_oauth": {}}
         self.generations = {}
         self.auth_json = None
+        self.claude_preferences = None
         self.host_labels = {}
         self.launch_env = {}
         self.mounts = {}
@@ -658,6 +659,8 @@ class NativeDocker(StaticCodexDocker):
             if argv[-1] not in self.volumes:
                 return 1, "", "No such volume"
             labels = self.volumes[argv[-1]]
+            if "moonmind.owner" in " ".join(argv):
+                return 0, labels.get("moonmind.owner", ""), ""
             return (
                 0,
                 labels["moonmind.host_lease_ref"]
@@ -665,7 +668,21 @@ class NativeDocker(StaticCodexDocker):
                 + labels["moonmind.host_lease_generation"],
                 "",
             )
+        if argv[:2] == ["docker", "ps"]:
+            volume = _options(argv, "--filter")[0].removeprefix("volume=")
+            mounted = self.server.host_alive and any(
+                mount["src"] == volume for mount in self.mounts.values()
+            )
+            return (
+                0,
+                self.host_labels.get("moonmind.static_host", "") if mounted else "",
+                "",
+            )
         if argv[:3] == ["docker", "volume", "rm"]:
+            if self.server.host_alive and any(
+                mount["src"] == argv[-1] for mount in self.mounts.values()
+            ):
+                return 1, "", "volume is in use"
             assert argv[-1] != "journey_oauth"
             del self.volumes[argv[-1]]
             self.events.append(("volume_remove", argv[-1]))
@@ -673,7 +690,13 @@ class NativeDocker(StaticCodexDocker):
         if argv[:2] == ["docker", "run"]:
             assert "--rm" in argv and "none" == argv[argv.index("--network") + 1]
             mounts = _mounts(argv)
-            if "/credential" in mounts:
+            if "/preferences" in mounts and input_bytes:
+                payload = json.loads(input_bytes)
+                volume = mounts["/preferences"]["src"]
+                assert volume in self.volumes and volume != "journey_oauth"
+                self.claude_preferences = payload["files"]
+                self.generations[volume] = str(payload["generation"])
+            if "/credential" in mounts and "/preferences" not in mounts:
                 volume = mounts["/credential"]["src"]
                 assert volume in self.volumes
                 if input_bytes:
@@ -844,6 +867,14 @@ class NativeDocker(StaticCodexDocker):
                 assert self.server.harness == "codex-native"
                 assert self.server.hidden_native_default
                 return 0, json.dumps({"status": "ready", "model": self.server.model}), ""
+            if 'observed=$(sha256sum "$1")' in " ".join(argv):
+                target, digest = argv[-2:]
+                mount = self.mounts[target]
+                assert "readonly" in mount
+                relative = mount["volume-subpath"].removeprefix("files/")
+                content = self.claude_preferences[relative].encode()
+                assert digest == "sha256:" + hashlib.sha256(content).hexdigest()
+                return 0, "verified", ""
             if 'cat "$1/.moonmind-generation"' in " ".join(argv):
                 return 0, self.generations[self.mounts[argv[-1]]["src"]], ""
             # Image-local shell/runner probes are explicitly controlled here.
@@ -972,6 +1003,10 @@ class StaticNativeDocker(NativeDocker):
                 )
                 if mount["read_only"]:
                     rendered += ",readonly"
+                if mount.get("volume", {}).get("subpath"):
+                    rendered += ",volume-subpath=" + mount["volume"]["subpath"]
+                    assert mount["volume"]["nocopy"] is True
+                    rendered += ",volume-nocopy"
                 command.extend(["--mount", rendered])
             command.extend(
                 [
@@ -1049,6 +1084,7 @@ async def _compile_plan(
     oauth_tuning=None,
     api_key_tuning=None,
     oauth_private_config=False,
+    claude_oauth_files=False,
     private_profile_config=False,
     private_configuration_home=None,
     declare_configuration_home=True,
@@ -1172,6 +1208,32 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
+    if claude_oauth_files:
+        assert oauth and runtime_id == "claude_code"
+        profile.file_templates = [
+            {
+                "path": "/home/app/.claude/settings.json",
+                "format": "json",
+                "merge_strategy": "deep_merge",
+                "permissions": "0600",
+                "content_template": dict(session_settings or {"language": "English"}),
+            },
+            *(
+                additional_files
+                or [
+                    {
+                        "path": "/home/app/.claude/CLAUDE.md",
+                        "format": "text",
+                        "content_template": "Admitted instructions for {{workspace_path}}.\n",
+                    },
+                    {
+                        "path": "/home/app/.claude/rules/project.md",
+                        "format": "text",
+                        "content_template": "Use {{runtime_support_dir}} for support.\n",
+                    },
+                ]
+            ),
+        ]
     if native_default:
         assert runtime_id == "codex_cli"
         profile.default_model = "example/model"
@@ -1367,9 +1429,14 @@ async def native_journey(
                 oauth_tuning=selection.get("oauthTuning"),
                 api_key_tuning=selection.get("apiKeyTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
-                private_profile_config=bool(selection.get("privateProfileConfiguration")),
+                claude_oauth_files=bool(selection.get("claudeOauthFiles")),
+                private_profile_config=bool(
+                    selection.get("privateProfileConfiguration")
+                ),
                 private_configuration_home=selection.get("privateConfigurationHome"),
-                declare_configuration_home=selection.get("declareConfigurationHome", True),
+                declare_configuration_home=selection.get(
+                    "declareConfigurationHome", True
+                ),
                 native_default=bool(selection.get("codexNativeDefault")),
                 instructions=instructions,
                 model=server.model,
@@ -1798,26 +1865,40 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
-@pytest.mark.parametrize("native_journey", [{
+@pytest.mark.parametrize(("native_journey", "private_reference"), [({
     "harness": "codex-native-api-key", "privateProfileConfiguration": True,
     "sessionSettings": {"developer_instructions": "Keep the admitted key Profile preferences."},
     "additionalFiles": [{
         "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
         "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted key Profile file.\n",
     }],
-}], indirect=True)
-async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey):
+    "apiKeyTuning": {
+        "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "REPORT_DIR": "{{workspace_path}}/reports",
+    } if private_reference else {},
+}, private_reference) for private_reference in (False, True)], indirect=["native_journey"])
+async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey, private_reference):
     journey = native_journey
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, PROFILE)
         profile.file_templates = []
         profile.home_path_overrides = {}
+        profile.env_template = {"OPENAI_API_KEY": {"from_secret_ref": "provider_api_key"}}
         await session.commit()
     await assert_native_turn_saved_and_cleaned(journey)
     configuration = journey.docker.codex_configuration
     assert configuration["privateHomeOnly"] is True
     assert configuration["document"] == {"developer_instructions": "Keep the admitted key Profile preferences."}
     assert configuration["additionalFiles"][0]["content_template"] == "Admitted key Profile file.\n"
+    if private_reference:
+        assert configuration["environmentTemplates"] == {
+            "INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md",
+        }
+        assert journey.docker.launch_env["REPORT_DIR"] == "/workspaces/run/reports"
+        assert "INSTRUCTIONS_FILE" not in journey.docker.launch_env
+    else:
+        assert "environmentTemplates" not in configuration
+        assert "REPORT_DIR" not in journey.docker.launch_env
 
 
 @pytest.mark.parametrize(("native_journey", "private_reference"), [({
@@ -2221,6 +2302,14 @@ async def assert_native_turn_saved_and_cleaned(
     journey, terminal_status="idle", *, expected_messages=1
 ):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
+    if journey.static_mode:
+        from tests.integration.omnigent.test_generic_static_host_journey import (
+            assert_static_native_turn_saved_and_retained,
+        )
+
+        return await assert_static_native_turn_saved_and_retained(
+            journey, terminal_status
+        )
     from moonmind.omnigent.realizers.turn_delivery import admission_epoch
     request, plan, services = journey.request, journey.plan, journey.services
     realizer, server, docker = journey.realizer, journey.server, journey.docker
@@ -2713,14 +2802,15 @@ async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
 
 
 @pytest.mark.parametrize("native_journey", [{
-    "harness": "codex-native-file-config",
+    "harness": harness,
+    "privateProfileConfiguration": harness == "codex-native-api-key",
     "apiKeyTuning": {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md"},
     "additionalFiles": [{
         "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
         "format": "text", "merge_strategy": "append", "permissions": "0600",
         "content_template": "Use the admitted global instructions.\n",
     }],
-}], indirect=True)
+} for harness in ("codex-native-file-config", "codex-native-api-key")], indirect=True)
 @pytest.mark.parametrize("refresh", [None, False, True], ids=["queued", "frozen", "fresh-scheduled"])
 async def test_profile_files_keep_queued_and_fresh_configuration_authority(native_journey, refresh):
     from copy import deepcopy
@@ -2758,6 +2848,8 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
                 access=access_for_test("system"),
             )
             configuration = json.loads(body)["primary-model"]["endpoint"]["codexConfiguration"]
+            if not refresh:
+                assert "sha256:" + hashlib.sha256(body).hexdigest() == journey.plan.payload.providerConfigurationSnapshot.contentDigest
             changed = plan_writer.changed_admitted_intent(journey.plan.payload, compiled.envelope.payload)
             assert ("providerConfiguration" in changed) is refresh
         await session.commit()
@@ -2769,3 +2861,133 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
     assert configuration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
     assert configuration["environmentTemplates"] == {"INSTRUCTIONS_FILE": "{{runtime_support_dir}}/AGENTS.md"}
     assert expected not in journey.plan.payload.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": "claude-native", "static": static, "claudeOauthFiles": True}
+        for static in (False, True)
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("edit_after_admission", [False, True])
+async def test_claude_oauth_files_are_frozen_readonly_overlays(
+    native_journey,
+    edit_after_admission,
+):
+    journey = native_journey
+    if edit_after_admission:
+        async with journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+            profile.file_templates = [
+                {
+                    "path": "/home/app/.claude/CLAUDE.md",
+                    "format": "text",
+                    "content_template": "Later instructions must not enter this attempt.\n",
+                }
+            ]
+            await session.commit()
+    await assert_native_turn_saved_and_cleaned(journey)
+    files = journey.docker.claude_preferences
+    assert json.loads(files["settings.json"]) == {"language": "English"}
+    assert files["CLAUDE.md"] == "Admitted instructions for /workspaces/run.\n"
+    assert files["rules/project.md"] == (
+        "Use /home/app/.omnigent/moonmind/runtime-context for support.\n"
+    )
+    assert set(files) == {"settings.json", "CLAUDE.md", "rules/project.md"}
+    home = journey.docker.mounts["/home/app/.claude"]
+    assert home["src"] == "journey_oauth" and "readonly" not in home
+    for name in files:
+        mount = journey.docker.mounts["/home/app/.claude/" + name]
+        assert "readonly" in mount and mount["src"] != "journey_oauth"
+        assert mount["volume-subpath"] == "files/" + name
+    assert "/home/app/.claude/.credentials.json" not in journey.docker.mounts
+    if journey.static_mode:
+        assert (
+            journey.docker.mounts["/run/moonmind-claude-preferences"]["src"]
+            in journey.docker.volumes
+        )
+    else:
+        assert journey.docker.volumes == {"journey_oauth": {}}
+        assert any(kind == "volume_remove" for kind, _ in journey.events)
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": "claude-native", "static": static, "claudeOauthFiles": True}
+        for static in (False, True)
+    ],
+    indirect=True,
+)
+async def test_claude_oauth_files_cancellation_preserves_enrollment_without_successor(
+    native_journey,
+    monkeypatch,
+):
+    journey = native_journey
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: False
+    )
+    execution = asyncio.create_task(
+        journey.realizer.execute(journey.request, journey.plan)
+    )
+
+    async def cancel_running_turn():
+        execution.cancel()
+
+    journey.server.on_first_message = cancel_running_turn
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(execution, 30)
+    assert journey.docker.create_count == 1 and len(journey.server.session_ids) == 1
+    assert journey.server.host_alive == journey.static_mode
+    assert journey.docker.claude_preferences["CLAUDE.md"].startswith(
+        "Admitted instructions"
+    )
+    if journey.static_mode:
+        assert (
+            journey.docker.mounts["/run/moonmind-claude-preferences"]["src"]
+            in journey.docker.volumes
+        )
+    else:
+        assert journey.docker.volumes == {"journey_oauth": {}}
+        assert any(kind == "volume_remove" for kind, _ in journey.events)
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=journey.plan.planRef,
+            idempotency_key=journey.request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": "claude-native", "static": True, "claudeOauthFiles": True},
+    ],
+    indirect=True,
+)
+async def test_static_claude_oauth_successor_reclaims_only_retired_preferences(
+    native_journey, monkeypatch
+):
+    from tests.integration.omnigent.test_generic_static_host_journey import (
+        test_static_successor_restores_saved_work_and_retains_old_allocation,
+    )
+
+    journey = native_journey
+    await test_static_successor_restores_saved_work_and_retains_old_allocation(
+        journey, monkeypatch
+    )
+    projections = [
+        argv[-1]
+        for argv in journey.docker.commands
+        if argv[:3] == ("docker", "volume", "create")
+        and "moonmind.owner=generic-omnigent-claude-preferences" in argv
+    ]
+    assert len(set(projections)) == 2
+    first, current = dict.fromkeys(projections)
+    assert first not in journey.docker.volumes
+    assert current in journey.docker.volumes
+    assert "journey_oauth" in journey.docker.volumes
+    assert journey.server.host_alive

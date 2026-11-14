@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -305,8 +306,9 @@ class ManagedCheckpointRestoreService:
             ]
         return normalized
 
-    def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any], *, selected_only=False) -> None:
-        expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+    def _materialized_paths(
+        self, staging: Path, manifest: Mapping[str, Any], *, selected_only=False
+    ) -> set[str]:
         selected = None
         if selected_only:
             from .checkpoint_submodules import checkpoint_worktrees
@@ -319,18 +321,32 @@ class ManagedCheckpointRestoreService:
         # A symlink is a leaf entry even when it points at a directory, so exclude
         # only real directories; ``is_dir()`` alone would follow directory symlinks
         # and drop them from the set, spuriously failing valid restores.
-        actual = {
+        return {
             str(path.relative_to(staging))
             for path in staging.rglob("*")
             if ".git" not in path.relative_to(staging).parts
             and (selected is None or path.relative_to(staging).as_posix() in selected)
-            and not self._excluded_from_capture(path.relative_to(staging).as_posix(), manifest)
+            and not self._excluded_from_capture(
+                path.relative_to(staging).as_posix(), manifest
+            )
             and not (path.is_dir() and not path.is_symlink())
         }
-        if actual != set(expected):
+
+    def _verify_materialized(
+        self, staging: Path, manifest: Mapping[str, Any], *, selected_only=False
+    ) -> None:
+        expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        if self._materialized_paths(
+            staging, manifest, selected_only=selected_only
+        ) != set(expected):
             raise CheckpointRestoreError(
                 "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "materialized path set mismatch"
             )
+        self._verify_manifest_entries(staging, expected)
+
+    def _verify_manifest_entries(
+        self, staging: Path, expected: Mapping[str, Any]
+    ) -> None:
         for name, item in expected.items():
             path = staging.joinpath(*PurePosixPath(name).parts)
             if item.get("type") == "symlink":
@@ -344,10 +360,287 @@ class ManagedCheckpointRestoreService:
                 if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
 
-    def _verify_git_candidate(self, workspace, manifest, base):
+    @staticmethod
+    def _input_projection_entries(req, projection) -> dict[str, Mapping[str, Any]]:
+        """Accept only the sandbox owner's exact, durable input description."""
+
+        def invalid(message):
+            return CheckpointRestoreError(
+                "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", message
+            )
+
+        if (
+            not isinstance(req.destination, SandboxRestoreDestination)
+            or req.workspace_policy != "restore_step_input"
+            or not isinstance(projection, Mapping)
+            or projection.get("version") != "input-projection-v1"
+            or not isinstance(projection.get("entries"), list)
+        ):
+            raise invalid("checkpoint input projection is invalid")
+        entries = {}
+        for item in projection["entries"]:
+            if not isinstance(item, Mapping):
+                raise invalid("checkpoint input projection entry is invalid")
+            name, ref = item.get("path"), item.get("ref")
+            if not isinstance(name, str) or not isinstance(ref, str) or not ref.strip():
+                raise invalid("checkpoint input projection identity is invalid")
+            suffix = hashlib.sha256(ref.strip().encode()).hexdigest()[:24]
+            if name not in {
+                f".moonmind/{kind}/{suffix}" for kind in ("restore", "attachments")
+            }:
+                raise invalid("checkpoint input projection path is not deterministic")
+            if (
+                name in entries
+                or not isinstance(item.get("digest"), str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", item["digest"])
+                or any(
+                    not isinstance(item.get(key), int)
+                    or isinstance(item[key], bool)
+                    or item[key] < 0
+                    for key in ("bytes", "mode", "uid", "gid")
+                )
+                or item["mode"] != 0o400
+            ):
+                raise invalid("checkpoint input projection metadata is invalid")
+            entries[name] = item
+        return entries
+
+    def _validate_input_projection_paths(
+        self, workspace, manifest, entries
+    ) -> frozenset[str]:
+        # HEAD includes paths deleted from the index; ls-files includes newly
+        # staged paths. Neither can be replaced by a current worktree scan.
+        saved_entries = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        baseline = set(saved_entries)
+        reused = set()
+        for args in (
+            ["ls-files", "--cached", "-z"],
+            ["ls-tree", "-r", "--name-only", "-z", "HEAD"],
+        ):
+            baseline.update(
+                os.fsdecode(name)
+                for name in self._git_bytes(args, workspace).split(b"\0")
+                if name
+            )
+        for name, item in entries.items():
+            saved_entry = saved_entries.get(name)
+            saved_mode = None
+            if saved_entry is not None:
+                self._expected_mode(
+                    saved_entry
+                )  # Keep canonical malformed-mode errors.
+                saved_mode = int(str(saved_entry.get("mode", "0644")), 8)
+            if saved_entry is not None and (
+                saved_entry.get("type") == "file"
+                and saved_entry.get("digest") == item["digest"]
+                and saved_mode == item["mode"]
+                and all(
+                    key not in saved_entry
+                    or (
+                        isinstance(saved_entry[key], int)
+                        and not isinstance(saved_entry[key], bool)
+                        and saved_entry[key] == item["bytes"]
+                    )
+                    for key in ("bytes", "size")
+                )
+            ):
+                reused.add(name)
+            if any(
+                (name == saved and name not in reused)
+                or name.startswith(saved + "/")
+                or saved.startswith(name + "/")
+                for saved in baseline
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                    "input projection collides with saved work",
+                )
+            target = workspace / name
+            parent = workspace
+            for component in PurePosixPath(name).parts[:-1]:
+                parent = parent / component
+                try:
+                    mode = parent.lstat().st_mode
+                except FileNotFoundError:
+                    break
+                if not stat.S_ISDIR(mode):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                        "input projection parent is not a directory",
+                    )
+            try:
+                mode = target.lstat().st_mode
+            except FileNotFoundError:
+                if name not in reused:
+                    continue
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                    "saved input projection is missing",
+                ) from None
+            if not stat.S_ISREG(mode):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                    "input projection target is not a regular file",
+                )
+            if name in reused:
+                # Matching descriptor metadata alone is not proof of reuse.
+                # Pin and verify the actual saved leaf before any input write.
+                self._verify_projection_file(target, item, baseline_owned=True)
+        return frozenset(reused)
+
+    async def validate_input_projection(
+        self, raw, *, access, admitted_projection
+    ) -> frozenset[str]:
+        """Check collisions and identify saved leaves before input writes."""
+        req = (
+            raw
+            if isinstance(raw, ManagedWorkspaceRestoreRequest)
+            else ManagedWorkspaceRestoreRequest.model_validate(raw)
+        )
+        entries = self._input_projection_entries(req, admitted_projection)
+        workspace, _locator = self._destination(req)
+        manifest = await self._read_retained_manifest(req, access=access)
+        return self._validate_input_projection_paths(workspace, manifest, entries)
+
+    async def _read_retained_manifest(self, req, *, access):
+        payload = await self._read(
+            req.checkpoint.manifest_ref,
+            content_types={
+                "application/json",
+                "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            },
+            access=access,
+        )
+        if _digest(payload) != req.checkpoint.manifest_digest:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed"
+            )
+        return self._normalize_manifest(json.loads(payload))
+
+    @staticmethod
+    def _verify_projection_file(path, item, *, baseline_owned=False) -> bool:
+        from moonmind.utils.workspace_paths import open_regular_file
+
+        try:
+            # Pin every parent and the leaf. A rename after the collision
+            # check must not redirect this read outside the workspace.
+            with open_regular_file(path) as stream:
+                metadata = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or stat.S_IMODE(metadata.st_mode) != item["mode"]
+                    or (
+                        not baseline_owned
+                        and (
+                            metadata.st_uid != item["uid"]
+                            or metadata.st_gid != item["gid"]
+                        )
+                    )
+                    or metadata.st_size != item["bytes"]
+                    or _digest(stream.read(item["bytes"] + 1)) != item["digest"]
+                ):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                        "projected input content or metadata changed",
+                    )
+        except FileNotFoundError:
+            if baseline_owned:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                    "saved input projection is missing",
+                ) from None
+            return False  # Interrupted projection may have promoted a subset.
+        except OSError as exc:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "cannot verify projected input"
+            ) from exc
+        return True
+
+    def _verify_projected_candidate(
+        self, workspace, manifest, entries
+    ) -> frozenset[str]:
+        reused = self._validate_input_projection_paths(workspace, manifest, entries)
+        present = {
+            name
+            for name, item in entries.items()
+            if name not in reused
+            and self._verify_projection_file(workspace / name, item)
+        }
+        expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        if self._materialized_paths(workspace, manifest) != set(expected) | present:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "materialized path set mismatch"
+            )
+        # Reused leaves already matched saved manifest metadata and pinned bytes.
+        # They remain baseline-owned: unlike additions, their raw Git status and
+        # index entries are never removed from checkpoint identity checks.
+        self._verify_manifest_entries(
+            workspace,
+            {name: item for name, item in expected.items() if name not in reused},
+        )
+        return frozenset(present)
+
+    @staticmethod
+    def _checkpoint_status(
+        status: bytes, verified_projection_paths: frozenset[str]
+    ) -> bytes:
+        if not verified_projection_paths:
+            return status
+        removable = {b"?? " + os.fsencode(name) for name in verified_projection_paths}
+        records = status.split(b"\0")
+        kept = []
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if record not in removable:
+                kept.append(record)
+            # Porcelain -z rename/copy records have a second path, not a status
+            # record, even if its filename itself begins with "?? ".
+            if b"R" in record[:2] or b"C" in record[:2]:
+                if index < len(records):
+                    kept.append(records[index])
+                    index += 1
+        return b"\0".join(kept)
+
+    def _saved_sandbox_branch(self, manifest: Mapping[str, Any]) -> str | None:
+        # Managed manifests historically recorded branch as provenance while
+        # restoring detached. Only the sandbox format newly captures restore
+        # intent here; old absent fields retain their original interpretation.
+        if manifest.get("kind") != "worktree_archive" or manifest.get("contentType") == (
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"
+        ):
+            return None
+        git = manifest.get("git", {})
+        if "branch" not in git:
+            return None
+        branch = git["branch"]
+        if not isinstance(branch, str):
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        if branch and self._git(
+            ["check-ref-format", "--branch", branch],
+            code="CHECKPOINT_MANIFEST_CORRUPTED",
+        ) != branch:
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved Git branch is invalid")
+        return branch
+
+    def _verify_git_candidate(
+        self,
+        workspace,
+        manifest,
+        base,
+        *,
+        admitted_target_branch=None,
+        verified_projection_paths=frozenset(),
+    ):
         from .checkpoint_history import capture_git_index_patch
         if self._git(["rev-parse", "HEAD"], workspace) != base:
             raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
+        branch = self._saved_sandbox_branch(manifest)
+        if branch is not None and self._git(["branch", "--show-current"], workspace) not in {
+            branch, admitted_target_branch,
+        }:
+            raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git branch changed")
         index = manifest.get("git", {}).get("indexPatch")
         # This compares already-authorized immutable content; it does not grant
         # export authority or re-scan a checkpoint under a different policy.
@@ -361,6 +654,7 @@ class ManagedCheckpointRestoreService:
             # its index from worktree content during recovery.
             raise CheckpointRestoreError("CHECKPOINT_INDEX_EVIDENCE_UNAVAILABLE", "historical checkpoint lacks immutable index content")
         status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
+        status = self._checkpoint_status(status, verified_projection_paths)
         expected = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
         if expected and _digest(status) != expected:
             raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch")
@@ -547,12 +841,40 @@ class ManagedCheckpointRestoreService:
         raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest,
         *,
         access: ArtifactAccessContext,
+        admitted_target_branch: str | None = None,
+        admitted_projection: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         req = (
             raw
             if isinstance(raw, ManagedWorkspaceRestoreRequest)
             else ManagedWorkspaceRestoreRequest.model_validate(raw)
         )
+        # The checkpoint-branch owner may already have renamed a verified
+        # candidate before its readiness commit was interrupted. This internal
+        # authority is not authored restore data and does not change retained
+        # request/receipt digests. It never changes the branch during restore.
+        if admitted_target_branch == "":
+            admitted_target_branch = None
+        if admitted_target_branch is not None:
+            if (
+                not isinstance(req.destination, SandboxRestoreDestination)
+                or req.workspace_policy != "restore_step_input"
+                or not isinstance(admitted_target_branch, str)
+                or not admitted_target_branch
+                or self._git(
+                    ["check-ref-format", "--branch", admitted_target_branch],
+                    code="CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                ) != admitted_target_branch
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "checkpoint branch override is invalid",
+                )
+        # Only the sandbox readiness owner supplies this internal description
+        # after durably binding its projection. It is never wire request data or
+        # part of the canonical request/receipt digest.
+        if admitted_projection is not None:
+            self._input_projection_entries(req, admitted_projection)
         lock_dir = self.root / "managed_restores"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / (
@@ -563,7 +885,12 @@ class ManagedCheckpointRestoreService:
             with lock_path.open("a+") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
-                    return await self._restore_locked(req, access=access)
+                    return await self._restore_locked(
+                        req,
+                        access=access,
+                        admitted_target_branch=admitted_target_branch,
+                        admitted_projection=admitted_projection,
+                    )
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -572,6 +899,8 @@ class ManagedCheckpointRestoreService:
         req: ManagedWorkspaceRestoreRequest,
         *,
         access: ArtifactAccessContext,
+        admitted_target_branch: str | None = None,
+        admitted_projection: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         record_dir = self.root / "managed_restores"
         record_dir.mkdir(parents=True, exist_ok=True)
@@ -593,29 +922,67 @@ class ManagedCheckpointRestoreService:
                         "idempotency key input drift",
                     )
                 if record.get("status") == "ready" and workspace.is_dir():
-                    if (self._git(["rev-parse", "HEAD"], workspace) != record["result"]["baseCommit"]
-                            or _digest(self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)) != record["result"]["gitStatusDigest"]):
-                        raise CheckpointRestoreError("CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT", "restored candidate was subsequently changed")
-                    manifest_bytes = await self._read(
-                        req.checkpoint.manifest_ref,
-                        content_types={
-                            "application/json",
-                            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
-                        },
-                        access=access,
+                    if (
+                        self._git(["rev-parse", "HEAD"], workspace)
+                        != record["result"]["baseCommit"]
+                    ):
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
+                            "restored candidate was subsequently changed",
+                        )
+                    status = self._git_bytes(
+                        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                        workspace,
                     )
-                    if _digest(manifest_bytes) != req.checkpoint.manifest_digest:
-                        raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed")
-                    manifest = self._normalize_manifest(json.loads(manifest_bytes))
-                    self._verify_materialized(workspace, manifest, selected_only=req.restores_original_owner)
-                    self._verify_git_candidate(workspace, manifest, req.checkpoint.base_commit)
+                    if (
+                        admitted_projection is None
+                        and _digest(status) != record["result"]["gitStatusDigest"]
+                    ):
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
+                            "restored candidate was subsequently changed",
+                        )
+                    manifest = await self._read_retained_manifest(req, access=access)
+                    verified_paths = frozenset()
+                    if admitted_projection is not None:
+                        verified_paths = self._verify_projected_candidate(
+                            workspace,
+                            manifest,
+                            self._input_projection_entries(req, admitted_projection),
+                        )
+                    else:
+                        self._verify_materialized(
+                            workspace,
+                            manifest,
+                            selected_only=req.restores_original_owner,
+                        )
+                    if (
+                        _digest(self._checkpoint_status(status, verified_paths))
+                        != record["result"]["gitStatusDigest"]
+                    ):
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
+                            "restored candidate was subsequently changed",
+                        )
+                    self._verify_git_candidate(
+                        workspace,
+                        manifest,
+                        req.checkpoint.base_commit,
+                        admitted_target_branch=admitted_target_branch,
+                        verified_projection_paths=verified_paths,
+                    )
                     if self._git(["rev-parse", "HEAD"], workspace) != req.checkpoint.base_commit:
                         raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
                     status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
-                    if _digest(status) != record["result"]["gitStatusDigest"]:
+                    if (
+                        _digest(self._checkpoint_status(status, verified_paths))
+                        != record["result"]["gitStatusDigest"]
+                    ):
                         raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git status changed")
                     return record["result"]
 
+        # Lost candidates and new canonical generations still use the strict
+        # cold restore below. A projection description never relaxes extraction.
         workspace_parent = workspace.parent
         if not workspace_parent.resolve().is_relative_to(self.root):
             raise CheckpointRestoreError(
@@ -852,7 +1219,11 @@ class ManagedCheckpointRestoreService:
                 self._git(
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
-                self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                branch = self._saved_sandbox_branch(manifest)
+                if branch:
+                    self._git(["checkout", "-B", branch, req.checkpoint.base_commit], staging)
+                else:
+                    self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
                 await self._restore_index(staging, manifest, access=access)
                 await self._restore_submodules(staging, manifest, access=access)
                 count, size = self._extract(
