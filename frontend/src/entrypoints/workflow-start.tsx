@@ -6710,7 +6710,7 @@ function WorkflowStartPageContent({
   const trustedToolsQuery = useQuery({
     ...configQueryDefaults,
     queryKey: ["workflow-start", "trusted-tools"],
-    enabled: hasToolStep,
+    enabled: hasToolStep || steps.some((step) => step.stepType === "preset"),
     retry: false,
     queryFn: async (): Promise<TrustedToolDefinition[]> => {
       const response = await fetch("/mcp/tools", {
@@ -9340,6 +9340,30 @@ function WorkflowStartPageContent({
     };
   }
 
+  function usesUnselectedTools(
+    candidateSteps: StepState[],
+    publication: Record<string, unknown>,
+    allowPendingPresets = false,
+  ): boolean {
+    if (pageMode.mode !== "create" || remediationDraft ||
+        runtimeAuthored || harnessChoice || providerProfileAuthored ||
+        omnigentLaunchPolicyAuthored || Object.keys(modelSelection).length > 0 ||
+        normalizePublishModeForSubmit(String(publication.mode || "")) !== "none" ||
+        Object.keys(publication).some((key) => key !== "mode")) return false;
+    return candidateSteps.length > 0 && candidateSteps.every((step) => {
+      if (stepRuntimePayload(step)) return false;
+      // Expansion is allowed to run, but cannot authorize omission. The same
+      // check is repeated on the materialized steps before admission.
+      if (step.stepType === "preset") return allowPendingPresets && Boolean(step.presetKey);
+      if (step.stepType !== "tool") return false;
+      const generated = executableGeneratedToolPayload(step);
+      if (generated?.runtime || (generated?.type && generated.type !== "tool")) return false;
+      const toolId = String(generated?.id || generated?.name || step.toolId).trim();
+      return trustedToolsQuery.isSuccess && !trustedToolsQuery.isFetching &&
+        Boolean(trustedToolsQuery.data?.some((tool) => toolDefinitionId(tool) === toolId));
+    });
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmitting || submitExpansionInFlightRef.current) {
@@ -9436,33 +9460,6 @@ function WorkflowStartPageContent({
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    const unsupportedStep = selectedRuntimeUnavailableReason
-      ? undefined
-      : steps.find((step) =>
-          step.runtimeMode
-            ? runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog)
-            : null,
-        );
-    const unsupportedSelection =
-      selectedRuntimeUnavailableReason ||
-      (unsupportedStep
-        ? runtimeUnavailableReason(unsupportedStep.runtimeMode, runtimeTargetCatalog)
-        : null);
-    if (unsupportedSelection) {
-      rejectSubmit(
-        unsupportedSelection,
-        unsupportedStep
-          ? { stepLocalId: unsupportedStep.localId, field: "runtimeMode" }
-          : { control: "harness" },
-      );
-      return;
-    }
-    if (selectedProfileMissing || runtimeProfileMismatch || configurationSelectionError || configurationDetailsUnavailable || selectedConfiguredProfile?.execution_selection_error) {
-      rejectSubmit(profileSelectionError || "Profile configuration is unavailable.", {
-        control: "providerProfile",
-      });
-      return;
-    }
     // Host-policy authoring lives behind Advanced mode, which only hides it: a
     // closed section still submits the policy it holds and counts it as an
     // override.
@@ -9471,80 +9468,6 @@ function WorkflowStartPageContent({
       submittedOmnigentAgentProfileVersion;
     const effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
     const effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
-    // The boot catalog supplies choices, not admission authority. Profiles,
-    // presets and persisted drafts may carry runtime selections beyond that
-    // snapshot. The API validates them against the selected execution profile.
-    if (normalizedRuntime === "omnigent") {
-      if (selectedProfileIsGenericV2) {
-        const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
-        if (!selected || selected.enabled === false || selected.launch_ready === false || selected.execution_selection_error) {
-          rejectSubmit(
-            selected?.execution_selection_error?.message || "Connect and enable this Profile in Settings.",
-            { control: "providerProfile" },
-          );
-          return;
-        }
-      } else {
-      const refreshed = await omnigentCatalogQuery.refetch();
-      if (refreshed.isError) {
-        rejectSubmit("Omnigent readiness could not be verified.");
-        return;
-      }
-      const catalog = refreshed.data;
-      const executionProfile = (catalog?.executionProfiles || []).find(
-        (profile) => profile.ref === omnigentExecutionTargetRef,
-      );
-      const eligibleProfile = catalog?.eligibleProviderProfiles.find(
-        (profile) =>
-          profile.profileId === providerProfile &&
-          profile.runtimeId === selectedOmnigentProviderRuntime,
-      );
-      if (!catalog?.available || !executionProfile?.available) {
-        rejectSubmit(
-          executionProfile?.gateReasons[0]?.message ||
-            catalog?.gateReasons[0]?.message ||
-            "Omnigent readiness could not be verified.",
-        );
-        return;
-      }
-      if (!eligibleProfile) {
-        rejectSubmit(
-          "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
-          { control: "providerProfile" },
-        );
-        return;
-      }
-      const {
-        selectable: refreshedCompatiblePolicies,
-        preferred: refreshedPreferredPolicy,
-      } = resolveOmnigentLaunchPolicyOptions(
-        executionProfile.launchPolicies,
-        selectedOmnigentAgentProfileVersion,
-      );
-      if (
-        !refreshedCompatiblePolicies.some(
-          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
-        ) &&
-        !omnigentLaunchPolicyAuthored
-      ) {
-        if (refreshedPreferredPolicy) {
-          submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
-          setOmnigentLaunchPolicyRef(refreshedPreferredPolicy.ref);
-        }
-      }
-      if (
-        !refreshedCompatiblePolicies.some(
-          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
-        )
-      ) {
-        rejectSubmit(
-          "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
-          { control: "omnigentLaunchPolicyRef" },
-        );
-        return;
-      }
-      }
-    }
     const formPublishMode = normalizePublishModeForSubmit(sourcePublishMode);
     if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
       rejectSubmit("Publish mode must be one of: auto, none, branch, pr.", {
@@ -9716,6 +9639,110 @@ function WorkflowStartPageContent({
             mode: effectivePublishMode,
           }
         : { mode: effectivePublishMode };
+    const unselectedToolWorkflow = usesUnselectedTools(submissionSteps, effectiveWorkflowPublish);
+    if (!unselectedToolWorkflow) {
+      const unsupportedStep = selectedRuntimeUnavailableReason
+        ? undefined
+        : submissionSteps.find((step) =>
+            step.runtimeMode
+              ? runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog)
+              : null,
+          );
+      const unsupportedSelection =
+        selectedRuntimeUnavailableReason ||
+        (unsupportedStep
+          ? runtimeUnavailableReason(unsupportedStep.runtimeMode, runtimeTargetCatalog)
+          : null);
+      if (unsupportedSelection) {
+        rejectSubmit(
+          unsupportedSelection,
+          unsupportedStep
+            ? { stepLocalId: unsupportedStep.localId, field: "runtimeMode" }
+            : { control: "harness" },
+        );
+        return;
+      }
+      if (selectedProfileMissing || runtimeProfileMismatch || configurationSelectionError || configurationDetailsUnavailable || selectedConfiguredProfile?.execution_selection_error) {
+        rejectSubmit(profileSelectionError || "Profile configuration is unavailable.", {
+          control: "providerProfile",
+        });
+        return;
+      }
+      // The boot catalog supplies choices, not admission authority. Profiles,
+      // presets and persisted drafts may carry runtime selections beyond that
+      // snapshot. The API validates them against the selected execution profile.
+      if (normalizedRuntime === "omnigent") {
+        if (selectedProfileIsGenericV2) {
+          const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
+          if (!selected || selected.enabled === false || selected.launch_ready === false || selected.execution_selection_error) {
+            rejectSubmit(
+              selected?.execution_selection_error?.message || "Connect and enable this Profile in Settings.",
+              { control: "providerProfile" },
+            );
+            return;
+          }
+        } else {
+        const refreshed = await omnigentCatalogQuery.refetch();
+        if (refreshed.isError) {
+          rejectSubmit("Omnigent readiness could not be verified.");
+          return;
+        }
+        const catalog = refreshed.data;
+        const executionProfile = (catalog?.executionProfiles || []).find(
+          (profile) => profile.ref === omnigentExecutionTargetRef,
+        );
+        const eligibleProfile = catalog?.eligibleProviderProfiles.find(
+          (profile) =>
+            profile.profileId === providerProfile &&
+            profile.runtimeId === selectedOmnigentProviderRuntime,
+        );
+        if (!catalog?.available || !executionProfile?.available) {
+          rejectSubmit(
+            executionProfile?.gateReasons[0]?.message ||
+              catalog?.gateReasons[0]?.message ||
+              "Omnigent readiness could not be verified.",
+          );
+          return;
+        }
+        if (!eligibleProfile) {
+          rejectSubmit(
+            "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
+            { control: "providerProfile" },
+          );
+          return;
+        }
+        const {
+          selectable: refreshedCompatiblePolicies,
+          preferred: refreshedPreferredPolicy,
+        } = resolveOmnigentLaunchPolicyOptions(
+          executionProfile.launchPolicies,
+          selectedOmnigentAgentProfileVersion,
+        );
+        if (
+          !refreshedCompatiblePolicies.some(
+            (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+          ) &&
+          !omnigentLaunchPolicyAuthored
+        ) {
+          if (refreshedPreferredPolicy) {
+            submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
+            setOmnigentLaunchPolicyRef(refreshedPreferredPolicy.ref);
+          }
+        }
+        if (
+          !refreshedCompatiblePolicies.some(
+            (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+          )
+        ) {
+          rejectSubmit(
+            "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
+            { control: "omnigentLaunchPolicyRef" },
+          );
+          return;
+        }
+        }
+      }
+    }
     if (
       !normalizedRepository &&
       (effectivePublishMode === "branch" || effectivePublishMode === "pr")
@@ -10640,10 +10667,12 @@ function WorkflowStartPageContent({
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       ...(explicitTitle ? { title: explicitTitle } : {}),
-      runtime: {
+      runtime: unselectedToolWorkflow ? {
+        // This matching preview is passive metadata, not an agent selection.
         mode: normalizedRuntime,
-        // Accepting the visible default has the same authority as choosing it.
-        // Omitting `authored` makes the displayed mode explicit at admission.
+        authored: false,
+      } : {
+        mode: normalizedRuntime,
         ...modelSelection,
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(runtime === "omnigent" && selectedConfiguration && pageMode.mode === "create" && !remediationDraft
@@ -11353,9 +11382,16 @@ function WorkflowStartPageContent({
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
-  const isSubmitBlocked =
-    isTemporalFormBlocked || Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
-    (runtime === "omnigent" && !omnigentSelectionEligible);
+  const visiblePresetPublish = workflowPublishForAppliedTemplates(activeAppliedTemplatesForSteps(appliedTemplates, steps));
+  const visiblePublication = visiblePresetPublish &&
+    normalizePublishModeForSubmit(String(visiblePresetPublish.mode || "")) === normalizePublishModeForSubmit(sourcePublishMode)
+      ? visiblePresetPublish : { mode: normalizePublishModeForSubmit(sourcePublishMode) };
+  const visibleUnselectedTools = usesUnselectedTools(steps, visiblePublication);
+  const canResolveUnselectedTools = visibleUnselectedTools || usesUnselectedTools(steps, visiblePublication, true);
+  const isSubmitBlocked = isTemporalFormBlocked || (!canResolveUnselectedTools && (
+    Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
+    (runtime === "omnigent" && !omnigentSelectionEligible)));
+
   // Closing Advanced mode hides its controls but keeps and submits their
   // values, so the collapsed toggle names each non-default value it holds.
   const advancedOverridesSummary = summarizeOverrides({
@@ -12970,7 +13006,7 @@ function WorkflowStartPageContent({
               ))}
             </select>
           </label>
-            {runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
+            {!visibleUnselectedTools && runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
               selectedProfileIsGenericV2
                 ? selectedGenericOmnigentTarget?.available === false
                 : omnigentCatalogQuery.data?.available === false
@@ -12987,7 +13023,7 @@ function WorkflowStartPageContent({
               Backend: {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}
             </span>
           ) : null}
-          {selectedRuntimeUnavailableReason ? (
+          {!visibleUnselectedTools && selectedRuntimeUnavailableReason ? (
             <span className="small" role="status" data-runtime-unavailable>
               {selectedRuntimeUnavailableReason}
             </span>
@@ -12995,7 +13031,7 @@ function WorkflowStartPageContent({
 
           </div>
 
-          {blockedNewWorkDefault ? (
+          {!visibleUnselectedTools && blockedNewWorkDefault ? (
             <p className="small text-amber-700 dark:text-amber-300" id="queue-new-work-default-warning">
               {blockedNewWorkDefault.message} Pick a profile, or{' '}
               <a href="/settings/providers-secrets#new-work-defaults">Fix the default</a>.
@@ -13052,14 +13088,14 @@ function WorkflowStartPageContent({
                 <p className="small" id="queue-auth-profile-hint">
                   Failed to load provider profiles.
                 </p>
-              ) : harness && harnessProviderOptions.length === 0 && !providerProfilesQuery.isPending ? (
+              ) : !visibleUnselectedTools && harness && harnessProviderOptions.length === 0 && !providerProfilesQuery.isPending ? (
                 <p className="small" role="alert" id="queue-provider-profile-empty">
                   No Provider Profiles are configured for {formatHarnessLabel(harness)}. Configure one in
                   Settings or choose another Harness.
                 </p>
               ) : null}
             </div>
-          ) : providerProfilesUnresolvedForRuntime ? null : (
+          ) : providerProfilesUnresolvedForRuntime || visibleUnselectedTools ? null : (
             <div id="queue-provider-profile-wrap">
               {providerProfilesLoadFailedForRuntime ? (
                 <p className="small" role="alert" id="queue-auth-profile-hint">
@@ -13131,17 +13167,17 @@ function WorkflowStartPageContent({
           </div>
         ) : null}
 
-        {runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ? (
+        {!visibleUnselectedTools && runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ? (
           <div className="notice error small" role="alert" id="queue-profile-submit-error">
             Profile cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
-        {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
+        {!visibleUnselectedTools && runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
           <div className="notice error small" role="alert" id="queue-omnigent-submit-error">
             Omnigent cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
-        {runtime.trim().toLowerCase() === "omnigent" && omnigentSelectionEligible && !profileSelectionError && selectedEligibleOmnigentProfile?.busy ? (
+        {!visibleUnselectedTools && runtime.trim().toLowerCase() === "omnigent" && omnigentSelectionEligible && !profileSelectionError && selectedEligibleOmnigentProfile?.busy ? (
           <div className="notice small" role="status">
             This Provider Profile is busy. This workflow will wait for it to become available.
           </div>
@@ -13654,7 +13690,7 @@ function WorkflowStartPageContent({
               aria-label={primaryCta}
               aria-describedby={[
                 submitMessage && !submitErrorDetail ? SUBMIT_MESSAGE_ID : null,
-                runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error)
+                visibleUnselectedTools ? null : runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error)
                   ? "queue-profile-submit-error" : runtime === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? "queue-omnigent-submit-error" : null,
               ].filter(Boolean).join(" ") || undefined}
               title={primaryCtaTooltip}

@@ -25,14 +25,27 @@ if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ $project_name_regex ]]; then
   exit 2
 fi
 
+budget="${MOONMIND_INTEGRATION_TIMEOUT:-0}"
+if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
+  echo "Error: MOONMIND_INTEGRATION_TIMEOUT must be a number of seconds." >&2
+  exit 2
+fi
+RUN_BUDGET_SECONDS=$((10#$budget))
+
+# Reject incompatible timeout tools before creating resources whose cleanup
+# would otherwise be skipped. Preserve the no-timeout host's optional bounds.
+if (( RUN_BUDGET_SECONDS > 0 )) || command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  "$SCRIPT_DIR/gnu_timeout.sh" --version >/dev/null
+fi
+
 # Compose against this wrapper's own project. A leading time bound in seconds
 # applies when coreutils timeout exists; stock macOS lacks it, so there the
 # command stays unbounded.
 compose() {
   local -a bound=()
   if [[ "$1" =~ ^[0-9]+$ ]]; then
-    if command -v timeout >/dev/null 2>&1; then
-      bound=(timeout --kill-after=10s "$1s")
+    if command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+      bound=("$SCRIPT_DIR/gnu_timeout.sh" --kill-after=10s "$1s")
     fi
     shift
   fi
@@ -166,12 +179,6 @@ pytest_args="tests/integration -m 'integration_ci' -p tools.ci.write_backend_mat
 if [[ "${MOONMIND_INTEGRATION_FAIL_FAST:-0}" == "1" ]]; then
   pytest_args+=" --maxfail=1"
 fi
-budget="${MOONMIND_INTEGRATION_TIMEOUT:-0}"
-if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
-  echo "Error: MOONMIND_INTEGRATION_TIMEOUT must be a number of seconds." >&2
-  exit 2
-fi
-RUN_BUDGET_SECONDS=$((10#$budget))
 RUN_STARTED_SECONDS=$SECONDS
 pipeline_compose=("${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR")
 
@@ -185,7 +192,7 @@ run_phase() {
   if (( RUN_BUDGET_SECONDS > 0 )); then
     local remaining=$((RUN_BUDGET_SECONDS - (SECONDS - RUN_STARTED_SECONDS)))
     if (( remaining <= 0 )); then TEST_STATUS=124; return; fi
-    bound=(timeout --signal=INT --kill-after=30s "${remaining}s")
+    bound=("$SCRIPT_DIR/gnu_timeout.sh" --signal=INT --kill-after=30s "${remaining}s")
   fi
   if [[ -n "$output" ]]; then
     ${bound[@]+"${bound[@]}"} "$@" > "$output" 2> >(tee -a "$REPORT_DIR/pytest-integration-ci.log" >&2) &

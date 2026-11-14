@@ -2434,3 +2434,52 @@ async def test_generic_profile_identity_precedes_host_admission_without_starting
     )
     assert result["summary"] == "done"
     assert host_reads == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_kind", ["provider", "host"])
+async def test_loop_deadline_expires_while_capacity_is_unavailable(
+    monkeypatch, wait_kind
+):
+    from moonmind.schemas.agent_runtime_models import (
+        ExecutionBudgetContext,
+        resolve_execution_budget,
+    )
+
+    _configure_workflow_runtime(monkeypatch)
+    now = [datetime(2026, 11, 9, tzinfo=timezone.utc)]
+    run = _RecordingRun()
+    run.grant_on_signal = False
+    run.host_decisions = [{"admitted": False, "retryAfterSeconds": 30}]
+    run._execution_budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 3600}),
+        logicalStepId="verify",
+        attemptId="first",
+        admittedAt=now[0],
+        executionDeadline=now[0] + timedelta(seconds=3),
+        suspendedAt=now[0],
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: now[0])
+    waits = []
+
+    async def wait(*args, timeout):
+        waits.append(timeout.total_seconds())
+        assert timeout.total_seconds() <= 3
+        now[0] += timeout
+        raise TimeoutError
+
+    async def sleep(duration):
+        waits.append(duration.total_seconds())
+        assert duration.total_seconds() <= 3
+        now[0] += duration
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait)
+    monkeypatch.setattr(agent_run_module.workflow, "sleep", sleep)
+    with pytest.raises(TimeoutError):
+        if wait_kind == "provider":
+            await run._admit_omnigent_capacity_before_execution(
+                request=_omnigent_request(), admission=_admission(), parent_info=None
+            )
+        else:
+            await run._await_omnigent_host_capacity(parent_info=None)
+    assert waits == [3]
