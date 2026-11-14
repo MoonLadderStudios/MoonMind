@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import re
 import subprocess
 import tarfile
 import urllib.error
@@ -14,10 +15,10 @@ from tools.ci import repository_security_image as image
 from tools.ci import test_repository_security_image_updates as updates
 
 
-def release(tool, version="1.2.3", prerelease=False):
+def release(tool, version="1.2.3", prerelease=False, *, opengrep_platform="manylinux"):
     names = {
         "opengrep": [
-            f"opengrep_manylinux_{arch}{suffix}"
+            f"opengrep_{opengrep_platform}_{arch}{suffix}"
             for arch in ("x86", "aarch64")
             for suffix in ("", ".sig", ".cert")
         ],
@@ -82,6 +83,35 @@ def test_explicit_versions_and_base_are_resolved_without_compatibility_gates(rel
     assert any(url.endswith("/tags/v9.8.7") for url in releases)
 
 
+@pytest.mark.parametrize("override", ["", "2.0.0"])
+def test_current_opengrep_linux_assets_resolve_for_both_architectures(monkeypatch, override):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        tool = next(t for t, repo in image.REPOSITORIES.items() if f"/{repo}/" in url)
+        return release(tool, "2.0.0", opengrep_platform="linux")
+
+    monkeypatch.setattr(image, "fetch_json", fetch)
+    inputs = image.resolve_inputs(opengrep=override)
+    selected = inputs["tools"]["opengrep"]
+    assert selected["version"] == "v2.0.0"
+    assert set(selected["assets"]) == {"amd64", "arm64"}
+    for arch, suffix in (("amd64", "x86"), ("arm64", "aarch64")):
+        material = selected["assets"][arch]
+        name = f"opengrep_linux_{suffix}"
+        assert material["binary"]["name"] == name
+        assert material["signature"]["name"] == name + ".sig"
+        assert material["certificate"]["name"] == name + ".cert"
+        assert all(
+            asset["browser_download_url"]
+            == f"https://github.com/opengrep/opengrep/releases/download/v2.0.0/{asset['name']}"
+            for asset in material.values()
+        )
+    selector = "tags/v2.0.0" if override else "latest"
+    assert calls[0] == f"https://api.github.com/repos/opengrep/opengrep/releases/{selector}"
+
+
 @pytest.mark.parametrize("flag", ["prerelease", "draft"])
 def test_default_does_not_admit_unstable_release(monkeypatch, flag):
     data = release("opengrep")
@@ -99,10 +129,12 @@ def test_default_does_not_admit_unstable_release(monkeypatch, flag):
         "opengrep_manylinux_x86.cert",
     ],
 )
+@pytest.mark.parametrize("platform", ["manylinux", "linux"])
 def test_missing_architecture_or_required_verification_material_fails_closed(
-    monkeypatch, missing
+    monkeypatch, missing, platform
 ):
-    data = release("opengrep")
+    data = release("opengrep", opengrep_platform=platform)
+    missing = missing.replace("manylinux", platform)
     data["assets"] = [a for a in data["assets"] if a["name"] != missing]
     monkeypatch.setattr(image, "fetch_json", lambda url: data)
     with pytest.raises(image.ImageError, match=missing):
@@ -224,38 +256,48 @@ def test_signature_verification_is_required_and_uses_the_upstream_identity(
         with pytest.raises((subprocess.CalledProcessError, FileNotFoundError)):
             image.verify_signature(
                 tool,
-                "v1.2.3",
                 binary,
                 {
                     "signature": tmp_path / "signature",
                     "certificate": tmp_path / "certificate",
                     "bundle": tmp_path / "bundle",
                 },
+                identity=image.signature_identity(tool, "v1.2.3"),
             )
     else:
         image.verify_signature(
             tool,
-            "v1.2.3",
             binary,
             {
                 "signature": tmp_path / "signature",
                 "certificate": tmp_path / "certificate",
                 "bundle": tmp_path / "bundle",
             },
+            identity=image.signature_identity(tool, "v1.2.3"),
         )
     argv = calls[0]
     assert argv[:2] == ("cosign", "verify-blob")
     assert argv[argv.index("--certificate-oidc-issuer") + 1] == (
         "https://token.actions.githubusercontent.com"
     )
-    ref = (
-        r"refs/(?:tags/v1\.2\.3|heads/release-v1\.2\.3)"
-        if tool == "opengrep"
-        else r"refs/tags/v1\.2\.3"
-    )
-    assert argv[argv.index("--certificate-identity-regexp") + 1] == (
-        rf"^https://github.com/{image.REPOSITORIES[tool]}/\.github/workflows/[^/]+\.ya?ml@{ref}$"
-    )
+    identity = argv[argv.index("--certificate-identity-regexp") + 1]
+    prefix = f"https://github.com/{image.REPOSITORIES[tool]}/.github/workflows/"
+    allowed = [prefix + "release.yml@refs/tags/v1.2.3"]
+    if tool == "opengrep":
+        allowed.extend(
+            [
+                prefix + "release.yml@refs/heads/release-v1.2.3",
+                prefix + "rolling-release.yml@refs/heads/main",
+            ]
+        )
+    assert all(re.fullmatch(identity, subject) for subject in allowed)
+    rejected = [
+        prefix + "release.yml@refs/tags/v1.2.4",
+        prefix + "release.yml@refs/heads/main",
+        prefix + "rolling-release.yml@refs/heads/untrusted",
+        allowed[0].replace(image.REPOSITORIES[tool], "other-owner/other-repository"),
+    ]
+    assert not any(re.fullmatch(identity, subject) for subject in rejected)
     assert not any("insecure" in str(a) or "ignore" in str(a) for a in argv)
 
 
@@ -356,6 +398,7 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
     "entrypoint",
     [
         "moonmind.security.repository_scanner_runner",
+        "moonmind.security.scanner_readiness",
         "moonmind.security.scanner_feeds",
         "moonmind.security.image_assessment_runner",
         "moonmind.security.tls_assessment_runner",
@@ -499,7 +542,9 @@ def test_prepare_verifies_before_installing_any_binary(releases, monkeypatch, tm
     monkeypatch.setattr(
         image,
         "verify_signature",
-        lambda *args: (_ for _ in ()).throw(image.ImageError("invalid signature")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            image.ImageError("invalid signature")
+        ),
     )
     installs = []
     monkeypatch.setattr(image, "install_binary", lambda *args: installs.append(args))
@@ -519,13 +564,23 @@ def test_negative_verification_checks_preserve_original_artifacts(
             (tmp_path / tool / asset["name"]).write_bytes(b"original")
     calls = []
 
-    def reject(tool, tag, binary, material):
-        calls.append((tool, tag, binary, material))
+    def reject(tool, binary, material, *, identity):
+        calls.append((tool, binary, material, identity))
         raise subprocess.CalledProcessError(1, ["cosign"])
 
     monkeypatch.setattr(image, "verify_signature", reject)
     image.verification_negatives(inputs, "amd64", tmp_path)
     assert len(calls) == 8
+    for index in (3, 7):
+        tool, _, _, identity = calls[index]
+        signer = (
+            "rolling-release.yml@refs/heads/main"
+            if tool == "opengrep"
+            else "release.yml@refs/tags/v1.2.3"
+        )
+        subject = f"https://github.com/{image.REPOSITORIES[tool]}/.github/workflows/{signer}"
+        assert re.fullmatch(image.signature_identity(tool, "v1.2.3"), subject)
+        assert not re.fullmatch(identity, subject)
     assert len(json.loads((tmp_path / "verification-negatives.json").read_text())) == 8
     assert all(
         path.read_bytes() == b"original"

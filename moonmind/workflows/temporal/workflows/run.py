@@ -80,6 +80,7 @@ with workflow.unsafe.imports_passed_through():
         TerminateCodexManagedSessionRequest,
         canonical_managed_session_runtime_id,
     )
+    from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
     from moonmind.schemas.temporal_activity_models import (
         ArtifactReadInput,
         ArtifactWriteCompleteInput,
@@ -629,6 +630,7 @@ RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
 )
 RUN_MERGE_GATE_REPOSITORY_AUTHORITY_PATCH = "run-merge-gate-repository-authority-v1"
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
+RUN_ASSESSMENT_RUNTIME_READINESS_PATCH = "run-assessment-runtime-readiness-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
@@ -13222,6 +13224,146 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             skill_payload.get("id"), max_chars=160
         ) or self._coerce_text(skill_payload.get("name"), max_chars=160)
 
+    async def _check_assessment_runtime_readiness(self, parameters: dict[str, Any]) -> None:
+        """Check today's runtime before a fresh assessment starts spending tokens."""
+        task_key = "workflow" if parameters.get("workflow") else "task"
+        task = parameters.get(task_key) or {}
+        steps = task.get("steps") if isinstance(task, Mapping) else None
+        selected_steps = []
+        for step in steps if isinstance(steps, list) else []:
+            if (
+                not isinstance(step, Mapping)
+                or not isinstance(step.get("annotations"), Mapping)
+                or "securityAssessment" not in step["annotations"]
+            ):
+                continue
+            hint = step["annotations"]["securityAssessment"]
+            selected = {
+                "annotations": {
+                    "securityAssessment": (
+                        {
+                            key: hint[key]
+                            for key in ("kind", "phase", "admission")
+                            if key in hint
+                        }
+                        if isinstance(hint, Mapping)
+                        else hint
+                    )
+                }
+            }
+            skill = step.get("skill")
+            if isinstance(skill, Mapping):
+                args = skill.get("args")
+                selected["skill"] = {
+                    "id": skill.get("id"),
+                    "args": {
+                        "assessment": (
+                            args.get("assessment") if isinstance(args, Mapping) else None
+                        )
+                    },
+                }
+            selected_steps.append(selected)
+        if not selected_steps:
+            return
+        # Preserve both authored selection and its admission hint for the worker's
+        # equality check, but never copy instructions, inputs or other steps.
+        selected_parameters = {task_key: {"steps": selected_steps}}
+        if "assessmentScope" in parameters:
+            selected_parameters["assessmentScope"] = parameters["assessmentScope"]
+        try:
+            request = validate_compact_temporal_mapping(
+                {
+                    "parameters": selected_parameters,
+                    "owner": {
+                        "principalId": self._owner_id,
+                        "principalType": self._owner_type,
+                    },
+                },
+                field_name="assessmentReadiness",
+            )
+        except (ValueError, TypeError, RecursionError):
+            raise exceptions.ApplicationError(
+                "Assessment readiness inputs must be compact JSON; reduce the "
+                "selected assessment configuration or scope before retrying.",
+                type="assessment_runtime_input_invalid",
+                non_retryable=True,
+            ) from None
+        fallback = (
+            "Assessment runtime readiness is unavailable; restore the assessment "
+            "runtime worker and check its container backend before retrying."
+        )
+        try:
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "container_job.assessment_readiness"
+            )
+            options = self._execute_kwargs_for_route(route, max_attempts_override=1)
+            # Image preparation may take ten minutes. Bound queue waiting as well
+            # so a missing worker cannot leave a fresh run pending indefinitely.
+            options.update(
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_close_timeout=timedelta(minutes=11),
+            )
+            readiness = await workflow.execute_activity(
+                "container_job.assessment_readiness",
+                request,
+                **options,
+            )
+        except exceptions.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- redact transport details
+            # Worker/transport exceptions can contain credentials or private
+            # paths. Only the activity's bounded operator diagnostics are public.
+            raise exceptions.ApplicationError(
+                fallback, type="assessment_runtime_unavailable", non_retryable=True
+            ) from None
+        valid = (
+            isinstance(readiness, Mapping)
+            and readiness.get("status") in ("ready", "blocked", "unavailable")
+            and isinstance(readiness.get("checks"), list)
+            and all(isinstance(check, Mapping) for check in readiness["checks"])
+            and isinstance(readiness.get("diagnostics"), list)
+            and len(readiness["diagnostics"]) <= 32
+            and all(
+                isinstance(item, Mapping)
+                and isinstance(item.get("code"), str)
+                and 0 < len(item["code"]) <= 80
+                and all(c.isalnum() or c in "_-" for c in item["code"])
+                and isinstance(item.get("action"), str)
+                and 0 < len(item["action"].strip()) <= 400
+                for item in readiness["diagnostics"]
+            )
+        )
+        if (
+            valid
+            and readiness["status"] == "ready"
+            and readiness["checks"]
+            and not readiness["diagnostics"]
+            and all(
+                check.get("status") in ("ready", "unverified")
+                for check in readiness["checks"]
+            )
+        ):
+            workflow.upsert_memo(
+                validate_compact_temporal_mapping(
+                    {
+                        "assessmentReadiness": {
+                            "status": "ready",
+                            "checks": [dict(check) for check in readiness["checks"]],
+                        }
+                    },
+                    field_name="assessmentReadinessResult",
+                )
+            )
+            return
+        message = fallback
+        if valid and readiness["diagnostics"]:
+            message = "Assessment runtime is not ready: " + "; ".join(
+                f"{item['code']}: {item['action']}" for item in readiness["diagnostics"][:4]
+            )
+        raise exceptions.ApplicationError(
+            message, type="assessment_runtime_unavailable", non_retryable=True
+        )
+
     async def _run_planning_stage(
         self,
         *,
@@ -13342,6 +13484,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             type="saved_preset_capabilities_stale",
                             non_retryable=True,
                         )
+        if (
+            workflow.patched(RUN_ASSESSMENT_RUNTIME_READINESS_PATCH)
+            and not getattr(workflow.info(), "continued_run_id", None)
+        ):
+            await self._check_assessment_runtime_readiness(parameters)
         if plan_ref:
             return plan_ref
 

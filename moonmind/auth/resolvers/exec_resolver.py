@@ -48,6 +48,7 @@ class ExecSecretResolver(SecretBackendResolver):
 
         args = parts[1:] if len(parts) > 1 else []
 
+        proc = None
         try:
             # We use exec directly (not shell) to prevent shell injection vulnerabilities
             proc = await asyncio.create_subprocess_exec(
@@ -57,6 +58,18 @@ class ExecSecretResolver(SecretBackendResolver):
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await proc.communicate()
+        except asyncio.CancelledError:
+            # Readiness may time out before collection starts. Its resolver
+            # process must stop with that check rather than survive the caller.
+            if proc is not None:
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        # The process exited before kill; communicate still reaps it.
+                        pass
+                await proc.communicate()
+            raise
         except FileNotFoundError as e:
             logger.error("exec_binary_not_found", binary=command, error=str(e))
             raise SecretMissingError(f"Executable not found: {command}") from e
