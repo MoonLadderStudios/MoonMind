@@ -118,6 +118,9 @@ def _make_wrapper(tmp_path: Path, repo: Path) -> Wrapper:
     tools = repo / "tools"
     tools.mkdir(parents=True)
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
+    helper = tools / "gnu_timeout.sh"
+    helper.write_text((SCRIPT.parent / helper.name).read_text())
+    helper.chmod(0o755)
     (tools / "test_worker_count.py").write_text("print(4)\n")
     (repo / "docker-compose.test.yaml").write_text("services: {}\n")
     (repo / ".env-template").write_text("TEMPLATE=1\n")
@@ -424,3 +427,34 @@ def test_termination_runs_bounded_cleanup_and_reports_the_signal(
         "test_case FAILED"
         in (wrapper.repo / REPORT / "pytest-integration-ci.log").read_text()
     )
+
+
+def test_incompatible_timeout_fails_before_creating_resources(wrapper: Wrapper) -> None:
+    binaries = Path(wrapper.env["PATH"].split(os.pathsep)[0])
+    for name in ("gnutimeout", "timeout", "gtimeout"):
+        candidate = binaries / name
+        candidate.write_text('#!/bin/bash\necho "timeout (uutils coreutils) 0.10.0"\n')
+        candidate.chmod(0o755)
+    status, output, _ = wrapper.run()
+    assert status == 125
+    assert "GNU coreutils timeout is required" in output
+    assert not wrapper.calls_path.exists()
+
+
+@pytest.mark.parametrize("budget", ["0", "2"])
+def test_missing_timeout_preserves_only_unbounded_host_mode(wrapper: Wrapper, budget) -> None:
+    import shutil
+
+    binaries = Path(wrapper.env["PATH"].split(os.pathsep)[0])
+    for name in ("bash", "dirname", "cp", "mkdir", "rm", "tee", "cat", "python3"):
+        (binaries / name).symlink_to(shutil.which(name))
+    wrapper.env["PATH"] = str(binaries)
+    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = budget
+    status, output, _ = wrapper.run()
+    if budget == "0":
+        assert status == 0, output
+        assert wrapper.downs() == 1
+    else:
+        assert status == 125
+        assert "GNU coreutils timeout is required" in output
+        assert not wrapper.calls_path.exists()
