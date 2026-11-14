@@ -590,6 +590,7 @@ async def publish_claim_comment(
 
     observed_body = str(observed.get("body") or "")
     acknowledged = False
+    outcome_unknown = False
     for attempt in range(3):
         if attempt:
             await asyncio.sleep(attempt)
@@ -607,18 +608,32 @@ async def publish_claim_comment(
             if not acknowledged:
                 detail = f"{result.get('reasonCode') or 'update_failed'}: {result.get('summary') or 'GitHub rejected the owned comment update'}"
                 status = result.get("httpStatus")
+                # A later rejection cannot disprove an earlier uncertain write.
+                outcome_unknown = (
+                    outcome_unknown or result.get("reasonCode") == "outcome_unknown"
+                )
                 retryable = result.get("reasonCode") == "outcome_unknown" or (
                     isinstance(status, int) and (status == 429 or 500 <= status < 600)
                 )
                 if not retryable:
+                    if outcome_unknown:
+                        raise ValueError(
+                            f"claim_update_pending: {detail}; "
+                            f"first update outcome: {first_update_failure}"
+                        )
                     raise ValueError(f"claim_update_failed: {detail}")
                 first_update_failure = first_update_failure or detail
         observed_body = await readback()
         if observed_body == body:
             await store.confirm_comment_update(receipt.owner, body)
             return comment_id
+    reason = (
+        "claim_update_pending"
+        if acknowledged or outcome_unknown
+        else "claim_update_failed"
+    )
     raise ValueError(
-        "claim_update_pending: GitHub has not confirmed the intended comment after bounded retries"
+        f"{reason}: GitHub has not confirmed the intended comment after bounded retries"
         + (
             f"; first update outcome: {first_update_failure}"
             if first_update_failure

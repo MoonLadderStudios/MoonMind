@@ -184,7 +184,10 @@ async def journey(tmp_path, monkeypatch, request):
             )
             released = '"activity":"released"' in payload["body"]
             if released and state.get("reject_release"):
-                self.respond({"message": "fixture temporary failure"}, 503)
+                self.respond(
+                    {"message": "fixture release rejection"},
+                    state.get("release_rejection_status", 503),
+                )
                 return
             if state.get("stale_reads_per_update"):
                 state["stale_comment_snapshot"] = [dict(item) for item in state["comments"]]
@@ -1464,6 +1467,58 @@ async def test_owned_comment_update_exhaustion_retains_intent_and_transport_erro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unknown_first,rejection_status,reason,patches",
+    [
+        (False, 503, "claim_update_failed", 3),
+        (True, 503, "claim_update_pending", 3),
+        (True, 403, "claim_update_pending", 2),
+    ],
+)
+async def test_owned_comment_rejection_preserves_any_earlier_unknown_outcome(
+    journey, unknown_first, rejection_status, reason, patches
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-rejected"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = render_attempt_comment(
+        replace(parse_attempt_comment(receipt.comment_body).handoff, activity="released")
+    )
+    state["reject_release"] = True
+    state["release_rejection_status"] = rejection_status
+    state["lose_updates_before_apply"] = int(unknown_first)
+
+    diagnostic = "RemoteProtocolError" if unknown_first else "HTTP 503"
+    with pytest.raises(ValueError, match=f"{reason}:.*{diagnostic}") as error:
+        await publish_claim_comment(store, receipt, service, body)
+
+    if rejection_status == 403:
+        assert "HTTP 403" in str(error.value)
+    assert state["patches"] == patches
+    assert state["posts"] == 1
+    assert state["comments"][0]["body"] == receipt.comment_body
+    pending = await store.get(receipt.owner)
+    assert pending.pending_comment_body == body
+    assert pending.comment_body == receipt.comment_body
+    assert not pending.released and not pending.ownership_ended
+
+
+@pytest.mark.asyncio
 async def test_owned_comment_update_does_not_retry_permanent_denial(journey):
     from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
 
@@ -1509,6 +1564,34 @@ async def test_owned_comment_update_polls_acknowledged_write_without_repeating(j
     assert state["patches"] == 1
     assert state["comments"][0]["body"] == body
     assert (await store.get(receipt.owner)).pending_comment_body is None
+
+
+@pytest.mark.asyncio
+async def test_owned_comment_acknowledged_without_readback_remains_pending(journey):
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-handoff-unconfirmed"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    body = receipt.comment_body + "\n\nPreserved implementation pull request."
+    state["stale_reads_per_update"] = 10
+
+    with pytest.raises(ValueError, match="claim_update_pending"):
+        await publish_claim_comment(store, receipt, service, body)
+
+    assert state["patches"] == 1
+    assert state["comments"][0]["body"] == body
+    pending = await store.get(receipt.owner)
+    assert pending.pending_comment_body == body
+    assert pending.comment_body == receipt.comment_body
+    assert not pending.released and not pending.ownership_ended
 
 
 @pytest.mark.asyncio
