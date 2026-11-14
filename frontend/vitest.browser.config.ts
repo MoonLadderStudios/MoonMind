@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
@@ -34,6 +35,58 @@ export default defineConfig({
       headless: true,
       provider: playwright(),
       commands: {
+        prepareCaptureViewport: async ({ page }, width: number, height: number) => {
+          const original = page.viewportSize();
+          // Size the runner before Vitest sizes its test iframe or the app renders.
+          // This allows Vitest to select scale(1) without changing a live portal.
+          await page.setViewportSize({ width: width + 320, height: height + 320 });
+          return original;
+        },
+        restoreCaptureViewport: async ({ page }, original: { width: number; height: number } | null) => {
+          if (original) await page.setViewportSize(original);
+        },
+        captureViewport: async ({ page, iframe }, fileName: string, width: number, height: number) => {
+          const geometry = async () => ({
+            frame: await iframe.owner().boundingBox(),
+            document: await iframe.locator('html').evaluate(element => {
+              const doc = element.ownerDocument;
+              const win = doc.defaultView!;
+              const root = element.getBoundingClientRect();
+              return {
+                innerWidth: win.innerWidth, innerHeight: win.innerHeight,
+                clientWidth: doc.documentElement.clientWidth,
+                rootWidth: root.width, scrollX: win.scrollX, scrollY: win.scrollY,
+                usableRight: Math.min(win.innerWidth, doc.documentElement.clientWidth, root.right),
+                tooltips: Array.from(doc.querySelectorAll<HTMLElement>('[role="tooltip"]'))
+                  .filter(panel => !panel.hidden && win.getComputedStyle(panel).visibility !== 'hidden')
+                  .map(panel => {
+                    const box = panel.getBoundingClientRect();
+                    return { left: box.left, right: box.right, width: box.width, inlineLeft: panel.style.left };
+                  }),
+              };
+            }),
+          });
+          const before = await geometry();
+          console.info('captureViewport before', fileName, JSON.stringify(before));
+          // Whole-runner evidence distinguishes a browser capture issue from a
+          // clipped element. Neither capture scrolls the iframe or changes its scale.
+          await page.screenshot({ path: resolve('artifacts/browser-layout', fileName.replace(/\.png$/, '-runner.png')) });
+          if (!before.frame) throw new Error('Test iframe has no capture bounds');
+          await page.screenshot({ path: resolve('artifacts/browser-layout', fileName), clip: before.frame });
+          const after = await geometry();
+          console.info('captureViewport after', fileName, JSON.stringify(after));
+          for (const sample of [before, after]) {
+            if (sample.document.innerWidth !== width || sample.document.innerHeight !== height
+              || !sample.frame || Math.abs(sample.frame.width - width) > 1 || Math.abs(sample.frame.height - height) > 1) {
+              throw new Error(`Unexpected scaled or resized test viewport: ${JSON.stringify(sample)}`);
+            }
+            for (const panel of sample.document.tooltips) {
+              if (panel.left < -1 || panel.right > sample.document.usableRight + 1) {
+                throw new Error(`Tooltip exceeds usable viewport during capture: ${JSON.stringify(sample)}`);
+              }
+            }
+          }
+        },
         replaceInputByKeyboard: async ({ iframe }, label: string, text: string) => {
           const input = iframe.getByLabel(label, { exact: true });
           await input.click();

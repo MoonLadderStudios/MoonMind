@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
+import { isValidElement, useEffect, useId, useRef, useState, type ReactElement } from 'react';
 import { Button } from './Button';
+import { InfoTooltip } from './InfoTooltip';
 import { resolveSchemaProperty } from '../lib/assessmentProjects';
 
 export interface SchemaCapabilityDetail {
@@ -423,6 +424,7 @@ export function SchemaCapabilityFields({
   onChange,
   onGitHubIssueRepositoryChange,
   defaultIssueRepository = "",
+  advancedDisclosure = true,
 }: {
   fields: Array<[string, unknown]>;
   detail: Pick<SchemaCapabilityDetail, "inputSchema" | "uiSchema" | "defaults">;
@@ -434,6 +436,7 @@ export function SchemaCapabilityFields({
   onChange: (name: string, value: unknown) => void;
   onGitHubIssueRepositoryChange?: (repository: string) => void;
   defaultIssueRepository?: string;
+  advancedDisclosure?: boolean;
 }): ReactElement | null {
   const fieldGroupId = useId();
   // Dependent defaults are resolved against the current values so a field whose
@@ -442,13 +445,20 @@ export function SchemaCapabilityFields({
   const guidedNames = schemaGuidedInputNames(detail.inputSchema);
   const isAdvanced = ([name]: [string, unknown]) =>
     capabilityFieldUiSchema(detail.uiSchema, name).advanced === true && !guidedNames.has(name);
-  const advancedFields = fields.filter(isAdvanced);
+  const orderedFields = [...fields].sort(([left], [right]) => {
+    const order = (name: string) => {
+      const value = capabilityFieldUiSchema(detail.uiSchema, name).order;
+      return typeof value === "number" && Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    return order(left) - order(right);
+  });
+  const advancedFields = advancedDisclosure ? orderedFields.filter(isAdvanced) : [];
   const hasAdvancedErrors = advancedFields.some(([name]) =>
     Object.keys(errors).some(path => path === name || path.startsWith(`${name}.`)),
   );
-  const advancedDisclosure = useRef<HTMLDetailsElement>(null);
+  const advancedDisclosureRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
-    if (hasAdvancedErrors && advancedDisclosure.current) advancedDisclosure.current.open = true;
+    if (hasAdvancedErrors && advancedDisclosureRef.current) advancedDisclosureRef.current.open = true;
   }, [errors, hasAdvancedErrors]);
   if (fields.length === 0) return null;
   const renderField = ([name, rawSchema]: [string, unknown]) => {
@@ -459,8 +469,9 @@ export function SchemaCapabilityFields({
         const value = values[name] !== undefined ? values[name] : safeCapabilityDefault(effectiveDefaults, name, fieldSchema);
         const inputId = `queue-capability-input-${fieldGroupId}-${name}`;
         const error = errors[name];
-        const description = String(fieldSchema.description || "").trim();
-        const describedBy = [description ? `${inputId}-hint` : '', error ? `${inputId}-error` : ''].filter(Boolean).join(' ') || undefined;
+        const fieldDescription = String(fieldSchema.description || "").trim();
+        const description = uiSchema.helpDisplay === "tooltip" ? "" : fieldDescription;
+        const describedBy = [fieldDescription ? `${inputId}-hint` : '', error ? `${inputId}-error` : ''].filter(Boolean).join(' ') || undefined;
         const choices = schemaChoiceOptions(fieldSchema);
         // Omission is distinct from an authored empty object/list. Only offer
         // it when no semantic default would immediately recreate the value.
@@ -569,21 +580,24 @@ export function SchemaCapabilityFields({
         }
         if (fieldSchema.type === "boolean") {
           return (
-            <div key={name}><label htmlFor={inputId}>
-              {label}
-              <input
-                id={inputId}
-                aria-label={label}
-                type="checkbox"
-                checked={Boolean(value)}
-                disabled={disabled}
-                aria-invalid={Boolean(error)}
-                aria-describedby={describedBy}
-                onChange={(event) => onChange(name, event.target.checked)}
-              />
+            <div key={name}>
+              <label htmlFor={inputId} className="schema-capability-checkbox">
+                <input
+                  id={inputId}
+                  aria-label={label}
+                  type="checkbox"
+                  checked={Boolean(value)}
+                  disabled={disabled}
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={describedBy}
+                  onChange={(event) => onChange(name, event.target.checked)}
+                />
+                <span>{label}</span>
+              </label>
               {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
-            </label>{omitControl}</div>
+              {omitControl}
+            </div>
           );
         }
         const itemSchema = recordValue(fieldSchema.items);
@@ -854,11 +868,33 @@ export function SchemaCapabilityFields({
           </label>{omitControl}</div>
         );
       };
+  const renderPresentedField = (field: [string, unknown]) => {
+    const [name, rawSchema] = field;
+    const schema = recordValue(rawSchema);
+    const ui = capabilityFieldUiSchema(detail.uiSchema, name);
+    const description = String(schema.description || "").trim();
+    const tooltip = ui.helpDisplay === "tooltip" && Boolean(description);
+    const rendered = renderField(field);
+    // Structured fieldsets own their grid span. Do not interpose a wrapper
+    // unless presentation metadata actually needs one; carry the span if it does.
+    if (!tooltip && ui.fullWidth !== true) return rendered;
+    const fullWidth = ui.fullWidth === true || (
+      isValidElement<{ className?: string }>(rendered)
+      && rendered.props.className?.split(/\s+/).includes("col-span-full")
+    );
+    const label = capabilityFieldLabel(name, schema);
+    return <div key={name} className={`schema-capability-field${fullWidth ? " schema-capability-field--full-width" : ""}${tooltip ? " schema-capability-field--tooltip" : ""}`}>
+      {rendered}
+      {tooltip ? <InfoTooltip label={`Help for ${label}`} title={`Help for ${label}`}
+        panelId={`queue-capability-input-${fieldGroupId}-${name}-hint`}
+        className="schema-capability-field-help">{description}</InfoTooltip> : null}
+    </div>;
+  };
   return <>
-    <div className="grid-2">{fields.filter(field => !isAdvanced(field)).map(renderField)}</div>
-    {advancedFields.length > 0 ? <details ref={advancedDisclosure}>
+    <div className="grid-2 schema-capability-fields">{orderedFields.filter(field => !advancedDisclosure || !isAdvanced(field)).map(renderPresentedField)}</div>
+    {advancedFields.length > 0 ? <details ref={advancedDisclosureRef}>
       <summary>Advanced {String(detail.inputSchema?.title || "input")} options</summary>
-      <div className="grid-2">{advancedFields.map(renderField)}</div>
+      <div className="grid-2 schema-capability-fields">{advancedFields.map(renderPresentedField)}</div>
     </details> : null}
   </>;
 }

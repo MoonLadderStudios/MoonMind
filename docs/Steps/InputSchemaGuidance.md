@@ -201,3 +201,9 @@ The Skill remains selectable. An unsupported publishing or target authority cont
 The shared normalizer, renderer, expander, API, and runtime enforce these semantics across apply/reapply, unexpanded submit, API/MCP, schedules, edit/rerun, and recovery. The [UI design](SkillInputSchemaUIGeneration.md#backend-validation) defines error routing and handoff; [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns policy admission and reconstruction. Verify the actual producer/consumer boundaries rather than treating a correct form as execution-policy proof.
 
 These are target contracts, not an assertion that the current form or seeds already satisfy them.
+
+## Preset field presentation
+
+Preset fields retain their execution schema and defaults independently of presentation. Use `annotations.uiSchema.<field>` to set `order` (a numeric display priority), `fullWidth: true` for a full grid row, or `helpDisplay: tooltip` to put a concise field description behind an accessible help icon. Descriptions stay inline when no help display is specified. Tooltips support keyboard focus, Escape, and touch; keep them short rather than moving documentation into a popup.
+
+Mark optional configuration `advanced: true` to hide it in Create until Advanced mode is enabled. Create uses that page-level control without an additional field disclosure; hiding a field does not reset its value. Keep the primary task input visible and place detailed operating policy in documentation, not form descriptions.

@@ -1,3 +1,4 @@
+import { InfoTooltip } from "../components/InfoTooltip";
 import { schemaProperties, schemaRequired, schemaAlternativeRequiredGroups, schemaGuidedInputNames, capabilityFieldLabel, capabilityFieldUiSchema, capabilityFieldVisible, capabilityWidgetName, safeCapabilityDefault, dependentCapabilityDefault, recordValue, OWNER_REPO_PATTERN, SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
 export { SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
 import { OrganisationalEvidenceEditor } from '../components/OrganisationalEvidenceEditor';
@@ -4855,80 +4856,6 @@ function PresetLayersIcon() {
       <path d="M4 12l8 4 8-4" />
       <path d="M4 16l8 4 8-4" />
     </svg>
-  );
-}
-
-function InfoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="9.5" strokeWidth="2" />
-      <path d="M12 11v6.25" strokeWidth="2.6" strokeLinecap="round" />
-      <circle
-        cx="12"
-        cy="7.75"
-        r="1.45"
-        fill="currentColor"
-        stroke="none"
-      />
-    </svg>
-  );
-}
-
-function InfoTooltip({
-  label,
-  panelId,
-  title,
-  className,
-  children,
-}: {
-  label: string;
-  panelId: string;
-  title: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  const [isHovered, setIsHovered] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
-  const isVisible = (isHovered || isFocused) && !isDismissed;
-  const visibilityClass = isVisible
-    ? " queue-info-tooltip--visible"
-    : isDismissed
-      ? " queue-info-tooltip--dismissed"
-      : "";
-  return (
-    <span
-      className={`queue-info-tooltip${className ? ` ${className}` : ""}${visibilityClass}`}
-      onMouseEnter={() => {
-        setIsHovered(true);
-        setIsDismissed(false);
-      }}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      <button
-        type="button"
-        className="queue-step-icon-button queue-info-toggle"
-        aria-label={label}
-        aria-describedby={panelId}
-        title={title}
-        onFocus={() => {
-          setIsFocused(true);
-          setIsDismissed(false);
-        }}
-        onBlur={() => setIsFocused(false)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setIsDismissed(true);
-          }
-        }}
-      >
-        <InfoIcon />
-      </button>
-      <span id={panelId} role="tooltip" className="queue-info-tooltip-panel">
-        {children}
-      </span>
-    </span>
   );
 }
 
@@ -12544,7 +12471,7 @@ function WorkflowStartPageContent({
                               {skillContractNotice}
                             </p>
                           ) : null}
-                        <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
+                        <SchemaCapabilityFields advancedDisclosure={false} defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
                           fields={visibleSkillSchemaFields}
                           detail={selectedSkillDetail}
                           values={step.presetInputValues}
@@ -12605,7 +12532,7 @@ function WorkflowStartPageContent({
                       aria-label="Step Preset Options"
                     >
                       {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
-                        <SchemaCapabilityFields defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
+                        <SchemaCapabilityFields advancedDisclosure={false} defaultIssueRepository={readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY)}
                           key={step.presetKey}
                           fields={visiblePresetSchemaFields}
                           detail={step.presetDetail}

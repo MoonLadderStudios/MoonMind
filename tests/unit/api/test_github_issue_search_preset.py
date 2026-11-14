@@ -1392,10 +1392,25 @@ async def test_catalog_definition_exposes_all_authors_checkbox_below_search(tmp_
     assert prop["title"] == "Include issues created by other users"
     assert (
         prop["description"]
-        == "By default, only issues created by the GitHub account used for this search are eligible."
+        == "Otherwise, search only issues created by your GitHub account."
     )
     assert prop["default"] is False
-    assert current["uiSchema"]["include_all_authors"] == {"widget": "checkbox"}
+    assert current["uiSchema"]["include_all_authors"] == {
+        "widget": "checkbox",
+        "order": 20,
+        "helpDisplay": "tooltip",
+    }
+    ui = current["uiSchema"]
+    assert (
+        ui["issue_search"]["order"]
+        < ui["include_all_authors"]["order"]
+        < ui["run_verify"]["order"]
+    )
+    assert ui["issue_search"]["fullWidth"] is True
+    assert ui["run_verify"]["helpDisplay"] == "tooltip"
+    assert ui["constraints"]["advanced"] is True
+    assert ui["constraints"]["widget"] == "textarea"
+    assert ui["constraints"]["fullWidth"] is True
     assert current["defaults"]["include_all_authors"] is False
     assert current["presetDigest"]
     schema_inputs = {item["name"]: item for item in current["inputs"]}

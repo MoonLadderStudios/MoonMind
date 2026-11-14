@@ -7515,67 +7515,22 @@ textarea {
 }
 
 .queue-info-tooltip-panel {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  min-width: 16rem;
-  max-width: min(22rem, 90vw);
+  position: fixed;
+  z-index: 1000;
+  width: min(22rem, calc(100% - 1rem));
+  min-width: 0;
+  max-width: calc(100% - 1rem);
+  max-height: calc(100% - 1rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
   padding: 0.6rem 0.75rem;
   border: 1px solid rgb(var(--mm-border, 220 220 220));
   border-radius: 0.5rem;
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-ink));
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.12);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 150ms ease,
-    visibility 150ms ease;
   display: grid;
   gap: 0.4rem;
-}
-
-@media (hover: hover){
-
-.queue-info-tooltip:hover:where(:not(:disabled, [aria-disabled="true"])) .queue-info-tooltip-panel {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-}
-}
-
-.queue-info-tooltip:focus-within .queue-info-tooltip-panel,
-.queue-info-tooltip--visible .queue-info-tooltip-panel {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-}
-
-.queue-info-tooltip--dismissed .queue-info-tooltip-panel {
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-}
-
-.queue-info-tooltip-panel::before {
-  content: "";
-  position: absolute;
-  top: -0.5rem;
-  left: 0;
-  right: 0;
-  height: 0.5rem;
-}
-
-@media (max-width: 640px) {
-  .queue-info-tooltip-panel {
-    left: 0;
-    right: auto;
-    transform: none;
-    max-width: min(22rem, calc(100vw - 1rem));
-  }
 }
 
 .queue-info-tooltip-panel .notice {
@@ -10883,3 +10838,45 @@ button:disabled,
 .mm-button-reason { flex-basis: 100%; color: rgb(var(--mm-muted)); font-size: 0.8rem; }
 .queue-inline-selector-label { display: block; padding-left: 0.15rem; font-size: 0.8rem; color: rgb(var(--mm-muted)); }
 .queue-floating-bar .queue-inline-selector svg { top: auto; bottom: 0.6rem; transform: none; }
+
+/* Schema fields can opt into concise contextual help without changing inputs. */
+.schema-capability-field {
+  position: relative;
+  min-width: 0;
+}
+
+.schema-capability-field--full-width {
+  grid-column: 1 / -1;
+}
+
+.schema-capability-field--tooltip > label,
+.schema-capability-field--tooltip > :first-child > label {
+  padding-inline-end: 2rem;
+}
+
+.schema-capability-field-help {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+}
+
+.schema-capability-fields .schema-capability-checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  min-height: 2rem;
+}
+
+.schema-capability-checkbox input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+}
+
+
+
+.queue-info-tooltip-panel[hidden] {
+  display: none;
+}

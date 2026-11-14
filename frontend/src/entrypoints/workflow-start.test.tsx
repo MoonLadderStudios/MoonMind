@@ -14391,7 +14391,7 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(secondSkillInput.placeholder).toBe("optional Skill name");
     fireEvent.click(within(second).getByRole("button", { name: "Skill info for Step 2" }));
     expect(
-      await within(second).findByText(
+      await within(await screen.findByRole("tooltip")).findByText(
         "Skill is optional. Leave blank to run this step without a selected Skill.",
       ),
     ).toBeTruthy();
@@ -18795,17 +18795,17 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).queryByLabelText("Branch")).toBeNull();
     fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
     expect(
-      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+      await within(await screen.findByRole("tooltip")).findByTestId("skill-optional-inputs-notice-0"),
     ).toBeTruthy();
     expect(
-      within(step).getByTestId("skill-optional-inputs-notice-0").textContent,
+      within(screen.getByRole("tooltip")).getByTestId("skill-optional-inputs-notice-0").textContent,
     ).toContain("Advanced mode");
 
     fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     expect(await within(step).findByLabelText("Branch")).toBeTruthy();
     expect(
-      within(step).queryByTestId("skill-optional-inputs-notice-0"),
+      screen.queryByTestId("skill-optional-inputs-notice-0"),
     ).toBeNull();
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
@@ -18889,7 +18889,7 @@ describe("Task Create schema-driven capability inputs", () => {
     });
     fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
     expect(
-      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+      await within(await screen.findByRole("tooltip")).findByTestId("skill-optional-inputs-notice-0"),
     ).toBeTruthy();
     expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
     fireEvent.click(screen.getByLabelText("Advanced mode"));
@@ -19027,7 +19027,7 @@ describe("Task Create schema-driven capability inputs", () => {
     });
     fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
     expect(
-      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+      await within(await screen.findByRole("tooltip")).findByTestId("skill-optional-inputs-notice-0"),
     ).toBeTruthy();
     expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
     fireEvent.click(screen.getByLabelText("Advanced mode"));
