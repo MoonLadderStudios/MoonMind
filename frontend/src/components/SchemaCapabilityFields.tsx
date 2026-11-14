@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
+import { isValidElement, useEffect, useId, useRef, useState, type ReactElement } from 'react';
 import { Button } from './Button';
 import { InfoTooltip } from './InfoTooltip';
 import { resolveSchemaProperty } from '../lib/assessmentProjects';
@@ -874,9 +874,17 @@ export function SchemaCapabilityFields({
     const ui = capabilityFieldUiSchema(detail.uiSchema, name);
     const description = String(schema.description || "").trim();
     const tooltip = ui.helpDisplay === "tooltip" && Boolean(description);
+    const rendered = renderField(field);
+    // Structured fieldsets own their grid span. Do not interpose a wrapper
+    // unless presentation metadata actually needs one; carry the span if it does.
+    if (!tooltip && ui.fullWidth !== true) return rendered;
+    const fullWidth = ui.fullWidth === true || (
+      isValidElement<{ className?: string }>(rendered)
+      && rendered.props.className?.split(/\s+/).includes("col-span-full")
+    );
     const label = capabilityFieldLabel(name, schema);
-    return <div key={name} className={`schema-capability-field${ui.fullWidth === true ? " schema-capability-field--full-width" : ""}${tooltip ? " schema-capability-field--tooltip" : ""}`}>
-      {renderField(field)}
+    return <div key={name} className={`schema-capability-field${fullWidth ? " schema-capability-field--full-width" : ""}${tooltip ? " schema-capability-field--tooltip" : ""}`}>
+      {rendered}
       {tooltip ? <InfoTooltip label={`Help for ${label}`} title={`Help for ${label}`}
         panelId={`queue-capability-input-${fieldGroupId}-${name}-hint`}
         className="schema-capability-field-help">{description}</InfoTooltip> : null}

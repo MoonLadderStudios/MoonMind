@@ -62,3 +62,24 @@ it('preserves inline descriptions and error associations by default', () => {
   expect(verify.getAttribute('aria-describedby')?.split(' ')).toHaveLength(2);
   expect(screen.queryByRole('button', { name: 'Help for Run verification' })).toBeNull();
 });
+
+it.each([false, true])('preserves full-width grid ownership for structured groups with tooltip=%s', (tooltip) => {
+  const onChange = vi.fn();
+  const groupedFields: Array<[string, unknown]> = ['Questions', 'Allowed Followups'].map(title => [title, {
+    title, description: `Configure ${title}.`, type: 'array', items: { type: 'object', properties: { query: { type: 'string', title: 'Query' } } },
+  }]);
+  render(<SchemaCapabilityFields fields={groupedFields} detail={{ uiSchema: Object.fromEntries(
+    ['Questions', 'Allowed Followups'].map(title => [title, { helpDisplay: tooltip ? 'tooltip' : 'inline' }]),
+  ) }}
+    values={{}} errors={{}} disabled={false} repositoryOptions={[]} branchOptions={[]} onChange={onChange} />);
+  for (const title of ['Questions', 'Allowed Followups']) {
+    const group = screen.getByRole('group', { name: title });
+    // col-span-full only governs layout when the fieldset remains a grid item.
+    expect(group.classList.contains('col-span-full')).toBe(true);
+    const gridItem = tooltip ? group.parentElement! : group;
+    if (tooltip) expect(gridItem.classList.contains('schema-capability-field--full-width')).toBe(true);
+    expect(gridItem.parentElement?.classList.contains('grid-2')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: `Add ${title} item` }));
+    expect(onChange).toHaveBeenCalledWith(title, [{}]);
+  }
+});

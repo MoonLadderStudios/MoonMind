@@ -99,15 +99,15 @@ describe('Search preset progressive disclosure', () => {
       const panel = document.getElementById(help.getAttribute('aria-describedby')!)!;
       expect(panel.hidden).toBe(true);
       help.focus();
-      await expect.element(page.getByRole('tooltip').filter({ hasText: 'Adds a separate verification' })).toBeVisible();
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).toBeVisible();
       expectInsideViewport(panel);
-      await page.screenshot({ path: `../../../artifacts/browser-layout/search-preset-help-${viewport.width}.png` });
+      await page.screenshot({ element: document.documentElement, path: `../../../artifacts/browser-layout/search-preset-help-${viewport.width}.png` });
       await userEvent.keyboard('{Escape}');
-      await expect.element(page.getByRole('tooltip').filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
       await userEvent.click(help);
-      await expect.element(page.getByRole('tooltip').filter({ hasText: 'Adds a separate verification' })).toBeVisible();
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).toBeVisible();
       await userEvent.click(help);
-      await expect.element(page.getByRole('tooltip').filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
       await userEvent.fill(search, 'label:bug');
       await userEvent.click(verify); await userEvent.click(authors);
       const advanced = screen.getByRole('checkbox', { name: 'Advanced mode' });
@@ -126,7 +126,7 @@ describe('Search preset progressive disclosure', () => {
       expect(expandedInputs[0]).toMatchObject({ issue_search: 'label:bug', run_verify: true, include_all_authors: true, constraints: 'Preserve existing work.' });
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 2);
       for (const control of [search, verify, authors, help]) expectInsideViewport(control);
-      await page.screenshot({ path: `../../../artifacts/browser-layout/search-preset-${viewport.width}.png` });
+      await page.screenshot({ element: document.documentElement, path: `../../../artifacts/browser-layout/search-preset-${viewport.width}.png` });
     });
   }
 });
