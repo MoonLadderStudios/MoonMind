@@ -114,7 +114,16 @@ describe('Search preset progressive disclosure', () => {
       await userEvent.click(help);
       await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Adds a separate verification' })).not.toBeVisible();
       await userEvent.fill(search, 'label:bug');
-      await userEvent.click(verify); await userEvent.click(authors);
+      const authorHelp = screen.getByRole('button', { name: 'Help for Include issues created by other users' });
+      await userEvent.hover(authorHelp);
+      const authorPanel = document.getElementById(authorHelp.getAttribute('aria-describedby')!)!;
+      // Wait until intentional hover has actually opened help, then use the
+      // next checkbox normally. A delay must not merely hide an overlap bug.
+      await expect.element(page.getByRole('tooltip', { includeHidden: true }).filter({ hasText: 'Otherwise, search only' })).toBeVisible();
+      expect(authorPanel.getBoundingClientRect().bottom).toBeLessThan(authorHelp.getBoundingClientRect().top);
+      await userEvent.click(verify);
+      expect(verify).toBeChecked();
+      await userEvent.click(authors);
       const advanced = screen.getByRole('checkbox', { name: 'Advanced mode' });
       await userEvent.click(advanced);
       const constraints = await screen.findByLabelText('Constraints');
