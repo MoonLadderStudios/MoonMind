@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '../Button';
 import { useDashboardToast } from '../dashboard/DashboardToast';
 import { ApiError, responseError } from '../../lib/api/client';
+import { formatHarnessLabel } from '../../runtime/runtimeTargets';
 import {
   displayValue, fetchCatalog,
   providerProfileOptionLabel, valuesEqual,
@@ -20,6 +21,7 @@ interface DraftValue { value: unknown; originalValue: unknown; valueVersion: num
 interface ValidationIssue { key?: string; message: string }
 interface ValidationResult { accepted: boolean; issues_by_key: Record<string, ValidationIssue[]> }
 interface SettingFailure { key?: string; message?: string; details?: { issues?: ValidationIssue[] } }
+interface PickerOption { value: string; label: string; disabled: boolean; harness?: string | undefined }
 
 export function NewWorkDefaultsCard() {
   const queryClient = useQueryClient();
@@ -162,6 +164,33 @@ export function NewWorkDefaultsCard() {
     !d.read_only || valuesEqual(values[d.key], d.effective_value));
   const optionDisabled = (runtimeValue: unknown, profileValue: unknown) => !runtime || !profile ||
     !pairAllowed({ [runtime.key]: runtimeValue, [profile.key]: profileValue });
+  const harnessName = (id: unknown) => runtime?.options?.find((option) => valuesEqual(option.value, id))?.label
+    ?? (id ? formatHarnessLabel(String(id)) : 'Not set');
+  const harnessChoiceLabel = (id: unknown) => runtime?.options?.some((option) => valuesEqual(option.value, id))
+    ? `${harnessName(id)}${id === 'omnigent' ? ' (basic)' : ' (preferred profile)'}` : `${String(id ?? 'Not set')} (saved custom harness)`;
+  const missingProfileLabel = (id: unknown) => `${String(id)}${profilesQuery.isSuccess ? ' (not found)' : ''}`;
+  const selectionLabel = (runtimeId: unknown, profileId: unknown) => {
+    if (!profileId) return harnessChoiceLabel(runtimeId);
+    const item = profiles.find((candidate) => candidate.profile_id === profileId);
+    if (!item) return missingProfileLabel(profileId);
+    return `${item.profile_id} (${harnessName(item.runtime_id)}${item.runtime_id === runtimeId ? '' : `; harness ${harnessName(runtimeId)}`})`;
+  };
+  // Each choice joins its harness's group; a missing profile has no known harness and stays ungrouped.
+  const pickerOptions: PickerOption[] = [
+    ...(runtime?.options ?? []).map((option) => ({ value: `runtime:${option.value}`, label: harnessChoiceLabel(option.value),
+      disabled: optionDisabled(option.value, null), harness: String(option.value) })),
+    ...(runtime?.options?.some((option) => option.value === savedRuntime) ? [] : [{ value: `runtime:${savedRuntime ?? ''}`,
+      label: harnessChoiceLabel(savedRuntime), disabled: optionDisabled(savedRuntime, null), harness: savedRuntime ? String(savedRuntime) : undefined }]),
+    ...profiles.map((item) => ({ value: `profile:${item.profile_id}`, label: providerProfileOptionLabel(item),
+      disabled: optionDisabled(item.runtime_id, item.profile_id), harness: item.runtime_id })),
+    ...(savedProfile && (!retainedProfile || retainedMismatch) ? [{ value: retainedSelection, disabled: optionDisabled(savedRuntime, savedProfile),
+      label: retainedProfile ? `${providerProfileOptionLabel(retainedProfile)} (saved; harness differs)` : missingProfileLabel(savedProfile),
+      harness: retainedProfile?.runtime_id }] : []),
+    ...(profileValue && (!selectedProfile || mismatched) && selection !== retainedSelection ? [{ value: selection, disabled: optionDisabled(runtimeValue, profileValue),
+      label: selectedProfile ? `${providerProfileOptionLabel(selectedProfile)} (draft; harness differs)` : missingProfileLabel(profileValue),
+      harness: selectedProfile?.runtime_id }] : []),
+  ];
+  const renderOption = (option: PickerOption) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>;
   const updateSelection = (selection: string) => {
     if (busy || readOnly || !runtime || !profile) return;
     const separator = selection.indexOf(':');
@@ -202,18 +231,10 @@ export function NewWorkDefaultsCard() {
             <label htmlFor="new-work-default" className="w-full text-sm font-medium sm:w-auto">Default for new work</label>
             <select id="new-work-default" disabled={busy || readOnly} value={selection} onChange={(event) => updateSelection(event.target.value)}
               className="min-w-0 w-full flex-none rounded-xl border border-mm-border bg-mm-surface px-3 py-2 text-sm sm:w-auto sm:flex-1">
-              {runtime?.options?.map((option) => <option key={option.value} value={`runtime:${option.value}`} disabled={optionDisabled(option.value, null)}>
-                {option.label}{option.value === 'omnigent' ? ' (basic)' : ' (preferred profile)'}
-              </option>)}
-              {!runtime?.options?.some((option) => option.value === savedRuntime) ?
-                <option value={`runtime:${savedRuntime ?? ''}`} disabled={optionDisabled(savedRuntime, null)}>{String(savedRuntime ?? 'Not set')} (saved custom harness)</option> : null}
-              {profiles.map((item) => <option key={item.profile_id} value={`profile:${item.profile_id}`} disabled={optionDisabled(item.runtime_id, item.profile_id)}>{providerProfileOptionLabel(item)}</option>)}
-              {savedProfile && (!retainedProfile || retainedMismatch) ? <option value={retainedSelection} disabled={optionDisabled(savedRuntime, savedProfile)}>
-                {retainedProfile ? `${providerProfileOptionLabel(retainedProfile)} (saved; harness differs)` : `${savedProfile}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
-              </option> : null}
-              {profileValue && (!selectedProfile || mismatched) && selection !== retainedSelection ? <option value={selection} disabled={optionDisabled(runtimeValue, profileValue)}>
-                {selectedProfile ? `${providerProfileOptionLabel(selectedProfile)} (draft; harness differs)` : `${profileValue}${profilesQuery.isSuccess ? ' (not found)' : ''}`}
-              </option> : null}
+              {[...new Set(pickerOptions.flatMap((option) => option.harness ?? []))].map((harness) => <optgroup key={harness} label={harnessName(harness)}>
+                {pickerOptions.filter((option) => option.harness === harness).map(renderOption)}
+              </optgroup>)}
+              {pickerOptions.filter((option) => !option.harness).map(renderOption)}
             </select>
             {dirty ? <><Button variant="ghost" disabled={busy} onClick={discard}>Cancel</Button>
               <Button disabled={busy || !pairAllowed(Object.fromEntries(descriptors.map((d) => [d.key, currentValue(d)])))} onClick={() => { void save(); }}>Save</Button></> : null}
@@ -230,9 +251,7 @@ export function NewWorkDefaultsCard() {
           <a href="/settings/instance" className="text-sm underline">Advanced default settings and reset</a>
         </div>}
       {dirty ? <div className="border-t border-mm-border pt-3" aria-label="Unsaved defaults">
-        <ul className="space-y-1 text-sm">{changed.map((descriptor) => <li key={descriptor.key}>
-          {descriptor.title}: {valueLabel(descriptor, draft[descriptor.key]!.originalValue)} → {valueLabel(descriptor, draft[descriptor.key]!.value)}
-        </li>)}</ul>
+        <p className="text-sm">Default for new work: {selectionLabel(savedRuntime, savedProfile)} → {selectionLabel(runtimeValue, profileValue)}</p>
       </div> : null}
     </section>
   );
