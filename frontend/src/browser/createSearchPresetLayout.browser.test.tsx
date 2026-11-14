@@ -78,7 +78,7 @@ afterEach(async () => {
 function expectInsideViewport(element: Element) {
   const rect = element.getBoundingClientRect();
   expect(rect.left).toBeGreaterThanOrEqual(-1);
-  expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1);
+  expect(rect.right).toBeLessThanOrEqual(document.documentElement.clientWidth + 1);
 }
 
 describe('Search preset progressive disclosure', () => {

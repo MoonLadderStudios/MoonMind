@@ -79,12 +79,14 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
       if (!trigger.current || !panel.current) return;
       const anchor = trigger.current.getBoundingClientRect();
       const box = panel.current.getBoundingClientRect();
-      const left = Math.max(8, Math.min(anchor.left + anchor.width / 2 - box.width / 2, window.innerWidth - box.width - 8));
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const left = Math.max(8, Math.min(anchor.left + anchor.width / 2 - box.width / 2, viewportWidth - box.width - 8));
       // Prefer above the label so deliberate help does not cover the next
       // form control. Near the viewport top, fall back below and clamp.
       const above = anchor.top - box.height - 8;
       const top = above >= 8
-        ? above : Math.max(8, Math.min(anchor.bottom + 8, window.innerHeight - box.height - 8));
+        ? above : Math.max(8, Math.min(anchor.bottom + 8, viewportHeight - box.height - 8));
       setPosition({ left, top });
     };
     reposition();
