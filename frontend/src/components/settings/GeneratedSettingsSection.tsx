@@ -350,6 +350,10 @@ function hasBrokenSecretRef(descriptor: SettingDescriptor): boolean {
   );
 }
 
+function showsSettingAudit(key: string): boolean {
+  return key !== 'workflow.default_runtime' && key !== 'workflow.default_provider_profile_ref';
+}
+
 export function canReset(descriptor: SettingDescriptor): boolean {
   return descriptor.source === 'instance_override';
 }
@@ -504,12 +508,12 @@ export function GeneratedSettingsSection({
     return keys ? keys.flatMap((key) => all.filter((descriptor) => descriptor.key === key)) : all;
   }, [catalogQuery.data, keys]);
   const selectedAuditDescriptor = descriptors.find(
-    (descriptor) => descriptor.key === selectedAuditKey,
+    (descriptor) => descriptor.key === selectedAuditKey && showsSettingAudit(descriptor.key),
   );
   const auditQuery = useQuery({
     queryKey: ['settings-audit', selectedAuditKey],
     queryFn: () => fetchSettingAudit(selectedAuditKey ?? ''),
-    enabled: selectedAuditKey !== null,
+    enabled: selectedAuditKey !== null && showsSettingAudit(selectedAuditKey),
   });
   const categories = useMemo(
     () => Array.from(new Set(descriptors.map((descriptor) => descriptor.category))).sort(),
@@ -894,7 +898,7 @@ export function GeneratedSettingsSection({
                     {renderControl(descriptor, currentValue, updatePending)}
                     <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
-                        <Button variant="ghost"
+                        {showsSettingAudit(descriptor.key) ? <Button variant="ghost"
                           type="button"
                           className="text-sm"
                           onClick={() => setSelectedAuditKey(descriptor.key)}
@@ -903,7 +907,7 @@ export function GeneratedSettingsSection({
                           aria-label={`View audit for ${descriptor.title}`}
                         >
                           View audit
-                        </Button>
+                        </Button> : null}
                         {canReset(descriptor) ? (
                           <Button variant="ghost"
                             type="button"

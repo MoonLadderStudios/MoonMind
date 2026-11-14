@@ -45,6 +45,7 @@ def resolve_new_work_selection(
     profile_harness_id: str | None = None,
     policy: Any | None = None,
     env: Mapping[str, Any] | None = None,
+    unselected_tools: bool = False,
 ):
     """Resolve one new-work selection through the single shared boundary.
 
@@ -73,6 +74,13 @@ def resolve_new_work_selection(
         policy=policy,
         env=env,
     )
+    # Proven tool-only work consumes the installed tool worker, not this
+    # agent target. Keep its default as passive provenance without admitting
+    # an unavailable agent backend. Explicit authority never takes this route.
+    if unselected_tools and not any(
+        (authored_runtime, requested_target_id, profile_runtime, profile_harness_id)
+    ):
+        return selection
     if not selection.available:
         reason = (
             str(selection.reason_code)
