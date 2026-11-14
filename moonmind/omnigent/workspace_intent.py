@@ -159,7 +159,23 @@ def authored_target_branch(request: AgentExecutionRequest) -> str | None:
     return value or None
 
 
+def _authored_full_commit(request: AgentExecutionRequest) -> str | None:
+    from moonmind.omnigent.workspace_sources import (
+        WorkspaceSourceError, repository_workspace_commit_sha,
+    )
+
+    try:
+        return repository_workspace_commit_sha(_spec(request))
+    except WorkspaceSourceError:
+        # Other revision kinds keep their existing reader and owner. Shared
+        # repository admission validates the narrower full-commit contract.
+        return None
+
+
 def authored_checkout_commit(request: AgentExecutionRequest) -> str | None:
+    full_commit = _authored_full_commit(request)
+    if full_commit:
+        return full_commit
     spec = _spec(request)
     repository = spec.get("repository")
     if isinstance(repository, Mapping):
@@ -203,6 +219,8 @@ def authored_anonymous_source(request: AgentExecutionRequest) -> bool:
 
 
 def authored_revision_kind(request: AgentExecutionRequest) -> str | None:
+    if _authored_full_commit(request):
+        return "git_commit"
     repository = _spec(request).get("repository")
     if not isinstance(repository, Mapping):
         return None

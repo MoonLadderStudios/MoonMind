@@ -114,6 +114,7 @@ async def execute_selected_pool_source(
     runtime_selection=None, step_runtime=None, repository_workspace=None,
     bind_parent_context=False, repository_at_top=True, terminal_runner=None,
     expected_native_reason=None, parent_repository_patch=True, submission_parameters=None,
+    repository_revision=None, pinned_repository_patch=False, controller_checkpoint_ref=None,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -157,6 +158,9 @@ async def execute_selected_pool_source(
                 "repository": {"name": "MoonLadderStudios/MoonMind"},
                 "branch": {"name": "main"},
             }
+        if repository_revision is not None:
+            assert repository is not None
+            repository["revision"] = repository_revision
         provider = await session.get(
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
@@ -266,6 +270,8 @@ async def execute_selected_pool_source(
         )
         assert record.parameters["targetRuntime"] == runtime
         assert not record.parameters.get("omnigentExecutionPlan")
+        if repository_revision is not None:
+            assert record.parameters["repository"]["revision"] == repository_revision
         with monkeypatch.context() as parent_patch:
             if not parent_repository_patch:
                 from moonmind.workflows.temporal.workflows.run import (
@@ -283,7 +289,10 @@ async def execute_selected_pool_source(
         if bind_parent_context:
             from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 
-            monkeypatch.setattr("temporalio.workflow.patched", lambda marker: True)
+            monkeypatch.setattr(
+                "temporalio.workflow.patched",
+                lambda marker: pinned_repository_patch if marker == "run-pinned-repository-workspace-handoff-v1" else True,
+            )
             request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
             assert request.canonical_repository_workspace_handoff is (
                 (request.workspace_spec.get("workspaceSource") or {}).get("kind") == "repository"
@@ -302,6 +311,12 @@ async def execute_selected_pool_source(
             metadata.setdefault("moonmind", {})["modelEffortResolution"] = {
                 "tierParameterDefaults": {"commitMessage": "Previous injected tier message"},
             }
+        if controller_checkpoint_ref is not None:
+            from moonmind.omnigent.workspace_sources import replace_repository_workspace_source
+
+            request.workspace_spec = replace_repository_workspace_source(
+                request.workspace_spec, controller_checkpoint_ref, allow_pinned=True,
+            )
         selected = request.model_copy(
             update={"execution_profile_ref": native_fixture.PROFILE}
         )
@@ -485,6 +500,20 @@ async def execute_selected_pool_source(
             assert shared.parameters.get("operatorExtension") == request.parameters.get("operatorExtension")
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         access = ArtifactAccessContext.for_execution(parent_id)
+        if repository_revision is not None:
+            _, snapshot_bytes = await artifacts.read(
+                artifact_id=original_memo["task_input_snapshot_ref"], access=access
+            )
+            assert json.loads(snapshot_bytes)["draft"]["repository"]["revision"] == repository_revision
+            from moonmind.omnigent.workspace_intent import compile_workspace_intent
+
+            intent = compile_workspace_intent(
+                shared, workflow_id=parent_id,
+                step_execution_id=shared.step_execution.step_execution_id,
+            )
+            assert intent.checkout_commit == repository_revision["commitSha"]
+            assert intent.revision_kind == "git_commit"
+            assert intent.publish_mode == "none"
         _, frozen_skill_bytes = await artifacts.read(
             artifact_id=skills.manifest_ref, access=access
         )
