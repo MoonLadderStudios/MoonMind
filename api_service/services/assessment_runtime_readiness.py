@@ -1,12 +1,14 @@
 """Pre-budget assessment checks through the existing container worker owner.
 
-Local credential metadata is not remote credential validity. No assessment
-credential is resolved or delivered, no target is contacted, and no assessment
-job is booked. Image preparation retains its existing registry authority.
+Local credential metadata and external registry credential resolution do not
+prove remote validity. Values stay in the existing worker resolver, never in
+readiness evidence or scanner diagnostics. No target is contacted or assessment
+job booked. Image preparation retains its existing registry authority.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -27,6 +29,7 @@ from moonmind.auth.secret_refs import (
 from moonmind.config.container_backend_settings import RegistryImageSource
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
+    ContainerJobBackendError,
     ContainerJobSpec,
     OwnerIdentity,
 )
@@ -45,7 +48,8 @@ _ACTIONS = {
     "scanner_image_unavailable": "Review the deployment scanner image source and its image preparation diagnostics.",
     "scanner_probe_unavailable": "The scanner runtime could not be verified. Review the worker and scanner image, then retry.",
     "credential_backend_unavailable": "Cloud and web workload credentials require an active managed db:// secret; select a supported credential before retrying.",
-    "credential_unavailable": "The selected credential is missing, disabled or no longer at its admitted revision. Review its grant and active secret.",
+    "credential_unavailable": "The selected credential is missing, disabled, malformed or no longer at its admitted revision. Review its backend, grant and active secret.",
+    "credential_resolution_unavailable": "The selected registry credential could not be checked in time. Restore its configured secret backend and retry.",
     "worker_unavailable": "The container worker could not complete readiness checks. Restore the worker and retry.",
 }
 _PROBE_CODES = frozenset(
@@ -71,6 +75,7 @@ _PROBE_CODES = frozenset(
 _COMPONENTS = frozenset(
     ["gitleaks", "opengrep", "trivy", "rules", "feeds", "checks", "java", "selection"]
 )
+_REGISTRY_CREDENTIAL_TIMEOUT_SECONDS = 15
 
 
 def readiness_failure(code, *, unavailable=False):
@@ -310,16 +315,32 @@ async def check_assessment_runtime_readiness(
             status = await credential_metadata(session, reference, revision=revision)
             if status == "blocked":
                 return readiness_failure("credential_unavailable")
+            component, code = "credentialMetadata", "active_revision_present"
+            if status == "unverified":
+                # Registry Exec/Vault references have no local presence metadata.
+                # Reuse the worker's authorized resolver, discarding plaintext;
+                # this performs no registry login or target request. All selected
+                # grants above must pass before any resolver can run.
+                try:
+                    async with asyncio.timeout(_REGISTRY_CREDENTIAL_TIMEOUT_SECONDS):
+                        await backend._resolve_credential(reference)
+                except TimeoutError:
+                    return readiness_failure(
+                        "credential_resolution_unavailable", unavailable=True
+                    )
+                except ContainerJobBackendError:
+                    return readiness_failure("credential_unavailable")
+                status, component, code = (
+                    "ready",
+                    "credentialResolution",
+                    "credential_resolvable",
+                )
             checks.extend(
                 [
                     {
-                        "component": "credentialMetadata",
+                        "component": component,
                         "status": status,
-                        "code": (
-                            "active_revision_present"
-                            if status == "ready"
-                            else "metadata_not_inspected"
-                        ),
+                        "code": code,
                     },
                     {
                         "component": "credentialValidity",

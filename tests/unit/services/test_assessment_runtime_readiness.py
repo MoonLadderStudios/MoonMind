@@ -362,8 +362,7 @@ async def test_env_presence_is_nonempty_and_cannot_prove_revision(
     session.execute.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_authorized_registry_remote_metadata_stays_unverified(monkeypatch):
+def registry_parameters(monkeypatch, reference):
     from dataclasses import replace
 
     from api_service.services import registry_authorization as registry
@@ -372,7 +371,7 @@ async def test_authorized_registry_remote_metadata_stays_unverified(monkeypatch)
     policy = registry.PrivateImageAuthorizationPolicy(
         grants=(
             registry.RegistryCredentialGrant(
-                credentialRef="exec://registry-login",
+                credentialRef=reference,
                 registry="registry.example",
                 repositories=("private/*",),
                 principals=("user:operator",),
@@ -405,7 +404,7 @@ async def test_authorized_registry_remote_metadata_stays_unverified(monkeypatch)
         "target": "registry",
         "imageReference": "registry.example/private/app:stable",
         "egressPolicyRef": "registry",
-        "targetCredentialRef": "exec://registry-login",
+        "targetCredentialRef": reference,
     }
     p = {
         "workflow": {
@@ -426,21 +425,38 @@ async def test_authorized_registry_remote_metadata_stays_unverified(monkeypatch)
             ]
         }
     }
-    backend = SimpleNamespace(
-        _settings=settings,
-        assessment_readiness=AsyncMock(
-            return_value={
-                "status": "ready",
-                "checks": [
-                    {
-                        "component": "trivy",
-                        "status": "ready",
-                        "code": "scanner_available",
-                    }
-                ],
-                "diagnostics": [],
-            }
-        ),
+    return p, settings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reference", ["exec://op?read?registry-login", "vault://kv/registry#credential"]
+)
+@pytest.mark.parametrize("value", [None, "", "invalid", "audit:readiness-secret-canary"])
+async def test_authorized_external_registry_readiness_before_image_preparation(
+    monkeypatch, tmp_path, reference, value
+):
+    from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
+    from moonmind.workflows.temporal.runtime import registry_auth_resolve
+
+    p, settings = registry_parameters(monkeypatch, reference)
+
+    async def resolve(ref, *, field_name):
+        assert ref == reference and field_name == "registryCredentialRef"
+        if value is None:
+            raise ValueError("unavailable readiness-secret-canary")
+        return value
+
+    resolver = AsyncMock(side_effect=resolve)
+    monkeypatch.setattr(
+        registry_auth_resolve, "resolve_managed_api_key_reference", resolver
+    )
+    runner = AsyncMock()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, settings=settings, command_runner=runner
+    )
+    backend.assessment_readiness = AsyncMock(
+        return_value={"status": "ready", "checks": [], "diagnostics": []}
     )
     session = SimpleNamespace(execute=AsyncMock())
     result = await readiness.check_assessment_runtime_readiness(
@@ -451,13 +467,130 @@ async def test_authorized_registry_remote_metadata_stays_unverified(monkeypatch)
         backend=backend,
         session=session,
     )
-    assert result["status"] == "ready"
-    assert {
-        "component": "credentialMetadata",
-        "status": "unverified",
-        "code": "metadata_not_inspected",
-    } in result["checks"]
+    resolver.assert_awaited_once()
+    assert "readiness-secret-canary" not in str(result)
+    assert reference not in str(result)
     session.execute.assert_not_awaited()
+    runner.assert_not_awaited()
+    assert not list(tmp_path.iterdir())
+    if value == "audit:readiness-secret-canary":
+        assert result["status"] == "ready"
+        assert {
+            "component": "credentialResolution",
+            "status": "ready",
+            "code": "credential_resolvable",
+        } in result["checks"]
+        assert {
+            "component": "credentialValidity",
+            "status": "unverified",
+            "code": "not_probed",
+        } in result["checks"]
+        backend.assessment_readiness.assert_awaited_once()
+    else:
+        assert result["status"] == "blocked"
+        assert result["diagnostics"][0]["code"] == "credential_unavailable"
+        backend.assessment_readiness.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ungranted_registry_selection_never_resolves_external_secret(monkeypatch):
+    p, settings = registry_parameters(monkeypatch, "exec://op?read?registry-login")
+    step = p["workflow"]["steps"][0]
+    for selection in (
+        step["skill"]["args"]["assessment"],
+        step["annotations"]["securityAssessment"]["admission"],
+    ):
+        selection["targetCredentialRef"] = "vault://kv/ungranted#credential"
+    backend = SimpleNamespace(
+        _settings=settings,
+        _resolve_credential=AsyncMock(),
+        assessment_readiness=AsyncMock(),
+    )
+    result = await readiness.check_assessment_runtime_readiness(
+        p,
+        owner={"principalId": "operator", "principalType": "user"},
+        workflow_id="wf",
+        run_id="run",
+        backend=backend,
+        session=SimpleNamespace(execute=AsyncMock()),
+    )
+    assert result["diagnostics"][0]["code"] == "assessment_authority_unavailable"
+    backend._resolve_credential.assert_not_awaited()
+    backend.assessment_readiness.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_external_registry_readiness_is_bounded_and_preserves_cancellation(
+    monkeypatch, cancel
+):
+    import asyncio
+
+    p, settings = registry_parameters(monkeypatch, "exec://op?read?registry-login")
+    monkeypatch.setattr(readiness, "_REGISTRY_CREDENTIAL_TIMEOUT_SECONDS", 0.01)
+    stopped = False
+
+    async def resolve(reference):
+        nonlocal stopped
+        try:
+            if cancel:
+                raise asyncio.CancelledError
+            await asyncio.Event().wait()
+        finally:
+            stopped = True
+
+    backend = SimpleNamespace(
+        _settings=settings,
+        _resolve_credential=AsyncMock(side_effect=resolve),
+        assessment_readiness=AsyncMock(),
+    )
+    check = readiness.check_assessment_runtime_readiness(
+        p,
+        owner={"principalId": "operator", "principalType": "user"},
+        workflow_id="wf",
+        run_id="run",
+        backend=backend,
+        session=SimpleNamespace(execute=AsyncMock()),
+    )
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await check
+    else:
+        result = await check
+        assert result["status"] == "unavailable"
+        assert result["diagnostics"][0]["code"] == "credential_resolution_unavailable"
+    assert stopped
+    backend.assessment_readiness.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_registry_assessment_does_not_require_a_credential(monkeypatch):
+    p, settings = registry_parameters(monkeypatch, "exec://op?read?registry-login")
+    step = p["workflow"]["steps"][0]
+    del step["skill"]["args"]["assessment"]["targetCredentialRef"]
+    del step["annotations"]["securityAssessment"]["admission"]["targetCredentialRef"]
+    for selection in (
+        step["skill"]["args"]["assessment"],
+        step["annotations"]["securityAssessment"]["admission"],
+    ):
+        selection["imageReference"] = "registry.example/public/app:stable"
+    backend = SimpleNamespace(
+        _settings=settings,
+        _resolve_credential=AsyncMock(),
+        assessment_readiness=AsyncMock(
+            return_value={"status": "ready", "checks": [], "diagnostics": []}
+        ),
+    )
+    result = await readiness.check_assessment_runtime_readiness(
+        p,
+        owner={"principalId": "operator", "principalType": "user"},
+        workflow_id="wf",
+        run_id="run",
+        backend=backend,
+        session=SimpleNamespace(execute=AsyncMock()),
+    )
+    assert result["status"] == "ready"
+    backend._resolve_credential.assert_not_awaited()
     backend.assessment_readiness.assert_awaited_once()
 
 
