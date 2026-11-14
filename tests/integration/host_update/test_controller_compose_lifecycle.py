@@ -259,6 +259,15 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
         receipt = submissions / "fixture.json"
         receipt.write_text('{"fixture":true}')
         assert json.loads(receipt.read_text()) == {"fixture": True}
+        # Ordinary POSIX host bootstrap opens the same persistent lock a+b.
+        # Check real host ownership/access, not only bearer/receipt permissions.
+        import fcntl
+        lock_path = state / "locks/moonmind.lock"
+        lock_inode = lock_path.stat().st_ino
+        with lock_path.open("a+b") as host_lock:
+            fcntl.flock(host_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(host_lock.fileno(), fcntl.LOCK_UN)
+        assert lock_path.stat().st_ino == lock_inode
         initial = read_state()
         assert initial["identity"]["project"] == project
         assert initial["identity"]["targetProject"] == project

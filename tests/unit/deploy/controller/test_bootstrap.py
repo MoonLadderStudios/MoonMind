@@ -3033,3 +3033,32 @@ def test_failed_handoff_retains_healthy_prior_controller_with_restart_history(
     assert "forward removal failed" in receipt["reason"]
     assert docker.restarts == "7"
     assert compose.read_text() == original
+
+
+@pytest.mark.parametrize("command", ["update", "restore"])
+@pytest.mark.parametrize("override", [None, 8599])
+def test_cli_repair_preserves_installed_host_port_unless_explicitly_overridden(
+    controller_path, tmp_path, monkeypatch, command, override
+):
+    import json
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    state.mkdir()
+    identity = {"project": "moonmind", "targetProject": "moonmind", "port": 8472,
+                "hostPort": 32100, "repo": str(tmp_path), "targetNetwork": "moonmind_controller"}
+    (state / "controller-identity.json").write_text(json.dumps(identity))
+    monkeypatch.setattr(bootstrap, "pinned_controller_image", lambda *a, **kw: ("image@sha256:digest", {}))
+    monkeypatch.setattr(bootstrap, "_ensure_identity_network", lambda *a, **kw: None)
+    monkeypatch.setattr(bootstrap, "_compose", lambda *a, **kw: 0)
+    monkeypatch.setattr(bootstrap, "_compose_up", lambda *a, **kw: 0)
+    rendered = []
+    monkeypatch.setattr(bootstrap, "render_compose_file", lambda **kw: rendered.append(kw))
+    argv = [command, "--state-dir", str(state), "--repo", str(tmp_path)]
+    if override is not None:
+        argv += ["--port", str(override)]
+    assert bootstrap.main(argv, env={}) == 0
+    saved = bootstrap.load_identity(state)
+    assert saved["port"] == (override if override is not None else 8472)
+    assert saved.get("hostPort") == (32100 if override is None else None)
+    assert rendered[0]["port"] == saved["port"]
+    assert rendered[0]["host_port"] == saved.get("hostPort")

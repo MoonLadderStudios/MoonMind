@@ -217,6 +217,10 @@ def prepare_host_access(state_dir: Path, repository: Path) -> None:
         state_dir / "controller-image.json",
         state_dir / "controller-compose.yaml",
         state_dir / "controller-identity.json",
+        # Host bootstrap acquires the same inode with a+b. Preserve that inode
+        # and its kernel-lock semantics while sharing it with the checkout owner.
+        state_dir / "locks",
+        state_dir / "locks/moonmind.lock",
     ):
         if path.stat().st_uid == 0:
             os.chown(path, owner.st_uid, owner.st_gid)

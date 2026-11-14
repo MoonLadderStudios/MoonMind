@@ -317,14 +317,19 @@ def test_host_access_changes_only_root_owned_bootstrap_paths(
         state / "controller-image.json",
         state / "controller-compose.yaml",
         state / "controller-identity.json",
+        state / "locks",
+        state / "locks/moonmind.lock",
     )
     changed = []
     modes = []
 
+    original_stat = Path.stat
+
     def stat(path, **kwargs):
         if path == repo:
             return SimpleNamespace(st_uid=1234, st_gid=2345)
-        assert path in paths
+        if path not in paths:
+            return original_stat(path, **kwargs)
         return SimpleNamespace(st_uid=0, st_gid=0)
 
     monkeypatch.setattr(Path, "stat", stat)

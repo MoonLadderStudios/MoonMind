@@ -1706,7 +1706,10 @@ def build_parser() -> argparse.ArgumentParser:
                 f"recorded, else {DEFAULT_IMAGE})."
             ),
         )
-        child.add_argument("--port", type=int, default=DEFAULT_PORT)
+        child.add_argument(
+            "--port", type=int, default=None,
+            help="Override the controller port (default: retain the installed endpoint).",
+        )
         child.add_argument("--controller-url", default=None)
         child.add_argument(
             "--target-network",
