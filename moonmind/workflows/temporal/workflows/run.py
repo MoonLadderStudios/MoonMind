@@ -810,6 +810,7 @@ RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
 RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH = "run-dispatch-checkpoint-source-v1"
 RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH = "run-canonical-repository-workspace-handoff-v1"
+RUN_PINNED_REPOSITORY_WORKSPACE_PATCH = "run-pinned-repository-workspace-handoff-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -18246,7 +18247,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and workflow.patched(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
             ):
                 request = request.model_copy(
-                    update={"canonical_repository_workspace_handoff": True}
+                    update={
+                        "canonical_repository_workspace_handoff": True,
+                        "pinned_repository_workspace_handoff": workflow.patched(
+                            RUN_PINNED_REPOSITORY_WORKSPACE_PATCH
+                        ),
+                    }
                 )
             if (
                 self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
@@ -18288,7 +18294,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     and workflow.patched(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
                 ):
                     workspace = replace_repository_workspace_source(
-                        workspace, receipt.workspace_checkpoint_restore_ref
+                        workspace, receipt.workspace_checkpoint_restore_ref,
+                        allow_pinned=request.pinned_repository_workspace_handoff,
                     )
                 else:
                     workspace["workspaceCheckpointRestoreRef"] = (
@@ -23597,7 +23604,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and self._workflow_patch_enabled(RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH)
             ):
                 workspace_spec = replace_repository_workspace_source(
-                    workspace_spec, restore_ref
+                    workspace_spec, restore_ref,
+                    allow_pinned=self._workflow_patch_enabled(
+                        RUN_PINNED_REPOSITORY_WORKSPACE_PATCH
+                    ),
                 )
             else:
                 workspace_spec["workspaceCheckpointRestoreRef"] = restore_ref

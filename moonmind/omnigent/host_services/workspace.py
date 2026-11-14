@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import hashlib
 import json
 import logging
@@ -10,6 +12,7 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -31,6 +34,7 @@ from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
     WorkspaceArtifactProjector,
     cleanup_import_staging,
+    STAGING_PREFIX,
 )
 from moonmind.omnigent.workspace_publication import publication_failure_is_transient
 from moonmind.omnigent.workspace_sources import (
@@ -40,6 +44,7 @@ from moonmind.omnigent.workspace_sources import (
     check_source_backend_supported,
     compile_workspace_source,
     resolve_workspace_backend,
+    repository_workspace_commit_sha,
     verify_existing_workspace_grant,
     verify_existing_workspace_grant_signature,
 )
@@ -293,7 +298,9 @@ class OmnigentWorkspaceMaterializer:
                     step_execution_id=identity.step_execution_id,
                     runtime="omnigent",
                 )
-                fenced = source.kind == "checkpoint"
+                fenced = source.kind == "checkpoint" or bool(
+                    source.kind == "repository" and source.repository_commit_sha
+                )
             except WorkspaceSourceError:
                 # The normal materializer supplies the public failure envelope.
                 pass
@@ -389,6 +396,9 @@ class OmnigentWorkspaceMaterializer:
                 spec, workflow_id=owner_workflow_id,
                 step_execution_id=owner_step_execution_id, runtime="omnigent",
             )
+            # Generic API compilation preserves unsupported legacy pins for
+            # their native owner; the shared host must not silently ignore one.
+            repository_workspace_commit_sha(spec)
             check_source_backend_supported(
                 source.kind, resolve_workspace_backend(),
                 grant_mode=(source.existing_grant.mode if source.existing_grant else None),
@@ -532,6 +542,18 @@ class OmnigentWorkspaceMaterializer:
                 or remediation_resolution.get("reusedAttempt")
             )
         )
+        if (
+            source.kind == "repository"
+            and source.repository_commit_sha
+            and not materialization_complete
+        ):
+            # An existing directory may be an interrupted clone, not a verified
+            # pinned source. Never reset it: reject a wrong HEAD before readiness.
+            # Completed candidates may contain later work and must retain it.
+            await self._verify_initial_repository_pin(
+                candidate, source.repository_commit_sha,
+                runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+            )
         attachment_evidence = []
         if not materialization_complete:
             # A retry reconciles the same generation; changed inputs are an
@@ -1230,6 +1252,7 @@ class OmnigentWorkspaceMaterializer:
                 candidate, target_branch=target_branch,
                 runtime_uid=runtime_uid, runtime_gid=runtime_gid,
                 allow_initialization=not existed,
+                initial_commit_sha=(source.repository_commit_sha if not existed else None),
             )
         if existed and not workspace_fenced:
             # Reclaim scratch only under the same owner fence as projection.
@@ -1239,9 +1262,41 @@ class OmnigentWorkspaceMaterializer:
                 cleanup_import_staging(candidate.parent)
         return candidate, record_store, sandbox_locator.workspace_id
 
+    async def _verify_initial_repository_pin(
+        self, candidate: Path, commit_sha: str, *, runtime_uid: int, runtime_gid: int,
+    ) -> None:
+        # Use the same daemon-visible volume and execution UID as the existing
+        # branch owner. The worker is not required to install Git.
+        from moonmind.omnigent.host_services.launcher import docker_attachment_mount
+
+        mount = docker_attachment_mount({
+            "kind": "volume", "sourceRef": self._workspace_volume,
+            "targetPath": "/work", "accessMode": "read-only",
+            "subPath": candidate.relative_to(self._root).as_posix(),
+        })
+        script = (
+            'set -eu; test "$(env -i PATH="$PATH" HOME=/nonexistent '
+            'GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null '
+            'git -C "$1" rev-parse HEAD)" = "$2"'
+        )
+        argv = [
+            "docker", "run", "--rm", "--network", "none", "--read-only",
+            "--user", f"{runtime_uid}:{runtime_gid}", "--mount", mount,
+            "--entrypoint", "/bin/sh",
+            os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0"),
+            "-ceu", script, "--", "/work", commit_sha,
+        ]
+        code, _stdout, _stderr = await self._runner(argv)
+        if code != 0:
+            raise HarnessPlatformError(
+                "sandbox repository HEAD does not match the admitted commit",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+
     async def _prepare_target_branch(
         self, candidate: Path, *, target_branch: str,
         runtime_uid: int, runtime_gid: int, allow_initialization: bool,
+        initial_commit_sha: str | None = None,
     ) -> None:
         argv = build_daemon_workspace_branch_argv(
             volume=self._workspace_volume,
@@ -1249,6 +1304,7 @@ class OmnigentWorkspaceMaterializer:
             target_branch=target_branch, runtime_uid=runtime_uid, runtime_gid=runtime_gid,
             image=os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0"),
             allow_initialization=allow_initialization,
+            initial_commit_sha=initial_commit_sha,
         )
         code, _stdout, stderr = await self._runner(argv)
         if code != 0:
@@ -1427,19 +1483,49 @@ class OmnigentWorkspaceMaterializer:
             execution_owner=repository_owner_ref,
             authority_sink=authority_sink,
         )
+        staging = None
         try:
+            clone_candidate = candidate
+            if source.repository_commit_sha:
+                # Pinned preparation is fenced by the existing workspace owner.
+                # A killed fetch/checkout leaves only disposable import staging,
+                # never a branch-tip checkout mistaken for a prepared candidate.
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=candidate.parent))
+                clone_candidate = staging / "repository"
             await self._clone_into_volume(
-                rel=rel,
+                rel=clone_candidate.relative_to(self._root),
                 source=clone_source,
                 branch=branch,
                 token=acquired.credential.use_now(bytes) if acquired else b"",
                 runtime_uid=runtime_uid,
                 runtime_gid=runtime_gid,
                 endpoint=identity.endpoint,
+                commit_sha=source.repository_commit_sha,
             )
+            if staging is not None:
+                # The initial branch receipt is part of the unpublished
+                # checkout. A crash after promotion must not leave a detached
+                # candidate that cannot prove whether branch initialization ran.
+                target_branch = str(spec.get("targetBranch") or "").strip()
+                if source.kind == "repository" and target_branch:
+                    await self._prepare_target_branch(
+                        clone_candidate, target_branch=target_branch,
+                        runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+                        allow_initialization=True,
+                        initial_commit_sha=source.repository_commit_sha,
+                    )
+                await self._verify_initial_repository_pin(
+                    clone_candidate, source.repository_commit_sha,
+                    runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+                )
+                _promote_absent_pinned_checkout(clone_candidate, candidate)
+
         finally:
             if acquired is not None:
                 acquired.credential.clear()
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
 
     async def _clone_into_volume(
         self,
@@ -1451,6 +1537,7 @@ class OmnigentWorkspaceMaterializer:
         runtime_uid: int,
         runtime_gid: int,
         endpoint: str = "https://github.com",
+        commit_sha: str | None = None,
     ) -> None:
         """Clone into the agent-workspaces volume through the Docker daemon.
 
@@ -1471,6 +1558,7 @@ class OmnigentWorkspaceMaterializer:
             git_user_email=git_user_email,
             authenticated=bool(token),
             endpoint=endpoint,
+            commit_sha=commit_sha,
         )
         # The one-shot container reads the token on stdin and exposes it to Git
         # through an ephemeral credential helper. The clean source URL is the
@@ -1561,6 +1649,28 @@ class OmnigentWorkspaceMaterializer:
             )
 
 
+def _promote_absent_pinned_checkout(staging: Path, candidate: Path) -> None:
+    """Atomically publish verified bytes without replacing even an empty target."""
+    # The Linux workspace owner already fences sibling materializers. NOREPLACE
+    # additionally protects a destination created outside that owner fence.
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, "renameat2", None)
+    if rename is None:
+        raise HarnessPlatformError(
+            "atomic pinned checkout promotion is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(staging), -100, os.fsencode(candidate), 1) != 0:
+        error = ctypes.get_errno()
+        raise HarnessPlatformError(
+            "pinned checkout destination already exists" if error == errno.EEXIST
+            else "atomic pinned checkout promotion failed",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+
+
 def build_daemon_git_clone_argv(
     *,
     volume: str,
@@ -1572,6 +1682,7 @@ def build_daemon_git_clone_argv(
     git_user_email: str,
     authenticated: bool = True,
     endpoint: str = "https://github.com",
+    commit_sha: str | None = None,
 ) -> list[str]:
     """Build a stdin-authenticated Docker argv for an in-volume git clone.
 
@@ -1589,6 +1700,11 @@ def build_daemon_git_clone_argv(
     if normalize_github_clone_source(source, endpoint=endpoint) != source:
         raise HarnessPlatformError(
             "sandbox workspace clone source is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    if commit_sha is not None and re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+        raise HarnessPlatformError(
+            "sandbox repository commit must be a full SHA",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
     host = github_host_from_endpoint(endpoint)
@@ -1642,6 +1758,15 @@ def build_daemon_git_clone_argv(
         'git -C "$3" config --local user.name "$4"; '
         'git -C "$3" config --local user.email "$5"'
     )
+    if commit_sha is not None:
+        script += (
+            "; " + git_environment + credential_environment + "git "
+            "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
+            "-c http.followRedirects=false " + helper_option
+            + '-C "$3" fetch --no-tags -- "$2" "$6"; '
+            + git_environment + 'git -C "$3" checkout --detach "$6"; '
+            + 'test "$(' + git_environment + 'git -C "$3" rev-parse HEAD)" = "$6"'
+        )
     return [
         "docker",
         "run",
@@ -1660,12 +1785,14 @@ def build_daemon_git_clone_argv(
         "/work/" + target_in_volume.lstrip("/"),
         identity_name,
         identity_email,
+        *([commit_sha] if commit_sha is not None else []),
     ]
 
 
 def build_daemon_workspace_branch_argv(
     *, volume: str, target_in_volume: str, target_branch: str,
     runtime_uid: int, runtime_gid: int, image: str, allow_initialization: bool,
+    initial_commit_sha: str | None = None,
 ) -> list[str]:
     """Prepare a fresh local branch, then preserve candidate changes on redelivery."""
     from moonmind.omnigent.host_services.launcher import docker_attachment_mount
@@ -1681,10 +1808,21 @@ def build_daemon_workspace_branch_argv(
             "workspace branch preparation authority is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
+    if initial_commit_sha is not None and (
+        not allow_initialization or re.fullmatch(r"[0-9a-f]{40}", initial_commit_sha) is None
+    ):
+        raise HarnessPlatformError(
+            "initial branch commit requires a fresh full-SHA checkout",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
     mount = docker_attachment_mount({
         "kind": "volume", "sourceRef": volume, "targetPath": "/work",
         "subPath": target.as_posix(), "accessMode": "read-write",
     })
+    initial_selection = (
+        'git -C "$1" switch --no-guess -C "$2" "$4"; '
+        if initial_commit_sha is not None else ""
+    )
     script = (
         "set -eu; umask 077; "
         'git() { env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 '
@@ -1694,7 +1832,8 @@ def build_daemon_workspace_branch_argv(
         'if [ -n "$recorded" ]; then '
         'test "$recorded" = "$2" || { echo "workspace branch intent conflicts" >&2; exit 75; }; '
         'exit 0; fi; '
-        'current=$(git -C "$1" symbolic-ref --quiet --short HEAD || true); '
+        + initial_selection
+        + 'current=$(git -C "$1" symbolic-ref --quiet --short HEAD || true); '
         'if [ "$current" != "$2" ]; then '
         'test "$3" = initialize || { '
         'echo "existing workspace branch preparation is uncertain; candidate preserved" >&2; exit 75; }; '
@@ -1709,6 +1848,7 @@ def build_daemon_workspace_branch_argv(
         "--entrypoint", "/bin/sh", image, "-ceu", script, "--",
         "/work", target_branch,
         "initialize" if allow_initialization else "retain",
+        *([initial_commit_sha] if initial_commit_sha is not None else []),
     ]
 
 

@@ -46,7 +46,7 @@ def _git(workspace, *args):
     ).strip()
 
 
-def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main"):
+def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False):
     remote = tmp_path / "remote"
     subprocess.run(
         ["git", "init", "-q", "-b", "default-branch", str(remote)], check=True
@@ -69,32 +69,36 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main"):
     clones = []
     monkeypatch.setenv("POOL_TEST_REPOSITORY_TOKEN", "synthetic-repository-credential")
 
+    interrupted = False
+
     async def daemon(argv, input_bytes=None):
+        nonlocal interrupted
         if list(argv[:2]) == ["docker", "run"] and "clone " in " ".join(argv):
-            selected_branch, source, target, name, email = argv[-5:]
+            args = list(argv[argv.index("--") + 1 :])
+            selected_branch, source, target = args[:3]
             assert source == "https://github.com/MoonLadderStudios/MoonMind.git"
             assert selected_branch == branch
             assert input_bytes == b"synthetic-repository-credential"
             clones.append((selected_branch, source))
             destination = journey.worker_root / target.removeprefix("/work/")
             destination.parent.mkdir(parents=True, exist_ok=True)
+            if interrupt_before_pin and not interrupted and len(args) == 6:
+                interrupted = True
+                subprocess.run(
+                    ["git", "clone", "--branch", selected_branch, str(remote), str(destination)],
+                    check=True, capture_output=True,
+                )
+                assert _git(destination, "rev-parse", "HEAD") != args[5]
+                raise asyncio.CancelledError("interrupted after clone before pin checkout")
+            # Run the production clone/fetch/checkout script; substitute only
+            # the network transport and mounted path with the local fixture.
+            args[1:3] = [str(remote), str(destination)]
             result = await asyncio.to_thread(
                 subprocess.run,
-                [
-                    "git",
-                    "clone",
-                    *(["--branch", selected_branch] if selected_branch else []),
-                    "--single-branch",
-                    str(remote),
-                    str(destination),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+                ["/bin/sh", "-ceu", argv[argv.index("-ceu") + 1], "--", *args],
+                input=input_bytes.decode(), capture_output=True, text=True, check=False,
             )
             if result.returncode == 0:
-                _git(destination, "config", "user.name", name)
-                _git(destination, "config", "user.email", email)
                 _git(destination, "remote", "set-url", "origin", source)
             return result.returncode, result.stdout, result.stderr
         if "/bin/chown" in argv:
@@ -108,11 +112,11 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main"):
             )
             return result.returncode, result.stdout, result.stderr
         if "-ceu" in argv and "--" in argv and list(argv[:2]) == ["docker", "run"]:
-            # Execute the owner's branch script against the actual mounted tree.
+            # Execute branch preparation and pin verification against the real tree.
             args = argv[argv.index("--") + 1 :]
             if args and args[0] == "/work":
                 mount = argv[argv.index("--mount") + 1]
-                fields = dict(part.split("=", 1) for part in mount.split(","))
+                fields = dict(part.split("=", 1) for part in mount.split(",") if "=" in part)
                 destination = journey.worker_root / fields["volume-subpath"]
                 result = await asyncio.to_thread(
                     subprocess.run,
@@ -156,8 +160,8 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main"):
 )
 @pytest.mark.parametrize(
     "source_shape",
-    ["flat", "nested", "default"],
-    ids=["flat-repository", "nested-repository-target", "omitted-source-branch"],
+    ["flat", "nested", "default", "pinned"],
+    ids=["flat-repository", "nested-repository-target", "omitted-source-branch", "typed-pinned-repository"],
 )
 async def test_repository_context_survives_source_host_and_worker_cleanup(
     native_journey,
@@ -192,6 +196,7 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
         source.pop("branch")
         source["connectionRef"] = "pool-repository"
     source["accessMode"] = "explicit"
+    pin = _git(tmp_path / "remote", "rev-parse", "main~1") if source_shape == "pinned" else None
     execute = pool.execute_selected_pool_source
     selected = {}
 
@@ -201,7 +206,9 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             **kwargs,
             repository_workspace={"workspaceSource": source},
             bind_parent_context=True,
-            repository_at_top=source_shape == "flat",
+            repository_at_top=source_shape in {"flat", "pinned"},
+            repository_revision={"kind": "git_commit", "commitSha": pin} if pin else None,
+            pinned_repository_patch=bool(pin),
         )
         selected["first"] = first
         if source_shape == "default":
@@ -231,14 +238,16 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             workspace = Path(native._mounts(list(argv))["/workspaces/run"]["src"])
             assert (workspace / "selected-branch.txt").read_text() == (
                 "Original default branch.\n"
-                if source_shape == "default"
+                if source_shape in {"default", "pinned"}
                 else "Selected main, not remote default.\n"
             )
             launches.append(workspace)
             if len(launches) == 1:
                 assert _git(workspace, "branch", "--show-current") == (
-                    "default-branch" if source_shape == "default" else "main"
+                    "" if pin else "default-branch" if source_shape == "default" else "main"
                 )
+                if pin:
+                    assert _git(workspace, "rev-parse", "HEAD") == pin
                 _git(workspace, "switch", "-qc", "agent/candidate")
                 (workspace / "unpublished.txt").write_text("Unpublished commit.\n")
                 _git(workspace, "add", "unpublished.txt")
@@ -273,7 +282,10 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
     assert authored_repository_access(
         {"workspaceSpec": journey.request.workspace_spec}
     ) == ("pool-repository", False)
-    assert compile_workspace_source(journey.request.workspace_spec).kind == "checkpoint"
+    compiled = compile_workspace_source(journey.request.workspace_spec)
+    assert compiled.kind == "checkpoint"
+    if pin:
+        assert compiled.repository_commit_sha == pin
     assert clones
     if source_shape == "default":
         assert len(clones) == 1
@@ -481,6 +493,161 @@ async def test_capable_parent_keeps_pinned_repository_revision_on_native_owner(
         bind_parent_context=True,
         repository_workspace=workspace,
         repository_at_top=False,
+        expected_native_reason="workspace_requires_its_recorded_native_owner",
+    )
+    assert native_journey.docker.create_count == 0
+    assert not native_journey.server.session_ids
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize("work_branch", [None, "main"], ids=["detached", "same-source-work-branch"])
+async def test_typed_pinned_repository_reaches_shared_materialization(
+    native_journey, monkeypatch, tmp_path, work_branch
+):
+    journey = native_journey
+    _repository_transport(journey, monkeypatch, tmp_path)
+    pinned = _git(tmp_path / "remote", "rev-parse", "main~1")
+    command = journey.docker.command
+    observed = []
+
+    async def observe_pin(argv, **kwargs):
+        if list(argv[:2]) == ["docker", "create"]:
+            workspace = Path(native._mounts(list(argv))["/workspaces/run"]["src"])
+            observed.append(_git(workspace, "rev-parse", "HEAD"))
+            assert _git(workspace, "branch", "--show-current") == (work_branch or "")
+            assert (workspace / "selected-branch.txt").read_text() == "Original default branch.\n"
+        return await command(argv, **kwargs)
+
+    monkeypatch.setattr(docker_backend, "run_runtime_command", observe_pin)
+    monkeypatch.setattr(credential_materializers, "run_runtime_command", observe_pin)
+    await pool.execute_selected_pool_source(
+        journey, monkeypatch, bind_parent_context=True,
+        repository_workspace={
+            "workspaceSource": {"kind": "repository"},
+            **({"targetBranch": work_branch} if work_branch else {}),
+        },
+        repository_revision={"kind": "git_commit", "commitSha": pinned},
+        pinned_repository_patch=True,
+        runtime_selection={
+            "model": journey.server.model,
+            "parameters": {
+                "workBranch": work_branch,
+                "workBranchId": f"refs/heads/{work_branch}",
+                "workBranchOrigin": "review_mapping",
+            },
+        } if work_branch else None,
+    )
+    assert journey.docker.create_count
+    assert observed == [pinned]
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_pinned_repository_does_not_gain_publication_authority(
+    native_journey, monkeypatch
+):
+    await pool.execute_selected_pool_source(
+        native_journey, monkeypatch, scenario="publish", bind_parent_context=True,
+        repository_workspace={"workspaceSource": {"kind": "repository"}},
+        repository_revision={"kind": "git_commit", "commitSha": "a" * 40},
+        pinned_repository_patch=True,
+        expected_native_reason="workspace_requires_its_recorded_native_owner",
+    )
+    assert not native_journey.docker.create_count
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_unavailable_pinned_repository_never_starts_harness(
+    native_journey, monkeypatch, tmp_path
+):
+    journey = native_journey
+    _repository_transport(journey, monkeypatch, tmp_path)
+
+    async def fail_without_harness(admitted):
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+        with pytest.raises(HarnessPlatformError, match="HEAD does not match the admitted commit"):
+            await admitted.realizer.execute(admitted.request, admitted.plan)
+        assert not admitted.docker.create_count
+        assert not admitted.server.session_ids
+
+    await pool.execute_selected_pool_source(
+        journey, monkeypatch, bind_parent_context=True,
+        repository_workspace={"workspaceSource": {"kind": "repository"}},
+        repository_revision={"kind": "git_commit", "commitSha": "a" * 40},
+        pinned_repository_patch=True, terminal_runner=fail_without_harness,
+    )
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_pinned_repository_retries_interrupted_initial_clone(
+    native_journey, monkeypatch, tmp_path
+):
+    journey = native_journey
+    clones = _repository_transport(journey, monkeypatch, tmp_path, interrupt_before_pin=True)
+    pin = _git(tmp_path / "remote", "rev-parse", "main~1")
+    command = journey.docker.command
+    observed = []
+
+    async def observe_pin(argv, **kwargs):
+        if list(argv[:2]) == ["docker", "create"]:
+            workspace = Path(native._mounts(list(argv))["/workspaces/run"]["src"])
+            observed.append(_git(workspace, "rev-parse", "HEAD"))
+        return await command(argv, **kwargs)
+
+    monkeypatch.setattr(docker_backend, "run_runtime_command", observe_pin)
+    monkeypatch.setattr(credential_materializers, "run_runtime_command", observe_pin)
+
+    async def retry_initialization(admitted):
+        with pytest.raises(asyncio.CancelledError):
+            await admitted.realizer._host_runtime._workspace.materialize(
+                admitted.request, plan=admitted.plan,
+            )
+        assert not admitted.docker.create_count
+        assert not list(admitted.worker_root.rglob(".moonmind-import-*"))
+        return await native.assert_native_turn_saved_and_cleaned(admitted)
+
+    await pool.execute_selected_pool_source(
+        journey, monkeypatch, bind_parent_context=True,
+        repository_workspace={"workspaceSource": {"kind": "repository"}},
+        repository_revision={"kind": "git_commit", "commitSha": pin},
+        pinned_repository_patch=True, terminal_runner=retry_initialization,
+    )
+    assert len(clones) == 2
+    assert observed == [pin]
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize("variant", ["abbreviated", "authored-capability-spoof"])
+async def test_typed_pin_requires_full_revision_and_controller_capability(
+    native_journey, monkeypatch, variant
+):
+    abbreviated = variant == "abbreviated"
+    await pool.execute_selected_pool_source(
+        native_journey, monkeypatch, bind_parent_context=True,
+        repository_workspace={"workspaceSource": {"kind": "repository"}},
+        repository_revision={
+            "kind": "git_commit", "commitSha": "a" * (12 if abbreviated else 40),
+        },
+        pinned_repository_patch=abbreviated,
+        submission_parameters={
+            "metadata": {"moonmind": {"pinnedRepositoryWorkspaceHandoff": True}},
+        } if not abbreviated else None,
+        expected_native_reason="workspace_requires_its_recorded_native_owner",
+    )
+    assert native_journey.docker.create_count == 0
+    assert not native_journey.server.session_ids
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_pinned_checkpoint_successor_cannot_gain_publication_authority(
+    native_journey, monkeypatch
+):
+    await pool.execute_selected_pool_source(
+        native_journey, monkeypatch, scenario="publish", bind_parent_context=True,
+        repository_workspace={"workspaceSource": {"kind": "repository"}},
+        repository_revision={"kind": "git_commit", "commitSha": "a" * 40},
+        pinned_repository_patch=True,
+        controller_checkpoint_ref="artifact://controller-saved-pinned-work",
         expected_native_reason="workspace_requires_its_recorded_native_owner",
     )
     assert native_journey.docker.create_count == 0
