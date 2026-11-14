@@ -240,6 +240,54 @@ async def test_invalid_action_intent_stops_before_any_host_or_lease_work(paramet
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parameters", "failure_code"),
+    [
+        ({"githubOperations": ["admin"]}, "github_action_intent_invalid"),
+        ({"githubOperations": ["write"]}, "github_auth_unavailable"),
+        (
+            {"requiredCapabilities": [], "maxBudgetUsd": 1},
+            "OMNIGENT_MAX_BUDGET_ENFORCEMENT_UNAVAILABLE",
+        ),
+    ],
+)
+async def test_preflight_rejection_does_not_bind_execution_inputs(
+    parameters, failure_code
+):
+    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
+    coordinator._execution_plan = None
+    coordinator._bind_request_inputs = AsyncMock(
+        side_effect=AssertionError("rejected request reached input binding")
+    )
+    coordinator._github_action_authority_error = AsyncMock(
+        return_value=SimpleNamespace(safe_summary="selected action is denied")
+    )
+
+    result = await coordinator.execute(request(**parameters))
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == failure_code
+    coordinator._bind_request_inputs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_valid_request_binds_required_inputs_before_bridge_mutation():
+    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
+    coordinator._execution_plan = None
+    coordinator._bind_request_inputs = AsyncMock(
+        side_effect=ValueError("required remediation context is missing")
+    )
+    coordinator._run_store = SimpleNamespace(get_or_create=AsyncMock())
+    authored = request(requiredCapabilities=[])
+
+    with pytest.raises(ValueError, match="required remediation context"):
+        await coordinator.execute(authored)
+
+    coordinator._bind_request_inputs.assert_awaited_once_with(authored)
+    coordinator._run_store.get_or_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_runtime_and_skill_declarations_have_replay_gate():
     parameters = {
         "requiredCapabilities": ["gh"],

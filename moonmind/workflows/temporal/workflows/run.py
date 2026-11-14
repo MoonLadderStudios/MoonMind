@@ -1096,6 +1096,7 @@ RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH = (
 RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH = (
     "run-remediation-attempt-context-inputs-v1"
 )
+RUN_REMEDIATION_INPUT_DELIVERY_PATCH = "run-remediation-input-delivery-v1"
 # Current controller evidence replaces inherited runtime defaults, including
 # an explicit absence of remaining work. Retained histories keep their original
 # AgentRun payloads when this patch is absent.
@@ -25379,6 +25380,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         },
                     }
             parameters.update(self._publication_identity_memo())
+
+        if (
+            self._remediation_context
+            and self._workflow_patch_enabled(RUN_REMEDIATION_INPUT_DELIVERY_PATCH)
+        ):
+            # Admission's remediation link owns the actual evidence ref. Carry
+            # the request intent so the Activity requires that ref on both the
+            # direct and supervised paths; old histories retain their payload.
+            projected_workflow = dict(parameters.get("workflow") or {})
+            projected_workflow["remediation"] = dict(self._remediation_context)
+            parameters["workflow"] = projected_workflow
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,

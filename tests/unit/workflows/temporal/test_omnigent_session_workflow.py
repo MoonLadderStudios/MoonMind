@@ -433,16 +433,118 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("remediation,security", [(True, False), (False, False), (True, True)])
+@pytest.mark.parametrize(
+    "activity_name",
+    [
+        "omnigent_ensure_host_activity",
+        "omnigent_ensure_provider_session_activity",
+        "omnigent_submit_turn_activity",
+    ],
+)
+async def test_canonical_dispatch_requires_context_before_provider_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    activity_name: str,
+) -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="mm:repair",
+        idempotencyKey="step-1",
+        parameters={
+            "workflow": {"remediation": {"target": {"workflowId": "mm:failed"}}}
+        },
+    )
+    lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_context_input_ref", lookup
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_claim_command",
+        AsyncMock(return_value=(None, True)),
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_intent_request",
+        AsyncMock(return_value=request),
+    )
+    provider = AsyncMock()
+    monkeypatch.setattr(
+        omnigent_session_activities, "_omnigent_client_context", provider
+    )
+    with pytest.raises(ValueError, match="remediation context"):
+        await getattr(omnigent_session_activities, activity_name)(
+            {
+                "sessionId": "oms_cleanup",
+                "compiledExecutionIntentRef": "art_intent",
+                "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+                "expectedRevision": 1,
+                "fencingGeneration": 1,
+                "commandId": "cmd-1",
+            }
+        )
+    lookup.assert_awaited_once_with("mm:repair")
+    provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_remediation_context_does_not_block_reconciliation_or_cleanup_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="mm:repair",
+        idempotencyKey="step-1",
+        parameters={"metadata": {"moonmind": {"selectedSkill": "remediate-workflow"}}},
+    )
+    snapshot = {
+        "sessionId": "oms_cleanup",
+        "request": request.model_dump(mode="json", by_alias=True),
+    }
+    lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_context_input_ref", lookup
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_read_json_artifact",
+        AsyncMock(return_value=snapshot),
+    )
+    loaded = await omnigent_session_activities._load_intent_request(
+        OmnigentSessionActivityRequest(
+            sessionId="oms_cleanup",
+            compiledExecutionIntentRef="art_intent",
+            compiledExecutionIntentDigest=omnigent_session_activities._digest_bytes(
+                omnigent_session_activities._json_bytes(snapshot)
+            ),
+            expectedRevision=1,
+            fencingGeneration=1,
+        )
+    )
+    assert loaded == request
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "remediation,security", [(True, False), (False, False), (True, True)]
+)
+@pytest.mark.parametrize("context_available", [False, True])
 async def test_compact_plan_handoff_delivers_remediation_context_as_input(
-    monkeypatch: pytest.MonkeyPatch, remediation: bool, security: bool
+    monkeypatch: pytest.MonkeyPatch,
+    remediation: bool,
+    security: bool,
+    context_available: bool,
 ) -> None:
     workflow: dict[str, object] = {"instructions": "Diagnose the failed run."}
     if remediation:
         workflow["remediation"] = {"target": {"workflowId": "mm:failed"}}
+        workflow["skill"] = {"name": "remediate-workflow"}
         if security:
             workflow["remediation"]["target"]["securityFinding"] = {
-                "comparisonArtifactRef": "art_comparison", "findingId": "finding-1",
+                "comparisonArtifactRef": "art_comparison",
+                "findingId": "finding-1",
             }
     snapshot = {
         "schemaVersion": "task-input-snapshot/v1",
@@ -479,20 +581,43 @@ async def test_compact_plan_handoff_delivers_remediation_context_as_input(
             modelConfig=SimpleNamespace(qualifiedId="opencode/gpt-5", effort="high"),
         )
     )
+    skills = {
+        "snapshot_id": "snapshot-1",
+        "resolved_at": "2026-01-01T00:00:00Z",
+        "skills": [
+            {
+                "skill_name": "remediate-workflow",
+                "provenance": {"source_kind": "built_in"},
+                "terminal_contract": {
+                    "contract_id": "remediate_workflow_terminal.v1",
+                    "relative_path": "artifacts/remediation-result.json",
+                    "expected_schema_version": "remediation-result/v1",
+                },
+            }
+        ],
+    }
+
+    async def read_artifact(ref, **_kwargs):
+        return skills if ref == "art-skills" else snapshot
+
     monkeypatch.setattr(
-        omnigent_session_activities,
-        "_read_json_artifact",
-        AsyncMock(return_value=snapshot),
+        omnigent_session_activities, "_read_json_artifact", read_artifact
     )
-    context_lookup = AsyncMock(return_value="artifact://art_remediation_context")
+    context_lookup = AsyncMock(
+        return_value="artifact://art_remediation_context" if context_available else None
+    )
     monkeypatch.setattr(
         omnigent_session_activities,
         "_remediation_context_input_ref",
         context_lookup,
     )
 
-    security_lookup = AsyncMock(return_value=["artifact://art_comparison", "artifact://art_native"])
-    monkeypatch.setattr(omnigent_session_activities, "_remediation_security_input_refs", security_lookup)
+    security_lookup = AsyncMock(
+        return_value=["artifact://art_comparison", "artifact://art_native"]
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_security_input_refs", security_lookup
+    )
 
     request = await omnigent_session_activities._reconstruct_plan_bound_request(
         binding=binding,
@@ -503,10 +628,24 @@ async def test_compact_plan_handoff_delivers_remediation_context_as_input(
         logical_step_id=None,
     )
 
+    assert request.input_refs == []
+    context_lookup.assert_not_awaited()
+    if remediation and not context_available:
+        with pytest.raises(ValueError, match="remediation context"):
+            await omnigent_session_activities.bind_remediation_context_inputs(request)
+        security_lookup.assert_not_awaited()
+        return
+    request = await omnigent_session_activities.bind_remediation_context_inputs(request)
     if remediation:
-        assert request.input_refs == ["artifact://art_remediation_context", *(
-            ["artifact://art_comparison", "artifact://art_native"] if security else []
-        )]
+        assert request.terminal_contract.execution_ref == "step-execution-1"
+        assert request.input_refs == [
+            "artifact://art_remediation_context",
+            *(
+                ["artifact://art_comparison", "artifact://art_native"]
+                if security
+                else []
+            ),
+        ]
         context_lookup.assert_awaited_once_with("mm:remediation")
     else:
         assert request.input_refs == []

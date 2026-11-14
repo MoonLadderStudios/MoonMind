@@ -18,6 +18,7 @@ from moonmind.omnigent.runtime_bindings import (
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
+    AgentTerminalContract,
     ExecutionBudgetContext,
     resolve_execution_budget,
 )
@@ -873,6 +874,76 @@ async def _session_ready_sink(idempotency_key: str):
             state=state,
         )
     return RuntimeBindingSessionAuthoritySink(store, binding)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["blocked", "failed", "missing", "succeeded"])
+async def test_remediation_verdict_gates_publication_before_cleanup(tmp_path, status):
+    request = _finish_request(idempotency_key=f"remediation-{status}").model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="remediate_workflow_terminal.v1",
+                relativePath="remediation-result.json",
+                expectedSchemaVersion="moonmind.remediate-workflow-result.v1",
+                executionRef="step:1",
+            )
+        }
+    )
+    sink = await _session_ready_sink(request.idempotency_key)
+    await sink.record_phase("saved", {"checkpointRef": "artifact://saved"})
+    turns = []
+    summary = (
+        "Diagnosed a transient outage; retry the interrupted step."
+        if status == "succeeded"
+        else "Remediation context is missing; the target failure remains unknown."
+    )
+
+    async def driver(bound, *, session_authority_sink, **kwargs):
+        turns.append(bound.idempotency_key)
+        await session_authority_sink.session_created("same-session")
+        if status != "missing":
+            (tmp_path / "remediation-result.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "moonmind.remediate-workflow-result.v1",
+                        "executionRef": "step:1",
+                        "status": status,
+                        "summary": summary,
+                    }
+                )
+            )
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            summary="Omnigent session completed",
+        )
+
+    computed = await complete_skill_turns(
+        request=request,
+        sink=sink,
+        driver=driver,
+        inspect_terminal=_inspect_workspace(tmp_path),
+    )
+    publish = AsyncMock(side_effect=lambda bound, result: result)
+    realizer = _finish_realizer(None, publish=publish)
+    result = await realizer._finish_owned_execution(request, sink, computed)
+    assert result.execution_state == "completed"
+    assert result.objective_outcome == (
+        "succeeded" if status == "succeeded" else "failed"
+    )
+    assert len(turns) == (3 if status == "missing" else 1)
+    if status == "succeeded":
+        publish.assert_awaited_once()
+    else:
+        publish.assert_not_awaited()
+        assert result.failure_class == "execution_error"
+        assert result.publication_state == "not_published"
+        assert result.metadata["workPreserved"] is True
+        assert result.summary == (
+            summary
+            if status != "missing"
+            else "Remediation ended without required outcome evidence: remediation-result.json"
+        )
 
 
 def _resolver_request(idempotency_key: str) -> AgentExecutionRequest:
