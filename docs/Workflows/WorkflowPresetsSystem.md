@@ -190,7 +190,7 @@ The durable minimum is the issue key. Optional enrichment is fetched/validated t
 
 ## GitHub Issue Search
 
-`github-issue-search-and-implement` uses the workflow repository binding. Its typed `github.load_issue_preset_brief` operation accepts `issueSearch` plus `includeAllAuthors` (preset input `include_all_authors`, default `false`); the implementation lives in `moonmind/workflows/temporal/github_issue_search.py`.
+`github-issue-search-and-implement` uses the workflow repository binding. Its optional verification and remediation pass defaults off (`run_verify: false`); explicit selections remain authoritative. This does not remove implementation tests or issue eligibility checks. Its typed `github.load_issue_preset_brief` operation accepts `issueSearch` plus `includeAllAuthors` (preset input `include_all_authors`, default `false`); the implementation lives in `moonmind/workflows/temporal/github_issue_search.py`.
 
 **Author scope.** Search defaults to the resolved GitHub credential’s account, verified with `GET /user` and durable IDs. **Include issues created by other users** broadens authors without bypassing repository, lifecycle, dependency, claim, retry, or publication checks. Queries use a parenthesized author constraint; blank searches use `creator`. Conflicting authored filters require opt-in; missing identity stops selection. Identity is rechecked before reservation and brief handoff; no-match never broadens scope. Explicit issue selection and dependency reads remain unrestricted. `searchEvidence` retains scope, identities, mismatches, and scan counts. Selected-issue agent prompts omit rejection samples; trusted results and workflow state retain them. Missing input means `false`; saved/admitted choices persist.
 

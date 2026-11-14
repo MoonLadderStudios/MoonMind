@@ -90,7 +90,8 @@ async def artifact_service(tmp_path):
         ({}, 0),
         ({"run_verify": True}, 0),
         ({"run_verify": False}, 0),
-        ({}, 2),
+        # Remediation restart requires opting into the optional verification pass.
+        ({"run_verify": True}, 2),
         ({"include_all_authors": False}, 0),
         ({"include_all_authors": True}, 0),
         pytest.param(

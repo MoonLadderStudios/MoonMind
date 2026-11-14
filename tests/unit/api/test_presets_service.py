@@ -3334,6 +3334,48 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
 
 
+@pytest.mark.parametrize(
+    ("inputs", "expected_verification"),
+    [({}, False), ({"run_verify": False}, False), ({"run_verify": True}, True)],
+    ids=["omitted-opt-out", "explicit-opt-out", "explicit-opt-in"],
+)
+async def test_search_implement_verification_is_opt_in(
+    tmp_path, inputs, expected_verification
+):
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service/data/presets"
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+            template = await service.get_template(
+                slug="github-issue-search-and-implement"
+            )
+            expanded = await service.expand_template(
+                slug="github-issue-search-and-implement",
+                inputs=inputs,
+                context={"repository": "MoonLadderStudios/MoonMind"},
+            )
+
+    annotations = template["annotations"]
+    assert annotations["inputSchema"]["properties"]["run_verify"]["default"] is False
+    assert annotations["defaults"]["run_verify"] is False
+    assert (
+        next(item for item in template["inputs"] if item["name"] == "run_verify")[
+            "default"
+        ]
+        is False
+    )
+    titles = [step["title"] for step in expanded["steps"]]
+    assert ("Verify implementation" in titles) is expected_verification
+    assert ("Remediation loop controller" in titles) is expected_verification
+    assert "Implement the issue" in titles
+    assert "Create pull request" in titles
+    assert (
+        expanded["steps"][-1]["tool"]["inputs"]["requireVerification"]
+        is expected_verification
+    )
+
+
 async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_path):
     seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
