@@ -14,10 +14,10 @@ from tools.ci import repository_security_image as image
 from tools.ci import test_repository_security_image_updates as updates
 
 
-def release(tool, version="1.2.3", prerelease=False):
+def release(tool, version="1.2.3", prerelease=False, *, opengrep_platform="manylinux"):
     names = {
         "opengrep": [
-            f"opengrep_manylinux_{arch}{suffix}"
+            f"opengrep_{opengrep_platform}_{arch}{suffix}"
             for arch in ("x86", "aarch64")
             for suffix in ("", ".sig", ".cert")
         ],
@@ -82,6 +82,35 @@ def test_explicit_versions_and_base_are_resolved_without_compatibility_gates(rel
     assert any(url.endswith("/tags/v9.8.7") for url in releases)
 
 
+@pytest.mark.parametrize("override", ["", "2.0.0"])
+def test_current_opengrep_linux_assets_resolve_for_both_architectures(monkeypatch, override):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        tool = next(t for t, repo in image.REPOSITORIES.items() if f"/{repo}/" in url)
+        return release(tool, "2.0.0", opengrep_platform="linux")
+
+    monkeypatch.setattr(image, "fetch_json", fetch)
+    inputs = image.resolve_inputs(opengrep=override)
+    selected = inputs["tools"]["opengrep"]
+    assert selected["version"] == "v2.0.0"
+    assert set(selected["assets"]) == {"amd64", "arm64"}
+    for arch, suffix in (("amd64", "x86"), ("arm64", "aarch64")):
+        material = selected["assets"][arch]
+        name = f"opengrep_linux_{suffix}"
+        assert material["binary"]["name"] == name
+        assert material["signature"]["name"] == name + ".sig"
+        assert material["certificate"]["name"] == name + ".cert"
+        assert all(
+            asset["browser_download_url"]
+            == f"https://github.com/opengrep/opengrep/releases/download/v2.0.0/{asset['name']}"
+            for asset in material.values()
+        )
+    selector = "tags/v2.0.0" if override else "latest"
+    assert calls[0] == f"https://api.github.com/repos/opengrep/opengrep/releases/{selector}"
+
+
 @pytest.mark.parametrize("flag", ["prerelease", "draft"])
 def test_default_does_not_admit_unstable_release(monkeypatch, flag):
     data = release("opengrep")
@@ -99,10 +128,12 @@ def test_default_does_not_admit_unstable_release(monkeypatch, flag):
         "opengrep_manylinux_x86.cert",
     ],
 )
+@pytest.mark.parametrize("platform", ["manylinux", "linux"])
 def test_missing_architecture_or_required_verification_material_fails_closed(
-    monkeypatch, missing
+    monkeypatch, missing, platform
 ):
-    data = release("opengrep")
+    data = release("opengrep", opengrep_platform=platform)
+    missing = missing.replace("manylinux", platform)
     data["assets"] = [a for a in data["assets"] if a["name"] != missing]
     monkeypatch.setattr(image, "fetch_json", lambda url: data)
     with pytest.raises(image.ImageError, match=missing):

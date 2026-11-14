@@ -168,7 +168,12 @@ def resolve_inputs(
         selected = {}
         for arch in ARCHITECTURES:
             if tool == "opengrep":
-                name = "opengrep_manylinux_" + ("x86" if arch == "amd64" else "aarch64")
+                platform = (
+                    "linux"
+                    if any(name.startswith("opengrep_linux_") for name in available)
+                    else "manylinux"
+                )
+                name = f"opengrep_{platform}_" + ("x86" if arch == "amd64" else "aarch64")
                 selected[arch] = {
                     "binary": asset(name),
                     "signature": asset(name + ".sig"),
