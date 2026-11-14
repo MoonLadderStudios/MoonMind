@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import re
 import subprocess
 import tarfile
 import urllib.error
@@ -255,38 +256,48 @@ def test_signature_verification_is_required_and_uses_the_upstream_identity(
         with pytest.raises((subprocess.CalledProcessError, FileNotFoundError)):
             image.verify_signature(
                 tool,
-                "v1.2.3",
                 binary,
                 {
                     "signature": tmp_path / "signature",
                     "certificate": tmp_path / "certificate",
                     "bundle": tmp_path / "bundle",
                 },
+                identity=image.signature_identity(tool, "v1.2.3"),
             )
     else:
         image.verify_signature(
             tool,
-            "v1.2.3",
             binary,
             {
                 "signature": tmp_path / "signature",
                 "certificate": tmp_path / "certificate",
                 "bundle": tmp_path / "bundle",
             },
+            identity=image.signature_identity(tool, "v1.2.3"),
         )
     argv = calls[0]
     assert argv[:2] == ("cosign", "verify-blob")
     assert argv[argv.index("--certificate-oidc-issuer") + 1] == (
         "https://token.actions.githubusercontent.com"
     )
-    ref = (
-        r"refs/(?:tags/v1\.2\.3|heads/release-v1\.2\.3)"
-        if tool == "opengrep"
-        else r"refs/tags/v1\.2\.3"
-    )
-    assert argv[argv.index("--certificate-identity-regexp") + 1] == (
-        rf"^https://github.com/{image.REPOSITORIES[tool]}/\.github/workflows/[^/]+\.ya?ml@{ref}$"
-    )
+    identity = argv[argv.index("--certificate-identity-regexp") + 1]
+    prefix = f"https://github.com/{image.REPOSITORIES[tool]}/.github/workflows/"
+    allowed = [prefix + "release.yml@refs/tags/v1.2.3"]
+    if tool == "opengrep":
+        allowed.extend(
+            [
+                prefix + "release.yml@refs/heads/release-v1.2.3",
+                prefix + "rolling-release.yml@refs/heads/main",
+            ]
+        )
+    assert all(re.fullmatch(identity, subject) for subject in allowed)
+    rejected = [
+        prefix + "release.yml@refs/tags/v1.2.4",
+        prefix + "release.yml@refs/heads/main",
+        prefix + "rolling-release.yml@refs/heads/untrusted",
+        allowed[0].replace(image.REPOSITORIES[tool], "other-owner/other-repository"),
+    ]
+    assert not any(re.fullmatch(identity, subject) for subject in rejected)
     assert not any("insecure" in str(a) or "ignore" in str(a) for a in argv)
 
 
@@ -531,7 +542,9 @@ def test_prepare_verifies_before_installing_any_binary(releases, monkeypatch, tm
     monkeypatch.setattr(
         image,
         "verify_signature",
-        lambda *args: (_ for _ in ()).throw(image.ImageError("invalid signature")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            image.ImageError("invalid signature")
+        ),
     )
     installs = []
     monkeypatch.setattr(image, "install_binary", lambda *args: installs.append(args))
@@ -551,13 +564,23 @@ def test_negative_verification_checks_preserve_original_artifacts(
             (tmp_path / tool / asset["name"]).write_bytes(b"original")
     calls = []
 
-    def reject(tool, tag, binary, material):
-        calls.append((tool, tag, binary, material))
+    def reject(tool, binary, material, *, identity):
+        calls.append((tool, binary, material, identity))
         raise subprocess.CalledProcessError(1, ["cosign"])
 
     monkeypatch.setattr(image, "verify_signature", reject)
     image.verification_negatives(inputs, "amd64", tmp_path)
     assert len(calls) == 8
+    for index in (3, 7):
+        tool, _, _, identity = calls[index]
+        signer = (
+            "rolling-release.yml@refs/heads/main"
+            if tool == "opengrep"
+            else "release.yml@refs/tags/v1.2.3"
+        )
+        subject = f"https://github.com/{image.REPOSITORIES[tool]}/.github/workflows/{signer}"
+        assert re.fullmatch(image.signature_identity(tool, "v1.2.3"), subject)
+        assert not re.fullmatch(identity, subject)
     assert len(json.loads((tmp_path / "verification-negatives.json").read_text())) == 8
     assert all(
         path.read_bytes() == b"original"
