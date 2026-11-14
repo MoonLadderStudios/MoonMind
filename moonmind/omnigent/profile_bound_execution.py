@@ -828,7 +828,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 apply_remediation_terminal_evaluation,
             )
 
-            evaluation = await self._workspace_publication.inspect_request_terminal(
+            evaluation = await self._workspace_preservation.inspect_request_terminal(
                 request
             )
             return apply_remediation_terminal_evaluation(result, evaluation)

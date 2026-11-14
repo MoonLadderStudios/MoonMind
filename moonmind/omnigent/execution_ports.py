@@ -27,7 +27,6 @@ from pydantic import BaseModel, ConfigDict, Field
 # Host release is owned by the host-port module; the coordinator consumes that
 # one definition rather than declaring a second protocol with the same name.
 from moonmind.omnigent.host_ports import OmnigentHostReleasePort
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 class ExecutionPolicyAuthorityUnavailableError(RuntimeError):
@@ -117,9 +116,6 @@ class OmnigentHostPreparationPort(Protocol):
 @runtime_checkable
 class OmnigentWorkspacePublicationPort(Protocol):
     """Publish the authoritative workspace before host capacity is released."""
-
-    async def inspect_request_terminal(self, request: AgentExecutionRequest) -> Any:
-        raise NotImplementedError
 
     async def publish_workspace(
         self,

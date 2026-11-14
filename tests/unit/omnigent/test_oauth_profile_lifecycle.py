@@ -5198,7 +5198,7 @@ async def _drive_authority_chain_coordinator(
     resolve_source_credential: bool = False,
     materialized_input_paths: dict | None = None,
     terminal_contract: dict | None = None,
-    terminal_inspector=None,
+    workspace_preservation=None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -5345,9 +5345,6 @@ async def _drive_authority_chain_coordinator(
                 "pushRef": "artifact://push-1",
             }
 
-        async def inspect_request_terminal(self, request):
-            return await terminal_inspector(request)
-
         async def inspect_session_completion(self, _session_id):
             if session_inspector is not None:
                 return await session_inspector.inspect_session_completion(_session_id)
@@ -5397,6 +5394,7 @@ async def _drive_authority_chain_coordinator(
         run_store=Store(),
         execution_runner=execute,
         artifact_gateway=object(),
+        workspace_preservation=workspace_preservation,
     )
     # Repository credential selection has its own coverage; this harness has no
     # repository connection store.
@@ -5456,25 +5454,42 @@ async def _drive_authority_chain_coordinator(
     )
 
 
+def _remediation_outcome_workspace(workspace_root):
+    workspace_id = hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24]
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "idem-1", "repo")
+    )
+    workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    return workspace
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["blocked", "missing", "succeeded"])
+@pytest.mark.parametrize("root_source", ["configured", "explicit"])
 async def test_profile_bound_remediation_verdict_prevents_false_publication(
-    tmp_path, status
+    tmp_path, monkeypatch, status, root_source
 ):
-    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+    workspace = _remediation_outcome_workspace(tmp_path)
+    if root_source == "configured":
+        monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+        workspace_preservation = None
+    else:
+        monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path / "other-root"))
+        workspace_preservation = OmnigentWorkspacePublicationService(tmp_path)
 
     contract = {
         "contractId": "remediate_workflow_terminal.v1",
         "relativePath": "outcome.json",
         "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
-        "executionRef": "step:1",
+        "executionRef": "idem-1",
     }
     if status != "missing":
-        (tmp_path / "outcome.json").write_text(
+        (workspace / "outcome.json").write_text(
             json.dumps(
                 {
                     "schemaVersion": contract["expectedSchemaVersion"],
-                    "executionRef": "step:1",
+                    "executionRef": "idem-1",
                     "status": status,
                     "summary": (
                         "Remediation prerequisite unavailable."
@@ -5483,12 +5498,6 @@ async def test_profile_bound_remediation_verdict_prevents_false_publication(
                     ),
                 }
             )
-        )
-
-    async def inspect(request):
-        return evaluate_terminal_evidence(
-            request.terminal_contract.model_dump(by_alias=True),
-            workspace_path=str(tmp_path),
         )
 
     async def execute(request, **kwargs):
@@ -5501,7 +5510,10 @@ async def test_profile_bound_remediation_verdict_prevents_false_publication(
     ordered, _, _, result = await _drive_authority_chain_coordinator(
         execute,
         terminal_contract=contract,
-        terminal_inspector=inspect,
+        workspace_preservation=workspace_preservation,
+        request_parameters={
+            "stepExecution": {"workflowId": "workflow-1", "stepExecutionId": "idem-1"}
+        },
     )
     assert result.objective_outcome == (
         "succeeded" if status == "succeeded" else "failed"
@@ -5510,6 +5522,11 @@ async def test_profile_bound_remediation_verdict_prevents_false_publication(
     if status != "succeeded":
         assert result.publication_state == "not_published"
         assert result.failure_class == "execution_error"
+        assert result.provider_error_code == (
+            "REMEDIATION_BLOCKED"
+            if status == "blocked"
+            else "INCOMPLETE_TERMINAL_CONTRACT"
+        )
 
 
 @pytest.mark.asyncio
@@ -5518,13 +5535,13 @@ async def test_profile_bound_continuation_rechecks_remediation_before_publishing
     tmp_path,
     running_recovery,
 ):
-    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+    workspace = _remediation_outcome_workspace(tmp_path)
 
     contract = {
         "contractId": "remediate_workflow_terminal.v1",
         "relativePath": "outcome.json",
         "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
-        "executionRef": "step:1",
+        "executionRef": "idem-1",
     }
     calls = []
 
@@ -5537,11 +5554,11 @@ async def test_profile_bound_continuation_rechecks_remediation_before_publishing
                 snapshot={"status": "running", "items": []},
             )
         if len(calls) == 2:
-            (tmp_path / "outcome.json").write_text(
+            (workspace / "outcome.json").write_text(
                 json.dumps(
                     {
                         "schemaVersion": contract["expectedSchemaVersion"],
-                        "executionRef": "step:1",
+                        "executionRef": "idem-1",
                         "status": "blocked",
                         "summary": "Required remediation context was not delivered.",
                     }
@@ -5561,16 +5578,13 @@ async def test_profile_bound_continuation_rechecks_remediation_before_publishing
             },
         )
 
-    async def inspect(request):
-        return evaluate_terminal_evidence(
-            request.terminal_contract.model_dump(by_alias=True),
-            workspace_path=str(tmp_path),
-        )
-
     ordered, _, _, result = await _drive_authority_chain_coordinator(
         execute,
         terminal_contract=contract,
-        terminal_inspector=inspect,
+        workspace_preservation=OmnigentWorkspacePublicationService(tmp_path),
+        request_parameters={
+            "stepExecution": {"workflowId": "workflow-1", "stepExecutionId": "idem-1"}
+        },
         completion_evidence=[
             {
                 "sessionStatus": "running" if running_recovery else "completed",
