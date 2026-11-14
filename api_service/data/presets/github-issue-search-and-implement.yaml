@@ -56,23 +56,11 @@ annotations:
       issue_search:
         type: string
         title: GitHub issue search
-        description: Free-text search used as '<search> is:issue state:open' for candidate
-          discovery only; by default only issues created by the GitHub account used
-          for this search are eligible (enable Include issues created by other users
-          to broaden author eligibility). Every candidate is revalidated through the
-          shared lifecycle eligibility decision (Available means no MoonMind status
-          label, not no labels at all; Recovery-needed continuations require stopped-writer,
-          prior-work, retry, and policy evidence; in-progress, code-review, needs-attention,
-          closed, mixed/unknown states, unresolved active comments, and unsafe or
-          incomplete handoffs are excluded). Leave blank to fall back to a bounded
-          repository scan for the first eligible candidate without blocking dependencies.
-          Safe recoveries within equivalent scope/priority are preferred under a bounded
-          fair policy so one difficult issue cannot monopolize recurring runs.
+        description: Leave blank to select the next eligible issue.
       include_all_authors:
         type: boolean
         title: Include issues created by other users
-        description: By default, only issues created by the GitHub account used for
-          this search are eligible.
+        description: Otherwise, search only issues created by your GitHub account.
         default: false
       repository:
         type: string
@@ -85,7 +73,7 @@ annotations:
       run_verify:
         type: boolean
         title: Run verification
-        description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
+        description: Adds a separate verification and remediation pass before pull request handoff.
         default: false
       completion_target_ref:
         type: string
@@ -100,9 +88,22 @@ annotations:
       advanced: true
     issue_search:
       widget: text
+      order: 10
+      fullWidth: true
       searchPlaceholder: Search GitHub issues
     include_all_authors:
       widget: checkbox
+      order: 20
+      helpDisplay: tooltip
+    run_verify:
+      widget: checkbox
+      order: 30
+      helpDisplay: tooltip
+    constraints:
+      widget: textarea
+      order: 40
+      fullWidth: true
+      advanced: true
     repository:
       widget: text
       advanced: true

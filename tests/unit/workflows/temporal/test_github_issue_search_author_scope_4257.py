@@ -129,7 +129,7 @@ def test_preset_seed_declares_unchecked_all_authors_opt_in() -> None:
     assert props["include_all_authors"]["title"] == "Include issues created by other users"
     assert (
         props["include_all_authors"]["description"]
-        == "By default, only issues created by the GitHub account used for this search are eligible."
+        == "Otherwise, search only issues created by your GitHub account."
     )
     assert props["include_all_authors"]["default"] is False
     assert seed["annotations"]["defaults"]["include_all_authors"] is False
@@ -138,7 +138,11 @@ def test_preset_seed_declares_unchecked_all_authors_opt_in() -> None:
     include_input = next(item for item in seed["inputs"] if item["name"] == "include_all_authors")
     assert include_input["type"] == "boolean"
     assert include_input["default"] is False
-    assert seed["annotations"]["uiSchema"]["include_all_authors"] == {"widget": "checkbox"}
+    assert seed["annotations"]["uiSchema"]["include_all_authors"] == {
+        "widget": "checkbox",
+        "order": 20,
+        "helpDisplay": "tooltip",
+    }
     binding = seed["steps"][0]["tool"]["inputs"]
     assert binding["includeAllAuthors"] == "{{ inputs.include_all_authors }}"
     assert "created by the authenticated" in seed["description"]
