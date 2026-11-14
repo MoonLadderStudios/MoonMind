@@ -1521,6 +1521,21 @@ class MoonMindAgentRun:
                 "omnigent.evaluate_session_admission",
                 "integration.resolve_adapter_metadata",
             }
+            if capacity_operation and context.execution_deadline is not None:
+                remaining = (
+                    context.execution_deadline - workflow.now()
+                ).total_seconds()
+                if remaining <= 0:
+                    raise ExecutionBudgetExhausted(
+                        "Remediation wall-clock deadline expired during capacity admission"
+                    )
+                for key in (
+                    "start_to_close_timeout",
+                    "schedule_to_close_timeout",
+                    "heartbeat_timeout",
+                ):
+                    if key in kwargs:
+                        kwargs[key] = min(kwargs[key], timedelta(seconds=remaining))
             if not capacity_operation:
                 now = workflow.now()
                 finishing = activity_name in {
@@ -5747,12 +5762,25 @@ class MoonMindAgentRun:
             else None
         )
 
+        context = getattr(self, "_execution_budget", None)
+        execution_deadline = context.execution_deadline if context is not None else None
+        if execution_deadline is not None:
+            wait_deadline = (
+                min(wait_deadline, execution_deadline)
+                if wait_deadline
+                else execution_deadline
+            )
+
         def remaining_wait():
             if wait_deadline is None:
                 return _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS - waited_seconds
             return (wait_deadline - workflow.now()).total_seconds()
 
         def capacity_timeout():
+            if execution_deadline is not None and workflow.now() >= execution_deadline:
+                return asyncio.TimeoutError(
+                    "Remediation wall-clock deadline expired during provider capacity wait"
+                )
             elapsed = (
                 _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS
                 if preserve_request
@@ -5767,7 +5795,9 @@ class MoonMindAgentRun:
             )
 
         while not self.slot_assigned_event.is_set():
-            if preserve_request and remaining_wait() <= 0:
+            if (
+                preserve_request or execution_deadline is not None
+            ) and remaining_wait() <= 0:
                 raise capacity_timeout()
             self.run_status = RunStatus.awaiting_slot
             await self._signal_parent_child_state_changed(
@@ -5781,7 +5811,9 @@ class MoonMindAgentRun:
             )
             if self.slot_assigned_event.is_set():
                 break
-            if preserve_request and remaining_wait() <= 0:
+            if (
+                preserve_request or execution_deadline is not None
+            ) and remaining_wait() <= 0:
                 raise capacity_timeout()
             try:
                 await workflow.wait_condition(
@@ -5789,7 +5821,7 @@ class MoonMindAgentRun:
                     timeout=timedelta(
                         seconds=(
                             min(_SLOT_WAIT_TIMEOUT_SECONDS, remaining_wait())
-                            if preserve_request
+                            if preserve_request or execution_deadline is not None
                             else _SLOT_WAIT_TIMEOUT_SECONDS
                         )
                     ),
@@ -6454,6 +6486,26 @@ class MoonMindAgentRun:
             )
             return False
 
+    async def _wait_for_budgeted_resume(self) -> None:
+        """Pause productive time, but never extend an admitted wall-clock limit."""
+        context = getattr(self, "_execution_budget", None)
+        deadline = context.execution_deadline if context is not None else None
+        if deadline is None:
+            await workflow.wait_condition(lambda: not self._paused)
+            return
+        remaining = (deadline - workflow.now()).total_seconds()
+        if remaining <= 0:
+            raise asyncio.TimeoutError(
+                "Remediation wall-clock deadline expired while paused"
+            )
+        await workflow.wait_condition(
+            lambda: not self._paused, timeout=timedelta(seconds=remaining)
+        )
+        if workflow.now() >= deadline:
+            raise asyncio.TimeoutError(
+                "Remediation wall-clock deadline expired while paused"
+            )
+
     async def _await_omnigent_host_capacity(
         self,
         *,
@@ -6482,7 +6534,13 @@ class MoonMindAgentRun:
         waited_seconds = (
             getattr(self, "_host_capacity_wait_seconds", 0) if cumulative else 0
         )
+        context = getattr(self, "_execution_budget", None)
+        execution_deadline = context.execution_deadline if context is not None else None
         while True:
+            if execution_deadline is not None and workflow.now() >= execution_deadline:
+                raise asyncio.TimeoutError(
+                    "Remediation wall-clock deadline expired during host capacity wait"
+                )
             decision = await self._execute_routed_activity(
                 "omnigent.admit_generic_host_capacity",
                 dict(host_binding or {}),
@@ -6534,6 +6592,11 @@ class MoonMindAgentRun:
                     or "Waiting for generic host capacity."
                 ),
             )
+            if execution_deadline is not None:
+                retry_after = min(
+                    retry_after,
+                    max(0, (execution_deadline - workflow.now()).total_seconds()),
+                )
             await workflow.sleep(timedelta(seconds=retry_after))
             waited_seconds += retry_after
             if cumulative:
@@ -6767,8 +6830,20 @@ class MoonMindAgentRun:
                 "originalProfileRef": original_profile_ref,
                 "request": request.model_dump(mode="json", by_alias=True),
             })
-            await workflow.wait_condition(lambda: self._pool_plan_response is not None,
-                                          timeout=timedelta(seconds=240))
+            context = getattr(self, "_execution_budget", None)
+            plan_wait_seconds = 240
+            if context is not None and context.execution_deadline is not None:
+                plan_wait_seconds = min(
+                    plan_wait_seconds, context.remaining_seconds(workflow.now())
+                )
+                if plan_wait_seconds <= 0:
+                    raise asyncio.TimeoutError(
+                        "Remediation wall-clock deadline expired awaiting pool plan"
+                    )
+            await workflow.wait_condition(
+                lambda: self._pool_plan_response is not None,
+                timeout=timedelta(seconds=plan_wait_seconds),
+            )
             result = self._pool_plan_response
             if result.get("disposition") == "native":
                 metadata = request.parameters.get("metadata")
@@ -8089,12 +8164,20 @@ class MoonMindAgentRun:
                 deadline = context.budget.deadline_seconds(
                     context.last_progress_seconds
                 )
+                if context.execution_deadline is not None:
+                    deadline = min(
+                        deadline, elapsed_now + context.remaining_seconds(now)
+                    )
                 verdict = (
                     "continue"
                     if context.remaining_seconds(now) > 0
                     else (
                         "expired_max_budget"
                         if elapsed_now >= context.budget.max_seconds
+                        or (
+                            context.execution_deadline is not None
+                            and now >= context.execution_deadline
+                        )
                         else "expired_no_progress"
                     )
                 )
@@ -8208,7 +8291,7 @@ class MoonMindAgentRun:
                         self._execution_budget = self._execution_budget.suspend(
                             workflow.now()
                         )
-                    await workflow.wait_condition(lambda: not self._paused)
+                    await self._wait_for_budgeted_resume()
                     if getattr(self, "_execution_budget", None) is not None:
                         self._execution_budget = self._execution_budget.resume(
                             workflow.now()
@@ -8609,7 +8692,7 @@ class MoonMindAgentRun:
                     if grant_progress_enabled:
                         await self._signal_parent_granted_profile(parent_info, runtime_id)
                     if self._paused:
-                        await workflow.wait_condition(lambda: not self._paused)
+                        await self._wait_for_budgeted_resume()
 
                     # Reset the execution clock so the timeout budget starts
                     # from launch readiness, excluding slot and pause waits.

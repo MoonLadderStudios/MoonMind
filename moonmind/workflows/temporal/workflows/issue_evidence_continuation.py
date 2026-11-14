@@ -27,6 +27,10 @@ from moonmind.workflows.temporal.remediation_loop import (
 )
 
 
+class _ResourceBudgetStop(RuntimeError):
+    """The existing loop owner already persisted the stop and retained work."""
+
+
 def _semantic_gap_signature(owner: Any, outputs: Mapping[str, Any], parsed: Any) -> str:
     """Hash canonical unresolved obligations, excluding artifact/report churn."""
     import hashlib
@@ -191,6 +195,21 @@ async def _verify(
         if read_only
         else f"{workflow.info().workflow_id}:issue-evidence-repair:{ordinal}"
     )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH,
+    )
+
+    enforce_resources = owner._workflow_patch_enabled(
+        RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH
+    )
+    if enforce_resources:
+        if not await owner._admit_remediation_resource_execution(node_id):
+            raise _ResourceBudgetStop(
+                "Remediation resource budget stopped evidence dispatch"
+            )
+        request = owner._bound_remediation_execution_request(
+            request, logical_step_id=node_id, attempt_id=child_id
+        )
     owner._active_agent_child_workflow_id = child_id
     owner._active_agent_id = request.agent_id
     try:
@@ -205,7 +224,25 @@ async def _verify(
         owner._active_agent_child_workflow_id = None
         owner._active_agent_id = None
     mapped = await owner._hydrate_acceptance_result(owner._map_agent_run_result(result))
+    if enforce_resources:
+        owner._record_remediation_execution_usage(
+            node_id, outputs=mapped.get("outputs") or {}, updated_at=workflow.now()
+        )
     if mapped.get("status") != "COMPLETED":
+        deadline = (
+            owner._remediation_execution_deadline() if enforce_resources else None
+        )
+        if (
+            deadline is not None
+            and workflow.now() >= deadline
+            and not owner._cancel_requested
+        ):
+            await owner._admit_remediation_resource_execution(
+                node_id, execution_ordinal=2
+            )
+            raise _ResourceBudgetStop(
+                "Remediation resource budget stopped evidence execution"
+            )
         raise ValueError(
             "Evidence-only verifier did not complete; preserved candidate remains unaccepted"
         )
@@ -240,6 +277,13 @@ async def resume_published_issue_evidence(
     if spec is None or state is None or node is None:
         return
     import re
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH,
+    )
+
+    enforce_resources = owner._workflow_patch_enabled(
+        RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH
+    )
 
     # Any admitted host (github.com or an allowlisted enterprise host) may
     # serve the PR; the evidence reader binds this URL to the admitted
@@ -261,7 +305,7 @@ async def resume_published_issue_evidence(
         if spec.budgets.max_wall_clock_seconds
         else datetime.fromisoformat(started)
     )
-    deadline = budget_origin + timedelta(
+    deadline = owner._remediation_execution_deadline() or budget_origin + timedelta(
         seconds=spec.budgets.max_wall_clock_seconds or 3600
     )
     # The candidate was verified and published against this base; a retargeted
@@ -295,9 +339,13 @@ async def resume_published_issue_evidence(
     async def run_under_claim() -> None:
         nonlocal state, gate, head, node
         while not owner._cancel_requested and workflow.now() < deadline:
-            await owner._wait_if_paused_at_safe_boundary()
+            await owner._wait_if_paused_at_safe_boundary(
+                remediation_step_id=str(node["id"])
+            )
             if owner._cancel_requested:
                 return
+            if enforce_resources and workflow.now() >= deadline:
+                break
             observation = await _activity(owner, payload)
             status = observation.get("status")
             if (
@@ -394,6 +442,8 @@ async def resume_published_issue_evidence(
                 observation=observation,
                 ordinal=ordinal,
             )
+            if enforce_resources:
+                state = owner._remediation_loop_state
             parsed = owner._moonspec_verify_gate_result(outputs)
             while (
                 (parsed.invalid or parsed.degraded)
@@ -435,6 +485,8 @@ async def resume_published_issue_evidence(
                     observation=observation,
                     ordinal=ordinal,
                 )
+                if enforce_resources:
+                    state = owner._remediation_loop_state
                 parsed = owner._moonspec_verify_gate_result(outputs)
             provisional = bool(
                 parsed.verdict in {"NO_DETERMINATION", "BLOCKED"}
@@ -523,6 +575,12 @@ async def resume_published_issue_evidence(
                 state = record_semantic_progress(
                     state, progress_ref=gate_ref, progress_signature=signature
                 )
+            if enforce_resources:
+                from moonmind.workflows.temporal.remediation_loop import (
+                    record_remediation_resource_usage,
+                )
+
+                state = record_remediation_resource_usage(state, now=workflow.now())
             state = record_verification_evidence(state, verification_ref=gate_ref)
             decision = decide_remediation_continuation(
                 spec=spec,
@@ -590,6 +648,8 @@ async def resume_published_issue_evidence(
                         "remainingWorkRef": gate_ref,
                     },
                 )
+                if enforce_resources:
+                    owner._bound_remediation_node_timeouts([repair, node])
                 record.update(
                     status="implementing",
                     nextAction="continue-implementation",
@@ -608,6 +668,8 @@ async def resume_published_issue_evidence(
                     ordinal=state.attempt_ordinal,
                     read_only=False,
                 )
+                if enforce_resources:
+                    state = owner._remediation_loop_state
                 await owner._record_publish_result_from_execution(
                     parameters={**parameters, "publishMode": "branch"},
                     execution_result={"status": "COMPLETED", "outputs": repaired},
@@ -723,6 +785,14 @@ async def resume_published_issue_evidence(
             )
             return
         if not owner._cancel_requested:
+            if (
+                enforce_resources
+                and owner._remediation_execution_deadline() is not None
+            ):
+                next_ordinal = int(record.get("verificationExecutions") or 0) + 1
+                await owner._admit_remediation_resource_execution(
+                    f"{node['id']}:published-evidence:{next_ordinal}"
+                )
             await _persist(
                 owner,
                 {
@@ -732,6 +802,12 @@ async def resume_published_issue_evidence(
                     "summary": "Existing evidence wait budget expired; candidate and proof remain preserved",
                 },
             )
+
+    async def run_with_resource_stop():
+        try:
+            await run_under_claim()
+        except _ResourceBudgetStop:
+            return
 
     lease = (owner._trusted_issue_context or {}).get("issueClaimLease")
     if lease:
@@ -751,7 +827,7 @@ async def resume_published_issue_evidence(
             )
 
         await execute_with_issue_lease(
-            lease=lease, execute=run_under_claim, renew=renew
+            lease=lease, execute=run_with_resource_stop, renew=renew
         )
     else:
-        await run_under_claim()
+        await run_with_resource_stop()

@@ -1108,6 +1108,10 @@ RUN_REMEDIATION_CURRENT_EVIDENCE_INPUTS_PATCH = (
 RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = "run-remediation-loop-continue-as-new-v1"
 # Resource receipts and admission change retry/continuation commands. Retained
 # histories keep their recorded decisions until a new run admits this policy.
+RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH = (
+    "run-remediation-active-resource-deadline-v1"
+)
+
 RUN_REMEDIATION_AGGREGATE_RESOURCE_BUDGET_PATCH = (
     "run-remediation-aggregate-resource-budget-v1"
 )
@@ -4280,6 +4284,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if len(controllers) != 1:
             raise ValueError("a plan must contain at most one remediation loop")
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
+        if (
+            self._workflow_patch_enabled(RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH)
+            and not (
+                self._remediation_loop_continuation is not None
+                and getattr(workflow.info(), "continued_run_id", None)
+            )
+        ):
+            # A new history after Continue-As-New may activate this patch for
+            # an already admitted loop. Require Temporal's continuation identity,
+            # not just caller-supplied state; restore then validates that state
+            # while retaining its original limits and accounting across upgrades.
+            for name, limit in (
+                ("tokenBudget", spec.budgets.token_budget),
+                ("costBudget", spec.budgets.cost_budget),
+            ):
+                if limit is not None:
+                    raise ValueError(
+                        f"{name} is unsupported: runtime receipts cannot enforce an active consumption limit; omit this dimension"
+                    )
         if require_agent_instructions:
             validate_remediation_loop_agent_instructions(spec)
         # Loop tools are authored as ``auto``: they inherit the run's resolved
@@ -4597,6 +4620,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._publish_context["remediationLoop"] = projection
 
     def _is_remediation_resource_step(self, logical_step_id: str) -> bool:
+        if ":published-evidence:" in logical_step_id and self._workflow_patch_enabled(
+            RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH
+        ):
+            logical_step_id = logical_step_id.rsplit(":published-evidence:", 1)[0]
         row = self._step_ledger_row_for(logical_step_id) or {}
         annotations = row.get("annotations")
         annotations = annotations if isinstance(annotations, Mapping) else {}
@@ -4609,6 +4636,48 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and annotations.get("issueImplementRole")
                 in {"moonspec-remediation", "moonspec-verification-gate"}
             )
+        )
+
+    def _remediation_execution_deadline(self) -> datetime | None:
+        if not self._workflow_patch_enabled(
+            RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH
+        ):
+            return None
+        spec, state = self._remediation_loop_spec, self._remediation_loop_state
+        if (
+            spec is None
+            or state is None
+            or state.resource_usage is None
+            or spec.budgets.max_wall_clock_seconds is None
+        ):
+            return None
+        return state.resource_usage.started_at + timedelta(
+            seconds=spec.budgets.max_wall_clock_seconds
+        )
+
+    def _bound_remediation_execution_request(
+        self, request: AgentExecutionRequest, *, logical_step_id: str, attempt_id: str
+    ) -> AgentExecutionRequest:
+        deadline = self._remediation_execution_deadline()
+        if deadline is None or not self._is_remediation_resource_step(logical_step_id):
+            return request
+        now = workflow.now()
+        context = request.execution_budget or ExecutionBudgetContext(
+            budget=resolve_execution_budget(
+                agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+            ),
+            logicalStepId=logical_step_id,
+            attemptId=attempt_id,
+            admittedAt=now,
+        )
+        if context.execution_deadline is not None:
+            deadline = min(deadline, context.execution_deadline)
+        return request.model_copy(
+            update={
+                "execution_budget": context.model_copy(
+                    update={"execution_deadline": deadline}
+                )
+            }
         )
 
     def _record_remediation_execution_usage(
@@ -4724,6 +4793,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         state = record_remediation_resource_usage(
             self._remediation_loop_state, now=workflow.now()
         )
+        if (
+            self._workflow_patch_enabled(RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH)
+            and state.phase == RemediationLoopPhase.STOPPED_REMAINING_WORK
+        ):
+            return False
         execution_id = f"{logical_step_id}:execution:{execution_ordinal or self._step_execution_for(logical_step_id) or 1}"
         # Reconcile an already reserved effect under its existing identity.
         # A successor Step Execution has its own ordinal and must pass admission.
@@ -4802,6 +4876,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             verification_inputs=verification_inputs,
             legacy_id_scope=self._remediation_legacy_id_scope(),
         )
+
+    def _bound_remediation_node_timeouts(self, nodes: Sequence[dict[str, Any]]) -> None:
+        """Disclose remaining aggregate allowance; dispatch binds its fixed deadline."""
+        deadline = self._remediation_execution_deadline()
+        if deadline is not None:
+            remaining = max(1, math.ceil((deadline - workflow.now()).total_seconds()))
+            for node in nodes:
+                inputs = node["inputs"]
+                budget = resolve_execution_budget(
+                    timeout_policy=inputs.get("timeoutPolicy")
+                )
+                inputs["timeoutPolicy"] = (
+                    self._remaining_interrupted_step_timeout_policy(
+                        inputs.get("timeoutPolicy"),
+                        budget=budget,
+                        consumed_seconds=max(0, budget.max_seconds - remaining),
+                    )
+                )
 
     def _remediation_legacy_id_scope(self) -> str | None:
         """Return the pre-patch attempt-ID prefix only for older histories."""
@@ -5376,6 +5468,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 source_node=source_node, state=state, gate_result_ref=gate_result_ref,
             )]
         if pair:
+            self._bound_remediation_node_timeouts(pair)
             insertion_index = (
                 len(ordered_nodes)
                 if current_index is None
@@ -12064,7 +12157,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
             self._update_memo()
 
-    async def _wait_if_paused_at_safe_boundary(self) -> None:
+    async def _wait_if_paused_at_safe_boundary(
+        self, *, remediation_step_id: str | None = None
+    ) -> None:
         if not workflow.patched(RUN_PAUSE_SAFE_BOUNDARIES_PATCH):
             await workflow.wait_condition(lambda: not self._paused)
             return
@@ -12076,10 +12171,37 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._update_search_attributes()
         self._update_memo()
         self._at_pause_safe_boundary = True
+        deadline = (
+            self._remediation_execution_deadline()
+            if remediation_step_id is not None
+            and self._is_remediation_resource_step(remediation_step_id)
+            and self._remediation_loop_state.phase != RemediationLoopPhase.ACCEPTED
+            else None
+        )
         try:
-            await workflow.wait_condition(
-                lambda: not self._paused or self._cancel_requested
-            )
+            if deadline is None:
+                await workflow.wait_condition(
+                    lambda: not self._paused or self._cancel_requested
+                )
+            elif workflow.now() < deadline:
+                try:
+                    await workflow.wait_condition(
+                        lambda: not self._paused or self._cancel_requested,
+                        timeout=deadline - workflow.now(),
+                    )
+                except TimeoutError:
+                    # Expected expiry falls through to the durable budget stop below.
+                    pass
+            if (
+                deadline is not None
+                and workflow.now() >= deadline
+                and not self._cancel_requested
+                and self._remediation_loop_state.continuation_reason != "wall_clock_budget_exhausted"
+            ):
+                await self._admit_remediation_resource_execution(
+                    remediation_step_id,
+                    execution_ordinal=(self._step_execution_for(remediation_step_id) or 1) + 1,
+                )
         finally:
             self._at_pause_safe_boundary = False
         if self._cancel_requested:
@@ -13649,7 +13771,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH
         )
         for index, node in enumerate(ordered_nodes, start=1):
-            await self._wait_if_paused_at_safe_boundary()
+            await self._wait_if_paused_at_safe_boundary(remediation_step_id=str(node.get("id") or ""))
             if self._cancel_requested:
                 return
 
@@ -13800,7 +13922,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             agent_request_for_context: AgentExecutionRequest | None = None
 
             while current_review_attempt <= (max_review_attempts + 1):
-                await self._wait_if_paused_at_safe_boundary()
+                await self._wait_if_paused_at_safe_boundary(remediation_step_id=node_id)
                 if self._cancel_requested:
                     return
 
@@ -13996,7 +14118,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
-                    await self._wait_if_paused_at_safe_boundary()
+                    await self._wait_if_paused_at_safe_boundary(remediation_step_id=node_id)
                     if self._cancel_requested:
                         return
                     if not await self._admit_remediation_resource_execution(node_id):
@@ -14553,6 +14675,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                                 }
                                             )
                                         agent_attempt_started_at = workflow.now()
+                                    request = self._bound_remediation_execution_request(
+                                        request,
+                                        logical_step_id=node_id,
+                                        attempt_id=child_workflow_id,
+                                    )
+                                    if logical_step_budget is not None:
+                                        logical_step_budget = request.execution_budget
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.AgentRun",
                                         self._with_issue_claim_work_started(request),
@@ -14589,6 +14718,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         != logical_step_budget.budget
                                         or observed_budget.attempt_id
                                         != logical_step_budget.attempt_id
+                                        or observed_budget.execution_deadline
+                                        != logical_step_budget.execution_deadline
                                     ):
                                         raise ValueError(
                                             "child budget observation conflicts with admitted logical step"
@@ -14909,6 +15040,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             )
                             self._update_memo()
                     if result_status != "COMPLETED":
+                        loop_deadline = self._remediation_execution_deadline()
+                        if (
+                            loop_deadline is not None
+                            and self._is_remediation_resource_step(node_id)
+                            and workflow.now() >= loop_deadline
+                            and not self._cancel_requested
+                        ):
+                            # The active operation's original error/save is already
+                            # recorded. Use the loop's existing durable stop owner,
+                            # rather than misreporting this as a fresh Step failure.
+                            await self._admit_remediation_resource_execution(
+                                node_id, execution_ordinal=current_step_execution + 1
+                            )
+                            self._mark_remaining_plan_steps_skipped(
+                                ordered_nodes=ordered_nodes,
+                                completed_index=index - 2,
+                                summary=self._plan_blocked_message,
+                            )
+                            self._refresh_step_readiness(updated_at=workflow.now())
+                            return
                         failure_message = self._activity_result_failure_message(
                             execution_result
                         )
@@ -15049,7 +15200,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 logical_step_budget = logical_step_budget.suspend(
                                     workflow.now()
                                 )
-                            await self._wait_if_paused_at_safe_boundary()
+                            await self._wait_if_paused_at_safe_boundary(remediation_step_id=node_id)
                             if logical_step_budget is not None:
                                 logical_step_budget = logical_step_budget.resume(
                                     workflow.now()

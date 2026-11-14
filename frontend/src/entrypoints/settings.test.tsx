@@ -128,7 +128,7 @@ describe('Providers & Secrets defaults for new work', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the compact Harness and Provider profile controls with precedence hint', async () => {
+  it('shows one compact default picker', async () => {
     window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     const descriptor = (key: string, title: string, extra: Record<string, unknown>) => ({
       key, title, category: 'Workflow', section: 'user-workspace', description: null,
@@ -170,13 +170,12 @@ describe('Providers & Secrets defaults for new work', () => {
     renderProvidersPage({ page: 'settings-providers-secrets', apiBase: '/api', initialData: {} });
 
     const card = await screen.findByRole('region', { name: 'Defaults for new work' });
-    const harness = (await within(card).findByLabelText('Harness')) as HTMLSelectElement;
-    expect(harness.value).toBe('codex_cli');
-    expect(harness.selectedOptions[0]?.textContent).toBe('Codex');
-    expect(within(card).getByLabelText('Provider profile')).toBeTruthy();
+    const harness = (await within(card).findByLabelText('Default for new work')) as HTMLSelectElement;
+    expect(harness.value).toBe('runtime:codex_cli');
+    expect(harness.selectedOptions[0]?.textContent).toBe('Codex (preferred profile)');
+    expect(within(card).getAllByRole('combobox')).toHaveLength(1);
     expect(within(card).queryByLabelText('Default Publish Mode')).toBeNull();
     expect(card.textContent).toContain("Used when a launch doesn't choose a harness or profile.");
-    expect(card.textContent).toContain('Takes priority over the harness when set.');
     expect(card.textContent).not.toMatch(/Instance override|Pending|Affects|Details|workflow\.default/);
   });
 });

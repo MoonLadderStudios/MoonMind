@@ -267,3 +267,175 @@ async def test_rollover_without_historical_metering_cannot_reset_an_admitted_bud
     assert state.workspace_head_ref == "artifact://workspace/C1"
     assert state.resource_usage.complete_history is False
     assert state.resource_usage.totals()["provider"] == 0
+
+
+@pytest.mark.parametrize("dimension", ["tokenBudget", "costBudget"])
+@pytest.mark.parametrize("amount", [0, 100])
+@pytest.mark.parametrize("supplied_continuation", [False, True])
+def test_unenforceable_resource_dimension_rejected_at_admission(
+    monkeypatch, dimension, amount, supplied_continuation
+):
+    run = parent(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda patch: True)
+    spec = _spec(6).model_dump(by_alias=True, mode="json")
+    spec["budgets"][dimension] = amount
+    if supplied_continuation:
+        # Caller-controlled payload fields do not make a fresh execution an
+        # already admitted Temporal continuation, even with valid carried state.
+        run._remediation_loop_continuation = {
+            "schemaVersion": 1,
+            "state": _state(attempts=1).model_dump(by_alias=True, mode="json"),
+            "orderedNodes": [{"id": "verify"}],
+            "stepLedgerRows": [],
+        }
+    with pytest.raises(ValueError, match=f"{dimension}.*unsupported"):
+        run._initialize_remediation_loop_controller(
+            ordered_nodes=[{"id": "verify", "annotations": {"remediationLoop": spec}}],
+            require_agent_instructions=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_active_dispatch_and_materialized_pair_share_original_deadline(
+    monkeypatch,
+):
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    run = parent(monkeypatch, limits={"max_wall_clock_seconds": 20})
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch: patch
+        in {
+            RESOURCE_PATCH,
+            run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH,
+            "run-materialize-evidence-retry-v1",
+        },
+    )
+    assert await run._admit_remediation_resource_execution("verify")
+    monkeypatch.setattr(run_module.workflow, "now", lambda: NOW + timedelta(seconds=12))
+    nodes = []
+    assert await evaluate(run, nodes=nodes)
+    assert len(nodes) == 2
+    assert all(
+        node["inputs"]["timeoutPolicy"]["max_timeout_seconds"] == 8 for node in nodes
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="test",
+        idempotencyKey="test",
+    )
+    bounded = run._bound_remediation_execution_request(
+        request, logical_step_id="verify", attempt_id="attempt"
+    )
+    assert bounded.execution_budget.execution_deadline == NOW + timedelta(seconds=20)
+    assert bounded.execution_budget.remaining_seconds(NOW + timedelta(seconds=19)) == 1
+    assert bounded.execution_budget.remaining_seconds(NOW + timedelta(seconds=20)) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_timeout", [False, True])
+async def test_published_evidence_uses_original_resource_owner(
+    monkeypatch, active_timeout
+):
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    run = parent(
+        monkeypatch, limits={"max_wall_clock_seconds": 20, "provider_budget": 2}
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    run._repo = "example/repo"
+    run._publish_context["branch"] = "candidate"
+    assert await run._admit_remediation_resource_execution("verify")
+    monkeypatch.setattr(run_module.workflow, "now", lambda: NOW + timedelta(seconds=12))
+    run._resolve_agent_node_skillset_ref = AsyncMock(return_value="artifact://skills")
+    run._existing_agent_skillset_ref = lambda **_: None
+    run._build_agent_execution_request = lambda **_: AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="test",
+        idempotencyKey="test",
+    )
+    run._workflow_child_task_queue = lambda: "test"
+    run._hydrate_acceptance_result = AsyncMock(
+        return_value={"status": "COMPLETED", "outputs": {}}
+    )
+    child = AsyncMock(return_value={})
+    monkeypatch.setattr(run_module.workflow, "execute_child_workflow", child)
+    kwargs = dict(
+        node={"id": "verify", "inputs": {}},
+        parameters={},
+        observation={"headSha": "a" * 40},
+    )
+    if active_timeout:
+
+        async def timed_out(*args):
+            monkeypatch.setattr(
+                run_module.workflow, "now", lambda: NOW + timedelta(seconds=20)
+            )
+            return {"status": "FAILED", "outputs": {}}
+
+        run._hydrate_acceptance_result = timed_out
+        with pytest.raises(continuation._ResourceBudgetStop):
+            await continuation._verify(run, ordinal=1, **kwargs)
+        assert (
+            run._remediation_loop_state.continuation_reason
+            == "wall_clock_budget_exhausted"
+        )
+        assert child.await_count == 1
+        return
+    await continuation._verify(run, ordinal=1, **kwargs)
+    request = child.await_args.args[1]
+    assert request.execution_budget.execution_deadline == NOW + timedelta(seconds=20)
+    assert run._remediation_loop_state.resource_usage.totals()["provider"] == 2
+    with pytest.raises(continuation._ResourceBudgetStop, match="resource budget"):
+        await continuation._verify(run, ordinal=2, **kwargs)
+    assert child.await_count == 1
+    assert (
+        run._remediation_loop_state.continuation_reason == "provider_budget_exhausted"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_parent_pause_stops_at_loop_deadline_without_resume(monkeypatch, cancel):
+    run = parent(monkeypatch, limits={"max_wall_clock_seconds": 3})
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    assert await run._admit_remediation_resource_execution("verify")
+    run._paused = True
+    run._update_search_attributes = lambda: None
+    clock = [NOW]
+    monkeypatch.setattr(run_module.workflow, "now", lambda: clock[0])
+    async def wait(*args, timeout=None):
+        assert timeout == timedelta(seconds=3)
+        clock[0] += timeout
+        run._cancel_requested = cancel
+        raise TimeoutError
+    monkeypatch.setattr(run_module.workflow, "wait_condition", wait)
+    await run._wait_if_paused_at_safe_boundary(remediation_step_id="verify")
+    assert run._paused
+    assert not await run._admit_remediation_resource_execution("verify")
+    assert run._remediation_loop_state.resource_usage.totals()["provider"] == 1
+    assert run._remediation_loop_state.continuation_reason == (None if cancel else "wall_clock_budget_exhausted")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_unrelated_or_accepted_parent_pause_keeps_its_own_authority(monkeypatch, accepted):
+    run = parent(monkeypatch, limits={"max_wall_clock_seconds": 3})
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    assert await run._admit_remediation_resource_execution("verify")
+    if accepted:
+        run._remediation_loop_state = run._remediation_loop_state.model_copy(update={"phase": RemediationLoopPhase.ACCEPTED})
+    monkeypatch.setattr(run_module.workflow, "now", lambda: NOW + timedelta(seconds=4))
+    run._paused = True
+    run._update_search_attributes = lambda: None
+    wait = AsyncMock()
+    monkeypatch.setattr(run_module.workflow, "wait_condition", wait)
+    await run._wait_if_paused_at_safe_boundary(remediation_step_id="verify" if accepted else None)
+    assert "timeout" not in wait.await_args.kwargs
+    assert run._remediation_loop_state.continuation_reason is None

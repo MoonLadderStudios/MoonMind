@@ -249,6 +249,122 @@ def workflow_requires_agent(
     return workflow_step_tool_name(task).lower() not in STORY_OUTPUT_TASK_TOOLS
 
 
+def workflow_uses_unselected_tools(
+    task: Mapping[str, Any], parameters: Mapping[str, Any]
+) -> bool:
+    """Prove new work needs tools only, without replacing agent authority.
+
+    Runtime previews marked unauthored are not selections. Recorded plans,
+    explicit accounts/model choices and finishing still need their admission
+    owner, even when the visible steps themselves never launch an agent.
+    """
+    from moonmind.runtime_intent import (
+        has_profile_selector,
+        provider_profile_ref_from_mapping,
+    )
+
+    from .routing import _coerce_bool, merge_automation_candidates
+
+    if workflow_requires_agent(task, parameters):
+        return False
+    publication = parameters.get("publish") or task.get("publish") or {}
+    if any(
+        source.get(key) not in (None, "", "none")
+        for source in (parameters, task)
+        for key in ("publishMode", "publish_mode")
+    ) or any(
+        isinstance(source.get("publish"), Mapping)
+        and source["publish"].get("mode") not in (None, "", "none")
+        for source in (parameters, task)
+    ):
+        return False
+    try:
+        if any(
+            isinstance(candidate, Mapping)
+            and _coerce_bool(candidate.get("enabled"), default=False)
+            for candidate in merge_automation_candidates(
+                parameters, publish_payload=publication, task_payload=task
+            )
+        ):
+            return False
+    except ValueError:
+        return False
+
+    runtime = task.get("runtime") or parameters.get("runtime") or {}
+    preview = isinstance(runtime, Mapping) and runtime.get("authored") is False
+    if preview:
+        preview_mode = runtime.get("mode")
+        runtime_sources = [parameters, task, runtime]
+        for source in (parameters, task):
+            if isinstance(source.get("runtime"), Mapping):
+                runtime_sources.append(source["runtime"])
+        modes = [
+            source[key]
+            for source in runtime_sources
+            for key in ("mode", "targetRuntime", "target_runtime")
+            if source.get(key)
+        ]
+        if modes and (
+            not preview_mode
+            or any(
+                normalize_runtime_id(mode) != normalize_runtime_id(preview_mode)
+                for mode in modes
+            )
+        ):
+            return False
+
+    def selected(source: Mapping[str, Any], *, preview: bool = False) -> bool:
+        if any(key in source for key in MODEL_SELECTION_KEYS):
+            return True
+        if provider_profile_ref_from_mapping(source) or has_profile_selector(source):
+            return True
+        if any(
+            source.get(key) is not None
+            for key in (
+                "agentProfile",
+                "agentProfileSnapshot",
+                "omnigentExecutionPlan",
+                "omnigentStepExecutionPlans",
+                "executionConfiguration",
+                "omnigent",
+                "runtimeCutover",
+                "plan",
+                "planArtifactRef",
+                "plan_artifact_ref",
+                "inputArtifactRef",
+                "input_artifact_ref",
+                "manifestArtifactRef",
+                "manifest_artifact_ref",
+                "manifest_ref",
+                "requestedTargetId",
+                "requested_target_id",
+                "targetId",
+            )
+        ):
+            return True
+        if not preview and any(
+            source.get(key)
+            for key in (
+                "mode",
+                "targetRuntime",
+                "target_runtime",
+            )
+        ):
+            return True
+        child_runtime = source.get("runtime")
+        if child_runtime is not None and not isinstance(child_runtime, Mapping):
+            return True
+        return isinstance(child_runtime, Mapping) and selected(
+            child_runtime, preview=preview
+        )
+
+    if selected(parameters, preview=preview) or selected(task, preview=preview):
+        return False
+    return not any(
+        selected(step) for step in task.get("steps") or [] if isinstance(step, Mapping)
+    )
+
+
 def _is_absent_vector_value(item: object) -> bool:
     """Return True for absent/empty/disabled retrieval values.
 

@@ -81,7 +81,7 @@ class ManagedRunSupervisor:
         the supervisor's kill deadline and the workflow's cannot diverge. The
         process is terminated when the budget's base window elapses *and*
         progress has gone stale, or when its hard ceiling is reached — never on
-        elapsed wall-clock alone.
+        elapsed wall-clock alone unless an aggregate execution deadline was admitted.
         """
         self._active_processes[run_id] = process
         registered_paths: list[str] = list(cleanup_paths or [])
@@ -101,6 +101,15 @@ class ManagedRunSupervisor:
         # step backward would let it run past the ceiling the AgentRun workflow
         # is enforcing — the two deadlines must stay the same boundary.
         start_monotonic = time.monotonic()
+        execution_deadline_monotonic = None
+        if (
+            execution_budget is not None
+            and execution_budget.execution_deadline is not None
+        ):
+            execution_deadline_monotonic = (
+                start_monotonic
+                + (execution_budget.execution_deadline - start_time).total_seconds()
+            )
         if execution_budget is not None:
             budget = execution_budget.budget
             # Preserve the admitted productive-time origin while measuring new
@@ -454,6 +463,7 @@ class ManagedRunSupervisor:
                     process,
                     budget,
                     monotonic_started_at=start_monotonic,
+                    execution_deadline_monotonic=execution_deadline_monotonic,
                     idle_progress_seconds=_idle_progress_seconds,
                     no_output_callback=_emit_no_output_annotation,
                     progress_snapshot=_progress_snapshot,
@@ -762,9 +772,11 @@ class ManagedRunSupervisor:
         *,
         monotonic_started_at: float,
         idle_progress_seconds: Callable[[float], float | None],
+        execution_deadline_monotonic: float | None = None,
         no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
-        progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
-        | None = None,
+        progress_snapshot: (
+            Callable[[], tuple[datetime | None, int | None]] | None
+        ) = None,
         on_budget_extended: Callable[[float, float | None], None] | None = None,
     ) -> tuple[int | None, ExecutionBudgetVerdict]:
         """Heartbeat while waiting, enforcing the progress-aware budget.
@@ -810,6 +822,11 @@ class ManagedRunSupervisor:
                 elapsed_seconds=elapsed,
                 idle_progress_seconds=idle_seconds,
             )
+            if (
+                execution_deadline_monotonic is not None
+                and now_monotonic >= execution_deadline_monotonic
+            ):
+                verdict = "expired_max_budget"
             if verdict != "continue":
                 refreshed_for_expiry = False
                 if verdict == "expired_no_progress" and no_output_callback is not None:
@@ -823,6 +840,11 @@ class ManagedRunSupervisor:
                         elapsed_seconds=elapsed,
                         idle_progress_seconds=idle_seconds,
                     )
+                if (
+                    execution_deadline_monotonic is not None
+                    and now_monotonic >= execution_deadline_monotonic
+                ):
+                    verdict = "expired_max_budget"
                 if verdict != "continue":
                     await self._terminate_process(process)
                     if no_output_callback is not None and not refreshed_for_expiry:
