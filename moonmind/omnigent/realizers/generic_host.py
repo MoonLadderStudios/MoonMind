@@ -367,6 +367,11 @@ class GenericOmnigentHostRealizer:
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, prior)
+
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            bind_remediation_context_inputs,
+        )
+
         workflow_id, step_execution_id = _execution_identity(request)
         acquired: tuple[Any, ...] = ()
         credential_handles: tuple[CredentialRuntimeHandle, ...] = ()
@@ -546,6 +551,7 @@ class GenericOmnigentHostRealizer:
                     RuntimeBindingState.session_creating,
                     RuntimeBindingState.session_active,
                 }:
+                    request = await bind_remediation_context_inputs(request)
                     await self._validate_bound_host_identity(
                         plan=plan,
                         host_context=host_context,
@@ -587,6 +593,7 @@ class GenericOmnigentHostRealizer:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
 
+            request = await bind_remediation_context_inputs(request)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan, request=request)
             static_selection = host_class.runtime.get("staticHostSelection")

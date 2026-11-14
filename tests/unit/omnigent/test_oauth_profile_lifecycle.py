@@ -5187,6 +5187,8 @@ async def _drive_authority_chain_coordinator(
     credential_resolver=None,
     resolve_source_credential: bool = False,
     materialized_input_paths: dict | None = None,
+    terminal_contract: dict | None = None,
+    terminal_inspector=None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -5319,6 +5321,8 @@ async def _drive_authority_chain_coordinator(
             ordered.append("host_cleanup")
 
         async def publish_workspace(self, **_kwargs):
+            if terminal_contract is not None:
+                ordered.append("workspace_publication")
             if isinstance(publication, Exception):
                 raise publication
             return publication or {
@@ -5330,6 +5334,9 @@ async def _drive_authority_chain_coordinator(
                 "remote_verified": True,
                 "pushRef": "artifact://push-1",
             }
+
+        async def inspect_request_terminal(self, request):
+            return await terminal_inspector(request)
 
         async def inspect_session_completion(self, _session_id):
             if session_inspector is not None:
@@ -5410,6 +5417,7 @@ async def _drive_authority_chain_coordinator(
             executionProfileRef="codex",
             correlationId="workflow-1",
             idempotencyKey="idem-1",
+            terminalContract=terminal_contract,
             workspaceSpec={
                 "workspaceLocator": {
                     "kind": "sandbox",
@@ -5435,6 +5443,135 @@ async def _drive_authority_chain_coordinator(
         dict(coordinator_result.metadata or {}),
         coordinator_result,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["blocked", "missing", "succeeded"])
+async def test_profile_bound_remediation_verdict_prevents_false_publication(
+    tmp_path, status
+):
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "outcome.json",
+        "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "step:1",
+    }
+    if status != "missing":
+        (tmp_path / "outcome.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": contract["expectedSchemaVersion"],
+                    "executionRef": "step:1",
+                    "status": status,
+                    "summary": (
+                        "Remediation prerequisite unavailable."
+                        if status == "blocked"
+                        else "Diagnosed a transient failure; retry the interrupted step."
+                    ),
+                }
+            )
+        )
+
+    async def inspect(request):
+        return evaluate_terminal_evidence(
+            request.terminal_contract.model_dump(by_alias=True),
+            workspace_path=str(tmp_path),
+        )
+
+    async def execute(request, **kwargs):
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            summary="Omnigent session completed",
+        )
+
+    ordered, _, _, result = await _drive_authority_chain_coordinator(
+        execute,
+        terminal_contract=contract,
+        terminal_inspector=inspect,
+    )
+    assert result.objective_outcome == (
+        "succeeded" if status == "succeeded" else "failed"
+    )
+    assert ("workspace_publication" in ordered) is (status == "succeeded")
+    if status != "succeeded":
+        assert result.publication_state == "not_published"
+        assert result.failure_class == "execution_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running_recovery", [False, True])
+async def test_profile_bound_continuation_rechecks_remediation_before_publishing(
+    tmp_path,
+    running_recovery,
+):
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "outcome.json",
+        "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "step:1",
+    }
+    calls = []
+
+    async def execute(request, **kwargs):
+        calls.append(request.idempotency_key)
+        if len(calls) == 1 and running_recovery:
+            raise OmnigentSameSessionContinuationRequired(
+                "completed response remains active",
+                session_id="session-1",
+                snapshot={"status": "running", "items": []},
+            )
+        if len(calls) == 2:
+            (tmp_path / "outcome.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": contract["expectedSchemaVersion"],
+                        "executionRef": "step:1",
+                        "status": "blocked",
+                        "summary": "Required remediation context was not delivered.",
+                    }
+                )
+            )
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            summary="provider turn ended",
+            metadata={
+                "omnigentSessionId": "session-1",
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {"summary": "turn completed"},
+                },
+            },
+        )
+
+    async def inspect(request):
+        return evaluate_terminal_evidence(
+            request.terminal_contract.model_dump(by_alias=True),
+            workspace_path=str(tmp_path),
+        )
+
+    ordered, _, _, result = await _drive_authority_chain_coordinator(
+        execute,
+        terminal_contract=contract,
+        terminal_inspector=inspect,
+        completion_evidence=[
+            {
+                "sessionStatus": "running" if running_recovery else "completed",
+                "terminalAssistantAfterWork": running_recovery,
+            },
+            {"sessionStatus": "idle", "terminalAssistantAfterWork": True},
+        ],
+    )
+    assert len(calls) == 2
+    assert "workspace_publication" not in ordered
+    assert result.objective_outcome == "failed"
+    assert result.provider_error_code == "REMEDIATION_BLOCKED"
 
 
 @pytest.mark.asyncio

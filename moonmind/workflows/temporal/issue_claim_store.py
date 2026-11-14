@@ -7,6 +7,7 @@ or caller-supplied attempt identifier grants ownership.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -563,27 +564,64 @@ async def publish_claim_comment(
     )
     await store.confirm_comment_update(receipt.owner, str(observed.get("body") or ""))
     await store.prepare_comment_update(receipt.owner, body)
-    if observed.get("body") != body:
-        result = await service.update_issue_comment(
-            repo=receipt.repository, comment_id=int(comment_id), body=body
+    first_update_failure = ""
+
+    async def readback() -> str:
+        current = await store.get(receipt.owner)
+        listed = await service.list_issue_comments(
+            repo=receipt.repository, issue_number=receipt.issue_number
         )
-        if not result.get("ok") and result.get("reasonCode") != "outcome_unknown":
+        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
             raise ValueError(
-                "claim_update_failed: GitHub rejected the owned comment update"
+                "read_failure: claim comment update is unconfirmed; "
+                f"{listed.get('summary') or listed.get('reasonCode') or 'comment read unavailable'}"
+                + (
+                    f"; first update outcome: {first_update_failure}"
+                    if first_update_failure
+                    else ""
+                )
             )
-    current = await store.get(receipt.owner)
-    listed = await service.list_issue_comments(
-        repo=receipt.repository, issue_number=receipt.issue_number
-    )
-    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
-        raise ValueError("read_failure: claim comment update is unconfirmed")
-    inspect_claim_comments(current, listed["comments"], block_on_contenders=block)
-    if not any(
-        str(item.get("id")) == comment_id and item.get("body") == body
-        for item in listed["comments"]
-    ):
-        raise ValueError(
-            "claim_update_pending: GitHub has not confirmed the intended comment"
+        inspect_claim_comments(current, listed["comments"], block_on_contenders=block)
+        return next(
+            str(item.get("body") or "")
+            for item in listed["comments"]
+            if str(item.get("id")) == comment_id
         )
-    await store.confirm_comment_update(receipt.owner, body)
-    return comment_id
+
+    observed_body = str(observed.get("body") or "")
+    acknowledged = False
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(attempt)
+            # Reconcile uncertain effects and recheck ownership before repeating
+            # the same idempotent PATCH. A confirmed PATCH only needs readback.
+            observed_body = await readback()
+        if observed_body == body:
+            await store.confirm_comment_update(receipt.owner, body)
+            return comment_id
+        if not acknowledged:
+            result = await service.update_issue_comment(
+                repo=receipt.repository, comment_id=int(comment_id), body=body
+            )
+            acknowledged = bool(result.get("ok"))
+            if not acknowledged:
+                detail = f"{result.get('reasonCode') or 'update_failed'}: {result.get('summary') or 'GitHub rejected the owned comment update'}"
+                status = result.get("httpStatus")
+                retryable = result.get("reasonCode") == "outcome_unknown" or (
+                    isinstance(status, int) and (status == 429 or 500 <= status < 600)
+                )
+                if not retryable:
+                    raise ValueError(f"claim_update_failed: {detail}")
+                first_update_failure = first_update_failure or detail
+        observed_body = await readback()
+        if observed_body == body:
+            await store.confirm_comment_update(receipt.owner, body)
+            return comment_id
+    raise ValueError(
+        "claim_update_pending: GitHub has not confirmed the intended comment after bounded retries"
+        + (
+            f"; first update outcome: {first_update_failure}"
+            if first_update_failure
+            else ""
+        )
+    )

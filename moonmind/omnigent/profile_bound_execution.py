@@ -813,7 +813,29 @@ class OmnigentProfileBoundExecutionCoordinator:
             },
         )
 
+    async def _apply_remediation_outcome(self, request, result):
+        if (
+            result.failure_class is None
+            and request.terminal_contract is not None
+            and request.terminal_contract.contract_id
+            == "remediate_workflow_terminal.v1"
+        ):
+            from moonmind.workflows.terminal_evidence import (
+                apply_remediation_terminal_evaluation,
+            )
+
+            evaluation = await self._workspace_publication.inspect_request_terminal(
+                request
+            )
+            return apply_remediation_terminal_evaluation(result, evaluation)
+        return result
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            bind_remediation_context_inputs,
+        )
+
+        request = await bind_remediation_context_inputs(request)
         # Validate before binding an existing recovery host: rejecting ambiguous
         # actions must not claim or clean up the only surviving workspace.
         try:
@@ -1893,6 +1915,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
                     runtime_binding_ref = updated_binding.runtimeBindingRef
             publication_requested = publish_mode in {"branch", "pr"}
+            if not publication_requested and running_turn_recovery is None:
+                result = await self._apply_remediation_outcome(request, result)
             if result.failure_class is None and (
                 publication_requested or running_turn_recovery is not None
             ):
@@ -1946,6 +1970,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         completion.get("terminalAssistantAfterWork") is True
                         and not recovering_running_turn
                     ):
+                        result = await self._apply_remediation_outcome(request, result)
+                        if result.failure_class is not None:
+                            break
                         if not publication_requested:
                             result = result.model_copy(
                                 update={

@@ -175,6 +175,84 @@ async def _remediation_security_input_refs(workflow_id: str) -> list[str]:
     return [f"artifact://{ref}" for ref in evidence.get("evidenceArtifactRefs", [])]
 
 
+async def bind_remediation_context_inputs(
+    request: AgentExecutionRequest,
+) -> AgentExecutionRequest:
+    """Deliver the admitted context before either Omnigent execution path starts."""
+    parameters = request.parameters or {}
+    workflow = parameters.get("workflow") or {}
+    remediation = workflow.get("remediation") if isinstance(workflow, Mapping) else None
+    metadata = parameters.get("metadata") or {}
+    moonmind = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+    selected_skill = (
+        moonmind.get("selectedSkill") if isinstance(moonmind, Mapping) else None
+    )
+    # Already-recorded direct requests lack the parent workflow block, but keep
+    # the resolved skill selection. New requests also preserve remediation for
+    # workflows using a different skill.
+    if not isinstance(remediation, Mapping) and selected_skill != "remediate-workflow":
+        return request
+
+    from moonmind.omnigent.codex_execution_decisions import request_identity
+
+    workflow_id, _ = request_identity(request)
+    context_ref = await _remediation_context_input_ref(workflow_id)
+    if not context_ref:
+        raise ValueError("Required remediation context is unavailable for this run")
+    refs = [*request.input_refs, context_ref]
+    if isinstance(remediation, Mapping) and (remediation.get("target") or {}).get(
+        "securityFinding"
+    ):
+        refs.extend(await _remediation_security_input_refs(workflow_id))
+    return await _bind_remediation_terminal_contract(
+        request.model_copy(update={"input_refs": list(dict.fromkeys(refs))})
+    )
+
+
+async def _bind_remediation_terminal_contract(
+    request: AgentExecutionRequest,
+) -> AgentExecutionRequest:
+    """Compile the selected immutable Skill's outcome contract for this execution."""
+    if request.terminal_contract is not None or not request.resolved_skillset_ref:
+        return request
+    from moonmind.omnigent.codex_execution_decisions import request_identity
+    from moonmind.schemas.agent_runtime_models import AgentTerminalContract
+    from moonmind.schemas.agent_skill_models import ResolvedSkillSet
+    from moonmind.workflows.agent_skills.selection import selected_agent_skill
+
+    parameters = request.parameters or {}
+    selected_skill = selected_agent_skill(parameters)
+    workflow = parameters.get("workflow")
+    if not selected_skill and isinstance(workflow, Mapping):
+        skill = workflow.get("skill")
+        selected_skill = (
+            str(skill.get("name") or "") if isinstance(skill, Mapping) else ""
+        )
+    if selected_skill != "remediate-workflow":
+        return request
+    skillset = ResolvedSkillSet.model_validate(
+        await _read_json_artifact(
+            request.resolved_skillset_ref,
+            access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL),
+        )
+    )
+    entry = next(
+        (item for item in skillset.skills if item.skill_name == selected_skill), None
+    )
+    if entry is None or entry.terminal_contract is None:
+        # An admitted older snapshot keeps its own semantics.
+        return request
+    _, execution_ref = request_identity(request)
+    return request.model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                **entry.terminal_contract.model_dump(),
+                executionRef=execution_ref,
+            )
+        }
+    )
+
+
 async def _read_json_artifact(
     ref: str, *, access: ArtifactAccessContext
 ) -> dict[str, Any]:
@@ -1076,6 +1154,10 @@ async def _reconstruct_plan_bound_request(
             "requiredCapabilities": required_capabilities,
             "workflow": workflow,
             "omnigent": omnigent,
+            "stepExecution": {
+                "workflowId": workflow_id,
+                "stepExecutionId": step_execution_id,
+            },
         }
     )
     publish = workflow.get("publish")
@@ -1102,14 +1184,6 @@ async def _reconstruct_plan_bound_request(
             ref = f"artifact://{_artifact_id(ref)}" if ref else ""
             if ref and ref not in attachment_refs:
                 attachment_refs.append(ref)
-    if isinstance(workflow.get("remediation"), Mapping) and workflow_id:
-        context_ref = await _remediation_context_input_ref(workflow_id)
-        if context_ref and context_ref not in attachment_refs:
-            attachment_refs.append(context_ref)
-        if (workflow.get("remediation") or {}).get("target", {}).get("securityFinding"):
-            for ref in await _remediation_security_input_refs(workflow_id):
-                if ref not in attachment_refs:
-                    attachment_refs.append(ref)
     workspace_spec = (
         dict(workflow.get("workspace") or {})
         if isinstance(workflow.get("workspace"), Mapping)
@@ -2164,6 +2238,7 @@ async def omnigent_resolve_intent_activity(
                 resolved.workspace_checkpoint_restore_ref
             ),
         )
+    request = await bind_remediation_context_inputs(request)
     if resolved.execution_budget is not None:
         if (
             request.execution_budget is not None
@@ -3580,7 +3655,9 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     command, should_execute = await _claim_command(request)
     if not should_execute:
         return {"commandId": request.command_id, "outcome": command.status}
-    agent_request = await _load_intent_request(request)
+    agent_request = await bind_remediation_context_inputs(
+        await _load_intent_request(request)
+    )
     agent_plan_binding = getattr(agent_request, "omnigent_execution_plan", None)
     execution_plan = (
         await _load_session_execution_plan(request, agent_plan_binding)
@@ -4016,7 +4093,9 @@ async def omnigent_ensure_provider_session_activity(
     command, should_execute = await _claim_command(request)
     if not should_execute:
         return {"commandId": request.command_id, "outcome": command.status}
-    agent_request = await _load_intent_request(request)
+    agent_request = await bind_remediation_context_inputs(
+        await _load_intent_request(request)
+    )
     store = OmnigentControlPlaneStore(async_session_maker)
     async with store.transaction() as repos:
         session = await repos.sessions.get(request.session_id)
@@ -4310,7 +4389,9 @@ async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str,
     command, should_execute = await _claim_command(request)
     if not should_execute:
         return {"commandId": request.command_id, "outcome": command.status}
-    agent_request = await _load_intent_request(request)
+    agent_request = await bind_remediation_context_inputs(
+        await _load_intent_request(request)
+    )
     store = OmnigentControlPlaneStore(async_session_maker)
     async with store.transaction() as repos:
         session = await repos.sessions.get(request.session_id)
@@ -5430,7 +5511,9 @@ async def omnigent_publish_workspace_activity(
     harvested_ref = str(session.metadata.get("harvestedEvidenceRef") or "")
     if not harvested_ref:
         raise ValueError("terminal evidence must be harvested before publication")
-    agent_request = await _load_intent_request(request)
+    agent_request = await _bind_remediation_terminal_contract(
+        await _load_intent_request(request)
+    )
     workflow_id = session.moonmind_workflow_id
     step_execution_id = session.step_execution_id or request.session_id
     if agent_request.remediation_workspace is not None:
@@ -5454,6 +5537,63 @@ async def omnigent_publish_workspace_activity(
         publish_mode = workspace_intent.publish_mode
         base_branch = workspace_intent.starting_branch
     recorded_publication_ref = str(session.metadata.get("publicationEvidenceRef") or "")
+    remediation_result = None
+    remediation_result_ref = str(session.metadata.get("remediationOutcomeRef") or "")
+    if (
+        session.terminal_state == "completed"
+        and agent_request.terminal_contract is not None
+        and agent_request.terminal_contract.contract_id
+        == "remediate_workflow_terminal.v1"
+    ):
+        if remediation_result_ref:
+            recorded_outcome = await _read_json_artifact(
+                remediation_result_ref,
+                access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL),
+            )
+            remediation_result = AgentRunResult.model_validate(
+                recorded_outcome["result"]
+            )
+        else:
+            from moonmind.workflows.terminal_evidence import (
+                apply_remediation_terminal_evaluation,
+            )
+
+            http_client, client = await _omnigent_client_context()
+            try:
+                evaluation = await OmnigentOAuthHostRuntime(
+                    client=client
+                ).inspect_request_terminal(
+                    agent_request.model_copy(
+                        update={
+                            "workspace_spec": {
+                                **(agent_request.workspace_spec or {}),
+                                "workspaceLocator": workspace_locator,
+                            }
+                        }
+                    )
+                )
+            finally:
+                await http_client.aclose()
+            remediation_result = apply_remediation_terminal_evaluation(
+                AgentRunResult(
+                    executionState="completed", objectiveOutcome="succeeded"
+                ),
+                evaluation,
+            )
+            remediation_result_ref = await _write_json_artifact(
+                name="omnigent.session.remediation-outcome.json",
+                artifact_type="omnigent.session_remediation_outcome",
+                payload={
+                    "result": remediation_result.model_dump(mode="json", by_alias=True)
+                },
+            )
+            async with store.transaction() as repos:
+                session = await repos.sessions.bind_runtime_authority(
+                    request.session_id,
+                    expected_revision=session.revision,
+                    expected_fencing_generation=request.fencing_generation,
+                    metadata_patch={"remediationOutcomeRef": remediation_result_ref},
+                )
     if recorded_publication_ref:
         recorded_publication = await _read_json_artifact(
             recorded_publication_ref,
@@ -5462,6 +5602,14 @@ async def omnigent_publish_workspace_activity(
         if not isinstance(recorded_publication.get("publication"), Mapping):
             raise ValueError("recorded publication evidence is missing its outcome")
         publication = dict(recorded_publication["publication"])
+    elif (
+        remediation_result is not None and remediation_result.failure_class is not None
+    ):
+        publication = {
+            "status": "not_attempted",
+            "publishMode": publish_mode,
+            "reason": remediation_result.provider_error_code,
+        }
     elif (
         request.execution_budget is not None
         and request.execution_budget.finishing_deadline is not None
@@ -5705,6 +5853,29 @@ async def omnigent_publish_workspace_activity(
             **(await _session_execution_authority_metadata(session)),
         },
     )
+    if remediation_result is not None and result.failure_class is None:
+        result = remediation_result.model_copy(
+            update={
+                "output_refs": [*result.output_refs, remediation_result_ref],
+                "publication_state": (
+                    "published"
+                    if publication.get("push_status") == "pushed"
+                    else (
+                        "not_published"
+                        if remediation_result.failure_class is not None
+                        else result.publication_state
+                    )
+                ),
+                "metadata": result.metadata,
+                "diagnostics_ref": (
+                    remediation_result_ref
+                    if remediation_result.failure_class
+                    else result.diagnostics_ref
+                ),
+            }
+        )
+        if result.failure_class is not None:
+            status = "execution_failed"
     terminal = OmnigentSessionTerminalResult(status=status, result=result)
     terminal_ref = await _write_json_artifact(
         name="omnigent.session.terminal.json",

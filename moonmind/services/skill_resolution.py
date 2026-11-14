@@ -278,6 +278,7 @@ def _terminal_contract_from_side_effect(
         ),
         "batch_workflows_fanout.v1": "moonmind.batch-workflows-result.v1",
         "pr_resolver_terminal.v1": "moonmind.pr-resolver-result.v1",
+        "remediate_workflow_terminal.v1": "moonmind.remediate-workflow-result.v1",
     }
     if contract_id not in known:
         raise ValueError(
