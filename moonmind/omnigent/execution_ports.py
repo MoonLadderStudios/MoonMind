@@ -118,7 +118,8 @@ class OmnigentHostPreparationPort(Protocol):
 class OmnigentWorkspacePublicationPort(Protocol):
     """Publish the authoritative workspace before host capacity is released."""
 
-    async def inspect_request_terminal(self, request: AgentExecutionRequest) -> Any: ...
+    async def inspect_request_terminal(self, request: AgentExecutionRequest) -> Any:
+        raise NotImplementedError
 
     async def publish_workspace(
         self,

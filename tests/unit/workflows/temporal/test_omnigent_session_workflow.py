@@ -630,13 +630,12 @@ async def test_compact_plan_handoff_delivers_remediation_context_as_input(
 
     assert request.input_refs == []
     context_lookup.assert_not_awaited()
-    bind = omnigent_session_activities.bind_remediation_context_inputs(request)
     if remediation and not context_available:
         with pytest.raises(ValueError, match="remediation context"):
-            await bind
+            await omnigent_session_activities.bind_remediation_context_inputs(request)
         security_lookup.assert_not_awaited()
         return
-    request = await bind
+    request = await omnigent_session_activities.bind_remediation_context_inputs(request)
     if remediation:
         assert request.terminal_contract.execution_ref == "step-execution-1"
         assert request.input_refs == [
