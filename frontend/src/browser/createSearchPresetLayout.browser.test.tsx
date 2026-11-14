@@ -8,6 +8,8 @@ import '../styles/dashboard.css';
 
 declare module 'vitest/browser' {
   interface BrowserCommands {
+    prepareCaptureViewport(width: number, height: number): Promise<{ width: number; height: number } | null>;
+    restoreCaptureViewport(original: { width: number; height: number } | null): Promise<void>;
     captureViewport(fileName: string, width: number, height: number): Promise<void>;
   }
 }
@@ -47,6 +49,7 @@ const payload: BootPayload = { page: 'dashboard', apiBase: '/api' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 let fetchSpy: MockInstance;
 let cleanupRender: (() => void) | null = null;
+let originalRunnerViewport: { width: number; height: number } | null = null;
 let expandedInputs: Array<Record<string, unknown>>;
 beforeEach(() => {
   window.sessionStorage.clear(); window.localStorage.clear();
@@ -73,6 +76,8 @@ afterEach(async () => {
   fetchSpy.mockRestore();
   window.sessionStorage.clear(); window.localStorage.clear();
   window.history.replaceState({}, '', '/');
+  await commands.restoreCaptureViewport(originalRunnerViewport);
+  originalRunnerViewport = null;
   await page.viewport(DESKTOP.width, DESKTOP.height);
 });
 function expectInsideViewport(element: Element) {
@@ -84,6 +89,7 @@ function expectInsideViewport(element: Element) {
 describe('Search preset progressive disclosure', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`keeps search primary and help accessible at ${viewport.width}px`, async () => {
+      originalRunnerViewport = await commands.prepareCaptureViewport(viewport.width, viewport.height);
       await page.viewport(viewport.width, viewport.height);
       const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
       cleanupRender = unmount;
