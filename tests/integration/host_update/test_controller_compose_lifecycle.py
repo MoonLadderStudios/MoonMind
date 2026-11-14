@@ -362,3 +362,258 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
         command(*compose, "down", "--timeout", "10", check=False)
         if built_images:
             command("docker", "image", "rm", *built_images, check=False)
+
+
+def test_compose_migration_waits_for_live_standalone_owner(tmp_path):
+    """Candidate in the old separate-project shape, not a historical image.
+
+    A real kernel lock and open durable operation prevent the new service
+    from replacing the old owner. Only the test actor completes that work.
+    """
+    if os.environ.get("MOONMIND_TEST_JOURNAL_TRANSITION") != "1":
+        pytest.skip("Real Docker journey is enabled in controller-journey CI")
+    import socket
+
+    image = os.environ["MOONMIND_TEST_JOURNAL_APP_IMAGE"]
+    project = f"moonmind-test-controller-migration-{uuid4().hex[:8]}"
+    legacy_project = f"{project}-legacy"
+    network = f"{project}_deployment-controller-network"
+    repo = tmp_path / "deployment"
+    state = repo / "deploy/state/controller"
+    state.mkdir(parents=True)
+    (state.parent / ".gitkeep").touch()
+    (state / ".gitkeep").touch()
+    exported = json.loads(
+        command(
+            "docker",
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            "import json,pathlib,yaml; print(json.dumps(yaml.safe_load(pathlib.Path('/app/release/docker-compose.yaml').read_text())))",
+        ).stdout
+    )
+    controller = exported["services"]["controller"]
+    controller["image"] = image
+    controller["ports"] = ["127.0.0.1::8472"]
+    compose_file = repo / "docker-compose.json"
+    compose_file.write_text(
+        json.dumps(
+            {
+                "services": {"controller": controller},
+                "networks": {
+                    "default": {},
+                    "deployment-controller-network": {
+                        "name": network,
+                        "internal": True,
+                    },
+                },
+            }
+        )
+    )
+    compose = [
+        "docker",
+        "compose",
+        "--env-file",
+        os.devnull,
+        "-p",
+        project,
+        "--project-directory",
+        str(repo),
+        "-f",
+        str(compose_file),
+    ]
+    # Copy this before startup rewrites the generated manifest to the new
+    # project's identity, so cleanup always has the legacy project's file.
+    legacy_file = repo / "legacy-controller.json.yaml"
+    legacy_compose = [
+        "docker",
+        "compose",
+        "--env-file",
+        os.devnull,
+        "-p",
+        legacy_project,
+        "-f",
+        str(legacy_file),
+    ]
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    image_id = command(
+        "docker", "image", "inspect", "--format", "{{.Id}}", image
+    ).stdout.strip()
+
+    def state_evidence():
+        return json.loads(
+            command(
+                "docker",
+                "run",
+                "--rm",
+                "--network=none",
+                "--user",
+                "0:0",
+                "--mount",
+                f"type=bind,source={state},target=/state,readonly",
+                "--entrypoint",
+                "python",
+                image,
+                "-c",
+                "import hashlib,json,pathlib; p=pathlib.Path('/state'); op=p/'operations/live-legacy.json'; "
+                "print(json.dumps({'identity':json.loads((p/'controller-identity.json').read_text()),"
+                "'secretHash':hashlib.sha256((p/'secrets/controller-bearer').read_bytes()).hexdigest(),"
+                "'operation':json.loads(op.read_text()) if op.exists() else None}))",
+            ).stdout
+        )
+
+    def eventually(predicate, timeout=90):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(1)
+        pytest.fail("Legacy controller migration did not reach the expected state")
+
+    try:
+        command(
+            "docker",
+            "network",
+            "create",
+            "--internal",
+            "--label",
+            f"com.docker.compose.project={project}",
+            "--label",
+            "com.docker.compose.network=deployment-controller-network",
+            network,
+        )
+        # Render via the real bootstrap, with explicit observed host sources.
+        command(
+            "docker",
+            "run",
+            "--rm",
+            "--network=none",
+            "--user",
+            "0:0",
+            "--mount",
+            f"type=bind,source={state},target=/state",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            "import pathlib,sys; sys.path.insert(0,'/app/deploy/controller'); import bootstrap; "
+            "s=pathlib.Path('/state'); repo=pathlib.Path(sys.argv[1]); "
+            "bootstrap.ensure_secret(s); "
+            "identity={'project':sys.argv[2],'targetProject':sys.argv[3],'repo':str(repo),'port':int(sys.argv[4]),'targetNetwork':sys.argv[5]}; "
+            "import json; (s/'controller-identity.json').write_text(json.dumps(identity)); "
+            "bootstrap.record_controller_image(s,requested=sys.argv[6],pinned=sys.argv[6]); "
+            "bootstrap.render_compose_file(state_dir=s,repo=repo,image=sys.argv[6],port=int(sys.argv[4]),project=sys.argv[2],target_project=sys.argv[3],target_network=sys.argv[5],state_source=sys.argv[7],repo_source=str(repo))",
+            str(repo),
+            legacy_project,
+            project,
+            str(port),
+            network,
+            image_id,
+            str(state),
+        )
+        legacy_file.write_bytes((state / "controller-compose.yaml").read_bytes())
+        command(*legacy_compose, "up", "-d", "--pull", "never", "--wait")
+        legacy_id = command(*legacy_compose, "ps", "-q", "controller").stdout.strip()
+        eventually(
+            lambda: (
+                command(
+                    "docker",
+                    "exec",
+                    legacy_id,
+                    "python",
+                    "-c",
+                    "import os,pathlib,urllib.request; secret=pathlib.Path(os.environ['MOONMIND_CONTROLLER_SECRET_FILE']).read_text().strip(); "
+                    "req=urllib.request.Request('http://127.0.0.1:'+os.environ['MOONMIND_CONTROLLER_PORT']+'/v1/healthz',headers={'Authorization':'Bearer '+secret}); "
+                    "urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=2).read()",
+                    check=False,
+                ).returncode
+                == 0
+            )
+        )
+        # This actor runs inside the old owner and holds the same kernel lock
+        # as a real update. It cannot finish until this test permits it.
+        command(
+            "docker",
+            "exec",
+            "--detach",
+            legacy_id,
+            "python",
+            "-c",
+            "import os,pathlib,sys,time; sys.path.insert(0,'/app/deploy/controller'); import lock,record; "
+            "p=pathlib.Path(os.environ['MOONMIND_CONTROLLER_STATE_DIR']); s=record.OperationStore(p); "
+            "guard=lock.StackLock(p,'moonmind'); "
+            "with_context=guard.acquire(); with_context.__enter__(); "
+            "s.begin(stack='moonmind',desired_image=sys.argv[1],source_revision='',operation_id='live-legacy',target={'project':sys.argv[2]}); "
+            "s.mark_stage('live-legacy',stage='applying'); "
+            "exec(\"while not (p/'fixture-release').exists():\\n time.sleep(0.1)\"); "
+            "s.supersede('live-legacy',reason='test-owned actor completed its work'); with_context.__exit__(None,None,None)",
+            image,
+            project,
+        )
+        eventually(lambda: bool(state_evidence()["operation"]))
+        before = state_evidence()
+        assert before["operation"]["status"] == "applying"
+        command(*compose, "up", "-d", "--pull", "never")
+        # Require actual startup contention, not merely an absence of change
+        # immediately after launching the new container.
+        eventually(
+            lambda: (
+                "owned by another controller"
+                in command(
+                    *compose, "logs", "--no-color", "controller", check=False
+                ).stdout
+            )
+        )
+        assert (
+            command(
+                "docker", "inspect", "--format", "{{.State.Running}}", legacy_id
+            ).stdout.strip()
+            == "true"
+        )
+        blocked = state_evidence()
+        assert blocked["identity"] == before["identity"]
+        assert blocked["secretHash"] == before["secretHash"]
+        assert blocked["operation"]["status"] == "applying"
+        (state / "fixture-release").write_text("complete")
+        result = command(
+            *compose, "up", "-d", "--wait", "--wait-timeout", "90", check=False
+        )
+        if result.returncode:
+            logs = command(*compose, "logs", "--no-color", "controller", check=False)
+            pytest.fail(result.stdout + result.stderr + logs.stdout + logs.stderr)
+        assert command("docker", "inspect", legacy_id, check=False).returncode != 0
+        after = state_evidence()
+        assert (
+            after["identity"]["project"]
+            == after["identity"]["targetProject"]
+            == project
+        )
+        assert after["secretHash"] == before["secretHash"]
+        assert after["operation"]["status"] == "superseded"
+        assert (
+            after["operation"]["supersededReason"]
+            == "test-owned actor completed its work"
+        )
+        owners = command(
+            "docker",
+            "ps",
+            "-q",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            "label=com.docker.compose.service=controller",
+        ).stdout.split()
+        assert len(owners) == 1
+    finally:
+        # Release the test actor even on assertion failure before teardown.
+        (state / "fixture-release").write_text("complete")
+        command(*compose, "down", "--timeout", "10", check=False)
+        if legacy_file.exists():
+            command(*legacy_compose, "down", "--timeout", "10", check=False)
+        command("docker", "network", "rm", network, check=False)
