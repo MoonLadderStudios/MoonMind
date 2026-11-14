@@ -835,7 +835,6 @@ class OmnigentProfileBoundExecutionCoordinator:
         return result
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-        request = await self._bind_request_inputs(request)
         # Validate before binding an existing recovery host: rejecting ambiguous
         # actions must not claim or clean up the only surviving workspace.
         try:
@@ -873,6 +872,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "admittedProviderCapacityCleanupCompleted"
                 ] = True
             return budget_rejection
+        request = await self._bind_request_inputs(request)
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = request_identity(request)
         await self._run_store.get_or_create(
