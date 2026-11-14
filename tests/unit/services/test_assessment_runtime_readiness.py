@@ -554,7 +554,7 @@ async def test_external_registry_readiness_is_bounded_and_preserves_cancellation
     )
     if cancel:
         with pytest.raises(asyncio.CancelledError):
-            await check
+            _ = await check
     else:
         result = await check
         assert result["status"] == "unavailable"

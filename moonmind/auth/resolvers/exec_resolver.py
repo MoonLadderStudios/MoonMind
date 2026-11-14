@@ -66,6 +66,7 @@ class ExecSecretResolver(SecretBackendResolver):
                     try:
                         proc.kill()
                     except ProcessLookupError:
+                        # The process exited before kill; communicate still reaps it.
                         pass
                 await proc.communicate()
             raise

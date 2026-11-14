@@ -836,7 +836,7 @@ async def test_image_preset_checks_external_credential_before_planning_or_jobs(
         backend.assessment_readiness.assert_awaited_once()
     else:
         with pytest.raises(ApplicationError, match="credential_unavailable"):
-            await check
+            _ = await check
         backend.assessment_readiness.assert_not_awaited()
     assert "readiness-integration-canary" not in str(observations)
     planning.assert_not_awaited()
