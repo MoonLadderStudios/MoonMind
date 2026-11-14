@@ -1059,3 +1059,51 @@ def test_source_issue_title_survives_continue_as_new(admitted):
         "title": "Resume the same candidate PR",
         "url": issue["url"],
     }
+
+
+@pytest.mark.asyncio
+async def test_evidence_wait_uses_original_loop_origin_after_rollover(
+    admitted, monkeypatch
+):
+    from datetime import timedelta
+    from moonmind.workflows.temporal.remediation_loop import (
+        record_remediation_resource_usage,
+    )
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    owner._remediation_loop_controller_node_id = "verify"
+    now = run_module.workflow.now()
+    owner._remediation_loop_spec = owner._remediation_loop_spec.model_copy(
+        update={
+            "budgets": owner._remediation_loop_spec.budgets.model_copy(
+                update={"max_wall_clock_seconds": 30}
+            )
+        }
+    )
+    owner._remediation_loop_state = record_remediation_resource_usage(
+        owner._remediation_loop_state, now=now - timedelta(seconds=60)
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="issue-owner", run_id="rolled-run", start_time=now
+        ),
+    )
+    reader = AsyncMock()
+    monkeypatch.setattr(continuation, "_activity", reader)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    reader.assert_not_awaited()
+    assert owner._remediation_loop_state.resource_usage.started_at == now - timedelta(
+        seconds=60
+    )
+
+    assert (
+        owner._remediation_loop_state.continuation_reason
+        == "wall_clock_budget_exhausted"
+    )
