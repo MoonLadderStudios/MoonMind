@@ -186,7 +186,11 @@ async def test_generic_model_drift_precedes_binding_readiness_and_command_effect
         )
     )
     deployment_validator = AsyncMock()
+    request_input_binder = AsyncMock(
+        side_effect=AssertionError("model drift reached input binding")
+    )
     realizer = GenericOmnigentHostRealizer(
+        request_input_binder=request_input_binder,
         runtime_binding_store=runtime_bindings,
         provider_lease_coordinator=object(),
         credential_provisioning_service=object(),
@@ -214,3 +218,4 @@ async def test_generic_model_drift_precedes_binding_readiness_and_command_effect
     assert rejected.value.code == "OMNIGENT_EXECUTION_PLAN_CONFLICT"
     runtime_bindings.get.assert_not_awaited()
     deployment_validator.assert_not_awaited()
+    request_input_binder.assert_not_awaited()

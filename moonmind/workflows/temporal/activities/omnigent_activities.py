@@ -1333,7 +1333,12 @@ async def _omnigent_execute_activity(
 
         lore_repository_adapter = build_lore_repository_adapter_from_environment()
         host_repository = OmnigentOAuthHostRepository(async_session_maker)
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            bind_remediation_context_inputs,
+        )
+
         coordinator = OmnigentProfileBoundExecutionCoordinator(
+            request_input_binder=bind_remediation_context_inputs,
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
             host_repository=host_repository,

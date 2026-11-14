@@ -177,6 +177,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         run_store: OmnigentBridgeSessionStore,
         execution_runner: ExecutionRunner,
         artifact_gateway: Any,
+        request_input_binder: Callable[
+            [AgentExecutionRequest], Awaitable[AgentExecutionRequest]
+        ],
         artifact_service: Any | None = None,
         workspace_owner: RemediationWorkspaceOwner | None = None,
         execution_plan: OmnigentExecutionPlanEnvelope | None = None,
@@ -198,6 +201,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._run_store = run_store
         self._execute = execution_runner
         self._artifact_gateway = artifact_gateway
+        self._bind_request_inputs = request_input_binder
         self._artifact_service = artifact_service or artifact_gateway
         self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
@@ -831,11 +835,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         return result
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
-            bind_remediation_context_inputs,
-        )
-
-        request = await bind_remediation_context_inputs(request)
+        request = await self._bind_request_inputs(request)
         # Validate before binding an existing recovery host: rejecting ambiguous
         # actions must not claim or clean up the only surviving workspace.
         try:

@@ -111,6 +111,9 @@ from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
 from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -3787,6 +3790,7 @@ async def _generic_publication_harness(
             events.append(f"command-settled:{kwargs['outcome'].value}")
 
     realizer = GenericOmnigentHostRealizer(
+        request_input_binder=bind_remediation_context_inputs,
         runtime_binding_store=runtime_store,
         provider_lease_coordinator=Leases(),
         credential_provisioning_service=Credentials(),

@@ -139,6 +139,9 @@ from moonmind.security.egress_conformance_evidence import (
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -594,6 +597,7 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
         record_lifecycle_event=AsyncMock(),
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=lease_client,
         host_repository=hosts,
@@ -3116,6 +3120,7 @@ async def test_profile_bound_execution_heartbeats_host_lease_until_runner_finish
         heartbeat_host_lease=AsyncMock(side_effect=heartbeat_host_lease)
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=AsyncMock(),
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -4176,6 +4181,7 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
     )
     runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
@@ -4285,6 +4291,7 @@ async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_
         checkpointDigest="sha256:" + "b" * 64,
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
@@ -4839,6 +4846,7 @@ async def test_coordinator_waits_for_canceled_host_cleanup_before_rerun(
     )
     emit = AsyncMock()
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=hosts,
@@ -4882,6 +4890,7 @@ def _drain_wait_coordinator(hosts, *, provider_lease_active: bool = True):
         inspect_lease=AsyncMock(return_value={"active": provider_lease_active})
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=lease_client,
         host_repository=hosts,
@@ -5109,6 +5118,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup(exposure) 
         return AgentRunResult(summary="done")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -5379,6 +5389,7 @@ async def _drive_authority_chain_coordinator(
             ordered.append(f"bridge_terminal:{idempotency_key}")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6394,6 +6405,7 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6549,6 +6561,7 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -6695,6 +6708,7 @@ async def test_coordinator_fails_closed_on_smuggled_runtime_shortcut() -> None:
             events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
@@ -7069,15 +7083,14 @@ async def _run_coordinator_failure_case(
             return await super().write_bytes(**kwargs)
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
         host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
-        artifact_gateway=LaunchEvidenceFailureGateway(
-            root=artifact_directory.name
-        ),
+        artifact_gateway=LaunchEvidenceFailureGateway(root=artifact_directory.name),
     )
 
     async def resolve_policy_snapshot(policy_ref: str) -> dict:

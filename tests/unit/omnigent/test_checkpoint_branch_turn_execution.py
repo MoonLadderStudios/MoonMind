@@ -40,6 +40,9 @@ from moonmind.security.assessment_authorizations import (
     AssessmentAuthorizations,
     authorization_scope,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from moonmind.workflows.temporal.remediation_verification import (
     verification_contract_for,
 )
@@ -251,6 +254,7 @@ async def test_canonical_coordinator_compiles_fresh_branch_restore_authority() -
     assert checkpoint_model.omnigent is not None
     checkpoint = checkpoint_model.omnigent
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=SimpleNamespace(),
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
@@ -317,6 +321,7 @@ async def test_profile_bound_coordinator_rejects_unenforceable_usd_budget_before
 ) -> None:
     run_store = SimpleNamespace(get_or_create=AsyncMock())
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=SimpleNamespace(),
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),

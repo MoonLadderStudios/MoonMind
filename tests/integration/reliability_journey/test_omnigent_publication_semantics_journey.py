@@ -44,6 +44,9 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 from tests.integration.reliability.helpers import load_replay
 from tests.unit.omnigent.test_policy_authority import policy_document
 
@@ -901,6 +904,7 @@ async def _drive_coordinator_materialization_to_cleanup(
         )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
+        request_input_binder=bind_remediation_context_inputs,
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
