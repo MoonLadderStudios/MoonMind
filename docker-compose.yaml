@@ -24,6 +24,37 @@ x-omnigent-static-host:
 
 services:
 
+  # Same Compose lifecycle as the app; updates use an external handoff to
+  # replace this service, never the application's ordinary recreation pass.
+  controller:
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    user: "0:0"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    entrypoint: ["python", "/app/deploy/controller/compose_start.py"]
+    environment:
+      MOONMIND_CONTROLLER_MANAGED: "1"
+      MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
+      MOONMIND_CONTROLLER_PORT: "8472"
+    ports:
+      - "127.0.0.1:${MOONMIND_CONTROLLER_HOST_PORT:-}:8472"
+    volumes:
+      - .:/deployment:ro
+      - ./deploy/state/controller:/var/lib/moonmind-controller
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      default: {}
+      deployment-controller-network:
+        aliases: [moonmind-controller]
+    labels:
+      moonmind.controller.managed: "true"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib,urllib.request; secret=pathlib.Path('/var/lib/moonmind-controller/secrets/controller-bearer').read_text().strip(); urllib.request.build_opener(urllib.request.ProxyHandler({})).open(urllib.request.Request('http://127.0.0.1:8472/v1/healthz',headers={'Authorization':'Bearer '+secret}),timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   api:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
@@ -157,8 +188,8 @@ services:
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
-      # Settings Operations submits to the standalone deployment controller
-      # installed by deploy/controller/bootstrap.py. Its identity and bearer
+      # Settings Operations submits to the Compose-owned controller.
+      # Its identity and bearer
       # secret stay in the read-only deployment state mount (server side
       # only); the endpoint is reached on deployment-controller-network.
       - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
@@ -1561,7 +1592,7 @@ networks:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true
   # Private link from the API and the deployment-control worker to the
-  # standalone deployment controller, which joins it under the
+  # deployment controller, which joins it under the
   # `moonmind-controller` alias. Agent runtimes are never attached. The name
   # follows the Compose project so independent deployments on one host never
   # share the alias; deploy/controller/bootstrap.py derives the same name.

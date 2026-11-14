@@ -526,7 +526,7 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
     with pytest.raises(RuntimeError, match="stop"):
         await release._run_job_body(request)
     for scope in ("executor", "runner"):
-        assert {"docker-proxy", "sandbox-egress-proxy", "postgres"} <= set(
+        assert {"controller", "docker-proxy", "sandbox-egress-proxy", "postgres"} <= set(
             observed[scope]
         )
         # Operator exclusions survive alongside the protected substrate.

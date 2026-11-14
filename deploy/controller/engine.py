@@ -3,7 +3,7 @@
 Semantic default, under bounded timeouts::
 
     docker compose pull --policy always [<services>]
-    docker compose up -d --pull never --no-build --remove-orphans [<services>]
+    docker compose up -d --pull never --no-build [<services>]
 
 All images needed for the requested update are staged before apply, so a
 registry loss after staging does not block the apply and a pull failure
@@ -26,7 +26,9 @@ remains usable.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -53,7 +55,6 @@ UP_FLAGS = (
     "--pull",
     "never",
     "--no-build",
-    "--remove-orphans",
 )
 
 class CommandError(RuntimeError):
@@ -222,6 +223,107 @@ def ensure_journal_storage(runner: Runner, base: Sequence[str], services: Sequen
                          redact_text(tail_text(str(result.get("output", "")))))
 
 
+def require_independent_controller(
+    runner: Runner,
+    base: Sequence[str],
+    services: Sequence[str],
+    own_service: str,
+) -> set[str]:
+    """Reject dependency paths that would recreate the update owner.
+
+    Keep application dependencies (notably init-db) under Compose; disabling
+    all dependency handling would remove their completion/health gating.
+    """
+    # Include inactive-profile services in ownership metadata; this does not start them.
+    result = run_command(runner, (*base, "--profile", "*", "config", "--format", "json"), timeout_seconds=60)
+    if int(result.get("exit", 0)) != 0:
+        raise StageError(
+            "controller-dependencies", int(result.get("exit", 1)),
+            redact_text(str(result.get("output", ""))),
+        )
+    try:
+        definitions = json.loads(command_stdout(result))["services"]
+        if not isinstance(definitions, dict):
+            raise TypeError("services must be an object")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise StageError(
+            "controller-dependencies", 1, "Cannot inspect effective Compose dependencies"
+        ) from exc
+    visited = set()
+    pending = list(services)
+    while pending:
+        name = pending.pop()
+        if name == own_service:
+            raise SelfReplacementError(
+                f"Application services must not depend on controller service {own_service!r}; "
+                "controller replacement is handled separately."
+            )
+        if name in visited:
+            continue
+        visited.add(name)
+        definition = definitions.get(name) or {}
+        pending.extend(definition.get("depends_on") or ())
+        for key in ("network_mode", "ipc", "pid"):
+            value = str(definition.get(key) or "")
+            if value.startswith("service:"):
+                pending.append(value.partition(":")[2])
+        for value in definition.get("links") or ():
+            pending.append(str(value).partition(":")[0])
+        for value in definition.get("volumes_from") or ():
+            if not str(value).startswith("container:"):
+                pending.append(str(value).partition(":")[0])
+
+    return set(definitions)
+
+
+def remove_retired_services(
+    runner: Runner, *, project: str, configured_services: set[str], own_service: str
+) -> None:
+    """Remove retired app containers, never the controller or lifecycle jobs.
+
+    Compose's --remove-orphans can delete a co-owned controller on rollback to
+    a release predating that service. Inspect full project membership ourselves,
+    and remove only positively identified ordinary Compose service containers.
+    No volumes are removed. IDs, not reusable names, bind inspection to removal.
+    """
+    def checked(args: Sequence[str], timeout: int = 60) -> Mapping[str, Any]:
+        try:
+            result = run_command(runner, args, timeout_seconds=timeout)
+        except CommandError as exc:
+            raise ApplyError("orphan-cleanup", exc.exit_status, redact_text(tail_text(exc.output))) from exc
+        if int(result.get("exit", 0)) != 0:
+            raise ApplyError("orphan-cleanup", int(result.get("exit", 1)),
+                             redact_text(tail_text(str(result.get("output", "")))))
+        return result
+
+    result = checked(("docker", "ps", "--all", "--no-trunc", "--filter",
+                      f"label=com.docker.compose.project={project}", "--format", "{{.ID}}"))
+    ids = command_stdout(result).split()
+    if any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in ids):
+        raise ApplyError("orphan-cleanup", 1, "Cannot inspect project container IDs")
+    for container_id in ids:
+        result = checked(("docker", "inspect", "--format", "{{json .Config.Labels}}", container_id))
+        try:
+            labels = json.loads(command_stdout(result))
+            if not isinstance(labels, dict):
+                raise ValueError("labels must be an object")
+        except (ValueError, TypeError) as exc:
+            raise ApplyError("orphan-cleanup", 1, "Cannot inspect container ownership") from exc
+        service = labels.get("com.docker.compose.service")
+        if (
+            labels.get("com.docker.compose.project") != project
+            or not service
+            or service in configured_services
+            or service in {own_service, "controller"}
+            or str(labels.get("com.docker.compose.oneoff", "")).lower() != "false"
+            or not labels.get("com.docker.compose.config-hash")
+            or any(key.startswith("moonmind.controller.") for key in labels)
+        ):
+            continue
+        checked(("docker", "stop", "--time", "30", container_id), timeout=60)
+        checked(("docker", "rm", container_id))
+
+
 def apply(
     runner: Runner,
     *,
@@ -251,9 +353,14 @@ def apply(
         compose_files=compose_files,
         env_files=selected_env or None,
     )
+    if own_service:
+        configured_services = require_independent_controller(runner, base, targets, own_service)
     staged = stage_images(runner, base, tuple(images), services=tuple(targets))
     if before_compose is not None:
         before_compose()
+    if own_service:
+        remove_retired_services(runner, project=project, configured_services=configured_services,
+                                own_service=own_service)
     applied = apply_services(runner, base, tuple(targets))
     return {"staged": staged["staged"], "recreated": applied["recreated"]}
 

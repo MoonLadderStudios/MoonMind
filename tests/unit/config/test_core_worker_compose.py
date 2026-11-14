@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[3]
 FLEETS = ("workflow", "artifacts", "llm", "integrations")
 
 
-def test_default_install_has_eleven_persistent_services():
+def test_default_install_has_twelve_persistent_services():
     services = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())["services"]
     profiled = {name for name, spec in services.items() if spec.get("profiles")}
     init = {
@@ -19,8 +19,8 @@ def test_default_install_has_eleven_persistent_services():
         if condition.get("condition") == "service_completed_successfully"
     }
     persistent = set(services) - profiled - init
-    assert len(persistent) == 11, sorted(persistent)
-    assert "temporal-worker-core" in persistent
+    assert len(persistent) == 12, sorted(persistent)
+    assert {"temporal-worker-core", "controller"} <= persistent
     assert not {f"temporal-worker-{fleet}" for fleet in FLEETS} & set(services)
 
 

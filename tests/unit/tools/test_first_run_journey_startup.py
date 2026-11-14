@@ -151,7 +151,7 @@ class Journey:
     source_revision: str
 
     def run(
-        self, *, upgrade: bool = False, **config: object
+        self, *, upgrade: bool = False, controller: bool = False, **config: object
     ) -> subprocess.CompletedProcess:
         self.config.write_text(
             json.dumps({"credential_keys": CREDENTIAL_KEYS, **config})
@@ -160,7 +160,7 @@ class Journey:
             [
                 "bash",
                 str(self.repo / "tools/first_run_journey_3938.sh"),
-                *(["--upgrade"] if upgrade else []),
+                *(["--upgrade"] if upgrade else ["--controller"] if controller else []),
             ],
             cwd=self.repo,
             env=self.env,
@@ -861,4 +861,22 @@ def test_upgrade_isolation_uses_each_releases_actual_workers(journey):
         (journey.logs / "upgrade/state/routing-cutover.json").read_text()
     )
     assert set(receipt["isolation"]["services"]) == {"api", "temporal-worker-core"}
+    journey.assert_cleaned()
+
+
+@pytest.mark.parametrize("mode", ["fresh", "upgrade", "controller"])
+def test_only_missing_controller_fixture_disables_integrated_service(journey, mode):
+    result = journey.run(
+        upgrade=mode == "upgrade", controller=mode == "controller",
+        candidate_statuses=[7], source_statuses=[7], lines=1,
+        compose_config={"services": {"api": {}, "controller": {}, "minio": {"image": "test-minio"}}},
+    )
+    assert result.returncode != 0  # Stop after observing real startup arguments.
+    startups = journey.startups()
+    assert startups
+    isolation = startups[0]["overrides"][0]["services"]
+    if mode == "controller":
+        assert isolation["controller"]["profiles"] == ["journey-controller-intentionally-absent"]
+    else:
+        assert "controller" not in isolation
     journey.assert_cleaned()

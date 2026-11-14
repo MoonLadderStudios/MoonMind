@@ -201,6 +201,8 @@ def test_apply_uses_release_configuration_before_storage_and_recreation(
 
     class Runner(ReleaseRunner):
         def run(self, args, timeout_seconds):
+            if args[-3:] == ("config", "--format", "json"):
+                return {"exit": 0, "output": json.dumps(self.compose)}
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
             if args[:2] == ("docker", "compose") and args[-2:] != (

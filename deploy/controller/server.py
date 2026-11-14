@@ -66,6 +66,7 @@ CONTROLLER_CAPABILITIES = (
     "controller-handoff",
     "storage-transfer-budget",
     "journal-consumer-topology",
+    "compose-owned-controller",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
@@ -120,7 +121,7 @@ TARGET_PROJECT_ENV = "MOONMIND_CONTROLLER_TARGET_PROJECT"
 TARGET_CONFIG_TIMEOUT_SECONDS = 120
 # The Docker transport substrate is never recreated through an update, the
 # same exclusion the host entrypoint applies to its explicit target.
-DEFAULT_EXCLUDED_SERVICES = ("docker-proxy", "sandbox-egress-proxy")
+DEFAULT_EXCLUDED_SERVICES = ("controller", "docker-proxy", "sandbox-egress-proxy")
 # The retired shell installer kept its controller's record and kernel lock in
 # this fixed named volume; this controller's state is a bind mount instead.
 RETIRED_CONTROLLER_VOLUME = "moonmind-controller-state"
@@ -1486,7 +1487,7 @@ def run_omnigent_step(
     phase: str,
     selected_revision: int | None = None,
     helper_image: str | None = None,
-    required_capability: str | None = None,
+    required_capability: str | tuple[str, ...] | None = None,
 ) -> dict:
     """Delegate one release step to the selected image, never a full updater.
 
@@ -1577,10 +1578,16 @@ def run_omnigent_step(
                 "    r=__import__('moonmind.workflows.skills.deployment_release', "
                 f"fromlist=['{function}']) if importlib.util.find_spec('moonmind') else None\n"
                 f"    f=getattr(r,'{function}',None)\n"
-                + (
-                    "    if not getattr(r, 'JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED', False): f=None\n"
-                    if required_capability == "journal-consumer-topology"
-                    else ""
+                + "".join(
+                    f"    if not getattr(r, {attribute!r}, False): f=None\n"
+                    for capability, attribute in (
+                        ("journal-consumer-topology", "JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED"),
+                        ("compose-owned-controller", "COMPOSE_OWNED_CONTROLLER_SUPPORTED"),
+                    )
+                    if capability in (
+                        (required_capability,) if isinstance(required_capability, str)
+                        else (required_capability or ())
+                    )
                 )
                 + "    code=asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
                 "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0)\n"
@@ -2101,6 +2108,15 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
     needs_topology_support = (current.get("journalTransition") or {}).get(
         "requiresTopologySupport"
     ) and not current.get("installed")
+    required = ["journal-consumer-topology"] if needs_topology_support else []
+    try:
+        identity = json.loads((store.state_dir / "controller-identity.json").read_text())
+    except FileNotFoundError:
+        identity = {}
+    # Old controller releases use --remove-orphans and select every service:
+    # never hand them ownership of the same project that contains themselves.
+    if identity.get("project") and identity.get("project") == identity.get("targetProject"):
+        required.append("compose-owned-controller")
     # A capable requested controller may take over before apply as usual. An
     # older rollback controller must not own fencing/recovery across a rename;
     # the one-off checks support before invoking its handoff function.
@@ -2112,7 +2128,7 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
             overlay=overlay,
             phase="controller-handoff",
             required_capability=(
-                "journal-consumer-topology" if needs_topology_support else None
+                required[0] if len(required) == 1 else tuple(required) or None
             ),
         )
     except Exception as exc:  # noqa: BLE001 - the running controller still applies
@@ -2174,6 +2190,8 @@ def production_apply(
     """Default applier: stage images, apply, verify, and record the result."""
     target = operation.get("target") or {}
     project = target.get("project", operation.get("stack"))
+    if "controller" in target.get("services", ()):
+        raise engine.SelfReplacementError("Controller cannot be selected for application apply")
     checks = engine.pre_apply_checks(
         config_valid=bool(target.get("projectDir") and target.get("composeFiles")),
         storage_ok=True,
@@ -2304,6 +2322,7 @@ def production_apply(
             images=(selected_image(operation),),
             env_files=env_files,
             before_compose=before_compose,
+            own_service="controller",
         )
     except engine.StageError as exc:
         store.record_attempt_error(
