@@ -184,7 +184,9 @@ the controller supports repository-to-save handoffs. A separate versioned
 controller capability also admits a typed full Git commit SHA with publication
 mode `none`; abbreviated or unsupported revisions retain their existing owner.
 The shared owner verifies the requested commit before first readiness and binds
-it into immutable workspace intent and readiness identity. A controller save
+it into immutable workspace intent and readiness identity. Transient pin fetches
+resume only after the trusted clone/configuration phase completes; partial
+imports are rebuilt in private staging within the existing retry budget. A controller save
 retains the original pin as provenance, but restores its own verified HEAD,
 index and worktree instead of resetting later work to the initial commit.
 The workspace-source owner preserves repository, connection, access mode and

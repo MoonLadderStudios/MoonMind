@@ -67,10 +67,12 @@ _LOGGER = logging.getLogger(__name__)
 # sandbox clone: DNS/connect failures (``Could not resolve host: github.com``),
 # hosting outages, and connections dropped mid-transfer (``RPC failed; curl 92
 # HTTP/2 stream ... CANCEL``, ``early EOF``). Unlike a push, a clone has no
-# remote side effects and retries into an emptied target, so it shares the
+# remote side effects and retries into an emptied target (or resumes a pinned
+# fetch in its private import staging), so it shares the
 # publication outage classifier. Authentication, TLS, configuration, and
 # repository errors fail closed without retry, per docs/Temporal/ErrorTaxonomy.md.
 _CLONE_MAX_ATTEMPTS = 4
+_PINNED_CLONE_READY = "moonmind-pinned-clone-ready"
 
 
 async def _chown_restored_workspace(path: Path, uid: int, gid: int) -> None:
@@ -114,15 +116,16 @@ def _is_complete_checkout(path: Path) -> bool:
         return False
 
 
-def _remove_partial_clone_sync(path: Path) -> bool:
+def _remove_partial_clone_sync(path: Path, *, preserve_completed: bool = True) -> bool:
     """Remove a failed clone target; return True when the target is gone.
 
     A completed checkout owned by an overlapping materialization is never
-    removed: the caller reuses it instead. Anything else is best-effort;
+    removed: the caller reuses it instead. Only private pinned import staging
+    may disable that protection. Anything else is best-effort;
     a concurrent writer or read-only mount leaves the target in place.
     """
     try:
-        if _is_complete_checkout(path):
+        if preserve_completed and _is_complete_checkout(path):
             return False
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path, ignore_errors=True)
@@ -142,9 +145,9 @@ def _remove_partial_clone_sync(path: Path) -> bool:
         return False
 
 
-async def _remove_partial_clone(path: Path) -> bool:
+async def _remove_partial_clone(path: Path, *, preserve_completed: bool = True) -> bool:
     """Remove a failed clone target off the async event loop."""
-    return await asyncio.to_thread(_remove_partial_clone_sync, path)
+    return await asyncio.to_thread(_remove_partial_clone_sync, path, preserve_completed=preserve_completed)
 
 
 class DaemonCommandRunner(Protocol):
@@ -1548,7 +1551,7 @@ class OmnigentWorkspaceMaterializer:
 
         image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
         git_user_name, git_user_email = resolve_git_identity()
-        argv = build_daemon_git_clone_argv(
+        clone_options = dict(
             volume=self._workspace_volume,
             target_in_volume=rel.as_posix(),
             source=source,
@@ -1560,6 +1563,7 @@ class OmnigentWorkspaceMaterializer:
             endpoint=endpoint,
             commit_sha=commit_sha,
         )
+        argv = build_daemon_git_clone_argv(**clone_options)
         # The one-shot container reads the token on stdin and exposes it to Git
         # through an ephemeral credential helper. The clean source URL is the
         # only remote persisted in the authoritative workspace; credentials do
@@ -1575,11 +1579,12 @@ class OmnigentWorkspaceMaterializer:
         last_stderr = ""
         target = self._root / rel
         for attempt in range(1, _CLONE_MAX_ATTEMPTS + 1):
-            code, _stdout, stderr = await self._runner(argv, token)
+            code, stdout, stderr = await self._runner(argv, token)
             last_stderr = stderr or ""
             if code == 0:
                 break
-            if _is_complete_checkout(target):
+            complete_checkout = _is_complete_checkout(target)
+            if commit_sha is None and complete_checkout:
                 _LOGGER.warning(
                     "Sandbox workspace clone found a completed checkout; "
                     "reusing it instead of retrying",
@@ -1592,16 +1597,36 @@ class OmnigentWorkspaceMaterializer:
                 # Leave no partial checkout behind: a retry reuses the same
                 # attempt workspace, and a leftover directory would skip the
                 # clone and treat the broken partial as complete.
-                await _remove_partial_clone(target)
+                if commit_sha is not None:
+                    await _remove_partial_clone(target, preserve_completed=False)
+                else:
+                    await _remove_partial_clone(target)
                 detail = last_stderr.strip()[-300:]
                 raise HarnessPlatformError(
                     "sandbox workspace clone failed for the requested branch"
                     + (f": {detail}" if detail else ""),
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 )
-            removed = await _remove_partial_clone(target)
-            if not removed:
-                if _is_complete_checkout(target):
+            # A pinned clone lives only in this invocation's private import
+            # staging. Only the trusted script's post-clone/config marker proves
+            # that fetch/checkout may resume; a partial clone can already have
+            # .git/HEAD without its required objects. No marker means rebuild
+            # this private staging, never a promoted or checkpoint candidate.
+            if (
+                commit_sha is not None and complete_checkout
+                and _PINNED_CLONE_READY in (stdout or "").splitlines()
+            ):
+                argv = build_daemon_git_clone_argv(
+                    **clone_options, resume_pinned_checkout=True,
+                )
+                retry_ready = True
+            elif commit_sha is not None:
+                retry_ready = await _remove_partial_clone(target, preserve_completed=False)
+                argv = build_daemon_git_clone_argv(**clone_options)
+            else:
+                retry_ready = await _remove_partial_clone(target)
+            if not retry_ready:
+                if commit_sha is None and _is_complete_checkout(target):
                     _LOGGER.warning(
                         "Sandbox workspace clone found a completed checkout; "
                         "reusing it instead of retrying",
@@ -1683,6 +1708,7 @@ def build_daemon_git_clone_argv(
     authenticated: bool = True,
     endpoint: str = "https://github.com",
     commit_sha: str | None = None,
+    resume_pinned_checkout: bool = False,
 ) -> list[str]:
     """Build a stdin-authenticated Docker argv for an in-volume git clone.
 
@@ -1705,6 +1731,11 @@ def build_daemon_git_clone_argv(
     if commit_sha is not None and re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
         raise HarnessPlatformError(
             "sandbox repository commit must be a full SHA",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    if resume_pinned_checkout and commit_sha is None:
+        raise HarnessPlatformError(
+            "resuming checkout requires an admitted repository pin",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
     host = github_host_from_endpoint(endpoint)
@@ -1748,19 +1779,24 @@ def build_daemon_git_clone_argv(
             'MM_GIT_REPOSITORY_PATH="${2#https://*/}" '
         )
         helper_option = '-c "credential.helper=$credential_helper" '
-    script += (
+    clone_script = (
         git_environment + credential_environment + "git "
         "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
         "-c http.followRedirects=false "
         + helper_option
         + "clone "
         '${1:+--branch "$1"} --single-branch -- "$2" "$3"; '
+    )
+    if not resume_pinned_checkout:
+        script += clone_script
+    script += (
         'git -C "$3" config --local user.name "$4"; '
         'git -C "$3" config --local user.email "$5"'
     )
     if commit_sha is not None:
         script += (
-            "; " + git_environment + credential_environment + "git "
+            f"; printf '%s\\n' '{_PINNED_CLONE_READY}'; "
+            + git_environment + credential_environment + "git "
             "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
             "-c http.followRedirects=false " + helper_option
             + '-C "$3" fetch --no-tags -- "$2" "$6"; '

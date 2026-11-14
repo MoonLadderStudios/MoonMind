@@ -704,7 +704,7 @@ async def test_unavailable_pinned_repository_never_starts_harness(
     async def fail_without_harness(admitted):
         from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
-        with pytest.raises(HarnessPlatformError, match="HEAD does not match the admitted commit"):
+        with pytest.raises(HarnessPlatformError, match="not our ref " + "a" * 40):
             await admitted.realizer.execute(admitted.request, admitted.plan)
         assert not admitted.docker.create_count
         assert not admitted.server.session_ids

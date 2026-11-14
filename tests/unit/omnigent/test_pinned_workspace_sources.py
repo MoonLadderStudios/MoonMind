@@ -183,3 +183,105 @@ def test_initial_pinned_branch_never_selects_newer_existing_branch_tip(tmp_path)
     subprocess.run(["sh", "-ceu", script, "--", str(tmp_path), "main", "initialize", pin], check=True)
     assert git("rev-parse", "HEAD") == pin
     assert git("symbolic-ref", "--short", "HEAD") == "main"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["transient-once", "transient-exhausted", "permanent", "partial-clone"])
+@pytest.mark.parametrize("branch", ["main", ""])
+@pytest.mark.parametrize("pin_at_tip", [False, True])
+async def test_pinned_fetch_failure_uses_bounded_retry_and_original_diagnostic(
+    tmp_path, monkeypatch, failure, branch, pin_at_tip,
+):
+    import os
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from moonmind.omnigent.host_services import workspace
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    remote = tmp_path / "remote"
+    subprocess.run(["git", "init", "-qb", "main", str(remote)], check=True)
+    for message in ("admitted pin", "later branch tip"):
+        subprocess.run(["git", "-C", str(remote), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", message], check=True)
+    pin = subprocess.check_output(["git", "-C", str(remote), "rev-parse", "HEAD~1"], text=True).strip()
+    original_tip = subprocess.check_output(["git", "-C", str(remote), "rev-parse", "HEAD"], text=True).strip()
+    if pin_at_tip:
+        pin = original_tip
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    calls = tmp_path / "git-calls"
+    diagnostic = "fatal: Could not resolve host: controlled.invalid" if failure != "permanent" else "fatal: repository 'controlled' not found"
+    git = tools / "git"
+    git.write_text(
+        f"#!{sys.executable}\nimport os,sys\nfrom pathlib import Path\n"
+        f"calls=Path({str(calls)!r})\nargs=sys.argv[1:]\n"
+        "operation='fetch' if 'fetch' in args else 'clone' if 'clone' in args else 'other'\n"
+        "prior=calls.read_text().splitlines() if calls.exists() else []\n"
+        "with calls.open('a') as f: f.write(operation+'\\n')\n"
+        f"if operation=='clone' and {failure!r}=='partial-clone' and 'clone' not in prior:\n"
+        " target=Path(args[-1]); (target/'.git').mkdir(parents=True); (target/'.git/HEAD').write_text('ref: refs/heads/main\\n')\n"
+        f" print({diagnostic!r},file=sys.stderr); sys.exit(128)\n"
+        f"if operation=='fetch' and {failure!r}!='partial-clone' and ({failure!r}!='transient-once' or 'fetch' not in prior):\n"
+        f" print({diagnostic!r},file=sys.stderr); sys.exit(128)\n"
+        f"os.execv({shutil.which('git')!r}, ['git',*args])\n"
+    )
+    git.chmod(0o755)
+    delays = []
+    handoffs = []
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    async def daemon(argv, input_bytes=None):
+        if '/bin/chown' in argv:
+            handoffs.append(argv)
+            return 0, '', ''
+        args = list(argv[argv.index('--') + 1:])
+        args[1:3] = [str(remote), str(tmp_path / 'candidate')]
+        result = subprocess.run(
+            ['/bin/sh', '-ceu', argv[argv.index('-ceu') + 1], '--', *args],
+            input='', capture_output=True, text=True,
+            env={**os.environ, 'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}'},
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    monkeypatch.setattr(workspace.asyncio, 'sleep', sleep)
+    monkeypatch.setattr(workspace, 'resolve_git_identity', lambda: ('Fixture', 'fixture@example.test'))
+    materializer = workspace.OmnigentWorkspaceMaterializer(
+        command_runner=daemon, workspace_root=tmp_path, workspace_volume='agent_workspaces',
+    )
+    kwargs = dict(rel=Path('candidate'), source='https://github.com/owner/repo.git',
+                  branch=branch, token=b'', runtime_uid=os.getuid(), runtime_gid=os.getgid(), commit_sha=pin)
+    if failure in {'transient-once', 'partial-clone'}:
+        await materializer._clone_into_volume(**kwargs)
+        current = subprocess.check_output(['git', '-C', str(tmp_path / 'candidate'), 'rev-parse', 'HEAD'], text=True).strip()
+        assert current == pin
+        assert delays == [2]
+        assert len(handoffs) == 1
+        expected_fetches = 1 if failure == "partial-clone" else 2
+    else:
+        with pytest.raises(HarnessPlatformError, match=diagnostic):
+            await materializer._clone_into_volume(**kwargs)
+        assert not handoffs
+        assert delays == ([2, 4, 8] if failure == 'transient-exhausted' else [])
+        expected_fetches = 4 if failure == 'transient-exhausted' else 1
+    recorded = calls.read_text().splitlines()
+    assert recorded.count('clone') == (2 if failure == 'partial-clone' else 1)
+    assert recorded.count('fetch') == expected_fetches
+    assert (original_tip == pin) is pin_at_tip
+
+
+def test_resuming_clone_requires_admitted_pin():
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.host_services.workspace import build_daemon_git_clone_argv
+
+    with pytest.raises(HarnessPlatformError, match="resuming checkout requires an admitted repository pin"):
+        build_daemon_git_clone_argv(
+            volume="agent_workspaces", target_in_volume="owned/repo",
+            source="https://github.com/owner/repo.git", branch="main",
+            image="git-image", git_user_name="Test", git_user_email="test@example.test",
+            resume_pinned_checkout=True,
+        )
