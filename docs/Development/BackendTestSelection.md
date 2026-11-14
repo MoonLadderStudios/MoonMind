@@ -111,8 +111,13 @@ Each invocation also sets a faulthandler stack-dump threshold below its
 terminating per-test timeout (`-o faulthandler_timeout=`: 45s unit-fast,
 90s API/component and Temporal, 120s ordinary and 270s scheduled
 reliability). The dump only writes every thread's stack into the teed log,
-including from xdist workers; pytest-timeout still terminates the test. The
-`faulthandler_timeout = 300` in `pyproject.toml` is the local default only.
+including from xdist workers; pytest-timeout still terminates the test.
+The `faulthandler_timeout = 300` in `pyproject.toml` is the local default only.
+
+Host integration and reliability deadlines use `tools/gnu_timeout.sh` to select
+and report an installed GNU timeout (`gnutimeout`, `timeout`, or `gtimeout`).
+This preserves cooperative SIGINT teardown and the kill grace on hosts whose
+default timeout is uutils; no system-wide utility replacement is needed.
 
 The reliability dependency-start step (Compose pull, `up --wait` and address
 inspection) has a 5-minute native step bound; the 180-second readiness wait
