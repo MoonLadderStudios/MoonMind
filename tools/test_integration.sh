@@ -25,9 +25,16 @@ if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ $project_name_regex ]]; then
   exit 2
 fi
 
+budget="${MOONMIND_INTEGRATION_TIMEOUT:-0}"
+if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
+  echo "Error: MOONMIND_INTEGRATION_TIMEOUT must be a number of seconds." >&2
+  exit 2
+fi
+RUN_BUDGET_SECONDS=$((10#$budget))
+
 # Reject incompatible timeout tools before creating resources whose cleanup
 # would otherwise be skipped. Preserve the no-timeout host's optional bounds.
-if command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+if (( RUN_BUDGET_SECONDS > 0 )) || command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
   "$SCRIPT_DIR/gnu_timeout.sh" --version >/dev/null
 fi
 
@@ -172,12 +179,6 @@ pytest_args="tests/integration -m 'integration_ci' -p tools.ci.write_backend_mat
 if [[ "${MOONMIND_INTEGRATION_FAIL_FAST:-0}" == "1" ]]; then
   pytest_args+=" --maxfail=1"
 fi
-budget="${MOONMIND_INTEGRATION_TIMEOUT:-0}"
-if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
-  echo "Error: MOONMIND_INTEGRATION_TIMEOUT must be a number of seconds." >&2
-  exit 2
-fi
-RUN_BUDGET_SECONDS=$((10#$budget))
 RUN_STARTED_SECONDS=$SECONDS
 pipeline_compose=("${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR")
 

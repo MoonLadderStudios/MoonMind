@@ -439,3 +439,22 @@ def test_incompatible_timeout_fails_before_creating_resources(wrapper: Wrapper) 
     assert status == 125
     assert "GNU coreutils timeout is required" in output
     assert not wrapper.calls_path.exists()
+
+
+@pytest.mark.parametrize("budget", ["0", "2"])
+def test_missing_timeout_preserves_only_unbounded_host_mode(wrapper: Wrapper, budget) -> None:
+    import shutil
+
+    binaries = Path(wrapper.env["PATH"].split(os.pathsep)[0])
+    for name in ("bash", "dirname", "cp", "mkdir", "rm", "tee", "cat", "python3"):
+        (binaries / name).symlink_to(shutil.which(name))
+    wrapper.env["PATH"] = str(binaries)
+    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = budget
+    status, output, _ = wrapper.run()
+    if budget == "0":
+        assert status == 0, output
+        assert wrapper.downs() == 1
+    else:
+        assert status == 125
+        assert "GNU coreutils timeout is required" in output
+        assert not wrapper.calls_path.exists()
