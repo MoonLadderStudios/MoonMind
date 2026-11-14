@@ -1,4 +1,4 @@
-"""Lifecycle for the standalone controller (issue #4500, REQ-02).
+"""Host and out-of-process lifecycle for the deployment controller.
 
 The host CLI installs, starts, updates, and restores the controller. The
 controller never replaces itself: this CLI refuses to run inside the
@@ -250,7 +250,7 @@ def cmd_ensure(args, env) -> int:
             "The controller prerequisite requires its existing installation."
         )
     secret = _secret_path(state_dir).read_text(encoding="utf-8").strip()
-    url = args.controller_url or f"http://127.0.0.1:{identity['port']}"
+    url = args.controller_url or f"http://127.0.0.1:{identity.get('hostPort', identity['port'])}"
 
     def supported():
         try:
@@ -289,6 +289,17 @@ def cmd_ensure(args, env) -> int:
                 args.image,
             )
         )
+        if (_is_compose_owned(identity)
+                and not controller_image_supports_compose_ownership(image)):
+            # Rollback changes the application, not the safety of its updater.
+            if ready:
+                if prefer_requested:
+                    _print_refresh_receipt(refreshed=False, image=image)
+                return 0
+            retained = (load_controller_image(state_dir) or {}).get("pinned")
+            if not retained or not controller_image_supports_compose_ownership(retained):
+                raise RuntimeError("No safe Compose-owned controller is available for recovery")
+            image = retained
         if prefer_requested and _running_controller_image(identity["project"]) == image:
             _print_refresh_receipt(refreshed=False, image=image)
             return 0
@@ -322,6 +333,26 @@ def cmd_ensure(args, env) -> int:
             time.sleep(1)
 
 
+def controller_image_supports_compose_ownership(image: str, *, deadline=None) -> bool:
+    """An older updater must not remove a same-project controller on rollback."""
+    probe = (
+        "import sys; sys.path.insert(0,'/app/deploy/controller'); import server; "
+        "sys.exit(0 if 'compose-owned-controller' in "
+        "getattr(server,'CONTROLLER_CAPABILITIES',()) else 10)"
+    )
+    result = _run_capture(
+        ["docker", "run", "--rm", "--network=none", "--entrypoint", "python", image, "-c", probe],
+        **({"deadline": deadline} if deadline is not None else {}),
+    )
+    if result.returncode not in (0, 10):
+        raise RuntimeError("Compose-owned controller capability probe failed")
+    return result.returncode == 0
+
+
+def _is_compose_owned(identity: dict | None) -> bool:
+    return bool(identity and identity.get("targetProject") == identity.get("project"))
+
+
 def _retargeted_controller_lines(
     compose_file: Path, image: str, *, deadline=None
 ) -> list[str]:
@@ -332,6 +363,9 @@ def _retargeted_controller_lines(
     source changes, for a client that resolves the same host directory under
     its WSL drive mount.
     """
+    if (_is_compose_owned(load_identity(compose_file.parent))
+            and not controller_image_supports_compose_ownership(image, deadline=deadline)):
+        raise RuntimeError("Compose-owned controller cannot be replaced by an updater without safe self-exclusion")
     lines = _client_bind_lines(compose_file.read_text(encoding="utf-8").splitlines())
     image_lines = [
         index for index, line in enumerate(lines) if line.startswith("    image:")
@@ -677,6 +711,11 @@ def describe_installation(state_dir: Path, *, deadline=None) -> dict:
         "repo": str(repo),
         "recordedAt": int(time.time()),
     }
+    published = [p for p in controller.get("ports", [])
+                 if isinstance(p, dict) and int(p.get("target", 0)) == port]
+    if (len(published) == 1 and published[0].get("published")
+            and int(published[0]["published"]) != port):
+        identity["hostPort"] = int(published[0]["published"])
     links = []
     for name, membership in (controller.get("networks") or {}).items():
         if CONTROLLER_ALIAS in ((membership or {}).get("aliases") or ()):
@@ -857,6 +896,8 @@ def ensure_identity(
         "repo": str(repo),
         "recordedAt": int(time.time()),
     }
+    if existing and existing.get("hostPort") and port is None:
+        identity["hostPort"] = existing["hostPort"]
     network = target_network or (existing or {}).get("targetNetwork")
     if network:
         identity["targetNetwork"] = str(network)
@@ -1195,11 +1236,16 @@ def pinned_controller_image(state_dir: Path, requested: str) -> tuple[str, dict]
     try:
         digest = resolve_image_digest(requested)
     except ImageResolutionError as exc:
+        if _is_compose_owned(load_identity(state_dir)):
+            raise  # Preserve the last recoverable controller on failed refresh.
         print(f"WARNING: {exc}", flush=True)
         record = record_controller_image(state_dir, requested=requested, pinned=None)
         return requested, record
     repository, _, _ = split_image_reference(requested)
     pinned = f"{repository}@{digest}"
+    if (_is_compose_owned(load_identity(state_dir))
+            and not controller_image_supports_compose_ownership(pinned)):
+        raise ImageResolutionError("Compose-owned controller requires safe self-exclusion; keep the current updater for application rollback")
     record = record_controller_image(state_dir, requested=requested, pinned=pinned)
     return pinned, record
 
@@ -1261,8 +1307,11 @@ def render_compose_file(
     project: str | None = None,
     target_network: str | None = None,
     target_project: str | None = None,
+    state_source: str | None = None,
+    repo_source: str | None = None,
+    host_port: int | None = None,
 ) -> Path:
-    """Render the separate controller Compose project (REQ-02).
+    """Render the controller-only manifest for host repair and handoff.
 
     Bind sources are resolved through the mount adapter: a Windows drive
     path becomes its Desktop daemon-namespace path
@@ -1273,8 +1322,8 @@ def render_compose_file(
     project name is this deployment's stable identity (see
     :func:`project_for_repo`), never a shared global.
     """
-    state_src = mounts_mod.resolve_bind_source(str(state_dir))
-    repo_src = mounts_mod.resolve_bind_source(str(repo))
+    state_src = state_source or mounts_mod.resolve_bind_source(str(state_dir))
+    repo_src = repo_source or mounts_mod.resolve_bind_source(str(repo))
     project_name = project or project_for_repo(repo)
     process = ""
     if is_application_image(image):
@@ -1304,11 +1353,9 @@ def render_compose_file(
     name: {target_network}
     external: true
 """
-    content = f"""# MoonMind standalone deployment controller (issue #4500).
-# Separate Compose project: own durable state, restart policy, and direct
-# Docker socket mount. Its transport and endpoint survive target-project
-# shutdown. Managed by deploy/controller/bootstrap.py on the host; the
-# controller never replaces itself.
+    content = f"""# MoonMind deployment controller repair/handoff manifest.
+# Retains the recorded project/service identity and durable state.
+# Only an external owner replaces this service; app apply excludes it.
 name: {project_name}
 services:
   {CONTROLLER_SERVICE}:
@@ -1321,7 +1368,7 @@ services:
       MOONMIND_CONTROLLER_SECRET_FILE: /var/lib/moonmind-controller/secrets/controller-bearer
       MOONMIND_CONTROLLER_TARGET_REPO: "{repo}"
 {target_project_env}    ports:
-      - "127.0.0.1:{port}:{port}"
+      - "127.0.0.1:{host_port or port}:{port}"
     volumes:
       - {state_src}:/var/lib/moonmind-controller
       - {repo_src}:{repo}:ro
@@ -1329,7 +1376,7 @@ services:
     labels:
       moonmind.controller.managed: "true"
 {service_networks}{project_networks}"""
-    path.write_text(content, encoding="utf-8")
+    _write_controller_compose(path, content.splitlines())
     return path
 
 
@@ -1476,6 +1523,7 @@ def cmd_install(args, env) -> int:
         repo=repo,
         image=pinned,
         port=identity["port"],
+        host_port=identity.get("hostPort"),
         project=identity["project"],
         target_network=identity.get("targetNetwork"),
         target_project=identity.get("targetProject"),
@@ -1545,6 +1593,7 @@ def cmd_update(args, env) -> int:
             repo=repo,
             image=pinned,
             port=identity["port"],
+            host_port=identity.get("hostPort"),
             project=identity["project"],
             target_network=identity.get("targetNetwork"),
             target_project=identity.get("targetProject"),
@@ -1588,6 +1637,7 @@ def cmd_restore(args, env) -> int:
             repo=repo,
             image=pinned,
             port=identity["port"],
+            host_port=identity.get("hostPort"),
             project=identity["project"],
             target_network=identity.get("targetNetwork"),
             target_project=identity.get("targetProject"),

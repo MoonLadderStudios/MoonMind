@@ -1,7 +1,7 @@
 """Compose apply semantics owned by the controller (REQ-03).
 
 Semantic default: stage every image with `pull --policy always`, then apply
-with detached `up -d --pull never --no-build --remove-orphans` under bounded
+with detached `up -d --pull never --no-build` under bounded
 timeouts. Full `down` and force-recreate are explicit repair operations only,
 never automatic escalation. No volume/image pruning.
 """
@@ -139,8 +139,9 @@ def test_apply_uses_changed_service_semantic_default(controller_path):
     pull = next(cmd for cmd, _ in runner.commands if "pull" in cmd)
     up = next(cmd for cmd, _ in runner.commands if "up" in cmd)
     assert "--policy" in pull and "always" in pull
-    for flag in ("-d", "--pull", "never", "--no-build", "--remove-orphans"):
+    for flag in ("-d", "--pull", "never", "--no-build"):
         assert flag in up
+    assert "--remove-orphans" not in up
     assert "--wait" not in up
     assert "--build" not in up
     assert "--force-recreate" not in up
@@ -597,3 +598,70 @@ def test_subprocess_timeout_preserves_redacted_byte_output(
     if stdout or stderr:
         assert "helper stalled" in raised.value.output
     assert len(raised.value.output) <= 4000
+
+
+@pytest.mark.parametrize("dependency", ["direct", "transitive", "network", "ipc", "pid", "link", "volumes"])
+def test_apply_refuses_implicit_controller_recreation(controller_path, dependency):
+    import json
+    engine = load("engine")
+    definitions = {"api": {}, "init-db": {}, "controller": {}}
+    if dependency == "direct":
+        definitions["api"]["depends_on"] = {"controller": {"condition": "service_started"}}
+    elif dependency == "transitive":
+        definitions["api"]["depends_on"] = {"init-db": {}}
+        definitions["init-db"]["depends_on"] = {"controller": {}}
+    elif dependency in ("network", "ipc", "pid"):
+        definitions["api"]["network_mode" if dependency == "network" else dependency] = "service:controller"
+    elif dependency == "link":
+        definitions["api"]["links"] = ["controller:updates"]
+    else:
+        definitions["api"]["volumes_from"] = ["controller:ro"]
+
+    class Runner(FakeRunner):
+        def run(self, args, timeout_seconds):
+            result = super().run(args, timeout_seconds)
+            if "config" in args:
+                return {"exit": 0, "output": json.dumps({"services": definitions})}
+            return result
+
+    runner = Runner()
+    with pytest.raises(engine.SelfReplacementError):
+        engine.apply(runner, project="moonmind-test", project_dir="/repo",
+            compose_files=("docker-compose.yaml",), services=("api",),
+            images=("image",), own_service="controller")
+    assert not any("pull" in args or "up" in args for args, _ in runner.commands)
+
+
+def test_apply_preserves_application_dependencies_without_replacing_controller(controller_path):
+    import json
+    engine = load("engine")
+    class Runner(FakeRunner):
+        def run(self, args, timeout_seconds):
+            result = super().run(args, timeout_seconds)
+            if "config" in args:
+                return {"exit": 0, "output": json.dumps({"services": {
+                    "api": {"depends_on": {"init-db": {"condition": "service_completed_successfully"}}},
+                    "init-db": {}, "controller": {}}})}
+            return result
+    runner = Runner()
+    engine.apply(runner, project="moonmind-test", project_dir="/repo",
+        compose_files=("docker-compose.yaml",), services=("api",),
+        images=("image",), own_service="controller")
+    up = next(args for args, _ in runner.commands if "up" in args)
+    assert "--no-deps" not in up and "--remove-orphans" not in up
+    assert up[-1] == "api"
+
+
+@pytest.mark.parametrize("output", ["", "truncated", "{}", '{"services": []}'])
+def test_unobserved_dependencies_never_admit_application_mutation(controller_path, output):
+    engine = load("engine")
+    class Runner(FakeRunner):
+        def run(self, args, timeout_seconds):
+            super().run(args, timeout_seconds)
+            return {"exit": 0, "output": output}
+    runner = Runner()
+    with pytest.raises(engine.StageError, match="controller-dependencies"):
+        engine.apply(runner, project="moonmind-test", project_dir="/repo",
+            compose_files=("docker-compose.yaml",), services=("api",),
+            images=("image",), own_service="controller")
+    assert not any("pull" in args or "up" in args for args, _ in runner.commands)

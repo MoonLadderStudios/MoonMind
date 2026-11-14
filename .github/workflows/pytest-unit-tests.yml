@@ -1446,7 +1446,8 @@ jobs:
             tests/integration/host_update/test_journal_transition.py \
             tests/integration/host_update/test_controller_refresh.py \
             tests/integration/host_update/test_controller_handoff.py \
-            tests/integration/host_update/test_controller_compose_journeys.py -q
+            tests/integration/host_update/test_controller_compose_journeys.py \
+            tests/integration/host_update/test_controller_compose_lifecycle.py -q
       - name: Stop the job-owned OCI fixture registry
         if: always() && env.CANDIDATE_ARCHIVE != ''
         timeout-minutes: 1

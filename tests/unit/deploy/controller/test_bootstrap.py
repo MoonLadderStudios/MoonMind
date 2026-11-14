@@ -1173,8 +1173,11 @@ def test_only_trusted_deployment_services_join_the_controller_link(controller_pa
         for name, service in compose["services"].items()
         if bootstrap.TARGET_NETWORK_KEY in (service.get("networks") or [])
     )
-    assert attached == ["api", "temporal-worker-deployment-control"]
-    for name in attached:
+    assert attached == ["api", "controller", "temporal-worker-deployment-control"]
+    controller_environment = compose["services"]["controller"]["environment"]
+    assert controller_environment["MOONMIND_CONTROLLER_STATE_DIR"] == "/var/lib/moonmind-controller"
+    assert not any("CONTROLLER_SECRET" in item for item in controller_environment)
+    for name in ("api", "temporal-worker-deployment-control"):
         environment = compose["services"][name]["environment"]
         state_dirs = [
             item

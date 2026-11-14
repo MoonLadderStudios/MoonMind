@@ -91,6 +91,7 @@ def test_update_installs_latest_image_and_preserves_checkout(
             assert "docker-compose.yaml" in payload["target"]["composeFiles"]
             # The standalone controller owns execution over its own transport;
             # proxy substrate is never recreated through the update.
+            assert "controller" not in payload["target"]["services"]
             assert "docker-proxy" not in payload["target"]["services"]
             assert "sandbox-egress-proxy" not in payload["target"]["services"]
             assert request.get_header("Authorization") == "Bearer test-secret"
@@ -129,7 +130,7 @@ def test_update_installs_latest_image_and_preserves_checkout(
             output = json.dumps(
                 {
                     "name": "existing-project",
-                    "services": {"api": {}, "worker": {}, "docker-proxy": {}},
+                    "services": {"api": {}, "worker": {}, "controller": {}, "docker-proxy": {}},
                 }
             )
         else:
@@ -488,13 +489,14 @@ def test_explicit_controller_url_never_falls_back(tmp_path, monkeypatch):
     assert submitted_urls == ["http://127.0.0.1:9"]
 
 
-def test_bare_update_uses_installed_controller_port(tmp_path, monkeypatch):
+@pytest.mark.parametrize("host_port", [None, 32100])
+def test_bare_update_uses_installed_controller_port(tmp_path, monkeypatch, host_port):
     monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
     repo = tmp_path / "installed"
     repo.mkdir()
     _install_controller_secret(repo)
     (repo / "deploy/state/controller/controller-identity.json").write_text(
-        json.dumps({"project": "moonmind-controller-test", "port": 8533})
+        json.dumps({"project": "moonmind-controller-test", "port": 8533, **({"hostPort": host_port} if host_port else {})})
     )
     observed_urls = []
 
@@ -520,7 +522,7 @@ def test_bare_update_uses_installed_controller_port(tmp_path, monkeypatch):
         )
         == 0
     )
-    assert observed_urls == ["http://127.0.0.1:8533"] * 2
+    assert observed_urls == [f"http://127.0.0.1:{host_port or 8533}"] * 2
 
 
 def _install_controller_secret(repo, secret="test-secret"):

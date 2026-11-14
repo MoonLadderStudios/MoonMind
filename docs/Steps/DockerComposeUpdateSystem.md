@@ -11,7 +11,7 @@ Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Tempo
 
 ## 1. Purpose
 
-`./tools/update-moonmind.sh` deploys MoonMind for the first time, starts a stopped installation, or updates a running one. It does not require a healthy API or worker. Existing configuration and data retain their authority; a stopped stack is not treated as a new empty installation. The normal operation is image pull followed by changed-service recreation, with useful local progress and an honest result.
+`docker compose up -d` starts MoonMind and its deployment controller together. No separate controller installation is required. `docker compose down` stops both, retaining deployment state and data volumes. `./tools/update-moonmind.sh` deploys MoonMind for the first time, starts a stopped installation, or updates a running one. It does not require a healthy API or worker. Existing configuration and data retain their authority; a stopped stack is not treated as a new empty installation. The normal operation is image pull followed by changed-service recreation, with useful local progress and an honest result.
 
 ```text
 resolve and verify target -> persist deployment intent
@@ -33,7 +33,9 @@ One portable controller serves the host entrypoint and Settings Operations. It o
 
 **Target image:** The requested allowlisted MoonMind tag or digest. A tag is a selector; the controller resolves and records the concrete image that will run.
 
-**Controller:** The standalone deployment controller (`deploy/controller`), installed by `deploy/controller/bootstrap.py` as its own `moonmind-controller-<id>` Compose project, separate from the MoonMind stack. It owns its durable state, restart policy, direct Docker socket mount, and one authenticated local endpoint guarded by a deployment-owned secret, so it outlives the worker or API that submitted work and survives target-project shutdown. The host CLI installs, updates, and restores the controller; the controller does not replace itself. Agents receive neither sockets nor controller access.
+**Controller:** The `controller` service in the MoonMind Compose project. It keeps durable state and a deployment-owned bearer secret, has a direct Docker socket mount, and is reachable by trusted clients through the private `moonmind-controller` network alias. Its loopback host port is allocated by Docker unless `MOONMIND_CONTROLLER_HOST_PORT` is explicitly set. Startup derives paths and project identity from Docker's actual mounts and labels, not the invoking shell. Root-created startup metadata is assigned to the checkout owner so the ordinary host command remains usable; the bearer stays owner-readable only. It adopts an older standalone installation only after verifying its state bind and obtaining the shared stack lock; active old deployment work is not interrupted. Agents receive neither sockets nor controller access.
+
+Application updates exclude the controller and reject dependencies that would recreate it indirectly. An external, operation-scoped handoff replaces it using the same Compose project/service and durable journal. Rollback to an older application retains the current controller when the old updater lacks these protections. Broad orphan deletion is not part of routine updates; retired services require explicit, ownership-aware migration. Existing standalone installations remain repairable through the host entrypoint and are adopted on the next ordinary Compose startup.
 
 **Update record:** The local durable request, observed progress, attempts, and result for one operation. It survives application and controller restarts and distinguishes requested from confirmed state.
 
@@ -81,7 +83,7 @@ Stack state lists controller operations (requested/installed image, status, erro
 
 The API reaches the controller over the private `deployment-controller-network` using the bearer secret in the read-only deployment state mount (`deploy/state/controller`). Only the API (read-only) and the deployment-control worker see that state; the agent runtime sees an empty view, and the secret never reaches the browser.
 
-Without a controller, Settings Operations returns `deployment_controller_not_installed` (HTTP 503) and the host repair route `./tools/update-moonmind.sh`. Submitters require `/v1/healthz` capabilities `active-journal-transition` and `request-identity`: without request identity, a new `latest` update could return an earlier success without pulling. The API returns `deployment_controller_refresh_required` and the same repair route for an incompatible controller. Only the host entrypoint and deployment-control worker refresh it; the worker does so before submission. API submission needs neither Temporal nor the worker.
+Compose startup initializes and preserves the controller secret and installation identity before serving requests. A short unavailable period during startup or handoff is not an instruction to launch a competing updater. Without a controller, Settings Operations returns `deployment_controller_not_installed` (HTTP 503) and the host repair route `./tools/update-moonmind.sh`. Submitters require `/v1/healthz` capabilities `active-journal-transition` and `request-identity`: without request identity, a new `latest` update could return an earlier success without pulling. The API returns `deployment_controller_refresh_required` and the same repair route for an incompatible controller. Only the host entrypoint and deployment-control worker refresh it; the worker does so before submission. API submission needs neither Temporal nor the worker.
 
 The workflow's deployment observer heartbeats while reading its registry and awaiting the durable result. A 60-second heartbeat timeout detects a replaced observer independently of the longer command and release deadlines, and its retry reattaches with the same operation identity, reading an existing terminal receipt without repeating deployment.
 
@@ -135,7 +137,7 @@ Normal service replacement uses the equivalent of:
 
 ```bash
 docker compose pull --policy always
-docker compose up -d --pull never --no-build --remove-orphans
+docker compose up -d --pull never --no-build
 ```
 
 The controller saves the selected image's base Compose configuration before
