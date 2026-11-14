@@ -5,6 +5,7 @@ selection, credential acquisition, source compilation and checkpoint owners run.
 """
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -44,6 +45,32 @@ def _git(workspace, *args):
         ],
         text=True,
     ).strip()
+
+
+async def _run_mounted_repository_script(argv, destination, args):
+    uid, gid = map(int, argv[argv.index("--user") + 1].split(":"))
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "/bin/sh",
+            "-ceu",
+            argv[argv.index("-ceu") + 1],
+            "--",
+            ".",
+            *args[1:],
+        ],
+        # Docker mounts this subpath as /work, so the runtime
+        # never traverses private worker/staging ancestors. Enter
+        # it before dropping root CI's credentials to --user.
+        cwd=destination,
+        user=uid,
+        group=gid,
+        **({"extra_groups": []} if os.geteuid() == 0 else {}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result
 
 
 def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False):
@@ -118,20 +145,7 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
                 mount = argv[argv.index("--mount") + 1]
                 fields = dict(part.split("=", 1) for part in mount.split(",") if "=" in part)
                 destination = journey.worker_root / fields["volume-subpath"]
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    [
-                        "/bin/sh",
-                        "-ceu",
-                        argv[argv.index("-ceu") + 1],
-                        "--",
-                        str(destination),
-                        *args[1:],
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
+                result = await _run_mounted_repository_script(argv, destination, args)
                 return result.returncode, result.stdout, result.stderr
         return await original_runner(argv, input_bytes=input_bytes)
 
@@ -652,3 +666,78 @@ async def test_pinned_checkpoint_successor_cannot_gain_publication_authority(
     )
     assert native_journey.docker.create_count == 0
     assert not native_journey.server.session_ids
+
+
+@pytest.mark.parametrize("worker_uid", [0, 1000], ids=["root-worker", "runtime-worker"])
+async def test_repository_transport_honors_runtime_user_and_subpath(
+    monkeypatch, tmp_path, worker_uid
+):
+    mounted = tmp_path / "private-worker-parent" / "mounted-repository"
+    argv = [
+        "docker", "run", "--user", "1001:1002", "-ceu",
+        'git -C "$1" rev-parse HEAD', "--", "/work", "expected-pin",
+    ]
+    captured = {}
+
+    def run(command, **kwargs):
+        captured.update(command=command, **kwargs)
+        return subprocess.CompletedProcess(command, 0, "verified", "")
+
+    monkeypatch.setattr(os, "geteuid", lambda: worker_uid)
+    monkeypatch.setattr(subprocess, "run", run)
+    await _run_mounted_repository_script(argv, mounted, ["/work", "expected-pin"])
+    assert captured["command"][-2:] == [".", "expected-pin"]
+    assert captured["cwd"] == mounted
+    assert captured["user"] == 1001
+    assert captured["group"] == 1002
+    assert captured.get("extra_groups") == ([] if worker_uid == 0 else None)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires root worker to exercise runtime UID transition")
+async def test_root_repository_transport_reproduces_and_repairs_uid_mismatch(tmp_path):
+    from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
+
+    repository = tmp_path / "private-worker-parent" / "repository"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    (repository / "tracked.txt").write_text("Pinned input.\n")
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "-c", "user.name=Fixture", "-c",
+         "user.email=fixture@example.test", "commit", "-qm", "Pinned input"],
+        check=True,
+    )
+    pin = subprocess.check_output(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    subprocess.run(["chown", "-R", "1000:1000", str(repository)], check=True)
+    assert repository.stat().st_uid == 1000
+    observed = []
+
+    async def daemon(argv, input_bytes=None):
+        assert argv[argv.index("--user") + 1] == "1000:1000"
+        args = argv[argv.index("--") + 1 :]
+        script = argv[argv.index("-ceu") + 1]
+        # Reproduce the previous transport: root runs the runtime-owned
+        # checkout's actual production verifier without honoring --user.
+        previous = subprocess.run(
+            ["/bin/sh", "-ceu", script, "--", str(repository), *args[1:]],
+            capture_output=True, text=True, check=False,
+        )
+        assert previous.returncode != 0
+        assert "dubious ownership" in previous.stderr
+        identity_argv = list(argv)
+        identity_argv[identity_argv.index("-ceu") + 1] = "id -u"
+        identity = await _run_mounted_repository_script(identity_argv, repository, args)
+        assert identity.returncode == 0 and identity.stdout.strip() == "1000"
+        corrected = await _run_mounted_repository_script(argv, repository, args)
+        observed.append(corrected.returncode)
+        return corrected.returncode, corrected.stdout, corrected.stderr
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=daemon, workspace_root=tmp_path, workspace_volume="test-volume",
+    )
+    await materializer._verify_initial_repository_pin(
+        repository, pin, runtime_uid=1000, runtime_gid=1000,
+    )
+    assert observed == [0]
