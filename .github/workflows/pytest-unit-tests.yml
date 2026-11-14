@@ -678,7 +678,7 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          timeout --signal=INT --kill-after=30s "${step_budget}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- tests/integration/reliability \
+          tools/gnu_timeout.sh --signal=INT --kill-after=30s "${step_budget}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- tests/integration/reliability \
             -m "reliability_journey and not provider_verification and not requires_credentials" \
             -p tools.ci.write_backend_matrix_summary \
             --splits 4 --group "${{ matrix.shard }}" \
@@ -740,7 +740,7 @@ jobs:
               outcome="${{ steps.run-reliability.outcome }}"
               seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt"
               status_file="/tmp/backend-${{ matrix.suite }}-test-status.txt"
-              effective_command="timeout --signal=INT --kill-after=30s <step budget> python -m pytest tests/integration/reliability -m 'reliability_journey and not provider_verification and not requires_credentials' -p tools.ci.write_backend_matrix_summary --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule -o faulthandler_timeout=120 PR / 270 schedule --maxfail=1 (ordinary; omitted on schedule)"
+              effective_command="tools/gnu_timeout.sh --signal=INT --kill-after=30s <step budget> python -m pytest tests/integration/reliability -m 'reliability_journey and not provider_verification and not requires_credentials' -p tools.ci.write_backend_matrix_summary --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule -o faulthandler_timeout=120 PR / 270 schedule --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="150s PR / 300s schedule per-test"
               step_budget="600s PR / 660s schedule shell deadline (SIGINT, SIGKILL after 30s) within 12-min step and 20-min job" ;;
             *) selected="false"; outcome="skipped"; seconds_file=""; status_file=""; effective_command=""; pytest_timeout=""; step_budget="" ;;
