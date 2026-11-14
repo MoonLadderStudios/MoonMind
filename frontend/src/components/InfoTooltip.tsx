@@ -79,7 +79,11 @@ export function InfoTooltip({ label, panelId, title, className, children }: {
       if (!trigger.current || !panel.current) return;
       const anchor = trigger.current.getBoundingClientRect();
       const box = panel.current.getBoundingClientRect();
-      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      // A stable gutter can reserve space even when clientWidth still
+      // includes it (no rendered scrollbar). The root box excludes that gutter.
+      const root = document.documentElement;
+      const viewportWidth = Math.min(root.clientWidth || window.innerWidth,
+        root.getBoundingClientRect().width || window.innerWidth);
       const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
       const left = Math.max(8, Math.min(anchor.left + anchor.width / 2 - box.width / 2, viewportWidth - box.width - 8));
       // Prefer above the label so deliberate help does not cover the next

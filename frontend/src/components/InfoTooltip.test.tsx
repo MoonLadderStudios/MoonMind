@@ -51,9 +51,11 @@ it('keeps focus and touch activation immediate and dismisses keyboard help on Es
   expect(screen.queryByRole('tooltip')).toBeNull();
 });
 
-it('clamps help inside the usable viewport rather than under its scrollbar', () => {
-  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(375);
+it.each([375, 390])('clamps help inside rendered or reserved scrollbar space (clientWidth %s)', clientWidth => {
+  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(clientWidth);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this === document.documentElement) return { x: 0, y: 0, left: 0, top: 0, right: 375, bottom: 844,
+      width: 375, height: 844, toJSON() {} };
     const tooltip = this.getAttribute('role') === 'tooltip';
     return { x: 350, y: 400, left: 350, top: 400, right: 374, bottom: 424,
       width: tooltip ? 352 : 24, height: tooltip ? 60 : 24, toJSON() {} };
