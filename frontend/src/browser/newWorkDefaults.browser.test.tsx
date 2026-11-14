@@ -209,7 +209,7 @@ describe('new-work default control presentation', () => {
     await page.getByRole('button', { name: 'Reset Default Harness', exact: true }).click();
     await screen.findByText('Default Harness reset.');
     await waitFor(() => expect((screen.getByLabelText('Default Harness') as HTMLSelectElement).value).toBe('omnigent'));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset Default Harness', exact: true })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset Default Harness' })).toBeNull());
     // Reset removes an action above this row. Settle the new mobile scroll
     // position before sending the next native pointer interaction in WebKit.
     await captureVisibleRegion(
@@ -218,7 +218,7 @@ describe('new-work default control presentation', () => {
     );
     await page.getByRole('button', { name: 'Reset Default Provider Profile', exact: true }).click();
     await screen.findByText('Default Provider Profile reset.');
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset Default Provider Profile', exact: true })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset Default Provider Profile' })).toBeNull());
     for (const key of [runtimeKey, profileKey]) {
       expect(requests.some((request) => request.method === 'DELETE' && request.url === `/api/v1/settings/${key}`)).toBe(true);
     }
