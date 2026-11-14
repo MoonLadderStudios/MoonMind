@@ -1,5 +1,6 @@
 """Runtime usage, rollover and retained-history replay for MoonMind#5177."""
 
+import asyncio
 import hashlib
 import json
 from datetime import timedelta
@@ -36,7 +37,7 @@ class MeteredRuntime:
     async def run(self, tokens: int) -> dict[str, Any]:
         await workflow.sleep(timedelta(seconds=1))
         return AgentRunResult(
-            metadata={"usage": {"totalTokens": tokens, "costUsd": 0.25}}
+            metadata={"usage": {"totalTokens": tokens, "costUsd": 0.5}}
         ).model_dump(mode="json")
 
 
@@ -50,8 +51,33 @@ class ResourceBudgetJourney:
         run._remediation_loop_controller_node_id = "verify"
         spec = _spec(6)
         run._remediation_loop_spec = spec.model_copy(
-            update={"budgets": spec.budgets.model_copy(update={"token_budget": 100})}
+            update={
+                "budgets": spec.budgets.model_copy(
+                    update=(
+                        {"max_wall_clock_seconds": 2}
+                        if payload.get("wallClock")
+                        else {
+                            payload.get("dimension", "token_budget"): (
+                                1 if payload.get("dimension") == "cost_budget" else 100
+                            )
+                        }
+                    )
+                )
+            }
         )
+        # Exercise production admission before restore, including upgraded runs.
+        controller = {
+            "id": "verify",
+            "inputs": {"instructions": "Verify the saved candidate"},
+            "annotations": {
+                "remediationLoop": run._remediation_loop_spec.model_dump(
+                    by_alias=True, mode="json"
+                )
+            },
+        }
+        run._remediation_loop_continuation = payload.get("remediation_loop_continuation")
+        run._initialize_remediation_loop_controller(ordered_nodes=[controller])
+        run._remediation_loop_runtime = {"mode": "codex_cli"}
         run._remediation_loop_state = _state(attempts=1).model_copy(
             update={"phase": RemediationLoopPhase.VERIFICATION_RUNNING}
         )
@@ -65,9 +91,7 @@ class ResourceBudgetJourney:
 
         run._write_json_artifact = persist
         stage = payload.get("stage", 0)
-        nodes = [
-            {"id": "verify", "inputs": {"instructions": "Verify the saved candidate"}}
-        ]
+        nodes = [controller]
         if stage:
             run._remediation_loop_continuation = payload[
                 "remediation_loop_continuation"
@@ -116,8 +140,10 @@ class ResourceBudgetJourney:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wall_clock", [False, True])
 async def test_resource_receipts_cross_real_rollover_and_old_and_new_histories_replay(
     monkeypatch,
+    wall_clock,
 ):
     histories = []
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -125,6 +151,10 @@ async def test_resource_receipts_cross_real_rollover_and_old_and_new_histories_r
             selected = {"run-materialize-evidence-retry-v1"}
             if enabled:
                 selected.add(_PATCH)
+                if wall_clock:
+                    selected.add(
+                        run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH
+                    )
             monkeypatch.setattr(
                 run_module.workflow,
                 "patched",
@@ -140,7 +170,10 @@ async def test_resource_receipts_cross_real_rollover_and_old_and_new_histories_r
             ):
                 handle = await env.client.start_workflow(
                     ResourceBudgetJourney.run,
-                    {"originalEvidenceRef": "artifact://finding/original"},
+                    {
+                        "originalEvidenceRef": "artifact://finding/original",
+                        "wallClock": wall_clock,
+                    },
                     id=name,
                     task_queue=name,
                 )
@@ -150,9 +183,10 @@ async def test_resource_receipts_cross_real_rollover_and_old_and_new_histories_r
                 assert result["state"]["continueAsNewCount"] == 1
                 assert result["originalEvidenceRef"] == "artifact://finding/original"
                 if enabled:
-                    assert (
-                        result["state"]["continuationReason"]
-                        == "token_budget_exhausted"
+                    assert result["state"]["continuationReason"] == (
+                        "wall_clock_budget_exhausted"
+                        if wall_clock
+                        else "token_budget_exhausted"
                     )
                     assert (
                         sum(
@@ -181,8 +215,10 @@ async def test_resource_receipts_cross_real_rollover_and_old_and_new_histories_r
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["provider_budget", "max_wall_clock_seconds"])
 async def test_interrupted_runtime_exhaustion_prevents_successor_admission_and_replays(
     monkeypatch,
+    dimension,
 ):
     from moonmind.workflows.temporal.data_converter import (
         MOONMIND_TEMPORAL_DATA_CONVERTER,
@@ -198,7 +234,7 @@ async def test_interrupted_runtime_exhaustion_prevents_successor_admission_and_r
         payload = json.loads(await original_plan(*args, **kwargs))
         spec = _spec(6)
         spec = spec.model_copy(
-            update={"budgets": spec.budgets.model_copy(update={"provider_budget": 1})}
+            update={"budgets": spec.budgets.model_copy(update={dimension: 1})}
         )
         payload["nodes"][0]["inputs"]["annotations"] = {
             "remediationLoop": spec.model_dump(by_alias=True, mode="json")
@@ -217,6 +253,8 @@ async def test_interrupted_runtime_exhaustion_prevents_successor_admission_and_r
     patches = interrupted._CURRENT_PATCHES | {
         _PATCH,
         run_module.RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH,
+        run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH,
+        run_module.RUN_LOGICAL_STEP_EXECUTION_BUDGET_PATCH,
     }
     interrupted._enable(monkeypatch, patches)
     interrupted._ADMISSION_RESULT.clear()
@@ -243,12 +281,237 @@ async def test_interrupted_runtime_exhaustion_prevents_successor_admission_and_r
                 id="exhausted-interruption",
                 task_queue="exhausted-interruption",
             )
-            assert await handle.result() == 1
+            assert await asyncio.wait_for(handle.result(), timeout=15) == 1
             assert len(interrupted._CHILD_REQUESTS) == 1
             assert not interrupted._ADMISSIONS
             history = await handle.fetch_history()
+            reports = []
+            for event in history.events:
+                if event.HasField("activity_task_scheduled_event_attributes"):
+                    attrs = event.activity_task_scheduled_event_attributes
+                    if attrs.activity_type.name == "resource-budget.record":
+                        reports.extend(
+                            await env.client.data_converter.decode(attrs.input.payloads)
+                        )
+            expected_reason = (
+                "wall_clock_budget_exhausted"
+                if dimension == "max_wall_clock_seconds"
+                else "provider_budget_exhausted"
+            )
+            assert any(
+                report.get("payload", {}).get("reason") == expected_reason
+                for report in reports
+            )
         await Replayer(
             workflows=[interrupted._InterruptedStepFixture],
             workflow_runner=UnsandboxedWorkflowRunner(),
             data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
         ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["timeout", "process_loss"])
+async def test_absolute_loop_deadline_bounds_active_registered_operation_and_replays(
+    monkeypatch, mode
+):
+    from tests.unit.workflows.temporal.test_omnigent_budget_boundaries import (
+        test_registered_session_crosses_deadline_without_new_allowance,
+    )
+
+    await test_registered_session_crosses_deadline_without_new_allowance(
+        "omnigent.read_event_batch", mode, monkeypatch, absolute_deadline=True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancel,after_slot", [(False, False), (True, False), (False, True)]
+)
+async def test_registered_agent_pause_expires_without_resume_and_replays(
+    monkeypatch, cancel, after_slot
+):
+    from contextlib import AsyncExitStack
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        ExecutionBudgetContext,
+        resolve_execution_budget,
+    )
+    from moonmind.workflows.temporal.workflows import agent_run
+    from tests.integration.services.temporal.workflows import test_agent_run as harness
+
+    original_init = agent_run.MoonMindAgentRun.__init__
+
+    def paused_init(self):
+        original_init(self)
+        self._paused = not after_slot
+
+    paused_at_grant = []
+    original_granted = agent_run.MoonMindAgentRun._signal_parent_granted_profile
+
+    async def pause_after_grant(self, parent_info, runtime_id):
+        paused_at_grant.append(True)
+        self._paused = True
+        await original_granted(self, parent_info, runtime_id)
+
+    if after_slot:
+        monkeypatch.setattr(
+            agent_run.MoonMindAgentRun,
+            "_signal_parent_granted_profile",
+            pause_after_grant,
+        )
+    monkeypatch.setattr(agent_run.MoonMindAgentRun, "__init__", paused_init)
+    monkeypatch.setattr(harness, "_managed_launch_requests", [])
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        now = await env.get_current_time()
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            correlationId="pause",
+            idempotencyKey="pause",
+            executionProfileRef="default-managed" if after_slot else None,
+            executionBudget=ExecutionBudgetContext(
+                budget=resolve_execution_budget(
+                    timeout_policy={"timeout_seconds": 3600}
+                ),
+                logicalStepId="verify",
+                attemptId="pause",
+                admittedAt=now,
+                executionDeadline=now + timedelta(seconds=10),
+            ),
+        )
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue="pause-resource-budget",
+                    workflows=[
+                        agent_run.MoonMindAgentRun,
+                        harness.MockProviderProfileManager,
+                    ],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        harness.mock_provider_profile_list,
+                        harness.mock_provider_profile_ensure_manager,
+                        harness.mock_provider_profile_reset_manager,
+                        harness.mock_provider_profile_manager_state,
+                    ],
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.agent_runtime",
+                    activities=[
+                        harness.mock_agent_runtime_build_launch_context,
+                        harness.mock_agent_runtime_launch,
+                        harness.mock_agent_runtime_status,
+                        harness.mock_publish_artifacts,
+                    ],
+                )
+            )
+            if after_slot:
+                await env.client.start_workflow(
+                    harness.MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id="provider-profile-manager:claude_code",
+                    task_queue="pause-resource-budget",
+                )
+            handle = await env.client.start_workflow(
+                agent_run.MoonMindAgentRun.run,
+                request,
+                id="pause-resource-budget",
+                task_queue="pause-resource-budget",
+            )
+            if cancel:
+                from temporalio.client import WorkflowFailureError
+                from temporalio.exceptions import CancelledError
+
+                await env.sleep(1)
+                await handle.cancel()
+                with pytest.raises(WorkflowFailureError) as caught:
+                    await asyncio.wait_for(handle.result(), timeout=30)
+                assert isinstance(caught.value.cause, CancelledError)
+            else:
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                assert result.metadata["reason"] == "timed_out"
+            history = await handle.fetch_history()
+        assert not harness._managed_launch_requests
+        assert bool(paused_at_grant) is after_slot
+        await Replayer(
+            workflows=[agent_run.MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["token_budget", "cost_budget"])
+async def test_legacy_admitted_limits_survive_upgraded_continue_as_new(
+    monkeypatch, dimension
+):
+    selected = {_PATCH, "run-materialize-evidence-retry-v1"}
+
+    def upgraded_patch(patch):
+        # The first run models the installed old worker; the continued run
+        # activates the new admission policy on its new history.
+        if patch == run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH:
+            return bool(workflow.info().continued_run_id) and _REAL_PATCHED(patch)
+        return patch in selected and _REAL_PATCHED(patch)
+
+    monkeypatch.setattr(run_module.workflow, "patched", upgraded_patch)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="upgrade-limits",
+            workflows=[ResourceBudgetJourney, MeteredRuntime],
+            activities=[record],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            workflow_failure_exception_types=[ValueError],
+        ):
+            handle = await env.client.start_workflow(
+                ResourceBudgetJourney.run,
+                {
+                    "originalEvidenceRef": "artifact://finding/original",
+                    "dimension": dimension,
+                },
+                id="upgrade-limits",
+                task_queue="upgrade-limits",
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=30)
+            assert result["admitted"] is False
+            state = result["state"]
+            assert state["continuationReason"] == dimension + "_exhausted"
+            assert state["workspaceHeadRef"] == "artifact://workspace/C1"
+            assert state["continueAsNewCount"] == 1
+            assert state["consumedBudgets"]["attempts"] == 1
+            assert result["originalEvidenceRef"] == "artifact://finding/original"
+            receipts = state["resourceUsage"]["executions"].values()
+            assert sum(receipt["tokens"] for receipt in receipts) == 100
+            histories = [
+                await env.client.get_workflow_handle(
+                    "upgrade-limits", run_id=handle.first_execution_run_id
+                ).fetch_history(),
+                await env.client.get_workflow_handle("upgrade-limits").fetch_history(),
+            ]
+        # Replay both retained old admission and upgraded continuation with the
+        # current implementation. Temporal patch markers choose recorded policy.
+        monkeypatch.setattr(
+            run_module.workflow,
+            "patched",
+            lambda patch: (
+                patch
+                in selected | {run_module.RUN_REMEDIATION_ACTIVE_RESOURCE_DEADLINE_PATCH}
+                and _REAL_PATCHED(patch)
+            ),
+        )
+        replayer = Replayer(
+            workflows=[ResourceBudgetJourney],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        for history in histories:
+            await replayer.replay_workflow(history)

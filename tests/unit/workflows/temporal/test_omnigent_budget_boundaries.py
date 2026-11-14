@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
@@ -172,7 +172,7 @@ class SessionActivities:
 )
 @pytest.mark.parametrize("mode", ["timeout", "lost_ack", "process_loss"])
 async def test_registered_session_crosses_deadline_without_new_allowance(
-    target, mode, monkeypatch
+    target, mode, monkeypatch, absolute_deadline=False
 ):
     monkeypatch.setattr(module, "SNAPSHOT_INTERVAL_SECONDS", 1)
     monkeypatch.setattr(
@@ -183,14 +183,15 @@ async def test_registered_session_crosses_deadline_without_new_allowance(
         budget = ExecutionBudgetContext(
             budget=resolve_execution_budget(
                 timeout_policy={
-                    "timeout_seconds": 3,
-                    "max_timeout_seconds": 3,
+                    "timeout_seconds": 3600 if absolute_deadline else 3,
+                    "max_timeout_seconds": 3600 if absolute_deadline else 3,
                     "execution_budget_mode": "flat",
                 }
             ),
             logicalStepId="logical-step",
             attemptId="attempt",
             admittedAt=now,
+            executionDeadline=now + timedelta(seconds=3) if absolute_deadline else None,
         )
         state = SessionActivities(target, mode, now)
         groups = defaultdict(list)
@@ -300,3 +301,13 @@ async def test_registered_session_crosses_deadline_without_new_allowance(
                 "omnigent.submit_turn",
                 "omnigent.ensure_host",
             }
+
+        if absolute_deadline:
+            assert all(
+                value.execution_deadline == budget.execution_deadline
+                for value in contexts
+            )
+            await Replayer(
+                workflows=[module.MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ).replay_workflow(history)

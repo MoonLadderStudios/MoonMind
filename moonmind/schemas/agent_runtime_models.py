@@ -186,11 +186,20 @@ class ExecutionBudgetContext(BaseModel):
     suspended_at: datetime | None = Field(None, alias="suspendedAt")
     last_progress_seconds: float | None = Field(None, alias="lastProgressSeconds", ge=0)
     recovery_count: int = Field(0, alias="recoveryCount", ge=0)
+    # Aggregate wall-clock authority is independent of productive-time pauses.
+    # Omit absent deadlines to preserve serialized commands in retained histories.
+    execution_deadline: datetime | None = Field(
+        None, alias="executionDeadline", exclude_if=lambda value: value is None
+    )
     finishing_started_at: datetime | None = Field(None, alias="finishingStartedAt")
     finishing_deadline: datetime | None = Field(None, alias="finishingDeadline")
 
     @field_validator(
-        "admitted_at", "suspended_at", "finishing_started_at", "finishing_deadline"
+        "admitted_at",
+        "suspended_at",
+        "finishing_started_at",
+        "finishing_deadline",
+        "execution_deadline",
     )
     @classmethod
     def _utc_clock(cls, value: datetime | None) -> datetime | None:
@@ -213,11 +222,12 @@ class ExecutionBudgetContext(BaseModel):
             return max(0.0, (self.finishing_deadline - now).total_seconds())
         if self.finishing_deadline is not None:
             return 0.0
-        return max(
-            0.0,
-            self.budget.deadline_seconds(self.last_progress_seconds)
-            - self.elapsed_seconds(now),
-        )
+        remaining = self.budget.deadline_seconds(
+            self.last_progress_seconds
+        ) - self.elapsed_seconds(now)
+        if self.execution_deadline is not None:
+            remaining = min(remaining, (self.execution_deadline - now).total_seconds())
+        return max(0.0, remaining)
 
     def effective_deadline(self, now: datetime) -> datetime:
         return now + timedelta(seconds=self.remaining_seconds(now))

@@ -495,6 +495,7 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
         *,
         monotonic_started_at,
         idle_progress_seconds,
+        execution_deadline_monotonic=None,
         no_output_callback=None,
         progress_snapshot=None,
         on_budget_extended=None,
@@ -1131,7 +1132,10 @@ async def test_wedged_process_is_still_killed_at_its_base_budget(supervisor_env)
 
 
 @pytest.mark.asyncio
-async def test_successor_process_inherits_consumed_logical_budget(supervisor_env):
+@pytest.mark.parametrize("aggregate_deadline", [False, True])
+async def test_successor_process_inherits_consumed_logical_budget(
+    supervisor_env, aggregate_deadline
+):
     """A restarted managed process must not outlive its Step allowance (#4986)."""
     store, _, _, supervisor = supervisor_env
     _make_record(store, "run-successor-budget", "launching")
@@ -1141,7 +1145,10 @@ async def test_successor_process_inherits_consumed_logical_budget(supervisor_env
         logicalStepId="step",
         attemptId="attempt-2",
         admittedAt=datetime.now(UTC),
-        consumedSeconds=9,
+        consumedSeconds=0 if aggregate_deadline else 9,
+        executionDeadline=(
+            datetime.now(UTC) + timedelta(seconds=1) if aggregate_deadline else None
+        ),
         recoveryCount=1,
     )
     process = await asyncio.create_subprocess_exec(
@@ -1153,11 +1160,14 @@ async def test_successor_process_inherits_consumed_logical_budget(supervisor_env
     )
     started = asyncio.get_running_loop().time()
     try:
-        record = await supervisor.supervise(
-            run_id="run-successor-budget",
-            process=process,
-            budget=budget,
-            execution_budget=context,
+        record = await asyncio.wait_for(
+            supervisor.supervise(
+                run_id="run-successor-budget",
+                process=process,
+                budget=budget,
+                execution_budget=context,
+            ),
+            timeout=4,
         )
         assert record.status == "timed_out"
         assert process.returncode is not None
