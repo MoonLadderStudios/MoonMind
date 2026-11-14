@@ -308,8 +308,20 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
             ).stdout.strip()
 
         def resumed(operation_id):
+            # Retained operation records stay private/root-owned; only the
+            # bootstrap credential is shared with the ordinary host operator.
             operation = json.loads(
-                (state / "operations" / f"{operation_id}.json").read_text()
+                command(
+                    "docker",
+                    "exec",
+                    current_container(),
+                    "python",
+                    "-c",
+                    "import json,os,pathlib,sys; p=pathlib.Path(os.environ['MOONMIND_CONTROLLER_STATE_DIR']); "
+                    "o=json.loads((p/'operations'/f'{sys.argv[1]}.json').read_text()); "
+                    "print(json.dumps({'attempts':len(o['attempts']),'status':o['status']}))",
+                    operation_id,
+                ).stdout
             )
             return bool(operation["attempts"]) and operation["status"] not in (
                 "pending",
