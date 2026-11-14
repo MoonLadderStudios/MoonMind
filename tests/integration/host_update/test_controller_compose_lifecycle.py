@@ -146,6 +146,8 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
                 if predicate():
                     return
             except (OSError, ValueError, AssertionError):
+                # Replacement temporarily removes the container/health endpoint;
+                # retry observation until the bounded lifecycle deadline.
                 pass
             time.sleep(1)
         pytest.fail("Controller lifecycle condition did not converge")

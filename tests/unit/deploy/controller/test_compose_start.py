@@ -151,7 +151,7 @@ def test_wrong_state_owner_is_not_stopped(controller_path, tmp_path):
             return "foreign"
         if args[0] == "inspect":
             return json.dumps([other])
-        pytest.fail("must not stop an unowned container")
+        raise AssertionError("must not stop an unowned container")
 
     with pytest.raises(RuntimeError, match="state bind"):
         start.initialize(state, snapshot(repo, state), docker=docker)
@@ -270,7 +270,7 @@ def test_live_owner_with_open_work_is_not_interrupted(controller_path, tmp_path)
             return "legacy-id"
         if args[0] == "inspect":
             return json.dumps([old])
-        pytest.fail("active owner must not be stopped")
+        raise AssertionError("active owner must not be stopped")
 
     with pytest.raises(RuntimeError, match="open deployment work"):
         start.initialize(state, snapshot(repo, state), docker=docker)
