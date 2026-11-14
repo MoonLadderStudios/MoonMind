@@ -141,16 +141,26 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
 
     def eventually(predicate, timeout=90):
         deadline = time.monotonic() + timeout
+        last_observation = None
         while time.monotonic() < deadline:
             try:
-                if predicate():
+                last_observation = predicate()
+                if last_observation:
                     return
-            except (OSError, ValueError, AssertionError):
+            except (OSError, ValueError, AssertionError) as exc:
                 # Replacement temporarily removes the container/health endpoint;
                 # retry observation until the bounded lifecycle deadline.
-                pass
+                last_observation = str(exc)
             time.sleep(1)
-        pytest.fail("Controller lifecycle condition did not converge")
+        # Capture before finally removes the test-owned containers. Project
+        # state and server logs exclude container environment/bearer contents.
+        logs = command(
+            *compose, "logs", "--no-color", "--tail", "60", "controller", check=False
+        )
+        pytest.fail(
+            f"Controller lifecycle condition did not converge; last observation: {last_observation!r}\n"
+            f"Controller logs:\n{logs.stdout}{logs.stderr}"
+        )
 
     def open_operation(operation_id):
         command(
@@ -321,20 +331,41 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
                     "-c",
                     "import json,os,pathlib,sys; p=pathlib.Path(os.environ['MOONMIND_CONTROLLER_STATE_DIR']); "
                     "o=json.loads((p/'operations'/f'{sys.argv[1]}.json').read_text()); "
-                    "print(json.dumps({'attempts':len(o['attempts']),'status':o['status']}))",
+                    "print(json.dumps({'attempts':o['attempts'],'status':o['status']}))",
                     operation_id,
                 ).stdout
             )
-            return bool(operation["attempts"]) and operation["status"] not in (
-                "pending",
-                "staged",
-                "applying",
+            # This lifecycle-only operation deliberately omits a deployment
+            # target, so restart recovery must reach and record preflight
+            # refusal, not deploy the full application. Refusal retains staged
+            # status until its attempt budget is exhausted. This proves the
+            # replacement invoked recovery, not end-to-end application update
+            # completion; separate application recovery journeys cover that.
+            assert operation["attempts"], f"No recovery attempt yet: {operation!r}"
+            assert (
+                operation["attempts"][-1]["error"] == "target configuration is invalid"
+            ), operation
+            assert operation["status"] == "staged", operation
+            return True
+
+        def finish_test_operation(operation_id):
+            command(
+                "docker",
+                "exec",
+                current_container(),
+                "python",
+                "-c",
+                "import os,sys; sys.path.insert(0,'/app/deploy/controller'); import record; "
+                "s=record.OperationStore(os.environ['MOONMIND_CONTROLLER_STATE_DIR']); "
+                "s.supersede(sys.argv[1],reason='test-owned lifecycle probe completed')",
+                operation_id,
             )
 
         open_operation("same-project-handoff")
         result = handoff("same-project-handoff", images["replacement"])
         assert result == {"status": "handed-off", "image": images["replacement"]}
         eventually(lambda: resumed("same-project-handoff"))
+        finish_test_operation("same-project-handoff")
         eventually(
             lambda: "compose-owned-controller" in client_health()["capabilities"]
         )
@@ -350,6 +381,7 @@ def test_compose_owned_controller_first_start_dns_and_down_up(tmp_path):
         assert result["status"] == "unavailable"
         assert "previous controller restored" in result["reason"]
         eventually(lambda: resumed("same-project-restore"))
+        finish_test_operation("same-project-restore")
         eventually(
             lambda: "compose-owned-controller" in client_health()["capabilities"]
         )

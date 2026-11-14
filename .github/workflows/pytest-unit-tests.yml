@@ -1258,9 +1258,9 @@ jobs:
       contents: read
       packages: read
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
-    # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
+    # 2m disk diagnostics + 30m controller tests + 6m reporting + 4m post-action reserve.
     # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: 85
+    timeout-minutes: 90
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.installed_matrix) }}
