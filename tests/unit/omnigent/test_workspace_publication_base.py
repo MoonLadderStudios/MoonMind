@@ -582,7 +582,7 @@ async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
         assert input_bytes is None, "must reuse checkout"
         assert argv[:6] == ["docker", "run", "--rm", "--network", "none", "--read-only"]
         mount = dict(
-            part.split("=", 1)
+            part.split("=", 1) if "=" in part else (part, True)
             for part in argv[argv.index("--mount") + 1].split(",")
         )
         assert mount["type"] == "volume"
@@ -590,11 +590,11 @@ async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
         assert mount["volume-subpath"] == workspace.relative_to(tmp_path).as_posix()
         assert mount["dst"] == "/work"
         positional = argv[argv.index("--") + 1 :]
-        assert positional == [
-            mount["dst"],
-            "candidate",
-            "retain",
-        ]
+        if mount.get("readonly"):
+            # Execute the read-only admitted-pin verifier, not a success stub.
+            assert positional == [mount["dst"], verified_sha]
+        else:
+            assert positional == [mount["dst"], "candidate", "retain"]
         completed = subprocess.run(
             [
                 "/bin/sh",

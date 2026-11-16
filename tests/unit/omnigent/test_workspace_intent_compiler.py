@@ -348,3 +348,28 @@ def test_conflicting_side_effect_projections_remain_rejected() -> None:
 
     with pytest.raises(WorkspaceIntentCompilationError, match="conflicts across"):
         authored_repository_mutation_required(request)
+
+
+@pytest.mark.parametrize("placement", ["source", "workspace"])
+def test_full_repository_pin_is_immutable_workspace_intent(placement):
+    from moonmind.omnigent.workspace_intent import (
+        authored_checkout_commit, authored_revision_kind,
+    )
+
+    target = {
+        "provider": "git",
+        "repository": {"name": "acme/widgets"},
+        "branch": {"name": "main"},
+        "revision": {"kind": "git_commit", "commitSha": "c" * 40},
+    }
+    spec = {"workspaceLocator": _locator(), "workspaceSource": {"kind": "repository"}}
+    if placement == "source":
+        spec["workspaceSource"]["repositoryTarget"] = target
+    else:
+        spec["repositoryTarget"] = target
+    request = _request(workspace_spec=spec, parameters={"publishMode": "none"})
+    assert authored_checkout_commit(request) == "c" * 40
+    assert authored_revision_kind(request) == "git_commit"
+    intent = compile_workspace_intent(request, workflow_id=_WORKFLOW_ID, step_execution_id=_STEP_EXECUTION_ID)
+    assert intent.checkout_commit == "c" * 40
+    assert intent.remote_tip_expectation == {"kind": "read_only"}

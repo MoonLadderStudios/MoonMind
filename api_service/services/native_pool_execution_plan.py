@@ -534,6 +534,16 @@ async def prepare_selected_pool_plan(
                 "disposition": "native",
                 "reason": "recorded_native_context_requires_its_current_adapter",
             }
+        from moonmind.omnigent.workspace_sources import has_repository_workspace_revision
+
+        has_revision = has_repository_workspace_revision(request.workspace_spec)
+        # A controller save changes the source kind, not the authored pin's
+        # read-only publication contract. Check all successor source shapes.
+        if has_revision and str(request.parameters.get("publishMode") or "none").lower() != "none":
+            return {
+                "disposition": "native",
+                "reason": "workspace_requires_its_recorded_native_owner",
+            }
         source = request.workspace_spec.get("workspaceSource") or {}
         locator = request.workspace_spec.get("workspaceLocator") or {}
         repository_handoff = (
@@ -543,9 +553,23 @@ async def prepare_selected_pool_plan(
         if repository_handoff:
             from moonmind.omnigent.repository_sources import normalize_repository_source
             from moonmind.omnigent.workspace_sources import (
-                compile_workspace_source, has_repository_workspace_revision,
+                WorkspaceSourceError, compile_workspace_source,
+                repository_workspace_commit_sha,
             )
 
+            # Only the patched controller can migrate the read-only full-SHA
+            # contract. Retained controllers keep their native owner.
+            revision_handoff = not has_revision
+            if has_revision and request.pinned_repository_workspace_handoff:
+                try:
+                    revision_handoff = bool(repository_workspace_commit_sha(request.workspace_spec))
+                except WorkspaceSourceError:
+                    revision_handoff = False
+            if not revision_handoff:
+                return {
+                    "disposition": "native",
+                    "reason": "workspace_requires_its_recorded_native_owner",
+                }
             compiled_source = compile_workspace_source(request.workspace_spec)
             target = (
                 source.get("repositoryTarget")
@@ -558,7 +582,7 @@ async def prepare_selected_pool_plan(
             repository_handoff = (
                 isinstance(target, Mapping)
                 and target.get("provider") in {None, "git"}
-                and not has_repository_workspace_revision(request.workspace_spec)
+                and revision_handoff
                 and normalize_repository_source(compiled_source.repository_ref or "")[1]
                 == "github_https"
             )
@@ -584,6 +608,14 @@ async def prepare_selected_pool_plan(
             return {
                 "disposition": "native",
                 "reason": "retained_workflow_lacks_original_input_snapshot",
+            }
+        if (
+            has_revision
+            and str((canonical.parameters or {}).get("publishMode") or "none").lower() != "none"
+        ):
+            return {
+                "disposition": "native",
+                "reason": "workspace_requires_its_recorded_native_owner",
             }
         if (canonical.parameters or {}).get("agentProfileSnapshot"):
             return {
@@ -617,6 +649,14 @@ async def prepare_selected_pool_plan(
             ManagedRuntimeLauncher._apply_resolved_tier_policy(
                 request=selected, profile=profile, strategy=None
             )
+        if (
+            has_revision
+            and str(selected.parameters.get("publishMode") or "none").lower() != "none"
+        ):
+            return {
+                "disposition": "native",
+                "reason": "workspace_requires_its_recorded_native_owner",
+            }
         resolution = (
             (selected.parameters.get("metadata") or {}).get("moonmind") or {}
         ).get("modelEffortResolution") or {}
