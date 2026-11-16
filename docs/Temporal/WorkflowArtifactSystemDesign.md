@@ -812,12 +812,16 @@ targets. Trusted caller payloads use bounded single PUTs; public upload limits a
 standalone multipart behavior remain unchanged.
 
 Known database connection failures return `artifact_authority_unavailable`;
-storage timeouts return `artifact_storage_unavailable` (HTTP 503, `Retry-After: 5`).
-Storage credential rejection is `artifact_storage_forbidden` (502); confirmed
-object absence is `artifact_bytes_missing` (409). Reader denial, quarantine,
-expiry and integrity checks retain their own semantics. Failures never change
-artifact availability or grants. Activities retry unavailability within existing
-budgets; permanent artifact errors stop. Lazy downloads open before response
+storage timeouts return `artifact_storage_unavailable`, and a full disk (MinIO
+`XMinioStorageFull`, HTTP 507) returns `artifact_storage_full` (both HTTP 503,
+`Retry-After: 5`). Storage credential rejection is `artifact_storage_forbidden`
+(502); confirmed object absence is `artifact_bytes_missing` (409). Reader
+denial, quarantine, expiry and integrity checks retain their own semantics.
+Failures never change artifact availability or grants. Activities retry
+unavailability within existing budgets; `artifact.create`,
+`artifact.write_complete` and `workspace.capture_checkpoint` keep retrying for
+75 minutes, because the shared disk frees space only at the next hourly storage
+cleanup. Permanent artifact errors stop. Lazy downloads open before response
 headers; later transport failures terminate the stream and retain their cause.
 Unreadable publication decisions stop reconciliation rather than authorize
 replacement publication.

@@ -3743,6 +3743,132 @@ async def test_stream_failure_commits_every_delivered_event(
     assert missing_evidence == []
 
 
+def _full_disk_journal_writes(monkeypatch, gateway, *, failures: int | None):
+    """Fail live journal writes the way MinIO does once its disk is full."""
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+
+    outage = {"remaining": failures, "failed": 0}
+    write_text = gateway.write_text
+
+    async def full_disk(*, request, name, payload, link_type, **kwargs):
+        if _ACTIVE_JOURNAL_WRITE.match(name) and (
+            outage["remaining"] is None or outage["remaining"] > 0
+        ):
+            if outage["remaining"] is not None:
+                outage["remaining"] -= 1
+            outage["failed"] += 1
+            raise TemporalArtifactStorageFullError(
+                "art_journal", operation="write_complete"
+            )
+        return await write_text(
+            request=request, name=name, payload=payload, link_type=link_type, **kwargs
+        )
+
+    monkeypatch.setattr(gateway, "write_text", full_disk)
+    return outage
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_live_turn_rides_out_a_full_artifact_store(monkeypatch, tmp_path) -> None:
+    """Replays mm:c6eeb5e8-...T13:00:00Z: a full disk must not end a live turn.
+
+    A journal flush failed while Codex was still working; the error escaped
+    the stream loop and discarded 75 minutes of progress. The turn keeps
+    running, its events stay buffered, and they are committed with their
+    evidence once the cleanup frees space.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_FLUSH_MAX_EVENTS", 4, raising=False
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_STORAGE_RETRY_DELAYS_SECONDS",
+        (0.0,),
+        raising=False,
+    )
+    frames = _delta_frames(0, 40) + [{"type": "session.status", "status": "idle"}]
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _streamed_turn_client([frames]),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal", _settle_completed
+    )
+    harness = await _durable_journal_harness(monkeypatch, tmp_path)
+    outage = _full_disk_journal_writes(monkeypatch, harness.gateway, failures=12)
+    try:
+        result = await run_omnigent_execution(
+            _stream_request("full-disk"),
+            artifact_gateway=harness.gateway,
+            run_store=harness.store,
+        )
+        row = await harness.store.get_existing("idem-full-disk")
+        missing_evidence = await _index_rows_without_evidence(
+            harness, row.bridge_session_id
+        )
+        final = await harness.gateway.read_text(row.normalized_events_ref)
+    finally:
+        await harness.engine.dispose()
+
+    assert outage["remaining"] == 0
+    assert result.failure_class is None
+    assert result.metadata["normalizedStatus"] == "completed"
+    assert row.status == "completed"
+    assert missing_evidence == []
+    deltas = [
+        event["textPreview"]
+        for event in map(json.loads, final.splitlines())
+        if event["type"] == "response.output_text.delta"
+    ]
+    assert deltas == [f"token-{index}" for index in range(40)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_storage_outage_past_its_window_ends_the_bridge_session(
+    monkeypatch, tmp_path
+) -> None:
+    """A failed attempt never leaves its bridge session reported ``active``."""
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_STORAGE_RETRY_DELAYS_SECONDS",
+        (0.0,),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_STORAGE_OUTAGE_WINDOW_SECONDS",
+        0.0,
+        raising=False,
+    )
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _streamed_turn_client([_delta_frames(0, 10)]),
+    )
+    harness = await _durable_journal_harness(monkeypatch, tmp_path)
+    _full_disk_journal_writes(monkeypatch, harness.gateway, failures=None)
+    try:
+        with pytest.raises(TemporalArtifactUnavailableError) as raised:
+            await run_omnigent_execution(
+                _stream_request("disk-stays-full"),
+                artifact_gateway=harness.gateway,
+                run_store=harness.store,
+            )
+        row = await harness.store.get_existing("idem-disk-stays-full")
+    finally:
+        await harness.engine.dispose()
+
+    assert raised.value.code == "artifact_storage_full"
+    assert row.status == "failed"
+
+
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("compact_before_retry", [False, True])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import tarfile
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
@@ -115,3 +116,70 @@ async def test_capture_cancellation_stops_pending_checkpoint_work(
             await task
     assert stopped.is_set()
     assert not store._data
+
+
+@pytest.mark.asyncio
+async def test_capture_retries_while_artifact_storage_is_full(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A full store is waited out by the Activity, not recorded as bad evidence.
+
+    Reporting it as ``invalid_checkpoint`` let the parent start the step's
+    successor without the interrupted agent's saved work.
+    """
+
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactStorageFullError,
+        TemporalArtifactUnavailableError,
+    )
+
+    activities, request, _store = _capture(tmp_path)
+
+    async def storage_full(*_args, **_kwargs):
+        raise TemporalArtifactStorageFullError(
+            "art_archive", operation="write_complete"
+        )
+
+    monkeypatch.setattr(activities, "_put_checkpoint_bytes", storage_full)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, activity_type="workspace.capture_checkpoint", attempt=5
+    )
+
+    with pytest.raises(TemporalArtifactUnavailableError) as raised:
+        await environment.run(activities.workspace_capture_checkpoint, request)
+
+    assert raised.value.code == "artifact_storage_full"
+    assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("attempt", "retryable"), [(1, True), (2, False)])
+async def test_capture_keeps_its_ordinary_budget_for_other_failures(
+    tmp_path: Path, monkeypatch, attempt: int, retryable: bool
+) -> None:
+    """Only a storage outage may use the long retry window."""
+
+    from temporalio.exceptions import ApplicationError
+
+    activities, request, _store = _capture(tmp_path)
+
+    async def changing(*_args, **_kwargs):
+        raise activity_runtime.TemporalActivityRuntimeError(
+            "workspace changed during archive capture"
+        )
+
+    monkeypatch.setattr(activities, "_capture_workspace_evidence", changing)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, activity_type="workspace.capture_checkpoint", attempt=attempt
+    )
+
+    with pytest.raises(Exception) as raised:
+        await environment.run(activities.workspace_capture_checkpoint, request)
+
+    non_retryable = (
+        isinstance(raised.value, ApplicationError) and raised.value.non_retryable
+    )
+    assert non_retryable is not retryable
+    assert "workspace changed during archive capture" in str(raised.value)

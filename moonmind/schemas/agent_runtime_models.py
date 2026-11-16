@@ -1798,6 +1798,9 @@ class AgentRunResult(BaseModel):
             elif failure in {"system_error", "execution_error"} or recommendation in {
                 "retry_step_execution",
                 "retry_transient_upstream",
+                # Host credential/image materialization failed before the
+                # agent session ran; a bounded re-dispatch resumes the pull.
+                "retry_materialization",
             }:
                 disposition = "retry"
             else:

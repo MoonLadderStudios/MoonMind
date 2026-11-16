@@ -878,6 +878,10 @@ async def _try_generic_realizer_dispatch(
             )
             if typed_code in HarnessPlatformFailure.__members__:
                 provider_error_code = typed_code
+            else:
+                storage = _artifact_storage_failure_result(exc)
+                if storage is not None:
+                    return storage
             return AgentRunResult(
                 summary=(
                     "Admitted Omnigent execution-plan dispatch failed: "
@@ -1048,7 +1052,9 @@ async def _try_generic_realizer_dispatch(
         # provider or infrastructure details. Known boundaries above preserve
         # their actionable typed failure codes, and a MoonMind-typed platform
         # code carried by any other cause is projected the same way.
-        typed = _typed_platform_failure_result(exc)
+        typed = _typed_platform_failure_result(exc) or _artifact_storage_failure_result(
+            exc
+        )
         if typed is not None:
             return typed
         return AgentRunResult(
@@ -1080,6 +1086,26 @@ def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
         {"admittedProviderCapacityCleanupCompleted": completed}
         if isinstance(completed, bool)
         else {}
+    )
+
+
+def _artifact_storage_failure_result(exc: BaseException) -> AgentRunResult | None:
+    """Name a full or unreachable artifact store instead of a dispatch defect.
+
+    The realizer converts outages that interrupt a live attempt itself, after
+    cleanup kept its workspace; this covers outages before or around it.
+    """
+
+    from moonmind.omnigent.attempt_completion import (
+        artifact_storage_unavailable_result,
+    )
+    from moonmind.workflows.temporal.artifacts import artifact_storage_failure
+
+    storage = artifact_storage_failure(exc)
+    if storage is None:
+        return None
+    return artifact_storage_unavailable_result(
+        storage, metadata=_capacity_cleanup_receipt(exc)
     )
 
 

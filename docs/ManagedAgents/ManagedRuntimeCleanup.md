@@ -334,7 +334,10 @@ recorded, using `SAVED_WORK_UNSAVED_LOCAL_RETENTION` from the saved-work
 retention owner, and repeated failures do not extend it. A later
 successful save clears the marker and returns the workspace to ordinary
 retention. If the marker cannot be written, cleanup stays pending instead of
-releasing anything.
+releasing anything. When the failure is a full or unreachable artifact store,
+the attempt reports `OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE` with
+`retry_step_execution`: the parent's after-execution checkpoint capture waits
+for storage, and only that step restarts, from the captured workspace.
 
 ### 6.6 Managed runtime artifact directory
 

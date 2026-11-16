@@ -4119,6 +4119,96 @@ async def test_auxiliary_cleanup_failure_after_confirmed_stop_keeps_successor(
 
 
 @pytest.mark.asyncio
+async def test_full_artifact_store_keeps_workspace_and_restarts_only_the_step() -> None:
+    """Replays mm:c6eeb5e8-...T13:00:00Z: a live turn lost to a full disk.
+
+    The journal write failed after 75 minutes of Codex work and the attempt
+    surfaced as a generic dispatch failure with ``contact_administrator``,
+    leaving its binding ``cleanup_pending`` and its workspace unsaved with
+    nothing to resume it. The realizer must keep the workspace, finish cleanup
+    without artifact storage, and license only a successor Step Execution.
+    """
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    def storage_full(operation: str) -> TemporalArtifactStorageFullError:
+        return TemporalArtifactStorageFullError("art_full", operation=operation)
+
+    async def storage_full_driver(_request, *, session_authority_sink):
+        await session_authority_sink.session_created("session-1")
+        harness.events.append("journal-write-failed")
+        raise storage_full("write_complete")
+
+    retained: list[str] = []
+    publisher = harness.realizer._workspace_publisher
+
+    async def save_request_workspace(_request):
+        harness.events.append("workspace-save-failed")
+        raise storage_full("write_complete")
+
+    async def retain_unsaved_request_workspace(_request, *, reason_code):
+        retained.append(reason_code)
+        harness.events.append("workspace-retained")
+        return {"retained": True, "reasonCode": reason_code}
+
+    async def release_unsaved_request_workspace(_request):
+        harness.events.append("workspace-released")
+
+    class FullArtifacts:
+        async def write_json(self, **_kwargs):
+            raise storage_full("write_complete")
+
+        async def write_text(self, **_kwargs):
+            raise storage_full("write_complete")
+
+    publisher.save_request_workspace = save_request_workspace
+    publisher.retain_unsaved_request_workspace = retain_unsaved_request_workspace
+    publisher.release_unsaved_request_workspace = release_unsaved_request_workspace
+    harness.realizer._artifacts = FullArtifacts()
+    harness.realizer._session_driver = storage_full_driver
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.provider_error_code == "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.retry_disposition == "retry"
+    assert "disk full" in result.summary
+    assert result.metadata["artifactStorageFailureCode"] == "artifact_storage_full"
+    assert result.metadata["unsavedWorkspaceRetained"] is True
+    assert result.metadata["workPreserved"] is False
+    assert "successorBlocked" not in result.metadata
+    # The only copy of the agent's files stays protected; nothing was published.
+    assert retained == ["artifact_storage_full"]
+    assert "workspace-released" not in harness.events
+    assert "workspace-published" not in harness.events
+    # Cleanup finished without artifact storage: the host is gone and the
+    # provider capacity is back before a successor can be admitted.
+    binding = await harness.runtime_store.get(result.metadata["runtimeBindingRef"])
+    assert binding.state is RuntimeBindingState.cleaned
+    assert binding.terminalResult["providerErrorCode"] == (
+        "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    )
+    assert harness.events.index("host-cleaned") < harness.events.index(
+        "provider-released"
+    )
+    host_lease = await harness.host_leases.get(binding.hostLeaseRef)
+    assert host_lease.status == "cleaned"
+
+    # A late redelivery of the same attempt replays the recorded outcome.
+    events_before = list(harness.events)
+    late = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+    assert late.provider_error_code == "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    assert late.retry_recommendation == "retry_step_execution"
+    assert harness.events == events_before
+
+
+@pytest.mark.asyncio
 async def test_late_predecessor_delivery_leaves_successor_authority_intact(
     monkeypatch,
 ) -> None:

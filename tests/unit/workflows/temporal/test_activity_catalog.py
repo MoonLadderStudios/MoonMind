@@ -372,6 +372,36 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
     assert "step_checkpoint.create_v2" in fleets[ARTIFACTS_FLEET].activity_types
 
 
+@pytest.mark.parametrize(
+    "activity_type",
+    ["artifact.create", "artifact.write_complete", "workspace.capture_checkpoint"],
+)
+def test_artifact_writes_wait_out_a_full_store_until_the_next_cleanup(activity_type):
+    """A full artifact store frees space only at the next hourly cleanup.
+
+    The parent workflow used to fail within a minute of storage filling up.
+    The retry schedule it actually builds must keep the write alive past one
+    whole cleanup cycle while staying bounded.
+    """
+
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    route = build_default_activity_catalog().resolve_activity(activity_type)
+    policy = MoonMindRunWorkflow()._retry_policy_for_route(route)
+    interval = policy.initial_interval.total_seconds()
+    cap = policy.maximum_interval.total_seconds()
+    waits = []
+    for _ in range(policy.maximum_attempts - 1):
+        waits.append(min(interval, cap))
+        interval *= policy.backoff_coefficient
+
+    cleanup_cycle_seconds = 60 * 60
+    assert sum(waits) >= cleanup_cycle_seconds
+    assert route.timeouts.schedule_to_close_seconds >= cleanup_cycle_seconds
+    assert route.timeouts.schedule_to_close_seconds <= 2 * cleanup_cycle_seconds
+    assert policy.maximum_attempts > 0
+
+
 def test_checkpoint_persistence_binds_real_handlers_only_on_capable_fleet():
     from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
     from moonmind.workflows.temporal.activity_runtime import build_activity_bindings

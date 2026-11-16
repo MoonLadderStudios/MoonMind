@@ -67,6 +67,9 @@ class HarnessPlatformFailure(StrEnum):
     OMNIGENT_GENERIC_REALIZER_NOT_READY = "OMNIGENT_GENERIC_REALIZER_NOT_READY"
     OMNIGENT_GENERIC_DISPATCH_FAILED = "OMNIGENT_GENERIC_DISPATCH_FAILED"
     OMNIGENT_WORKSPACE_SAVE_FAILED = "OMNIGENT_WORKSPACE_SAVE_FAILED"
+    # Artifact storage stayed full or unreachable past its outage window. The
+    # attempt's workspace was saved or kept, so only the step restarts.
+    OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE = "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
     OMNIGENT_CURRENT_TURN_NOT_STARTED = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
     OMNIGENT_SESSION_HOST_LOST = "OMNIGENT_SESSION_HOST_LOST"
 
@@ -132,6 +135,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_WORKSPACE_SAVE_FAILED: "do_not_retry",
+    HarnessPlatformFailure.OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE: "retry_step_execution",
 }
 
 

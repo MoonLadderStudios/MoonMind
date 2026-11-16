@@ -949,6 +949,12 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
+            storage_result = await self._artifact_storage_result(
+                plan, binding, primary_error
+            )
+            if storage_result is not None:
+                binding, result = storage_result
+                primary_error = None
             if primary_error is None:
                 result, binding, cleanup_error = (
                     await self._fence_successor_on_predecessor_stop(
@@ -1003,6 +1009,48 @@ class GenericOmnigentHostRealizer:
         # not overwrite an objectively completed provider turn.
         _ = cleanup_error
         return result
+
+    async def _artifact_storage_result(
+        self,
+        plan: OmnigentExecutionPlanEnvelope,
+        binding: StableRuntimeBinding,
+        primary_error: BaseException | None,
+    ) -> tuple[StableRuntimeBinding, AgentRunResult] | None:
+        """Turn an attempt stopped by artifact storage into a step restart.
+
+        Cleanup has already saved the workspace or kept its unsaved copy, so
+        the work survives this attempt. The successor Step Execution resumes
+        from it under the existing predecessor-stop fence.
+        """
+
+        from moonmind.omnigent.attempt_completion import (
+            artifact_storage_unavailable_result,
+        )
+        from moonmind.workflows.temporal.artifacts import artifact_storage_failure
+
+        if not isinstance(primary_error, Exception):
+            return None
+        failure = artifact_storage_failure(primary_error)
+        if failure is None:
+            return None
+        result = artifact_storage_unavailable_result(
+            failure,
+            phases=binding.phaseResults,
+            metadata={
+                "executionPlanRef": plan.planRef,
+                "runtimeBindingRef": binding.bindingId,
+                "supportCombinationIdentity": execution_support_identity(plan),
+            },
+        )
+        binding = await self._update_binding(
+            binding,
+            updates={
+                "terminalResult": result.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                )
+            },
+        )
+        return binding, result
 
     def _record_cleanup_outcome(
         self,
@@ -1839,17 +1887,31 @@ class GenericOmnigentHostRealizer:
         cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
         if self._artifacts is not None:
-            evidence_ref = await self._artifacts.write_json(
-                request=request,
-                name="generic-host-cleanup.json",
-                payload={
-                    "bindingId": binding.bindingId,
-                    "executionPlanRef": binding.executionPlanRef,
-                    "results": cleanup_evidence,
-                    "providerCapacityReleaseOrder": "last",
-                },
-                link_type="evidence.cleanup",
+            from moonmind.workflows.temporal.artifacts import (
+                TemporalArtifactUnavailableError,
             )
+
+            try:
+                evidence_ref = await self._artifacts.write_json(
+                    request=request,
+                    name="generic-host-cleanup.json",
+                    payload={
+                        "bindingId": binding.bindingId,
+                        "executionPlanRef": binding.executionPlanRef,
+                        "results": cleanup_evidence,
+                        "providerCapacityReleaseOrder": "last",
+                    },
+                    link_type="evidence.cleanup",
+                )
+            except TemporalArtifactUnavailableError as exc:
+                # The host is already stopped. Holding provider capacity until
+                # the store recovers would block the step's successor too.
+                logger.warning(
+                    "Cleanup evidence for binding %s was not stored (%s); "
+                    "settlement stays on the binding",
+                    binding.bindingId,
+                    exc.code,
+                )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
         attestation_refs = dict(binding.attestationRefs)
