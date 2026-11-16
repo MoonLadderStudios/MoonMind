@@ -3869,6 +3869,108 @@ async def test_storage_outage_past_its_window_ends_the_bridge_session(
     assert row.status == "failed"
 
 
+def _full_disk_final_snapshot_writes(monkeypatch, gateway, *, failures: int | None):
+    """Fail the finished turn's terminal evidence the way a full MinIO does."""
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+
+    outage = {"remaining": failures, "failed": 0}
+    write_json = gateway.write_json
+
+    async def full_disk(*, request, name, payload, link_type, **kwargs):
+        if name == "output.omnigent.snapshot.final.json" and (
+            outage["remaining"] is None or outage["remaining"] > 0
+        ):
+            if outage["remaining"] is not None:
+                outage["remaining"] -= 1
+            outage["failed"] += 1
+            raise TemporalArtifactStorageFullError(
+                "art_final", operation="write_complete"
+            )
+        return await write_json(
+            request=request, name=name, payload=payload, link_type=link_type, **kwargs
+        )
+
+    monkeypatch.setattr(gateway, "write_json", full_disk)
+    return outage
+
+
+async def _completed_turn_with_full_evidence_store(monkeypatch, tmp_path, *, failures):
+    frames = _delta_frames(0, 3) + [{"type": "session.status", "status": "idle"}]
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _streamed_turn_client([frames]),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal", _settle_completed
+    )
+    harness = await _durable_journal_harness(monkeypatch, tmp_path)
+    outage = _full_disk_final_snapshot_writes(
+        monkeypatch, harness.gateway, failures=failures
+    )
+    try:
+        result = await run_omnigent_execution(
+            _stream_request("full-evidence"),
+            artifact_gateway=harness.gateway,
+            run_store=harness.store,
+        )
+        row = await harness.store.get_existing("idem-full-evidence")
+    finally:
+        await harness.engine.dispose()
+    return outage, result, row
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_finished_turn_evidence_waits_out_a_full_artifact_store(
+    monkeypatch, tmp_path
+) -> None:
+    """A full disk while storing a finished turn's evidence never repeats it.
+
+    The turn's receipt is recorded only after this evidence, so giving up here
+    would license a successor Step Execution that bills the same work again.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_STORAGE_RETRY_DELAYS_SECONDS",
+        (0.0,),
+        raising=False,
+    )
+    outage, result, row = await _completed_turn_with_full_evidence_store(
+        monkeypatch, tmp_path, failures=3
+    )
+
+    assert outage["failed"] == 3
+    assert result.failure_class is None
+    assert result.metadata["normalizedStatus"] == "completed"
+    assert row.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_finished_turn_evidence_past_the_window_stops_without_a_retry(
+    monkeypatch, tmp_path
+) -> None:
+    """A store that stays full ends the finished turn instead of restarting it."""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._JOURNAL_STORAGE_OUTAGE_WINDOW_SECONDS",
+        0.0,
+        raising=False,
+    )
+    _outage, result, row = await _completed_turn_with_full_evidence_store(
+        monkeypatch, tmp_path, failures=None
+    )
+
+    assert result.provider_error_code == "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    assert result.retry_recommendation == "do_not_retry"
+    assert result.retry_disposition == "no_retry"
+    assert "disk full" in result.summary
+    assert row.status == "failed"
+
+
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
 async def test_journal_backlog_from_an_outage_is_indexed_in_bounded_batches() -> None:

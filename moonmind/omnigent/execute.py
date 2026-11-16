@@ -2687,7 +2687,7 @@ class _ActiveJournal:
             try:
                 await self._commit_open_chunk()
             except TemporalArtifactUnavailableError as exc:
-                delay = self._defer_for_storage(exc)
+                delay = self.storage_retry_delay(exc)
                 if delay is None:
                     raise
                 if not wait_for_storage:
@@ -2705,8 +2705,14 @@ class _ActiveJournal:
                 self._storage_retry_at = None
                 return
 
-    def _defer_for_storage(self, exc: TemporalArtifactUnavailableError) -> float | None:
-        """Return the wait before the next flush, or ``None`` to give up."""
+    def storage_retry_delay(
+        self, exc: TemporalArtifactUnavailableError
+    ) -> float | None:
+        """Return the wait before the next storage write, or ``None`` to give up.
+
+        Journal flushes and the terminal capture share this outage clock, so
+        one outage gets one window however its writes are split.
+        """
 
         if exc.dependency != "storage":
             return None
@@ -2720,7 +2726,7 @@ class _ActiveJournal:
         self._storage_failures += 1
         self._storage_retry_at = now + delay
         _logger.warning(
-            "Live Omnigent journal flush deferred: %s (%s); %d events buffered, "
+            "Artifact storage unavailable: %s (%s); %d journal events buffered, "
             "retrying in %.0fs",
             exc,
             exc.code,
@@ -2951,6 +2957,7 @@ async def run_omnigent_execution(
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
     external_state: dict[str, Any] | None = None
+    terminal_status: str | None = None
     try:
         # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
         # bridge session before any provider call. Fails closed on missing
@@ -4286,29 +4293,43 @@ async def run_omnigent_execution(
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
                 )
-            bundle = await _build_capture_bundle(
-                client=client,
-                artifact_gateway=artifact_gateway,
-                request=request,
-                session_id=session_id,
-                agent_id=target.agent_id,
-                initial_snapshot=initial_snapshot,
-                final_snapshot=final_snapshot,
-                first_message_request=first_message,
-                first_message_response=first_message_response,
-                first_message_posted=first_message_posted,
-                first_message_response_identifiers=first_message_response_identifiers,
-                raw_events=raw_events,
-                normalized_events=normalized_events,
-                terminal_status=terminal_status,
-                diagnostics={
-                    "failureClass": failure_class_for_terminal_status(terminal_status),
-                    "eventDiagnostics": event_diagnostics,
-                },
-                harvest_resources=True,
-                external_state=external_state,
-                capture_policy=capture_policy,
-            )
+            # The turn's receipt is recorded only after its evidence, so the
+            # capture waits out a storage outage like the journal does.
+            while True:
+                try:
+                    bundle = await _build_capture_bundle(
+                        client=client,
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        initial_snapshot=initial_snapshot,
+                        final_snapshot=final_snapshot,
+                        first_message_request=first_message,
+                        first_message_response=first_message_response,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=(
+                            first_message_response_identifiers
+                        ),
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                        terminal_status=terminal_status,
+                        diagnostics={
+                            "failureClass": failure_class_for_terminal_status(
+                                terminal_status
+                            ),
+                            "eventDiagnostics": event_diagnostics,
+                        },
+                        harvest_resources=True,
+                        external_state=external_state,
+                        capture_policy=capture_policy,
+                    )
+                    break
+                except TemporalArtifactUnavailableError as exc:
+                    delay = journal.storage_retry_delay(exc)
+                    if delay is None:
+                        raise
+                await asyncio.sleep(delay)
             terminal_refs = build_omnigent_terminal_refs(
                 bundle,
                 terminal_status=terminal_status,
@@ -4477,11 +4498,11 @@ async def run_omnigent_execution(
     except TemporalArtifactUnavailableError as exc:
         if exc.dependency != "storage":
             raise
-        # Artifact storage stayed unavailable past the journal's outage window,
-        # or the terminal evidence could not be written. Stop this attempt's
-        # turn and end its bridge row, which would otherwise stay ``active``.
-        # The caller keeps the workspace and reports the outage, so only the
-        # step restarts from it.
+        # Artifact storage stayed unavailable past the journal's outage window.
+        # Stop this attempt's turn and end its bridge row, which would
+        # otherwise stay ``active``. A running turn is interrupted: the caller
+        # keeps the workspace, so only the step restarts from it. A completed
+        # turn stops without a retry, since a successor would bill it again.
         await cancel_and_wait(heartbeat_task)
         await cancel_and_wait(stream_task)
         if client is not None and session_id:
@@ -4490,7 +4511,23 @@ async def run_omnigent_execution(
         if run_store is not None:
             with suppress(Exception):
                 await run_store.mark_terminal(request.idempotency_key, status="failed")
-        raise
+        if terminal_status != "completed":
+            raise
+        return AgentRunResult(
+            summary=(
+                f"{exc}. The agent's turn completed, but its evidence could not "
+                "be stored before the storage outage window closed."
+            ),
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE",
+            retryRecommendation="do_not_retry",
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                "artifactStorageFailureCode": exc.code,
+                "unfinishedPhase": "evidence",
+            },
+        )
     except OmnigentAuthorizationError as exc:
         await cancel_and_wait(heartbeat_task)
         await cancel_and_wait(stream_task)
