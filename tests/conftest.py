@@ -14,6 +14,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from api_service.docker.cache_temporal_test_server import (
+    select_time_skipping_test_server,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _SLOW_TEST_MODULES = {
@@ -247,6 +251,10 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
     asyncio.run(_run_test_with_keepalive())
     return True
+
+
+# Every time-skipping environment starts the test server the image pre-warms.
+select_time_skipping_test_server()
 
 
 # ── atexit cleanup for orphaned Temporal test-server processes ──────────────
