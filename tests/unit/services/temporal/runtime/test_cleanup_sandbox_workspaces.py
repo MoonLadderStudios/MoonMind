@@ -780,7 +780,7 @@ def _pressure_janitor(
         run_store=ManagedRunStore(root / "managed_runs"),
         session_store=ManagedSessionStore(root / "managed_sessions"),
         config=_config(root, dry_run=dry_run),
-        docker_reference_provider=lambda: DockerReferenceState(),
+        docker_reference_provider=DockerReferenceState,
         closed_workflow_provider=closures,
         storage_usage_provider=disk,
         now=lambda: NOW,
