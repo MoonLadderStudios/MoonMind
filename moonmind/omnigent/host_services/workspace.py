@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -676,7 +677,13 @@ class OmnigentWorkspaceMaterializer:
         )
         if writable:
             if record_store is not None and workspace_id is not None:
-                record_store.invalidate_saved(workspace_id)
+                fence = (
+                    nullcontext()
+                    if workspace_fenced
+                    else record_store.claims_locked(workspace_id)
+                )
+                with fence:
+                    record_store.invalidate_saved(workspace_id)
             ensure_workspace_git_identity(
                 candidate,
                 runtime_uid=runtime_uid,

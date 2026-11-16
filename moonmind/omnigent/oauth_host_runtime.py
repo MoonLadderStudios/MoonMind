@@ -2763,9 +2763,9 @@ class OmnigentOAuthHostRuntime:
         except ValueError:
             return
         if relative.parts:
-            SandboxWorkspaceRecordStore(self._workspace_root).invalidate_saved(
-                relative.parts[0]
-            )
+            store = SandboxWorkspaceRecordStore(self._workspace_root)
+            with store.claims_locked(relative.parts[0]):
+                store.invalidate_saved(relative.parts[0])
 
     async def _launch_on_demand(
         self,

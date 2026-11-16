@@ -18,6 +18,30 @@ class InterruptedProjection(RuntimeError):
 
 
 @pytest.mark.asyncio
+async def test_writable_checkpoint_reuse_invalidates_saved_evidence_under_its_fence(
+    tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime
+
+    materialize = OmnigentWorkspaceMaterializer.materialize
+
+    async def resume_saved_workspace(self, request, **kwargs):
+        await materialize(self, request, **kwargs)
+        workspace_id = request.workspace_spec["workspaceLocator"]["workspaceId"]
+        store = SandboxWorkspaceRecordStore(self._root)
+        store.mark_saved(workspace_id, recorded_at=datetime.now(UTC))
+        assert store.save_is_current(workspace_id)
+        result = await materialize(self, request, **kwargs)
+        assert not store.save_is_current(workspace_id)
+        return result
+
+    monkeypatch.setattr(
+        OmnigentWorkspaceMaterializer, "materialize", resume_saved_workspace
+    )
+    await exercise_branch(tmp_path, monkeypatch, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "ignored_inputs", [False, True], ids=["visible-inputs", "ignored-inputs"]
 )
