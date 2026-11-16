@@ -17,6 +17,7 @@ from temporalio.testing import ActivityEnvironment
 from api_service.db import models
 from moonmind.omnigent import bridge_artifacts
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactError
+from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_activities as children
 from moonmind.workflows.temporal.activity_runtime import (
@@ -199,6 +200,44 @@ async def test_system_resolver_preparation_reuses_verified_parent_grant(
             await service.read(
                 artifact_id=parent_ref, access=access_for_test(f"workflow:{_CHILD}")
             )
+
+
+async def test_system_resolver_inherits_parent_principal_on_restricted_connection(
+    resolver_parent,
+):
+    # Connections created from Settings admit only the operator who created
+    # them, while the merge gate runs as the execution owner ("system").
+    state = resolver_parent
+    context = state.context
+    async with context.sessions() as session:
+        record = await session.get(
+            models.RepositoryConnectionRecord, "selected-repository"
+        )
+        record.allowed_principal_refs = ["user-1"]
+        await session.commit()
+
+    prepared = await state.environment.run(
+        TemporalAgentRuntimeActivities().omnigent_prepare_child_execution_plan,
+        state.payload,
+    )
+
+    plan = await DbExecutionPlanStore(context.sessions).load(
+        prepared["initial_parameters"]["omnigentExecutionPlan"]["planRef"]
+    )
+    access_refs = plan.payload.resolvedTools["repositoryAccess"]
+    assert access_refs
+    async with context.sessions() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        for slot, entry in access_refs.items():
+            _artifact, body = await service.read(
+                artifact_id=entry["artifactRef"].removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
+            selection = json.loads(body)["selection"]
+            # Runtime credential use re-checks this principal against the
+            # connection, so it must stay the one the parent was granted.
+            assert (slot, selection["principalRef"]) == (slot, "user-1")
+            assert selection["connectionId"] == "selected-repository"
 
 
 @pytest.mark.parametrize(
