@@ -336,14 +336,13 @@ successful save clears the marker and returns the workspace to ordinary
 retention. If the marker cannot be written, cleanup stays pending instead of
 releasing anything.
 
-While the runtime filesystem, which also holds MinIO artifacts, is at or above
-`MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` (default 90), the pass
-removes sandbox workspaces that only retention protects, oldest first, until
-usage drops below it, and only when another copy is proven: the canonical
-stopped-boundary save writes `<workspace_id>.saved.json`, which must be newer
-than any later owner-record, readiness or claim change. Not every producer
-records a failed save, so a missing unsaved marker proves nothing. Workspaces
-without current save evidence, and run/session roots, keep full retention.
+At or above `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` (default 90),
+the janitor evicts saved sandbox workspaces oldest first until usage falls below
+it. Only a verified stopped-boundary save writes `<workspace_id>.saved.json`;
+later owner-record, readiness or claim changes invalidate that evidence. A
+missing unsaved marker proves nothing. Without current save evidence, workspaces
+keep full retention; a saved-marker write failure cannot invalidate confirmed
+saved work. Run/session roots keep full retention.
 
 ### 6.6 Managed runtime artifact directory
 

@@ -276,8 +276,9 @@ async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("marker_unavailable", [False, True])
 async def test_only_a_completed_stopped_boundary_save_records_saved_work(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog, marker_unavailable
 ):
     """Cleanup may evict a workspace under disk pressure only once it is saved.
 
@@ -326,5 +327,17 @@ async def test_only_a_completed_stopped_boundary_save_records_saved_work(
         assert not store.save_is_current(workspace_id)
 
         monkeypatch.setattr(service, "link_artifact", link)
-        await publisher.save_request_workspace(fixture.request)
-        assert store.save_is_current(workspace_id)
+        if marker_unavailable:
+            import errno
+
+            def full_metadata_store(*_args, **_kwargs):
+                raise OSError(errno.ENOSPC, "controlled metadata store is full")
+
+            monkeypatch.setattr(
+                SandboxWorkspaceRecordStore, "mark_saved", full_metadata_store
+            )
+        saved = await publisher.save_request_workspace(fixture.request)
+        assert saved["savedWorkRef"]
+        assert store.save_is_current(workspace_id) is not marker_unavailable
+        if marker_unavailable:
+            assert "cleanup marker" in caplog.text
