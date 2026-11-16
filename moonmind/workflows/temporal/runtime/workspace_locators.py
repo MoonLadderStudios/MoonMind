@@ -459,6 +459,11 @@ class SandboxWorkspaceRecordStore:
             os.fsync(stream.fileno())
         os.replace(staging, path)
 
+    def invalidate_saved(self, workspace_id: str) -> None:
+        """Fence pressure eviction before this workspace becomes writable again."""
+        with self.claims_locked(workspace_id):
+            self._saved_marker_path(workspace_id).unlink(missing_ok=True)
+
     def save_is_current(self, workspace_id: str) -> bool:
         """Whether the last verified save postdates every later use.
 

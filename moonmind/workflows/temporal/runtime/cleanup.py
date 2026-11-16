@@ -640,7 +640,10 @@ class ManagedRuntimeWorkspaceJanitor:
                     reason="dry-run would delete under critical storage pressure",
                 )
             decisions[index] = decision
-            if decision.classification == "budget_exhausted":
+            if (
+                decision.classification == "budget_exhausted"
+                and budget.deleted_paths >= self._config.max_delete_paths
+            ):
                 break
             if decision.classification == "eligible":
                 used -= decision.estimated_bytes

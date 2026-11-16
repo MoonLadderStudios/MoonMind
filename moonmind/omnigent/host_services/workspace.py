@@ -675,6 +675,8 @@ class OmnigentWorkspaceMaterializer:
             and source.existing_grant.mode == "read_only"
         )
         if writable:
+            if record_store is not None and workspace_id is not None:
+                record_store.invalidate_saved(workspace_id)
             ensure_workspace_git_identity(
                 candidate,
                 runtime_uid=runtime_uid,

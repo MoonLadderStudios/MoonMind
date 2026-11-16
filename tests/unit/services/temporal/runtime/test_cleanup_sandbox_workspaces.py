@@ -931,6 +931,35 @@ def test_retention_holds_below_the_critical_watermark(tmp_path: Path) -> None:
     assert result.pressure_evicted_roots == 0
 
 
+def test_pressure_skips_an_oversized_workspace_and_reclaims_one_within_budget(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    root = tmp_path / "agent_jobs"
+    large = _sandbox_workspace(root, "a" * 24, owner="mm:large")
+    small = _sandbox_workspace(root, "b" * 24, owner="mm:small")
+    (large / "repo" / "README.md").write_bytes(b"x" * 4096)
+    _age(large)
+    _mark_saved(root, "a" * 24, "b" * 24)
+    disk = _Disk(root, base_percent=84)
+    janitor = _pressure_janitor(
+        root,
+        _Closures({"mm:large": NOW - timedelta(days=3), "mm:small": NOW - timedelta(days=2)}),
+        disk,
+    )
+    janitor._config = replace(janitor._config, max_delete_bytes=64)
+
+    result = janitor.run()
+
+    assert _decision(result, large).classification == "budget_exhausted"
+    assert _decision(result, small).classification == "deleted"
+    assert large.exists() and not small.exists()
+    assert result.estimated_deleted_bytes <= 64
+    assert result.pressure_evicted_roots == 1
+    assert result.storage_usage_percent_after == 89
+
+
 def test_dry_run_reports_pressure_eviction_without_deleting(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     workspace = _sandbox_workspace(root)

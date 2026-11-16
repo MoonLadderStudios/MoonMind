@@ -337,12 +337,13 @@ retention. If the marker cannot be written, cleanup stays pending instead of
 releasing anything.
 
 At or above `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` (default 90),
-the janitor evicts saved sandbox workspaces oldest first until usage falls below
-it. Only a verified stopped-boundary save writes `<workspace_id>.saved.json`;
-later owner-record, readiness or claim changes invalidate that evidence. A
-missing unsaved marker proves nothing. Without current save evidence, workspaces
-keep full retention; a saved-marker write failure cannot invalidate confirmed
-saved work. Run/session roots keep full retention.
+the janitor evicts saved sandbox workspaces oldest first, skipping roots that
+exceed the remaining byte budget. Only a verified stopped-boundary save writes
+`<workspace_id>.saved.json`; writable launch or reuse removes it, and later
+owner-record, readiness or claim changes invalidate it. A missing unsaved marker
+proves nothing. Without current save evidence, workspaces keep full retention;
+marker write failure cannot invalidate confirmed saved work. Run/session roots
+keep full retention.
 
 ### 6.6 Managed runtime artifact directory
 
