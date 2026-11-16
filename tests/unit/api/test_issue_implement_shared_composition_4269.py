@@ -61,11 +61,17 @@ def _inlined_stage_titles(raw: dict) -> list[str]:
     return [str(s.get("title") or "") for s in raw.get("steps", [])]
 
 
-async def test_search_composes_shared_assessment_and_work_pr(tmp_path):
+@pytest.mark.parametrize(
+    "inputs,verification_count",
+    [({}, 0), ({"run_verify": False}, 0), ({"run_verify": True}, 1)],
+)
+async def test_search_composes_shared_assessment_and_work_pr(
+    tmp_path, inputs, verification_count
+):
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=SEARCH,
-            inputs={},
+            inputs=inputs,
             context={"repository": REPOSITORY},
         )
     slugs = [item["presetSlug"] for item in expanded["authoredPresets"]]
@@ -75,8 +81,8 @@ async def test_search_composes_shared_assessment_and_work_pr(tmp_path):
     assert titles[0] == "Resolve GitHub issue and load trusted brief"
     assert titles.count("Assess existing implementation state") == 1
     assert titles.count("Implement the issue") == 1
-    assert titles.count("Verify implementation") == 1
-    assert titles.count("Remediation loop controller") == 1
+    assert titles.count("Verify implementation") == verification_count
+    assert titles.count("Remediation loop controller") == verification_count
     assert titles.count("Create pull request") == 1
     # One selection step only: continuation resumes without a second search.
     assert titles.count("Resolve GitHub issue and load trusted brief") == 1
@@ -128,7 +134,7 @@ async def test_explicit_and_search_share_normalized_stage_behavior(tmp_path):
         )
         search = await service.expand_template(
             slug=SEARCH,
-            inputs={},
+            inputs={"run_verify": True},
             context={"repository": REPOSITORY},
         )
     by_title = lambda steps: {step.get("title", ""): step for step in steps}
