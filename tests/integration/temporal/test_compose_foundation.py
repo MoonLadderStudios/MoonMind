@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,9 @@ import subprocess
 
 import pytest
 import yaml
+from temporalio.testing import WorkflowEnvironment
+
+from api_service.docker import cache_temporal_test_server
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MOUNTED_TOOL_PATH = (
@@ -1125,9 +1129,6 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     cache_script = (
         REPO_ROOT / "api_service" / "docker" / "cache_temporal_test_server.py"
     ).read_text(encoding="utf-8")
-    test_conftest = (REPO_ROOT / "tests" / "conftest.py").read_text(
-        encoding="utf-8"
-    )
     test_stage = dockerfile.index("FROM runtime-dependencies AS test-runtime")
     production_stage = dockerfile.index("FROM runtime-dependencies AS runtime-base")
     omnigent_copy = dockerfile.index("COPY omnigent/omnigent /app/omnigent/omnigent/")
@@ -1144,8 +1145,16 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     )
     assert "WorkflowEnvironment.start_time_skipping," in cache_script
     assert "WorkflowEnvironment.start_local," in cache_script
-    assert "test_server_download_version" not in cache_script
-    assert "test_server_download_version" not in test_conftest
+    # The image pre-warms the time-skipping server that test sessions start, so
+    # a selected release must be one Temporal publishes for amd64 and arm64.
+    cache_main = cache_script.split('if __name__ == "__main__":')[-1]
+    assert "select_time_skipping_test_server()" in cache_main
+    assert (
+        inspect.signature(WorkflowEnvironment.start_time_skipping)
+        .parameters["test_server_download_version"]
+        .default
+        == cache_temporal_test_server.TIME_SKIPPING_TEST_SERVER_VERSION
+    )
     assert "docker-buildx-plugin" in dockerfile[:test_stage]
     assert "docker buildx version" in dockerfile[:test_stage]
 

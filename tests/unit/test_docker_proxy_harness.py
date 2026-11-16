@@ -72,3 +72,17 @@ def test_host_checks_reject_socket_mounts_outside_proxy(harness, rendered_config
 
     with pytest.raises(AssertionError, match="worker"):
         harness.host_checks()
+
+
+def test_host_checks_accept_deployment_controller_socket(harness, rendered_config):
+    rendered_config["services"]["controller"] = {
+        "volumes": [
+            {
+                "type": "bind",
+                "source": "/var/run/docker.sock",
+                "target": "/var/run/docker.sock",
+            }
+        ]
+    }
+    with pytest.raises(ProxyStartupReached):
+        harness.host_checks()

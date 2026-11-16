@@ -41,6 +41,12 @@ def apply(operation):
         print(json.dumps(receipt), flush=True)
         base = engine.compose_base(project=target['project'], project_dir=target['projectDir'],
             compose_files=target['composeFiles'], env_files=[overlay])
+        # This focused phase bypasses engine.apply to inject an exact partial
+        # recreation crash. Keep its production dependency/ownership cleanup
+        # boundary before either the partial or complete apply.
+        configured = engine.require_independent_controller(runner, base, target['services'], 'controller')
+        engine.remove_retired_services(runner, project=target['project'],
+            configured_services=configured, own_service='controller')
         if sys.argv[4] == 'crash':
             engine.apply_services(runner, base, ['temporal-worker-agent-runtime'])
             os._exit(71)

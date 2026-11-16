@@ -545,11 +545,19 @@ def test_upgrade_faults_resume_the_submitted_operation_once(
                 # Operation-labelled one-offs have exited; the ordinary worker
                 # remains observable to both journal and routing inventories.
                 oneoff = any(controller.OMNIGENT_OPERATION_LABEL in arg for arg in args)
-                return {"exit": 0, "output": "" if oneoff else "worker"}
+                return {"exit": 0, "output": "" if oneoff else "a" * 64}
             if args[:2] == ("docker", "inspect"):
                 worker_image = IMAGE if applied else "sha256:prior-release"
                 projection = args[args.index("--format") + 1]
-                if projection == controller.JOURNAL_CONSUMER_INSPECT_FORMAT:
+                assert args[-1] == "a" * 64
+                if projection == "{{json .Config.Labels}}":
+                    row = {
+                        "com.docker.compose.project": "moonmind-test-upgrade",
+                        "com.docker.compose.service": writer,
+                        "com.docker.compose.oneoff": "False",
+                        "com.docker.compose.config-hash": "installed-config",
+                    }
+                elif projection == controller.JOURNAL_CONSUMER_INSPECT_FORMAT:
                     row = {
                         "Image": worker_image,
                         "Config": {
