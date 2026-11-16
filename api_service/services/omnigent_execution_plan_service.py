@@ -1234,6 +1234,28 @@ async def _admit_repository_plan_inputs(
         if parent_plan
         else {}
     )
+    parent_selections: dict[str, Mapping[str, Any]] = {}
+
+    async def parent_selection(slot: str) -> Mapping[str, Any]:
+        if slot not in parent_selections:
+            parent_access = parent_plan.payload.resolvedTools.get(
+                "repositoryAccess", {}
+            ).get(slot)
+            if not parent_access:
+                raise ValueError(
+                    f"child cannot synthesize an unbound repository slot {slot}"
+                )
+            _artifact, parent_bytes = await artifact_service.read(
+                artifact_id=parent_access["artifactRef"].removeprefix("artifact:"),
+                access=parent_artifact_access or access,
+            )
+            if (
+                "repository-access-snapshot:" + _sha256(parent_bytes)
+                != parent_access["snapshotRef"]
+            ):
+                raise ValueError("parent repository snapshot digest mismatch")
+            parent_selections[slot] = json.loads(parent_bytes)["selection"]
+        return parent_selections[slot]
 
     @asynccontextmanager
     async def admission_session():
@@ -1287,6 +1309,7 @@ async def _admit_repository_plan_inputs(
         selected_connection = None
         assignment = None
         candidates = []
+        admitted_principal = principal
         if mode != AccessMode.ANONYMOUS:
             if parent_bindings:
                 inherited_slot = "collaboration" if native_review else "source"
@@ -1301,10 +1324,16 @@ async def _admit_repository_plan_inputs(
                     )
                 connection_ref = inherited.connectionRef
                 mode = AccessMode.EXPLICIT
+                # The child narrows the parent's grant, so it keeps the grant's
+                # principal: the compiling service (e.g. a merge gate running
+                # as the execution owner) may not be one the connection admits.
+                admitted_principal = (await parent_selection(inherited_slot))[
+                    "principalRef"
+                ]
             if connection_ref:
                 selected_connection = await connections.get_connection(
                     connection_ref,
-                    principal_ref=principal,
+                    principal_ref=admitted_principal,
                     principal_scope=("system", None),
                 )
                 if selected_connection is None:
@@ -1316,7 +1345,7 @@ async def _admit_repository_plan_inputs(
             else:
                 candidates = await connections.launch_candidates(
                     repository,
-                    principal_ref=principal,
+                    principal_ref=admitted_principal,
                     principal_scope=("system", None),
                 )
                 identities = {
@@ -1339,7 +1368,7 @@ async def _admit_repository_plan_inputs(
                     identity=identity,
                     requested_operations=operations,
                     candidates=candidates,
-                    principal_ref=principal,
+                    principal_ref=admitted_principal,
                     principal_scope=("system", None),
                 )
                 assignment = selected_route.assignment
@@ -1350,7 +1379,7 @@ async def _admit_repository_plan_inputs(
                 )
             snapshot = select_repository_authority(
                 access_mode=mode,
-                principal_ref=principal,
+                principal_ref=admitted_principal,
                 principal_scope=("system", None),
                 identity=identity,
                 role=role,
@@ -1361,28 +1390,12 @@ async def _admit_repository_plan_inputs(
                 candidates=candidates,
             )
             if parent_plan is not None:
-                parent_access = parent_plan.payload.resolvedTools.get(
-                    "repositoryAccess", {}
-                ).get(slot)
-                if not parent_access:
-                    raise ValueError(
-                        f"child cannot synthesize an unbound repository slot {slot}"
-                    )
-                _artifact, parent_bytes = await artifact_service.read(
-                    artifact_id=parent_access["artifactRef"].removeprefix("artifact:"),
-                    access=parent_artifact_access or access,
-                )
-                if (
-                    "repository-access-snapshot:" + _sha256(parent_bytes)
-                    != parent_access["snapshotRef"]
-                ):
-                    raise ValueError("parent repository snapshot digest mismatch")
-                parent_selection = json.loads(parent_bytes)["selection"]
+                granted = await parent_selection(slot)
                 if any(
                     snapshot.model_dump(by_alias=True, mode="json")[key]
-                    != parent_selection[key]
+                    != granted[key]
                     for key in ("endpoint", "routeId", "connectionId", "role")
-                ) or not set(operations).issubset(parent_selection["operations"]):
+                ) or not set(operations).issubset(granted["operations"]):
                     raise ValueError(
                         "child repository authority must preserve or narrow the parent"
                     )
