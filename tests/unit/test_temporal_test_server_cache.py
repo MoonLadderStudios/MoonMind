@@ -105,6 +105,31 @@ async def test_permanent_startup_errors_are_not_retried(servers, error):
 
 
 @pytest.mark.asyncio
+async def test_selection_defaults_time_skipping_server_and_honors_explicit_choice(
+    monkeypatch,
+):
+    class Environment:
+        @classmethod
+        async def start_time_skipping(cls, **kwargs):
+            return cls, kwargs
+
+    monkeypatch.setattr(cache, "WorkflowEnvironment", Environment)
+
+    cache.select_time_skipping_test_server()
+
+    assert await Environment.start_time_skipping(port=7) == (
+        Environment,
+        {
+            "test_server_download_version": cache.TIME_SKIPPING_TEST_SERVER_VERSION,
+            "port": 7,
+        },
+    )
+    assert await Environment.start_time_skipping(
+        test_server_download_version="default"
+    ) == (Environment, {"test_server_download_version": "default"})
+
+
+@pytest.mark.asyncio
 async def test_shutdown_failure_does_not_start_another_server(servers):
     error = RuntimeError("shutdown failed")
     servers.skipping.shutdown.side_effect = error
