@@ -30,6 +30,7 @@ RUNNER_FILES = (
     "security/repository_scanner_runner.py",
     "security/repository_scanners.py",
     "security/scanner_feeds.py",
+    "security/scanner_readiness.py",
     "security/image_assessment_runner.py",
     "security/image_assessments.py",
     "security/assessments.py",
@@ -167,7 +168,12 @@ def resolve_inputs(
         selected = {}
         for arch in ARCHITECTURES:
             if tool == "opengrep":
-                name = "opengrep_manylinux_" + ("x86" if arch == "amd64" else "aarch64")
+                platform = (
+                    "linux"
+                    if any(name.startswith("opengrep_linux_") for name in available)
+                    else "manylinux"
+                )
+                name = f"opengrep_{platform}_" + ("x86" if arch == "amd64" else "aarch64")
                 selected[arch] = {
                     "binary": asset(name),
                     "signature": asset(name + ".sig"),
@@ -197,15 +203,21 @@ def resolve_inputs(
     return inputs
 
 
-def verify_signature(tool: str, tag: str, binary: Path, material: dict) -> None:
+def signature_identity(tool: str, tag: str) -> str:
     repo = REPOSITORIES[tool]
-    # Upstream uses release branches for Opengrep, tag refs for Trivy.
     ref = (
         rf"refs/(?:tags/{re.escape(tag)}|heads/release-{re.escape(tag)})"
         if tool == "opengrep"
         else rf"refs/tags/{re.escape(tag)}"
     )
-    identity = rf"^https://github.com/{repo}/\.github/workflows/[^/]+\.ya?ml@{ref}$"
+    signer = rf"[^/]+\.ya?ml@{ref}"
+    if tool == "opengrep":
+        # Upstream also dispatches releases from this fixed workflow on main.
+        signer = rf"(?:{signer}|rolling-release\.yml@refs/heads/main)"
+    return rf"^https://github.com/{repo}/\.github/workflows/{signer}$"
+
+
+def verify_signature(tool: str, binary: Path, material: dict, *, identity: str) -> None:
     args = [
         "cosign",
         "verify-blob",
@@ -329,7 +341,12 @@ def prepare(inputs: dict, arch: str, destination: Path, evidence: Path) -> None:
                 )
             material[role], identities[role] = path, {**asset, "resolvedDigest": digest}
         if tool in ("opengrep", "trivy"):
-            verify_signature(tool, release["version"], material["binary"], material)
+            verify_signature(
+                tool,
+                material["binary"],
+                material,
+                identity=signature_identity(tool, release["version"]),
+            )
             verification = "cosign"
         else:
             verify_checksum(material["binary"], material["checksums"].read_text())
@@ -397,7 +414,7 @@ def verification_negatives(inputs: dict, arch: str, evidence: Path) -> None:
             with tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 selected = dict(material)
-                tag = release["version"]
+                identity = signature_identity(tool, release["version"])
                 if case == "tampered-artifact":
                     path = work / "tampered"
                     path.write_bytes(material["binary"].read_bytes() + b"tampered")
@@ -409,9 +426,13 @@ def verification_negatives(inputs: dict, arch: str, evidence: Path) -> None:
                         path.write_text("invalid verification material")
                     selected[role] = path
                 else:
-                    tag = "v0.0.0-wrong-identity"
+                    # Rolling signers are independent of the release tag; vary
+                    # the trusted repository to exercise a real identity mismatch.
+                    identity = identity.replace(
+                        REPOSITORIES[tool], "not-the-upstream/incorrect-signer"
+                    )
                 try:
-                    verify_signature(tool, tag, selected["binary"], selected)
+                    verify_signature(tool, selected["binary"], selected, identity=identity)
                 except subprocess.CalledProcessError as error:
                     results.append(
                         {

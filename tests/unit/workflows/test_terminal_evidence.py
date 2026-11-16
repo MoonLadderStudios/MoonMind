@@ -12,6 +12,77 @@ from moonmind.workflows.temporal.agent_result_payloads import (
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 
 
+@pytest.mark.parametrize("status", ["succeeded", "blocked", "failed"])
+def test_remediation_terminal_receipt_preserves_the_skill_verdict(tmp_path, status):
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "artifacts/remediation-result.json",
+        "expectedSchemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "step:remediation:1",
+    }
+    path = tmp_path / contract["relativePath"]
+    path.parent.mkdir()
+    payload = {
+        "schemaVersion": contract["expectedSchemaVersion"],
+        "executionRef": contract["executionRef"],
+        "status": status,
+        "summary": (
+            "Completed an evidence-backed diagnosis."
+            if status == "succeeded"
+            else "Required remediation context was not delivered."
+        ),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert result.satisfied is (status == "succeeded")
+    assert result.outcome == (
+        "terminal_success" if status == "succeeded" else "terminal_failure"
+    )
+    assert result.metadata["remediationSummary"] == payload["summary"]
+    assert result.failure_code == (
+        None if status == "succeeded" else f"REMEDIATION_{status.upper()}"
+    )
+
+    payload["executionRef"] = "step:another-attempt"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert (
+        evaluate_terminal_evidence(contract, workspace_path=str(tmp_path)).failure_code
+        == "STALE_TERMINAL_EVIDENCE"
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"status": "completed"},
+        {"status": []},
+        {"status": {}},
+        {"summary": ""},
+        {"summary": []},
+        {"schemaVersion": "other"},
+    ],
+)
+def test_remediation_terminal_receipt_rejects_invalid_evidence(tmp_path, patch):
+    contract = {
+        "contractId": "remediate_workflow_terminal.v1",
+        "relativePath": "remediation-result.json",
+        "executionRef": "step:1",
+    }
+    payload = {
+        "schemaVersion": "moonmind.remediate-workflow-result.v1",
+        "executionRef": "step:1",
+        "status": "succeeded",
+        "summary": "Diagnosed a transient failure; retry the interrupted step.",
+        **patch,
+    }
+    (tmp_path / contract["relativePath"]).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert result.satisfied is False
+    assert result.failure_code == "MALFORMED_TERMINAL_EVIDENCE"
+
+
 def _contract(execution_ref: str = "step:1") -> dict[str, str]:
     return {
         "contractId": "batch_workflows_fanout.v1",

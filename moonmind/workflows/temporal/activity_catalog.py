@@ -1625,6 +1625,15 @@ def build_default_activity_catalog(
                 non_retryable=NON_RETRYABLE_ERRORS,
             ),
         ),
+        TemporalActivityDefinition(
+            activity_type="container_job.assessment_readiness",
+            family="container_job",
+            capability_class="docker_workload",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(600, 660, 30),
+            retries=_activity_retries(max_attempts=1, max_interval_seconds=30),
+        ),
         *(
             TemporalActivityDefinition(
                 activity_type=f"container_job.{name}",

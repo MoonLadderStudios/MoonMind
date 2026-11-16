@@ -90,8 +90,9 @@ def test_workflow_identity_registration_and_activity_routes() -> None:
         for item in build_default_activity_catalog().activities
         if item.family == "container_job"
     ]
-    assert len(routes) == 15
+    assert len(routes) == 16
     assert {route.activity_type for route in routes} >= {
+        "container_job.assessment_readiness",
         "container_job.submit",
         "container_job.status",
         "container_job.cancel",

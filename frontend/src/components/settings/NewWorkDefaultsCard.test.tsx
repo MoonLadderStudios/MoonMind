@@ -42,6 +42,9 @@ function renderCard() {
 }
 const changeHarness = () => fireEvent.change(screen.getByLabelText('Default for new work'), { target: { value: 'runtime:claude_code' } });
 const patches = () => fetchSpy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+const optionGroups = (picker: HTMLElement) => Array.from(picker.children).map((child) => child instanceof HTMLOptGroupElement
+  ? [child.label, Array.from(child.children).map((option) => (option as HTMLOptionElement).value)] : (child as HTMLOptionElement).value);
+const saveBar = () => screen.getByLabelText('Unsaved defaults').textContent;
 beforeEach(() => {
   current = catalog(); issues = {}; patchResponse = null; validationResponse = null; validationFailure = false;
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
@@ -102,6 +105,39 @@ describe('NewWorkDefaultsCard', () => {
       expected_versions: { [runtimeKey]: 3, [profileKey]: 4 },
     });
   });
+  it('groups each harness choice with its saved profiles', async () => {
+    renderCard(); const picker = await screen.findByLabelText('Default for new work');
+    await screen.findByRole('option', { name: /claude-team/ });
+    expect(optionGroups(picker)).toEqual([
+      ['OpenCode', ['runtime:omnigent']],
+      ['Codex', ['runtime:codex_cli', 'profile:disabled']],
+      ['Claude Code', ['runtime:claude_code', 'profile:claude-team']],
+    ]);
+  });
+  it.each([
+    { runtime: 'codex_cli', profile: 'claude-team', extra: [], claude: ['runtime:claude_code', 'profile:claude-team', 'saved:claude-team'] },
+    { runtime: 'custom-runtime', profile: 'gone', extra: [['Custom Runtime', ['runtime:custom-runtime']], 'profile:gone'], claude: ['runtime:claude_code', 'profile:claude-team'] },
+  ])('groups retained $runtime/$profile values by known harness', async ({ runtime, profile, extra, claude }) => {
+    current.categories.Workflow[0]!.effective_value = runtime;
+    current.categories.Workflow[1]!.effective_value = profile;
+    renderCard(); const picker = await screen.findByLabelText('Default for new work');
+    await screen.findByRole('option', { name: 'claude-team · Claude Code / Anthropic' });
+    expect(optionGroups(picker)).toEqual([
+      ['OpenCode', ['runtime:omnigent']],
+      ['Codex', ['runtime:codex_cli', 'profile:disabled']],
+      ['Claude Code', claude],
+      ...extra,
+    ]);
+  });
+  it('summarizes a dirty selection in one Save bar line', async () => {
+    current.categories.Workflow[1]!.effective_value = 'disabled';
+    renderCard(); const picker = await screen.findByLabelText('Default for new work');
+    await screen.findByRole('option', { name: /claude-team/ });
+    fireEvent.change(picker, { target: { value: 'profile:claude-team' } });
+    expect(saveBar()).toBe('Default for new work: disabled (Codex) → claude-team (Claude Code)');
+    fireEvent.change(picker, { target: { value: 'runtime:omnigent' } });
+    expect(saveBar()).toBe('Default for new work: disabled (Codex) → OpenCode (basic)');
+  });
   it('keeps a mismatched saved profile effective until explicit selection and Save', async () => {
     current.categories.Workflow[1]!.effective_value = 'claude-team';
     renderCard();
@@ -111,7 +147,7 @@ describe('NewWorkDefaultsCard', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
     expect(patches()).toHaveLength(0);
     fireEvent.change(picker, { target: { value: 'profile:claude-team' } });
-    expect(screen.getByText('Harness: Codex → Claude Code')).toBeTruthy();
+    expect(saveBar()).toBe('Default for new work: claude-team (Claude Code; harness Codex) → claude-team (Claude Code)');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(picker.value).toBe('saved:claude-team');
     fireEvent.change(picker, { target: { value: 'profile:claude-team' } });
@@ -139,7 +175,8 @@ describe('NewWorkDefaultsCard', () => {
       : fallback(input, init));
     renderCard(); const picker = await screen.findByLabelText('Default for new work') as HTMLSelectElement;
     expect(picker.value).toBe('runtime:custom-runtime');
-    await screen.findByRole('option', { name: /opencode-local/ });
+    const openCodeProfile = await screen.findByRole('option', { name: /opencode-local/ });
+    expect((openCodeProfile.parentElement as HTMLOptGroupElement).label).toBe('OpenCode');
     fireEvent.change(picker, { target: { value: 'profile:opencode-local' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await screen.findByText('Defaults saved');
@@ -370,7 +407,7 @@ describe('NewWorkDefaultsCard', () => {
       expect(card.textContent).not.toContain(copy);
     }
     changeHarness();
-    expect(screen.getByText('Harness: Codex → Claude Code')).toBeTruthy();
+    expect(saveBar()).toBe('Default for new work: Codex (preferred profile) → Claude Code (preferred profile)');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(harness.value).toBe('runtime:codex_cli');
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
@@ -381,7 +418,7 @@ describe('NewWorkDefaultsCard', () => {
     await screen.findByRole('option', { name: /claude-team/ });
     changeHarness();
     fireEvent.change(screen.getByLabelText('Default for new work'), { target: { value: 'profile:claude-team' } });
-    expect(screen.getByText(/Provider profile: Not set → claude-team.*Claude Code/)).toBeTruthy();
+    expect(saveBar()).toBe('Default for new work: Codex (preferred profile) → claude-team (Claude Code)');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await screen.findByText('Defaults saved');
     expect(patches()).toHaveLength(1);
@@ -414,7 +451,7 @@ describe('NewWorkDefaultsCard', () => {
     current.categories.Workflow[1]!.effective_value = 'disabled';
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] }); });
     await waitFor(() => expect((screen.getByLabelText('Default for new work') as HTMLSelectElement).value).toBe('runtime:claude_code'));
-    expect(screen.getByText('Harness: Codex → Claude Code')).toBeTruthy();
+    expect(saveBar()).toBe('Default for new work: Codex (preferred profile) → Claude Code (preferred profile)');
     expect((screen.getByLabelText('Default for new work') as HTMLSelectElement).value).toBe('runtime:claude_code');
     patchResponse = respond({ error: 'version_conflict', message: 'Changed elsewhere', key: runtimeKey }, 409);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

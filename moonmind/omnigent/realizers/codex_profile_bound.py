@@ -186,7 +186,12 @@ class CodexProfileBoundRealizer:
 
             lore_adapter = build_lore_repository_adapter_from_environment()
             host_repository = OmnigentOAuthHostRepository(session_factory)
+            from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+                bind_remediation_context_inputs,
+            )
+
             coordinator = OmnigentProfileBoundExecutionCoordinator(
+                request_input_binder=bind_remediation_context_inputs,
                 session_factory=session_factory,
                 lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
                 host_repository=host_repository,

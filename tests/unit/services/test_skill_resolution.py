@@ -127,6 +127,19 @@ async def test_terminal_contract_rejects_rooted_posix_path() -> None:
         )
 
 
+async def test_remediation_skill_compiles_execution_outcome_contract():
+    result = await AgentSkillResolver(loaders=[BuiltInSkillLoader()]).resolve(
+        SkillSelector(include=[{"name": "remediate-workflow"}]),
+        SkillResolutionContext(snapshot_id="snap-remediation"),
+    )
+    entry = next(
+        item for item in result.skills if item.skill_name == "remediate-workflow"
+    )
+    assert entry.terminal_contract is not None
+    assert entry.terminal_contract.contract_id == "remediate_workflow_terminal.v1"
+    assert entry.terminal_contract.relative_path == "artifacts/remediation-result.json"
+
+
 async def test_resolver_can_resolve_empty_selector():
     resolver = AgentSkillResolver()
     context = SkillResolutionContext(snapshot_id="snap-123", allow_local_skills=True)
