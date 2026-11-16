@@ -111,7 +111,7 @@ The parent records the automation child ID and waits in `awaiting_external`, rea
 
 ## 5. MergeAutomation Input and Output
 
-Inputs include parent workflow/run identity, publishContextRef, frozen mergeAutomationConfig, scoped publication provenance, and, for resolver modes, the resolver launch template. Runtime/Profile identity comes from the parent's admitted selection, and a resolver child receives newly admitted execution ownership rather than the parent's credentials or plan. For Omnigent, compact `parentOmnigentExecutionPlan` is the authority for preparing a fresh child plan, not the child plan itself.
+Inputs include parent workflow/run identity, publishContextRef, frozen mergeAutomationConfig, scoped publication provenance, and, for resolver modes, the resolver launch template. Runtime/Profile identity comes from the parent's admitted selection, and a resolver child receives newly admitted execution ownership rather than the parent's credentials or plan. For Omnigent, compact `parentOmnigentExecutionPlan` is the authority for preparing a fresh child plan, not the child plan itself; the child re-admits the parent's connection for the principal the parent was granted, because the gate's own owner may not be on that connection's allow-list.
 
 Jira-backed work carries canonical jiraIssueKey and normally enables post-merge Jira completion; an explicit `postMergeJira.issueKey` is validated independently. GitHub-issue-backed work carries the repository/issue number for post-merge GitHub completion. Neither operation lives inside `pr-resolver`.
 

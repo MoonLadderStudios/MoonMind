@@ -67,6 +67,9 @@ class HarnessPlatformFailure(StrEnum):
     OMNIGENT_GENERIC_REALIZER_NOT_READY = "OMNIGENT_GENERIC_REALIZER_NOT_READY"
     OMNIGENT_GENERIC_DISPATCH_FAILED = "OMNIGENT_GENERIC_DISPATCH_FAILED"
     OMNIGENT_WORKSPACE_SAVE_FAILED = "OMNIGENT_WORKSPACE_SAVE_FAILED"
+    # Artifact storage stayed full or unreachable past its outage window. The
+    # attempt's workspace was saved or kept, so only the step restarts.
+    OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE = "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
     OMNIGENT_CURRENT_TURN_NOT_STARTED = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
     OMNIGENT_SESSION_HOST_LOST = "OMNIGENT_SESSION_HOST_LOST"
 
@@ -132,8 +135,29 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_WORKSPACE_SAVE_FAILED: "do_not_retry",
+    HarnessPlatformFailure.OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE: "retry_step_execution",
 }
 
 
 def remediation_for(code: HarnessPlatformFailure | str) -> str:
     return _FAILURE_REMEDIATION.get(str(code), "contact_administrator")
+
+
+def artifact_storage_outage(exc: BaseException | None) -> BaseException | None:
+    """Return the artifact storage outage in ``exc``'s cause chain, if any.
+
+    Recognized by the artifact service's error contract (a retryable failure of
+    its ``storage`` dependency, such as a full disk) so domain code can classify
+    it without importing the storage infrastructure.
+    """
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        if (
+            getattr(exc, "dependency", None) == "storage"
+            and getattr(exc, "retryable", False) is True
+        ):
+            return exc
+        seen.add(id(exc))
+        exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+    return None

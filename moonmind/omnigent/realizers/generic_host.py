@@ -30,6 +30,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+    artifact_storage_outage,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
@@ -70,6 +71,20 @@ _PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
 _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240, 600)
 _TRANSIENT_PUBLICATION_WINDOW_SECONDS = 2 * 60 * 60
 
+#: Waits between saves of a finished turn's workspace while artifact storage is
+#: full or unreachable. The disk behind it fills between hourly cleanups, so
+#: saves outlast one cleanup cycle, the window artifact-writing Activities use.
+#: The provider turn is already durable; a successor would bill it again.
+_STORAGE_SAVE_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 300.0)
+_STORAGE_SAVE_WINDOW_SECONDS = 75 * 60
+
+
+def _windowed_retry_delay(
+    attempt: int, delays: tuple[float, ...], window_seconds: float
+) -> float | None:
+    waits = [delays[min(index, len(delays) - 1)] for index in range(attempt + 1)]
+    return waits[-1] if sum(waits) <= window_seconds else None
+
 
 def _publication_retry_delay(attempt: int, *, transient: bool) -> float | None:
     """Return the wait after failed ``attempt``, or ``None`` once exhausted.
@@ -81,9 +96,11 @@ def _publication_retry_delay(attempt: int, *, transient: bool) -> float | None:
     if not transient:
         delays = _PUBLICATION_RETRY_DELAYS_SECONDS
         return delays[attempt] if attempt < len(delays) else None
-    delays = _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
-    waits = [delays[min(index, len(delays) - 1)] for index in range(attempt + 1)]
-    return waits[-1] if sum(waits) <= _TRANSIENT_PUBLICATION_WINDOW_SECONDS else None
+    return _windowed_retry_delay(
+        attempt,
+        _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS,
+        _TRANSIENT_PUBLICATION_WINDOW_SECONDS,
+    )
 
 
 def _publication_exhausted(
@@ -107,6 +124,39 @@ def _publication_exhausted(
                 **(result.metadata or {}),
                 "unfinishedPhase": "publication",
                 "workPreserved": bool(saved),
+            },
+        }
+    )
+
+
+def _storage_save_exhausted(
+    result: AgentRunResult, failure: BaseException
+) -> AgentRunResult:
+    """End a finished turn whose save outlasted artifact storage's window.
+
+    Cleanup keeps the unsaved workspace. Restarting the step would bill the
+    finished turn again from nothing saved, so the step stops instead.
+    """
+
+    return result.model_copy(
+        update={
+            "failure_class": "integration_error",
+            "provider_error_code": (
+                HarnessPlatformFailure.OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE.value
+            ),
+            "retry_recommendation": "do_not_retry",
+            "retry_disposition": "no_retry",
+            "objective_outcome": "failed",
+            "summary": (
+                f"{failure}. The agent's turn finished, but its workspace could "
+                "not be saved before the storage outage window closed; cleanup "
+                "keeps the unsaved workspace."
+            ),
+            "metadata": {
+                **(result.metadata or {}),
+                "artifactStorageFailureCode": getattr(failure, "code", None),
+                "unfinishedPhase": "save",
+                "workPreserved": False,
             },
         }
     )
@@ -949,6 +999,12 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
+            storage_result = await self._artifact_storage_result(
+                plan, binding, primary_error
+            )
+            if storage_result is not None:
+                binding, result = storage_result
+                primary_error = None
             if primary_error is None:
                 result, binding, cleanup_error = (
                     await self._fence_successor_on_predecessor_stop(
@@ -979,13 +1035,16 @@ class GenericOmnigentHostRealizer:
             primary_error is not None
             and cleanup_error is None
             and binding is not None
-            and str(getattr(primary_error, "code", ""))
-            == HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE.value
+            and (
+                str(getattr(primary_error, "code", ""))
+                == HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE.value
+                or artifact_storage_outage(primary_error) is not None
+            )
             and binding.state is RuntimeBindingState.cleaned
             and _records_completed_compute(binding)
         ):
-            # Re-admission would start a new binding and repeat a provider turn
-            # that already completed. Its durable receipts finish only the
+            # Re-admission or a successor Step Execution would repeat a provider
+            # turn that already completed. Its durable receipts finish only the
             # unfinished save, publication, or reporting without a provider.
             return await self._reconcile_finalization(request, binding)
         if primary_error is not None and cleanup_error is None and binding is not None:
@@ -1003,6 +1062,50 @@ class GenericOmnigentHostRealizer:
         # not overwrite an objectively completed provider turn.
         _ = cleanup_error
         return result
+
+    async def _artifact_storage_result(
+        self,
+        plan: OmnigentExecutionPlanEnvelope,
+        binding: StableRuntimeBinding,
+        primary_error: BaseException | None,
+    ) -> tuple[StableRuntimeBinding, AgentRunResult] | None:
+        """Turn an attempt stopped by artifact storage into a step restart.
+
+        Cleanup has already saved the workspace or kept its unsaved copy, so
+        the work survives this attempt. The successor Step Execution resumes
+        from it under the existing predecessor-stop fence. A finished provider
+        turn is never restarted: its recorded finalization resumes instead.
+        """
+
+        from moonmind.omnigent.attempt_completion import (
+            artifact_storage_unavailable_result,
+        )
+
+        if not isinstance(primary_error, Exception) or _records_completed_compute(
+            binding
+        ):
+            return None
+        failure = artifact_storage_outage(primary_error)
+        if failure is None:
+            return None
+        result = artifact_storage_unavailable_result(
+            failure,
+            phases=binding.phaseResults,
+            metadata={
+                "executionPlanRef": plan.planRef,
+                "runtimeBindingRef": binding.bindingId,
+                "supportCombinationIdentity": execution_support_identity(plan),
+            },
+        )
+        binding = await self._update_binding(
+            binding,
+            updates={
+                "terminalResult": result.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                )
+            },
+        )
+        return binding, result
 
     def _record_cleanup_outcome(
         self,
@@ -1566,9 +1669,15 @@ class GenericOmnigentHostRealizer:
                         now, finishing=context.finishing_deadline is not None
                     )
                 ):
-                    await self._save(request, sink)
+                    storage_failure = await self._save_through_storage_outage(
+                        request, sink
+                    )
             else:
-                await self._save(request, sink)
+                storage_failure = await self._save_through_storage_outage(
+                    request, sink
+                )
+            if storage_failure is not None:
+                result = _storage_save_exhausted(result, storage_failure)
         saved = (sink.binding.phaseResults or {}).get("saved")
         if saved:
             result = result.model_copy(update={"metadata": {
@@ -1689,6 +1798,37 @@ class GenericOmnigentHostRealizer:
         result = AgentRunResult.model_validate(result.model_dump(mode="json", by_alias=True))
         await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
         return result
+
+    async def _save_through_storage_outage(self, request, sink):
+        """Save a finished turn's workspace, waiting out an artifact storage outage.
+
+        Returns the outage once it outlasts the window; cleanup then keeps the
+        unsaved workspace. The step's execution allowance bounds every wait.
+        """
+
+        attempt = 0
+        while True:
+            try:
+                await self._save(request, sink)
+                return None
+            except Exception as exc:
+                failure = artifact_storage_outage(exc)
+                if failure is None:
+                    raise
+                delay = _windowed_retry_delay(
+                    attempt,
+                    _STORAGE_SAVE_RETRY_DELAYS_SECONDS,
+                    _STORAGE_SAVE_WINDOW_SECONDS,
+                )
+                if delay is None:
+                    return failure
+                logger.warning(
+                    "Workspace save waiting %ss for artifact storage (%s)",
+                    delay,
+                    getattr(failure, "code", type(failure).__name__),
+                )
+            await asyncio.sleep(delay)
+            attempt += 1
 
     async def _save(self, request, sink):
         checkpoint = await self._workspace_publisher.save_request_workspace(request)
@@ -1839,17 +1979,29 @@ class GenericOmnigentHostRealizer:
         cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
         if self._artifacts is not None:
-            evidence_ref = await self._artifacts.write_json(
-                request=request,
-                name="generic-host-cleanup.json",
-                payload={
-                    "bindingId": binding.bindingId,
-                    "executionPlanRef": binding.executionPlanRef,
-                    "results": cleanup_evidence,
-                    "providerCapacityReleaseOrder": "last",
-                },
-                link_type="evidence.cleanup",
-            )
+            try:
+                evidence_ref = await self._artifacts.write_json(
+                    request=request,
+                    name="generic-host-cleanup.json",
+                    payload={
+                        "bindingId": binding.bindingId,
+                        "executionPlanRef": binding.executionPlanRef,
+                        "results": cleanup_evidence,
+                        "providerCapacityReleaseOrder": "last",
+                    },
+                    link_type="evidence.cleanup",
+                )
+            except Exception as exc:
+                if artifact_storage_outage(exc) is None:
+                    raise
+                # The host is already stopped. Holding provider capacity until
+                # the store recovers would block the step's successor too.
+                logger.warning(
+                    "Cleanup evidence for binding %s was not stored (%s); "
+                    "settlement stays on the binding",
+                    binding.bindingId,
+                    getattr(exc, "code", type(exc).__name__),
+                )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
         attestation_refs = dict(binding.attestationRefs)

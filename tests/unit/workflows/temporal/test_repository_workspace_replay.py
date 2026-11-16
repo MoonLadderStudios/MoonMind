@@ -252,3 +252,73 @@ async def test_repository_projection_executes_and_replays_in_sdk_sandbox():
         await Replayer(workflows=[RepositoryProjectionSandboxFixture]).replay_workflow(
             history
         )
+
+
+@activity.defn(name="repository.observe.pinned")
+async def _pinned_observe(payload):
+    from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+    request = AgentExecutionRequest.model_validate(payload)
+    source = compile_workspace_source(request.workspace_spec)
+    assert source.repository_commit_sha == "d" * 40
+    if request.pinned_repository_workspace_handoff:
+        assert source.kind == "checkpoint"
+        assert source.checkpoint_ref == "artifact://verified-save"
+        return "shared-save"
+    assert source.kind == "repository"
+    assert "pinnedRepositoryWorkspaceHandoff" not in payload
+    return "retained-native"
+
+
+@workflow.defn
+class PinnedRepositoryHandoffFixture:
+    @workflow.run
+    async def run(self):
+        request = _request()
+        request.step_execution.runtime_context_policy = "fresh_agent_run"
+        request.workspace_spec["workspaceSource"]["repositoryTarget"]["revision"] = {
+            "kind": "git_commit", "commitSha": "d" * 40,
+        }
+        request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
+        if request.pinned_repository_workspace_handoff:
+            child = MoonMindAgentRun()
+            child._execution_budget = None
+            child.final_result = AgentRunResult(metadata={
+                "savedWorkspaceCheckpoint": {"archiveRef": "artifact://verified-save"},
+            })
+            request = child._pool_cooldown_retry_request(request)
+        return await workflow.execute_activity(
+            _pinned_observe, request.model_dump(mode="json", by_alias=True),
+            start_to_close_timeout=timedelta(seconds=5),
+        )
+
+
+@pytest.mark.asyncio
+async def test_pinned_repository_owner_boundary_replays_retained_and_current(monkeypatch):
+    from moonmind.workflows.temporal.workflows.run import RUN_PINNED_REPOSITORY_WORKSPACE_PATCH
+
+    patched = workflow.patched
+    async with await WorkflowEnvironment.start_time_skipping() as environment:
+        for enabled in (False, True):
+            queue = f"pinned-owner-{enabled}"
+            with monkeypatch.context() as recorded:
+                if not enabled:
+                    recorded.setattr(workflow, "patched", lambda marker: (
+                        False if marker == RUN_PINNED_REPOSITORY_WORKSPACE_PATCH else patched(marker)
+                    ))
+                async with Worker(
+                    environment.client, task_queue=queue,
+                    workflows=[PinnedRepositoryHandoffFixture], activities=[_pinned_observe],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    workflow_failure_exception_types=[Exception],
+                ):
+                    handle = await environment.client.start_workflow(
+                        PinnedRepositoryHandoffFixture.run,
+                        id=queue, task_queue=queue, execution_timeout=timedelta(seconds=30),
+                    )
+                    assert await handle.result() == ("shared-save" if enabled else "retained-native")
+                    history = await handle.fetch_history()
+            await Replayer(
+                workflows=[PinnedRepositoryHandoffFixture],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ).replay_workflow(history)

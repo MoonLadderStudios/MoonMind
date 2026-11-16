@@ -213,6 +213,16 @@ def get_activity_task_queue(
     return route.task_queue
 
 
+#: How long artifact writes outlast a full or unavailable artifact store. The
+#: shared Docker disk that backs it fills up between hourly storage cleanups, so
+#: one whole cleanup cycle plus margin keeps saved work from failing a workflow.
+ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS = 75 * 60
+# With the workflows' 5s initial interval doubling to the 300s cap, 20 attempts
+# keep retrying for about 70 minutes before the window closes them.
+_ARTIFACT_STORAGE_OUTAGE_ATTEMPTS = 20
+_ARTIFACT_STORAGE_OUTAGE_MAX_INTERVAL_SECONDS = 300
+
+
 def _activity_retries(
     *, max_attempts: int, max_interval_seconds: int, non_retryable: tuple[str, ...] = ()
 ) -> TemporalActivityRetries:
@@ -438,8 +448,13 @@ def build_default_activity_catalog(
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 120),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+            timeouts=TemporalActivityTimeouts(
+                60, ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS
+            ),
+            retries=_activity_retries(
+                max_attempts=_ARTIFACT_STORAGE_OUTAGE_ATTEMPTS,
+                max_interval_seconds=_ARTIFACT_STORAGE_OUTAGE_MAX_INTERVAL_SECONDS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="artifact.write_complete",
@@ -447,8 +462,13 @@ def build_default_activity_catalog(
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 120),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+            timeouts=TemporalActivityTimeouts(
+                60, ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS
+            ),
+            retries=_activity_retries(
+                max_attempts=_ARTIFACT_STORAGE_OUTAGE_ATTEMPTS,
+                max_interval_seconds=_ARTIFACT_STORAGE_OUTAGE_MAX_INTERVAL_SECONDS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="artifact.publish_report_bundle",
@@ -700,8 +720,18 @@ def build_default_activity_catalog(
             capability_class="sandbox",
             task_queue=cfg.activity_sandbox_task_queue,
             fleet=SANDBOX_FLEET,
-            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            # Saves the interrupted step's work into artifact storage; only a
+            # storage outage uses the long window, other failures keep two
+            # attempts (enforced by the Activity).
+            timeouts=TemporalActivityTimeouts(
+                120,
+                ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS,
+                heartbeat_timeout_seconds=30,
+            ),
+            retries=_activity_retries(
+                max_attempts=_ARTIFACT_STORAGE_OUTAGE_ATTEMPTS,
+                max_interval_seconds=_ARTIFACT_STORAGE_OUTAGE_MAX_INTERVAL_SECONDS,
+            ),
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(

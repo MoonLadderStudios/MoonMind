@@ -23,6 +23,49 @@ MAX_CONTINUATIONS = 2
 VERIFICATION_READ_BUDGET_SECONDS = 90
 
 
+def artifact_storage_unavailable_result(
+    failure, *, phases=None, metadata=None
+) -> AgentRunResult:
+    """Report an attempt stopped by artifact storage, keeping its work.
+
+    ``failure`` is the storage error; ``phases`` the attempt's recorded
+    runtime-binding phases, which say whether cleanup saved its workspace or
+    kept the unsaved copy for the step's next attempt.
+    """
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformFailure,
+        remediation_for,
+    )
+
+    phases = phases or {}
+    saved = phases.get("saved")
+    retained = "saveDeferred" in phases and not saved
+    code = HarnessPlatformFailure.OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE.value
+    if saved:
+        outcome = "The agent's work was saved for the step's next attempt."
+    elif retained:
+        outcome = "The agent's unsaved workspace was kept for the step's next attempt."
+    else:
+        outcome = "This attempt stopped."
+    result_metadata = {
+        **(metadata or {}),
+        "artifactStorageFailureCode": getattr(failure, "code", None),
+        "unfinishedPhase": "artifact_storage",
+        "workPreserved": bool(saved),
+        "unsavedWorkspaceRetained": retained,
+    }
+    if saved:
+        result_metadata["savedWorkspaceCheckpoint"] = saved
+    return AgentRunResult(
+        summary=f"{failure}. {outcome}",
+        failureClass="integration_error",
+        providerErrorCode=code,
+        retryRecommendation=remediation_for(code),
+        metadata=result_metadata,
+    )
+
+
 def recorded_attempt_result(binding):
     """Reconcile terminal evidence without reacquiring released resources."""
     phases = binding.phaseResults or {}

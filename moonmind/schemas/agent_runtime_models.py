@@ -1360,6 +1360,13 @@ class AgentExecutionRequest(BaseModel):
         alias="canonicalRepositoryWorkspaceHandoff",
         exclude_if=lambda value: not value,
     )
+    # Separate from the branch-only handoff so retained native pin histories
+    # keep their recorded owner until the Run controller records this patch.
+    pinned_repository_workspace_handoff: bool = Field(
+        False,
+        alias="pinnedRepositoryWorkspaceHandoff",
+        exclude_if=lambda value: not value,
+    )
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
@@ -1798,6 +1805,9 @@ class AgentRunResult(BaseModel):
             elif failure in {"system_error", "execution_error"} or recommendation in {
                 "retry_step_execution",
                 "retry_transient_upstream",
+                # Host credential/image materialization failed before the
+                # agent session ran; a bounded re-dispatch resumes the pull.
+                "retry_materialization",
             }:
                 disposition = "retry"
             else:

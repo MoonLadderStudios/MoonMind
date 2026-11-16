@@ -152,6 +152,9 @@ class CompiledWorkspaceSource:
     # omits it entirely: no clone and no source-credential lookup.
     repository_ref: str | None = None
     repository_branch: str | None = None
+    # Authored source provenance; checkpoint content, not this initial pin,
+    # determines HEAD after a controller save.
+    repository_commit_sha: str | None = None
     # Explicit input policy: additive refs applied after an authoritative
     # restore, and the digest binding the admitted input set.
     additive_refs: tuple[str, ...] = ()
@@ -180,6 +183,8 @@ class CompiledWorkspaceSource:
                 or "scratch"
             )
         return {
+            **({"repositoryCommitSha": self.repository_commit_sha}
+               if self.repository_commit_sha else {}),
             "kind": self.kind,
             "sourceDigest": source_digest,
             "repositoryBase": (
@@ -777,6 +782,7 @@ def compile_workspace_source(
             artifact_digest=digest,
             repository_ref=content_repo,
             repository_branch=content_branch,
+            repository_commit_sha=_compiled_repository_commit_sha(spec_map),
             additive_refs=additive_refs,
             input_manifest_digest=manifest_digest,
             historical=not bool(authored_kind),
@@ -828,6 +834,7 @@ def compile_workspace_source(
             restore_contract_version=version,
             repository_ref=content_repo,
             repository_branch=content_branch,
+            repository_commit_sha=_compiled_repository_commit_sha(spec_map),
             additive_refs=additive_refs,
             input_manifest_digest=manifest_digest,
             historical=not bool(authored_kind),
@@ -890,6 +897,7 @@ def compile_workspace_source(
             overlay_policy=OVERLAY_AUTHORITATIVE,
             repository_ref=target_repo or None,
             repository_branch=target_branch or None,
+            repository_commit_sha=_compiled_repository_commit_sha(spec_map),
             additive_refs=additive_refs,
             input_manifest_digest=manifest_digest,
             historical=not bool(authored_kind),
@@ -909,7 +917,7 @@ def compile_workspace_source(
 
 
 def has_repository_workspace_revision(spec: Mapping[str, Any]) -> bool:
-    """Keep typed revision choices on their existing native owner."""
+    """Detect authored revision choices across supported repository aliases."""
     source = _as_mapping(spec.get("workspaceSource"))
     return any(
         isinstance(target, Mapping) and target.get("revision") is not None
@@ -920,8 +928,47 @@ def has_repository_workspace_revision(spec: Mapping[str, Any]) -> bool:
     )
 
 
+def _compiled_repository_commit_sha(spec: Mapping[str, Any]) -> str | None:
+    # Generic API compilation also precedes native-owner selection. Keep
+    # historical revision payloads intact; only the shared admission/host
+    # boundary demands the supported full-SHA subset.
+    try:
+        return repository_workspace_commit_sha(spec)
+    except WorkspaceSourceError:
+        return None
+
+
+def repository_workspace_commit_sha(spec: Mapping[str, Any]) -> str | None:
+    """Return the exact typed initial Git commit; reject ambiguous aliases."""
+    source = _as_mapping(spec.get("workspaceSource"))
+    commits: set[str] = set()
+    for target in (
+        source.get("repositoryTarget"), source.get("repository"),
+        spec.get("repositoryTarget"), spec.get("repository"),
+    ):
+        if not isinstance(target, Mapping) or target.get("revision") is None:
+            continue
+        revision = target["revision"]
+        if (
+            not isinstance(revision, Mapping)
+            or revision.get("kind") != "git_commit"
+            or not isinstance(revision.get("commitSha"), str)
+            or re.fullmatch(r"[0-9a-fA-F]{40}", revision["commitSha"]) is None
+        ):
+            raise WorkspaceSourceError(
+                WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
+                "shared repository source requires a full typed Git commit SHA",
+            )
+        commits.add(revision["commitSha"].lower())
+    if len(commits) > 1:
+        raise WorkspaceSourceError(
+            WORKSPACE_SOURCE_CONFLICT, "repository revision aliases conflict"
+        )
+    return next(iter(commits), None)
+
+
 def replace_repository_workspace_source(
-    spec: Mapping[str, Any], checkpoint_ref: str
+    spec: Mapping[str, Any], checkpoint_ref: str, *, allow_pinned: bool = False
 ) -> dict[str, Any]:
     """Carry a controller's save over its initial repository source.
 
@@ -947,11 +994,13 @@ def replace_repository_workspace_source(
     authored_repository_source(
         AgentExecutionRequest.model_construct(workspace_spec=dict(spec), parameters={})
     )
-    if has_repository_workspace_revision(spec):
+    if has_repository_workspace_revision(spec) and not allow_pinned:
         raise WorkspaceSourceError(
             WORKSPACE_SOURCE_RUNTIME_UNSUPPORTED,
             "pinned repository source cannot be replaced by a shared controller save",
         )
+    if allow_pinned:
+        repository_workspace_commit_sha(spec)
     replacement = deepcopy(dict(spec))
     replacement.pop("workspaceSource")
     aliases = compile_workspace_source(replacement)
@@ -966,6 +1015,12 @@ def replace_repository_workspace_source(
     target = authored.get("repositoryTarget")
     if isinstance(target, Mapping):
         replacement.setdefault("repositoryTarget", deepcopy(dict(target)))
+    if compiled.repository_commit_sha:
+        target = deepcopy(dict(_as_mapping(replacement.get("repositoryTarget"))))
+        target["revision"] = {
+            "kind": "git_commit", "commitSha": compiled.repository_commit_sha,
+        }
+        replacement["repositoryTarget"] = target
     if compiled.repository_ref:
         replacement["repository"] = compiled.repository_ref
     if compiled.repository_branch:
@@ -1132,6 +1187,7 @@ __all__ = [
     "has_repository_workspace_revision",
     "parse_existing_workspace_grant",
     "replace_repository_workspace_source",
+    "repository_workspace_commit_sha",
     "resolve_workspace_backend",
     "verify_existing_workspace_grant",
     "verify_existing_workspace_grant_signature",

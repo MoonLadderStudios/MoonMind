@@ -492,6 +492,9 @@ AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID = "agent-run-pool-checkpoint-source-v1
 AGENT_RUN_CANONICAL_REPOSITORY_WORKSPACE_PATCH_ID = (
     "agent-run-canonical-repository-workspace-handoff-v1"
 )
+AGENT_RUN_PINNED_REPOSITORY_WORKSPACE_PATCH_ID = (
+    "agent-run-pinned-repository-workspace-handoff-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -6921,7 +6924,11 @@ class MoonMindAgentRun:
                     )
                 ):
                     request.workspace_spec = replace_repository_workspace_source(
-                        request.workspace_spec, saved_workspace
+                        request.workspace_spec, saved_workspace,
+                        allow_pinned=(request.pinned_repository_workspace_handoff
+                            and self._workflow_patch_enabled(
+                                AGENT_RUN_PINNED_REPOSITORY_WORKSPACE_PATCH_ID
+                            )),
                     )
                 else:
                     request.workspace_spec["workspaceCheckpointRestoreRef"] = saved_workspace

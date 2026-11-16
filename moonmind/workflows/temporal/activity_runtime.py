@@ -883,6 +883,28 @@ class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
 
 
+#: Attempts ``workspace.capture_checkpoint`` grants a failure other than an
+#: artifact storage outage, whose longer window comes from the catalog.
+_CHECKPOINT_CAPTURE_ORDINARY_ATTEMPTS = 2
+
+
+def _checkpoint_capture_ordinary_attempts_used() -> bool:
+    """Whether this capture Activity attempt is its last ordinary one.
+
+    The capture code also runs inside other Activities (saving an Omnigent
+    workspace), whose own attempts and budgets must not be reinterpreted.
+    """
+
+    try:
+        info = temporal_activity.info()
+    except RuntimeError:
+        return False
+    return (
+        info.activity_type == "workspace.capture_checkpoint"
+        and info.attempt >= _CHECKPOINT_CAPTURE_ORDINARY_ATTEMPTS
+    )
+
+
 class ArtifactParentAuthorityUnavailable(TemporalActivityRuntimeError):
     """Let the existing publication Activity retry unavailable ancestry."""
 
@@ -2954,10 +2976,27 @@ class TemporalSandboxActivities:
         self,
         request: Mapping[str, Any] | WorkspaceCheckpointCaptureInput,
     ) -> dict[str, Any]:
-        return await _await_with_activity_heartbeats(
-            self._workspace_capture_checkpoint(request),
-            heartbeat_payload={"operation": "workspace.capture_checkpoint"},
-        )
+        try:
+            return await _await_with_activity_heartbeats(
+                self._workspace_capture_checkpoint(request),
+                heartbeat_payload={"operation": "workspace.capture_checkpoint"},
+            )
+        except TemporalArtifactUnavailableError:
+            # The catalog sizes this Activity's retries to outlast a full store.
+            raise
+        except Exception as exc:
+            if not _checkpoint_capture_ordinary_attempts_used():
+                raise
+            # Other failures keep the budget they had before the outage window.
+            if isinstance(exc, temporal_exceptions.ApplicationError):
+                if exc.non_retryable:
+                    raise
+                raise temporal_exceptions.ApplicationError(
+                    exc.message, *exc.details, type=exc.type, non_retryable=True
+                ) from exc
+            raise temporal_exceptions.ApplicationError(
+                str(exc), type=type(exc).__name__, non_retryable=True
+            ) from exc
 
     async def _workspace_capture_checkpoint(
         self,
@@ -3076,7 +3115,8 @@ class TemporalSandboxActivities:
                 repositories=repositories,
                 exclusions=exclusions,
             )
-        except TemporalActivityRuntimeError:
+        except (TemporalActivityRuntimeError, TemporalArtifactUnavailableError):
+            # A storage outage is not invalid evidence; the caller waits it out.
             raise
         except Exception as exc:
             result = WorkspaceCheckpointCaptureResult(

@@ -84,7 +84,9 @@ of directing credential rematerialization. A transport failure or rate limit
 that outlasts in-place recovery reports
 `OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE` with `retry_step_execution`: no session
 exists yet, so the parent's existing bounded step retry starts a fresh Step
-Execution instead of failing the workflow. Hermetic coverage
+Execution instead of failing the workflow. `OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED`
+(`retry_materialization`, for example a timed-out host image pull, which resumes
+from the layers already pulled) gets the same bounded retry. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
 | `moonmind/omnigent/legacy_retirement.py`, `session_supervisor_rollback.py` | Legacy admission table, rollback authority | Governance |
@@ -179,11 +181,19 @@ interpretation. Restored directories and contents transfer to the
 selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
-Unpinned canonical GitHub repository sources use the selected account's shared plan when
-the controller supports repository-to-save handoffs. The workspace-source owner
-preserves repository, connection, access mode and branch intent when a controller
-save replaces the initial checkout; authored source conflicts remain errors.
-Older parents retain native dispatch. Fresh preparation selects the authored
+Canonical GitHub repository sources use the selected account's shared plan when
+the controller supports repository-to-save handoffs. A separate versioned
+controller capability also admits a typed full Git commit SHA with publication
+mode `none`; abbreviated or unsupported revisions retain their existing owner.
+The shared owner verifies the requested commit before first readiness and binds
+it into immutable workspace intent and readiness identity. Transient pin fetches
+resume only after the trusted clone/configuration phase completes; partial
+imports are rebuilt in private staging within the existing retry budget. A controller save
+retains the original pin as provenance, but restores its own verified HEAD,
+index and worktree instead of resetting later work to the initial commit.
+The workspace-source owner preserves repository, connection, access mode and
+branch intent when a controller save replaces the initial checkout; authored
+source conflicts remain errors. Older parents retain native dispatch. Fresh preparation selects the authored
 target branch through the existing volume owner; redelivery preserves later
 branches and edits. New sandbox saves restore their captured branch and history,
 including detached HEAD; retained manifests keep their prior restore behavior.

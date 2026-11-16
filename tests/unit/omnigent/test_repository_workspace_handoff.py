@@ -321,7 +321,7 @@ def test_retained_cooldown_does_not_interpret_authored_metadata(monkeypatch, met
 
 @pytest.mark.parametrize("location", ["nested", "outer"])
 @pytest.mark.parametrize("handoff", ["continuation", "step-retry", "cooldown"])
-def test_controller_save_does_not_erase_unsupported_revision(
+def test_retained_controller_save_does_not_erase_pinned_revision(
     monkeypatch, location, handoff
 ):
     from moonmind.schemas.agent_runtime_models import AgentRunResult
@@ -330,7 +330,10 @@ def test_controller_save_does_not_erase_unsupported_revision(
     )
 
     _configure_workflow_runtime(monkeypatch)
-    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(
+        run_module.workflow, "patched",
+        lambda patch: patch != run_module.RUN_PINNED_REPOSITORY_WORKSPACE_PATCH,
+    )
     selected = request("second", "reuse_session_same_epoch")
     selected.workspace_spec = workspace(nested=location == "nested")
     target = selected.workspace_spec["workspaceSource"].get("repositoryTarget")
@@ -369,3 +372,47 @@ def test_controller_save_does_not_erase_unsupported_revision(
             )
             child._pool_cooldown_retry_request(selected)
     assert selected.workspace_spec == original
+
+
+@pytest.mark.parametrize("handoff", ["continuation", "step-retry", "cooldown"])
+def test_patched_controller_save_preserves_pin_as_checkpoint_provenance(monkeypatch, handoff):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from tests.unit.workflows.temporal.workflows.test_run_step_ledger import _configure_workflow_runtime
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    selected = request("second", "reuse_session_same_epoch")
+    selected.workspace_spec = workspace(nested=True)
+    selected.workspace_spec["workspaceSource"]["repositoryTarget"]["revision"] = {
+        "kind": "git_commit", "commitSha": "b" * 40,
+    }
+    original = deepcopy(selected.workspace_spec)
+    parent = run_module.MoonMindUserWorkflow()
+    parent._record_shared_runtime_context(request(), result())
+    if handoff == "continuation":
+        built = parent._bind_shared_runtime_context(selected)
+    elif handoff == "step-retry":
+        built = parent._build_agent_execution_request(
+            node_inputs={"instructions": "Continue saved work.", "runtime": {"mode": "codex_cli"}},
+            node_id="work", tool_name="codex_cli",
+            workflow_parameters={"workspaceSpec": selected.workspace_spec},
+            trusted_remediation_checkpoint_restore_ref="artifact://verified-save",
+        )
+    else:
+        child = child_module.MoonMindAgentRun()
+        child._execution_budget = None
+        monkeypatch.setattr(child, "_workflow_patch_enabled", lambda _patch: True)
+        selected.canonical_repository_workspace_handoff = True
+        selected.pinned_repository_workspace_handoff = True
+        child.final_result = AgentRunResult(metadata={
+            "savedWorkspaceCheckpoint": {"archiveRef": "artifact://verified-save"},
+        })
+        built = child._pool_cooldown_retry_request(selected)
+    compiled = source.compile_workspace_source(built.workspace_spec)
+    assert compiled.kind == "checkpoint"
+    assert compiled.repository_commit_sha == "b" * 40
+    assert compiled.checkpoint_ref == (
+        "artifact://verified-workspace" if handoff == "continuation" else "artifact://verified-save"
+    )
+    assert selected.workspace_spec == original
+    assert authored_repository_access({"workspaceSpec": built.workspace_spec}) == ("selected-connection", False)

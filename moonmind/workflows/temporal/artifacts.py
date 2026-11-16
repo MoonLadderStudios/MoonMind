@@ -340,6 +340,27 @@ class TemporalArtifactUnavailableError(TemporalArtifactError):
         self.code = f"artifact_{dependency}_unavailable"
         super().__init__(f"Artifact {dependency} is temporarily unavailable")
 
+
+class TemporalArtifactStorageFullError(TemporalArtifactUnavailableError):
+    """The storage transport has no free space; it returns after a cleanup.
+
+    It stays an unavailability so every owner waits it out the same way, but
+    keeps its own code so diagnostics say "disk full" instead of a vague outage.
+    """
+
+    def __init__(self, artifact_id: str, *, operation: str) -> None:
+        super().__init__(artifact_id, dependency="storage", operation=operation)
+        self.code = "artifact_storage_full"
+
+    def __str__(self) -> str:
+        return "Artifact storage is full (disk full)"
+
+
+#: MinIO reports a full drive as ``XMinioStorageFull`` with HTTP 507.
+_STORAGE_FULL_CODES = frozenset(
+    {"XMinioStorageFull", "StorageFull", "InsufficientStorage"}
+)
+
 class TemporalArtifactStorageAccessError(TemporalArtifactError):
     """The storage transport rejected its configured access, not the reader."""
 
@@ -384,16 +405,22 @@ def _raise_storage_error(exc: Exception, *, artifact_id: str, operation: str, re
     missing = read and isinstance(exc, FileNotFoundError)
     denied = isinstance(exc, PermissionError)
     unavailable = isinstance(exc, (ConnectionError, TimeoutError, S3ConnectionError, ReadTimeoutError))
+    full = False
     if isinstance(exc, ClientError):
         code = str(exc.response.get("Error", {}).get("Code", ""))
         missing = read and code in {"NoSuchKey", "NotFound", "404"}
         denied = code in {"AccessDenied", "403", "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken"}
         status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        full = code in _STORAGE_FULL_CODES or status == 507
         unavailable = code in {"SlowDown", "RequestTimeout", "RequestTimeoutException", "InternalError", "InternalFailure", "ServiceUnavailable", "Throttling", "NoSuchBucket"} or status == 429 or status >= 500
     if missing:
         raise TemporalArtifactBytesMissingError(artifact_id, operation=operation) from exc
     if denied:
         raise TemporalArtifactStorageAccessError(artifact_id, operation=operation) from exc
+    if full:
+        raise TemporalArtifactStorageFullError(
+            artifact_id, operation=operation
+        ) from exc
     if unavailable:
         raise TemporalArtifactUnavailableError(
             artifact_id, dependency="storage", operation=operation
