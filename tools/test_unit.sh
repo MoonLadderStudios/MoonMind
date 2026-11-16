@@ -137,7 +137,7 @@ fi
 
 if [[ "$uses_temporal_test_server" == "1" ]]; then
     temporal_test_tmpdir="${TMPDIR:-/tmp}"
-    rm -f "$temporal_test_tmpdir"/temporal-test-server-sdk-python-*.downloading
+    rm -f "$temporal_test_tmpdir"/temporal-test-server-*.downloading
     "$PYTHON_BIN" api_service/docker/cache_temporal_test_server.py
 fi
 
