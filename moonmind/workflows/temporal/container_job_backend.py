@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from moonmind.config.container_backend_settings import (
+    CacheSource,
     ContainerBackendReadinessError,
     ContainerBackendSettings,
     LocalImageRecipe,
@@ -763,28 +764,15 @@ class DockerContainerJobBackend:
         suffix = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
         return f"moonmind-container-job-{suffix}"
 
-    @staticmethod
-    def _owner_scoped_cache_volume_name(
-        request: ContainerJobActivityRequest,
-        base_volume_name: str,
-    ) -> tuple[str, str]:
-        owner_identity = (
-            f"{request.owner.principal_type}:{request.owner.principal_id}"
-        )
-        owner_digest = hashlib.sha256(owner_identity.encode("utf-8")).hexdigest()[:20]
-        prefix = base_volume_name[: 255 - len(owner_digest) - 1]
-        return f"{prefix}-{owner_digest}", owner_digest
+    async def _ensure_cache_volume(self, cache: CacheSource) -> str:
+        """Materialize the deployment's declared cache volume for reuse.
 
-    async def _ensure_owner_scoped_cache_volume(
-        self,
-        request: ContainerJobActivityRequest,
-        *,
-        base_volume_name: str,
-        cache_ref: str,
-    ) -> str:
-        volume_name, owner_digest = self._owner_scoped_cache_volume_name(
-            request, base_volume_name
-        )
+        Job principals are execution-scoped, so a volume keyed by principal
+        was a fresh, never-reused cache per run. Volumes from that scheme carry
+        a ``moonmind.cache_owner`` label, which storage maintenance reclaims;
+        this volume never does. Creating an existing volume returns it as is.
+        """
+
         code, _stdout, _stderr = await self._runner(
             (
                 "volume",
@@ -792,15 +780,13 @@ class DockerContainerJobBackend:
                 "--label",
                 "moonmind.kind=container-job-cache",
                 "--label",
-                f"moonmind.cache_ref={cache_ref}",
-                "--label",
-                f"moonmind.cache_owner={owner_digest}",
-                volume_name,
+                f"moonmind.cache_ref={cache.cache_ref}",
+                cache.volume_name,
             )
         )
         if code:
             raise RuntimeError("container cache volume could not be materialized")
-        return volume_name
+        return cache.volume_name
 
     async def _owned_ownership_label(self, name: str) -> str | None:
         """Return the ownership label of an existing container, or ``None``.
@@ -3314,11 +3300,7 @@ class DockerContainerJobBackend:
                     f"container cache source {cache.cache_ref!r} requires "
                     f"{access} access"
                 )
-            volume_name = await self._ensure_owner_scoped_cache_volume(
-                request,
-                base_volume_name=cache.volume_name,
-                cache_ref=cache.cache_ref,
-            )
+            volume_name = await self._ensure_cache_volume(cache)
             mount = (
                 f"type=volume,src={volume_name},dst={cache.target}"
             )

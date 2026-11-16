@@ -91,7 +91,7 @@ concurrent builds, loads the result into the deployment daemon, and validates
 it before use. Context contents and executable modes determine freshness.
 The build key identifies an image artifact, not runtime compatibility.
 
-Caches retain the existing owner-scoped volume behavior. Resource-file entries
+Every job reuses each declared cache volume. Resource-file entries
 use the same image, cache, and service schemas as backend environment settings.
 Explicit backend environment declarations override matching installed opaque
 references and retain distinct entries. Duplicate references within one source

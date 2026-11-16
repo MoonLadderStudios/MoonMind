@@ -432,6 +432,14 @@ async def test_legacy_recovery_captures_current_dirty_and_untracked_work_before_
     assert (
         runtime._project_github_credential.await_args.args[0] == "currentSelectedToken"
     )
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+    )
+
+    workspace_id = fixture.request.workspace_spec["workspaceLocator"]["workspaceId"]
+    # Recreation can write newer work without rebinding this attempt's owner.
+    # Its recovery checkpoint must stop authorizing early pressure eviction.
+    assert not SandboxWorkspaceRecordStore(tmp_path).save_is_current(workspace_id)
 
 
 @pytest.mark.asyncio

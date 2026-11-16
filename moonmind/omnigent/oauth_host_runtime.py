@@ -891,6 +891,7 @@ class OmnigentOAuthHostRuntime:
             if github_token and gh_required:
                 github_credential_exposure = "agent_readable_unconfined"
         else:
+            self._invalidate_saved_workspace(workspace_source)
             daemon_workspace_root = await self._resolve_daemon_workspace_root()
             daemon_workspace_source = daemon_visible_workspace_path(
                 workspace_source, daemon_root=daemon_workspace_root
@@ -2754,6 +2755,18 @@ class OmnigentOAuthHostRuntime:
     async def remove_container(self, container_name: str) -> None:
         await self._containers.remove_container(container_name)
 
+    def _invalidate_saved_workspace(self, workspace_source: Path) -> None:
+        """A resumed writable host can make a recovery save stale immediately."""
+        authority = (self._workspace_root / "temporal_sandbox").resolve()
+        try:
+            relative = workspace_source.resolve().relative_to(authority)
+        except ValueError:
+            return
+        if relative.parts:
+            store = SandboxWorkspaceRecordStore(self._workspace_root)
+            with store.claims_locked(relative.parts[0]):
+                store.invalidate_saved(relative.parts[0])
+
     async def _launch_on_demand(
         self,
         *,
@@ -2861,6 +2874,7 @@ class OmnigentOAuthHostRuntime:
                         recovery_store=recovery_store,
                         recovery_artifact_gateway=recovery_artifact_gateway,
                     )
+            self._invalidate_saved_workspace(workspace_source)
             return True
         if (recovery_store is not None and recovery_request is not None
                 and hasattr(recovery_store, "get_existing")):
@@ -3159,6 +3173,9 @@ class OmnigentOAuthHostRuntime:
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
         args.append(str(adapter["start_script"]))
+        # Recovery above can save the same attempt without rebinding its
+        # workspace. That save stops being current before writable execution.
+        self._invalidate_saved_workspace(workspace_source)
         try:
             await self._run(*args, env=child_env)
             if cpu_millis < 1:

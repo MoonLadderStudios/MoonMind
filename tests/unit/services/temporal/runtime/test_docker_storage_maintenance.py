@@ -24,6 +24,19 @@ ROUTINE_VOLUME_PRUNE = (
     "--filter",
     "label=com.docker.volume.anonymous",
 )
+# Volumes the pre-reuse backend keyed by run principal. The current backend
+# mounts the declared deployment volume, so these are never reattached.
+LEGACY_CACHE_VOLUME_PRUNE = (
+    "docker",
+    "volume",
+    "prune",
+    "--all",
+    "-f",
+    "--filter",
+    "label=moonmind.kind=container-job-cache",
+    "--filter",
+    "label=moonmind.cache_owner",
+)
 BUILDX_DISCOVERY = (
     "docker",
     "ps",
@@ -33,6 +46,27 @@ BUILDX_DISCOVERY = (
     "--format",
     "{{.ID}}",
 )
+HOLD_DISCOVERY = (
+    "docker",
+    "container",
+    "ls",
+    "--all",
+    "--no-trunc",
+    "--filter",
+    "label=moonmind.kind=image-retention-hold",
+    "--filter",
+    "label=moonmind.deployment=moonmind",
+    "--format",
+    '{{.ID}} {{.Label "moonmind.retained_image_id"}}',
+)
+ROUTINE_COMMANDS = [
+    HOLD_DISCOVERY,
+    ROUTINE_IMAGE_PRUNE,
+    ROUTINE_BUILDER_PRUNE,
+    ROUTINE_VOLUME_PRUNE,
+    LEGACY_CACHE_VOLUME_PRUNE,
+    BUILDX_DISCOVERY,
+]
 
 
 def _usage(percent: int) -> DiskUsageSnapshot:
@@ -60,17 +94,14 @@ async def test_storage_maintenance_prunes_aged_cache_below_high_watermark() -> N
     assert result.pressure_detected is False
     assert result.usage_percent_before == 79
     assert result.commands_attempted == (
+        "image retention hold discovery",
         "age-bounded image prune",
         "age-bounded builder prune",
         "unreferenced anonymous volume prune",
+        "legacy owner-scoped cache volume prune",
         "Buildx builder discovery",
     )
-    assert commands == [
-        ROUTINE_IMAGE_PRUNE,
-        ROUTINE_BUILDER_PRUNE,
-        ROUTINE_VOLUME_PRUNE,
-        BUILDX_DISCOVERY,
-    ]
+    assert commands == ROUTINE_COMMANDS
     assert result.critical_pressure_detected is False
 
 
@@ -134,12 +165,7 @@ async def test_storage_maintenance_prunes_aged_data_at_high_watermark() -> None:
         disk_usage=lambda _path: next(usages),
     )
 
-    assert commands == [
-        ROUTINE_IMAGE_PRUNE,
-        ROUTINE_BUILDER_PRUNE,
-        ROUTINE_VOLUME_PRUNE,
-        BUILDX_DISCOVERY,
-    ]
+    assert commands == ROUTINE_COMMANDS
     assert result.pressure_detected is True
     assert result.critical_pressure_detected is False
     assert result.usage_percent_after == 72
@@ -164,11 +190,10 @@ async def test_storage_maintenance_escalates_while_critical_pressure_remains() -
         disk_usage=lambda _path: next(usages),
     )
 
+    # MoonMind-owned waste (leaked cache volumes) is reclaimed before the
+    # pressure reading that decides whether unused tagged images go too.
     assert commands == [
-        ROUTINE_IMAGE_PRUNE,
-        ROUTINE_BUILDER_PRUNE,
-        ROUTINE_VOLUME_PRUNE,
-        BUILDX_DISCOVERY,
+        *ROUTINE_COMMANDS,
         ("docker", "image", "prune", "-af"),
         ("docker", "builder", "prune", "-af"),
     ]
@@ -194,7 +219,7 @@ async def test_storage_maintenance_continues_after_one_prune_failure() -> None:
         disk_usage=lambda _path: next(usages),
     )
 
-    assert len(commands) == 4
+    assert len(commands) == len(ROUTINE_COMMANDS)
     assert result.errors == ("age-bounded image prune exited with code 1",)
 
 
@@ -283,7 +308,8 @@ async def test_prunes_container_builder_cache_without_host_buildx_configuration(
     assert not any("buildx_buildkit_default_state" in command for command in commands)
     assert not any("rm" in command for command in commands)
     assert [command for command in commands if command[1] == "volume"] == [
-        ROUTINE_VOLUME_PRUNE
+        ROUTINE_VOLUME_PRUNE,
+        LEGACY_CACHE_VOLUME_PRUNE,
     ]
     assert result.errors == ()
 
@@ -338,3 +364,209 @@ async def test_builder_discovery_failure_keeps_other_cleanup_and_reports_error()
 
     assert ROUTINE_BUILDER_PRUNE in commands
     assert result.errors == ("Buildx builder discovery exited with code 1",)
+
+
+HOST_IMAGE = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "1" * 64
+JOB_IMAGE = "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+ABSENT_IMAGE = "ghcr.io/example/never-pulled:1"
+HOST_IMAGE_ID = "sha256:" + "a" * 64
+JOB_IMAGE_ID = "sha256:" + "b" * 64
+SUPERSEDED_IMAGE_ID = "sha256:" + "c" * 64
+
+
+def _retention_runner(
+    commands: list[tuple[str, ...]],
+    *,
+    existing_holds: str = "",
+    create_code: int = 0,
+):
+    image_ids = {HOST_IMAGE: HOST_IMAGE_ID, JOB_IMAGE: JOB_IMAGE_ID}
+
+    async def run(command: Sequence[str]) -> tuple[int, str, str]:
+        command = tuple(command)
+        commands.append(command)
+        if command[1:3] == ("image", "inspect"):
+            ref = command[-1]
+            if ref in image_ids:
+                return 0, image_ids[ref] + "\n", ""
+            return 1, "", f"Error response from daemon: No such image: {ref}"
+        if command == HOLD_DISCOVERY:
+            return 0, existing_holds, ""
+        if command[1:3] == ("container", "create"):
+            return create_code, "", "" if not create_code else "denied"
+        return 0, "", ""
+
+    return run
+
+
+@pytest.mark.asyncio
+async def test_launch_images_are_held_before_any_image_prune() -> None:
+    """An unused Host Class or declared job image survives critical pruning.
+
+    Docker has no image pin, but it never prunes an image a container
+    references. A stopped, never-started hold container per retained image
+    keeps the digest-pinned host image (and the multi-gigabyte job base image)
+    out of both prunes, so the next launch does not re-pull it under pressure.
+    """
+    commands: list[tuple[str, ...]] = []
+    usages = iter((_usage(96), _usage(95), _usage(91)))
+
+    result = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(),
+        command_runner=_retention_runner(
+            commands,
+            existing_holds=(
+                f"{'d' * 64} {HOST_IMAGE_ID}\n{'e' * 64} {SUPERSEDED_IMAGE_ID}\n"
+            ),
+        ),
+        disk_usage=lambda _path: next(usages),
+        retained_images=(HOST_IMAGE, JOB_IMAGE, ABSENT_IMAGE, HOST_IMAGE),
+    )
+
+    first_prune = commands.index(ROUTINE_IMAGE_PRUNE)
+    holds = commands[:first_prune]
+    # The superseded image's hold is released so routine expiry can take it.
+    assert ("docker", "container", "rm", "e" * 64) in holds
+    creates = [command for command in holds if command[1:3] == ("container", "create")]
+    assert len(creates) == 1
+    create = creates[0]
+    assert create[-2:] == (JOB_IMAGE_ID, "true")
+    assert "--pull" in create and create[create.index("--pull") + 1] == "never"
+    assert "moonmind.kind=image-retention-hold" in create
+    assert "moonmind.deployment=moonmind" in create
+    assert f"moonmind.retained_image_id={JOB_IMAGE_ID}" in create
+    assert ("docker", "image", "prune", "-af") in commands[first_prune:]
+    assert result.retained_images == (HOST_IMAGE, JOB_IMAGE)
+    assert result.to_dict()["retainedImages"] == [HOST_IMAGE, JOB_IMAGE]
+    assert result.errors == ()
+
+
+@pytest.mark.asyncio
+async def test_image_prunes_wait_until_launch_images_are_held() -> None:
+    """Fail closed: an unheld launch image is never exposed to a prune."""
+    commands: list[tuple[str, ...]] = []
+    usages = iter((_usage(96), _usage(95), _usage(94)))
+
+    result = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(),
+        command_runner=_retention_runner(commands, create_code=1),
+        disk_usage=lambda _path: next(usages),
+        retained_images=(HOST_IMAGE,),
+    )
+
+    assert not [command for command in commands if command[1:3] == ("image", "prune")]
+    # Every other owner still reclaims, including the critical builder pass.
+    assert ROUTINE_BUILDER_PRUNE in commands
+    assert LEGACY_CACHE_VOLUME_PRUNE in commands
+    assert ("docker", "builder", "prune", "-af") in commands
+    assert result.critical_pressure_detected is True
+    assert result.retained_images == ()
+    assert "image retention hold" in " ".join(result.errors)
+    assert any("image prunes skipped" in error for error in result.errors)
+
+
+class _HoldDaemon:
+    """A daemon that applies label filters and refuses duplicate names."""
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.holds: dict[str, tuple[str, dict[str, str]]] = {}
+        self.created = 0
+
+    def add(self, container_id: str, name: str, labels: dict[str, str]) -> None:
+        self.holds[container_id] = (name, labels)
+
+    @staticmethod
+    def _option_values(command: tuple[str, ...], option: str) -> list[str]:
+        return [command[i + 1] for i, arg in enumerate(command) if arg == option]
+
+    async def __call__(self, command: Sequence[str]) -> tuple[int, str, str]:
+        command = tuple(command)
+        self.commands.append(command)
+        if command[1:3] == ("image", "inspect"):
+            return 0, JOB_IMAGE_ID + "\n", ""
+        if command[1:3] == ("container", "ls"):
+            wanted = [
+                tuple(f.removeprefix("label=").split("=", 1))
+                for f in self._option_values(command, "--filter")
+            ]
+            lines = [
+                f"{container_id} {labels.get('moonmind.retained_image_id', '')}"
+                for container_id, (_name, labels) in self.holds.items()
+                if all(
+                    key in labels and (len(rest) == 0 or labels[key] == rest[0])
+                    for key, *rest in wanted
+                )
+            ]
+            return 0, "".join(line + "\n" for line in lines), ""
+        if command[1:3] == ("container", "rm"):
+            self.holds.pop(command[3], None)
+            return 0, "", ""
+        if command[1:3] == ("container", "create"):
+            name = self._option_values(command, "--name")[0]
+            if any(existing == name for existing, _ in self.holds.values()):
+                return 1, "", f"Conflict. The container name {name} is already in use"
+            labels = dict(
+                label.split("=", 1) for label in self._option_values(command, "--label")
+            )
+            self.created += 1
+            self.add(f"{self.created:064x}", name, labels)
+            return 0, "", ""
+        return 0, "", ""
+
+    def held(self, deployment: str) -> set[str]:
+        return {
+            labels["moonmind.retained_image_id"]
+            for _name, labels in self.holds.values()
+            if labels.get("moonmind.deployment") == deployment
+        }
+
+
+@pytest.mark.asyncio
+async def test_each_deployment_reconciles_only_its_own_holds() -> None:
+    """Deployments sharing a daemon keep every image either of them launches.
+
+    Releasing another deployment's hold, or colliding with its hold name,
+    would expose that deployment's launch image to the critical prune.
+    """
+    daemon = _HoldDaemon()
+    daemon.add(
+        "f" * 64,
+        "moonmind-image-hold-other",
+        {
+            "moonmind.kind": "image-retention-hold",
+            "moonmind.deployment": "moonmind-b",
+            "moonmind.retained_image_id": SUPERSEDED_IMAGE_ID,
+        },
+    )
+
+    first = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(deployment="moonmind-a"),
+        command_runner=daemon,
+        disk_usage=lambda _path: _usage(40),
+        retained_images=(JOB_IMAGE,),
+    )
+    assert daemon.held("moonmind-b") == {SUPERSEDED_IMAGE_ID}
+    assert daemon.held("moonmind-a") == {JOB_IMAGE_ID}
+
+    second = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(deployment="moonmind-b"),
+        command_runner=daemon,
+        disk_usage=lambda _path: _usage(40),
+        retained_images=(JOB_IMAGE,),
+    )
+    # B releases only its own superseded hold and holds the shared image itself.
+    assert daemon.held("moonmind-b") == {JOB_IMAGE_ID}
+    assert daemon.held("moonmind-a") == {JOB_IMAGE_ID}
+    assert first.errors == () and second.errors == ()
+    assert first.retained_images == second.retained_images == (JOB_IMAGE,)
+
+
+def test_hold_owner_follows_the_compose_project() -> None:
+    assert DockerStorageMaintenanceConfig.from_env({}).deployment == "moonmind"
+    assert (
+        DockerStorageMaintenanceConfig.from_env(
+            {"MOONMIND_DEPLOYMENT_PROJECT_NAME": " moonmind-b "}
+        ).deployment
+        == "moonmind-b"
+    )

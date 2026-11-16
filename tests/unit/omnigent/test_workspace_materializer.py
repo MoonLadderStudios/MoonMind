@@ -442,22 +442,36 @@ async def test_materializer_keeps_existing_authoritative_workspace(
     materializer = OmnigentWorkspaceMaterializer(
         command_runner=fail_runner, workspace_root=tmp_path
     )
+    request = _request(
+        {
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "main",
+        }
+    )
     await materializer.materialize(
-        _request(
-            {
-                "workspaceLocator": {
-                    "kind": "sandbox",
-                    "workspaceId": workspace_id,
-                    "relativePath": "repo",
-                },
-                "repository": "MoonLadderStudios/MoonMind",
-                "branch": "main",
-            }
-        ),
+        request,
         runtime_uid=_CONTROLLED_UID,
         runtime_gid=_CONTROLLED_GID,
     )
     assert (existing / "KEEP").exists()
+
+    from datetime import UTC, datetime
+
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    store.mark_saved(workspace_id, recorded_at=datetime.now(UTC))
+    assert store.save_is_current(workspace_id)
+    await materializer.materialize(
+        request,
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
+    )
+    assert not store.save_is_current(workspace_id)
+    assert (existing / "KEEP").read_text() == "x"
 
 
 @pytest.mark.asyncio

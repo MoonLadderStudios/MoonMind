@@ -273,3 +273,71 @@ async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch
         indexes = [item for item in listed if item.content_type.startswith("application/vnd.moonmind.saved-work-manifest")]
         assert len(indexes) == 1
         assert saved["savedWorkRef"] == "artifact:" + indexes[0].artifact_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("marker_unavailable", [False, True])
+async def test_only_a_completed_stopped_boundary_save_records_saved_work(
+    tmp_path, monkeypatch, caplog, marker_unavailable
+):
+    """Cleanup may evict a workspace under disk pressure only once it is saved.
+
+    A live-host probe can be followed by more agent work, and a save that fails
+    before its saved index is linked leaves the workspace as the only copy, so
+    neither records saved work. The stopped-boundary save does.
+    """
+    from contextlib import asynccontextmanager
+
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.workflows.temporal import artifacts as artifact_module
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+    )
+    from tests.unit.omnigent.test_legacy_github_host_recovery import _recovery_fixture
+    from tests.unit.publish.test_saved_work_publication_journey import _artifact_service
+
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    async with _artifact_service(tmp_path) as service:
+        _install_service(monkeypatch, artifact_module, service)
+
+        @asynccontextmanager
+        async def sessions():
+            yield service._repository._session
+
+        publisher = OmnigentWorkspacePublicationService(
+            tmp_path, artifact_gateway=TemporalOmnigentArtifactGateway(sessions)
+        )
+        workspace_id = publisher._owned_sandbox_workspace_id(fixture.request)
+        await publisher.save_request_workspace(
+            fixture.request, publish_saved_work=False
+        )
+        assert not store.save_is_current(workspace_id)
+
+        link = service.link_artifact
+
+        async def lost_index(**kwargs):
+            if kwargs["execution_ref"].link_type == "checkpoint.saved_work":
+                raise OSError("saved index could not be linked")
+            await link(**kwargs)
+
+        monkeypatch.setattr(service, "link_artifact", lost_index)
+        with pytest.raises(OSError, match="saved index"):
+            await publisher.save_request_workspace(fixture.request)
+        assert not store.save_is_current(workspace_id)
+
+        monkeypatch.setattr(service, "link_artifact", link)
+        if marker_unavailable:
+            import errno
+
+            def full_metadata_store(*_args, **_kwargs):
+                raise OSError(errno.ENOSPC, "controlled metadata store is full")
+
+            monkeypatch.setattr(
+                SandboxWorkspaceRecordStore, "mark_saved", full_metadata_store
+            )
+        saved = await publisher.save_request_workspace(fixture.request)
+        assert saved["savedWorkRef"]
+        assert store.save_is_current(workspace_id) is not marker_unavailable
+        if marker_unavailable:
+            assert "cleanup marker" in caplog.text

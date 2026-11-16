@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -700,6 +701,14 @@ class OmnigentWorkspaceMaterializer:
             and source.existing_grant.mode == "read_only"
         )
         if writable:
+            if record_store is not None and workspace_id is not None:
+                fence = (
+                    nullcontext()
+                    if workspace_fenced
+                    else record_store.claims_locked(workspace_id)
+                )
+                with fence:
+                    record_store.invalidate_saved(workspace_id)
             ensure_workspace_git_identity(
                 candidate,
                 runtime_uid=runtime_uid,

@@ -865,6 +865,21 @@ def test_managed_runtime_cleanup_config_has_operational_defaults() -> None:
         assert config.artifact_root == Path("/work/agent_jobs/artifacts")
 
 
+def test_pressure_watermark_follows_the_docker_storage_critical_watermark() -> None:
+    key = "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT"
+
+    assert ManagedRuntimeCleanupConfig().pressure_watermark_percent == 90
+    assert ManagedRuntimeCleanupConfig.from_env({}).pressure_watermark_percent == 90
+    assert (
+        ManagedRuntimeCleanupConfig.from_env({key: "95"}).pressure_watermark_percent
+        == 95
+    )
+    # A value that would evict at any usage keeps the safe default instead.
+    for invalid in ("0", "1", "100", "lots"):
+        config = ManagedRuntimeCleanupConfig.from_env({key: invalid})
+        assert config.pressure_watermark_percent == 90
+
+
 @pytest.mark.parametrize("value", ["", "0", "false", "FALSE", "no", "off"])
 def test_managed_runtime_cleanup_false_boolean_overrides(value: str) -> None:
     enabled = ManagedRuntimeCleanupConfig.from_env(

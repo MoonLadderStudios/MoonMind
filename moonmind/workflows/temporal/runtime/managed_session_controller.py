@@ -4351,8 +4351,10 @@ class DockerCodexManagedSessionController:
             active_mount_paths=frozenset(active_mount_paths),
         )
 
-    async def reclaim_docker_storage_pressure(self, *, config: Any = None) -> Any:
-        """Reclaim unused images, cache and anonymous volumes via the daemon."""
+    async def reclaim_docker_storage_pressure(
+        self, *, config: Any = None, retained_images: Sequence[str] = ()
+    ) -> Any:
+        """Reclaim unused images, cache and volumes, keeping launch images."""
         from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
             DockerStorageMaintenanceConfig,
             reclaim_docker_storage_under_pressure,
@@ -4370,6 +4372,7 @@ class DockerCodexManagedSessionController:
             config=resolved_config,
             command_runner=_run,
             docker_binary=self._docker_binary,
+            retained_images=retained_images,
         )
 
     def _active_sidecar_volume_names(self, active_session_ids: set[str]) -> set[str]:

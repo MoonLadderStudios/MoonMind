@@ -30,6 +30,9 @@ from moonmind.workflows.temporal.runtime.cleanup import (
     ManagedRuntimeWorkspaceJanitor,
     resolve_closed_workflows,
 )
+from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+    DiskUsageSnapshot,
+)
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
@@ -433,8 +436,8 @@ def test_claim_acquired_after_the_final_rescan_keeps_the_workspace(
     janitor = _janitor(root, _Closures({OWNER: NOW - timedelta(days=10)}))
     rescan = janitor._rescan_blocks_delete
 
-    def claim_after_rescan(candidate):
-        blocked = rescan(candidate)
+    def claim_after_rescan(candidate, **kwargs):
+        blocked = rescan(candidate, **kwargs)
         store.claim_existing_workspace(
             WORKSPACE_ID,
             ExistingWorkspaceGrant(
@@ -743,3 +746,231 @@ def test_cleared_unsaved_decision_returns_workspace_to_ordinary_cleanup(
     result = _janitor(root, _Closures({OWNER: NOW - timedelta(days=10)})).run()
 
     assert _decision(result, workspace).classification == "deleted"
+
+
+class _Disk:
+    """Filesystem usage that falls as sandbox workspaces are removed."""
+
+    def __init__(self, root: Path, *, base_percent: int, per_workspace: int = 5):
+        self.root = root
+        self.base_percent = base_percent
+        self.per_workspace = per_workspace
+        self.paths: list[Path] = []
+
+    def __call__(self, path: Path) -> DiskUsageSnapshot:
+        self.paths.append(path)
+        sandbox = self.root / "temporal_sandbox"
+        live = sum(
+            1
+            for child in sandbox.iterdir()
+            if child.is_dir() and not child.name.startswith(".")
+        )
+        used = self.base_percent + live * self.per_workspace
+        return DiskUsageSnapshot(total=100, used=used, free=100 - used)
+
+
+def _mark_saved(root: Path, *workspace_ids: str) -> None:
+    """Record the verified stopped-boundary save of each workspace."""
+
+    store = SandboxWorkspaceRecordStore(root)
+    for workspace_id in workspace_ids:
+        store.mark_saved(workspace_id, recorded_at=OLD)
+    _age(store.store_root)
+
+
+def _pressure_janitor(
+    root: Path,
+    closures,
+    disk: _Disk,
+    *,
+    dry_run: bool = False,
+) -> ManagedRuntimeWorkspaceJanitor:
+    return ManagedRuntimeWorkspaceJanitor(
+        run_store=ManagedRunStore(root / "managed_runs"),
+        session_store=ManagedSessionStore(root / "managed_sessions"),
+        config=_config(root, dry_run=dry_run),
+        docker_reference_provider=DockerReferenceState,
+        closed_workflow_provider=closures,
+        storage_usage_provider=disk,
+        now=lambda: NOW,
+    )
+
+
+def test_critical_pressure_evicts_oldest_saved_workspaces_until_relieved(
+    tmp_path: Path,
+) -> None:
+    """Retention is a floor only while the shared disk has room.
+
+    Hourly passes kept every terminal Tactics checkout for its full seven
+    days while MinIO refused artifact writes at 93-95% usage. At the critical
+    watermark the janitor now evicts closed, saved workspaces oldest first,
+    and stops as soon as usage falls below the watermark.
+    """
+
+    root = tmp_path / "agent_jobs"
+    owners = {"a" * 24: "mm:oldest", "b" * 24: "mm:middle", "c" * 24: "mm:newest"}
+    workspaces = {
+        workspace_id: _sandbox_workspace(root, workspace_id, owner=owner)
+        for workspace_id, owner in owners.items()
+    }
+    closures = _Closures(
+        {
+            "mm:oldest": NOW - timedelta(days=5),
+            "mm:middle": NOW - timedelta(days=3),
+            "mm:newest": NOW - timedelta(days=2),
+        }
+    )
+    _mark_saved(root, *owners)
+    # 80% plus 5% per workspace: 95% -> 90% -> 85%.
+    disk = _Disk(root, base_percent=80)
+
+    result = _pressure_janitor(root, closures, disk).run()
+
+    oldest = _decision(result, workspaces["a" * 24])
+    middle = _decision(result, workspaces["b" * 24])
+    newest = _decision(result, workspaces["c" * 24])
+    assert (oldest.classification, oldest.pressure) == ("deleted", True)
+    assert (middle.classification, middle.pressure) == ("deleted", True)
+    assert newest.classification == "protected_recent"
+    assert not workspaces["a" * 24].exists()
+    assert not workspaces["b" * 24].exists()
+    assert workspaces["c" * 24].exists()
+    assert set(disk.paths) == {root}
+    payload = result.to_dict()
+    assert payload["pressureEvictedRoots"] == 2
+    assert payload["storageUsagePercentBefore"] == 95
+    assert payload["storageUsagePercentAfter"] == 85
+
+
+def test_critical_pressure_never_evicts_unsaved_open_or_just_closed_work(
+    tmp_path: Path,
+) -> None:
+    """Pressure shortens retention only for work that is saved elsewhere."""
+
+    root = tmp_path / "agent_jobs"
+    unsaved = _sandbox_workspace(root, "a" * 24, owner="mm:unsaved")
+    running = _sandbox_workspace(root, "b" * 24, owner="mm:running")
+    just_closed = _sandbox_workspace(root, "c" * 24, owner="mm:just-closed")
+    saved = _sandbox_workspace(root, "d" * 24, owner="mm:saved")
+    store = SandboxWorkspaceRecordStore(root)
+    _mark_saved(root, "a" * 24, "b" * 24, "c" * 24, "d" * 24)
+    store.mark_unsaved(
+        "a" * 24, reason_code="WORKSPACE_SAVE_UNAVAILABLE", recorded_at=NOW
+    )
+    _age(store.store_root)
+    closures = _Closures(
+        {
+            "mm:unsaved": NOW - timedelta(days=6),
+            "mm:just-closed": NOW - timedelta(minutes=20),
+            "mm:saved": NOW - timedelta(days=4),
+        }
+    )
+    # Four workspaces at 5% each over 75%: still critical after any eviction.
+    disk = _Disk(root, base_percent=75)
+
+    result = _pressure_janitor(root, closures, disk).run()
+
+    assert _decision(result, unsaved).classification == "protected_unsaved"
+    assert _decision(result, running).classification == "protected_active"
+    assert _decision(result, just_closed).classification == "protected_recent"
+    assert _decision(result, saved).classification == "deleted"
+    assert unsaved.exists() and running.exists() and just_closed.exists()
+    assert not saved.exists()
+    assert result.pressure_evicted_roots == 1
+
+
+def test_critical_pressure_keeps_work_without_a_current_save(tmp_path: Path) -> None:
+    """Only positive save evidence lets pressure take a workspace early.
+
+    Not every producer records a failed save (a workflow checkpoint capture
+    that fails while the artifact store is full leaves no unsaved marker), so
+    the absence of that marker is not proof the work is saved. A save that a
+    later attempt's rebinding outdates is not proof either.
+    """
+
+    root = tmp_path / "agent_jobs"
+    unconfirmed = _sandbox_workspace(root, "a" * 24, owner="mm:unconfirmed")
+    outdated = _sandbox_workspace(root, "b" * 24, owner="mm:outdated")
+    saved = _sandbox_workspace(root, "c" * 24, owner="mm:saved")
+    _mark_saved(root, "b" * 24, "c" * 24)
+    store = SandboxWorkspaceRecordStore(root)
+    # A retry rebound the workspace after its last save.
+    _age(store.store_root / f"{'b' * 24}.ready.json", OLD + timedelta(days=1))
+    closures = _Closures(
+        {
+            "mm:unconfirmed": NOW - timedelta(days=6),
+            "mm:outdated": NOW - timedelta(days=5),
+            "mm:saved": NOW - timedelta(days=4),
+        }
+    )
+    disk = _Disk(root, base_percent=80)
+
+    result = _pressure_janitor(root, closures, disk).run()
+
+    assert _decision(result, unconfirmed).classification == "protected_recent"
+    assert _decision(result, outdated).classification == "protected_recent"
+    assert _decision(result, saved).classification == "deleted"
+    assert unconfirmed.exists() and outdated.exists() and not saved.exists()
+    # The record goes with the workspace it described.
+    assert not (store.store_root / f"{'c' * 24}.saved.json").exists()
+    assert result.pressure_evicted_roots == 1
+
+
+def test_retention_holds_below_the_critical_watermark(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    _mark_saved(root, WORKSPACE_ID)
+    disk = _Disk(root, base_percent=84)
+
+    result = _pressure_janitor(
+        root, _Closures({OWNER: NOW - timedelta(days=2)}), disk
+    ).run()
+
+    assert _decision(result, workspace).classification == "protected_recent"
+    assert workspace.exists()
+    assert result.pressure_evicted_roots == 0
+
+
+def test_pressure_skips_an_oversized_workspace_and_reclaims_one_within_budget(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    root = tmp_path / "agent_jobs"
+    large = _sandbox_workspace(root, "a" * 24, owner="mm:large")
+    small = _sandbox_workspace(root, "b" * 24, owner="mm:small")
+    (large / "repo" / "README.md").write_bytes(b"x" * 4096)
+    _age(large)
+    _mark_saved(root, "a" * 24, "b" * 24)
+    disk = _Disk(root, base_percent=84)
+    janitor = _pressure_janitor(
+        root,
+        _Closures({"mm:large": NOW - timedelta(days=3), "mm:small": NOW - timedelta(days=2)}),
+        disk,
+    )
+    janitor._config = replace(janitor._config, max_delete_bytes=64)
+
+    result = janitor.run()
+
+    assert _decision(result, large).classification == "budget_exhausted"
+    assert _decision(result, small).classification == "deleted"
+    assert large.exists() and not small.exists()
+    assert result.estimated_deleted_bytes <= 64
+    assert result.pressure_evicted_roots == 1
+    assert result.storage_usage_percent_after == 89
+
+
+def test_dry_run_reports_pressure_eviction_without_deleting(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    _mark_saved(root, WORKSPACE_ID)
+    disk = _Disk(root, base_percent=92)
+
+    result = _pressure_janitor(
+        root, _Closures({OWNER: NOW - timedelta(days=2)}), disk, dry_run=True
+    ).run()
+
+    decision = _decision(result, workspace)
+    assert (decision.classification, decision.pressure) == ("eligible", True)
+    assert "storage pressure" in decision.reason
+    assert workspace.exists()

@@ -2109,6 +2109,34 @@ async def _maybe_call_heartbeat(
     if inspect.isawaitable(result):
         await result
 
+
+def _retained_launch_images() -> tuple[str, ...]:
+    """Images the current configuration launches, kept through pruning.
+
+    Host Class images are digest-pinned and unused between on-demand hosts;
+    declared container-job images can be tens of gigabytes. Pruning either
+    only forces a re-pull, often under the same disk pressure. A source that
+    cannot be read contributes nothing and is logged, never blocking cleanup.
+    """
+
+    from moonmind.config import container_backend_settings
+    from moonmind.omnigent.harness_platform import host_classes
+
+    refs: list[str] = []
+    try:
+        refs.extend(host_classes.installed_host_class_image_refs())
+    except Exception:
+        logger.warning("Host Class images could not be resolved", exc_info=True)
+    try:
+        settings = container_backend_settings.resolve_container_backend_settings()
+        refs.extend(source.image for source in settings.image_sources)
+    except Exception:
+        logger.warning(
+            "Container-job image sources could not be resolved", exc_info=True
+        )
+    return tuple(dict.fromkeys(ref for ref in refs if ref))
+
+
 async def _await_with_activity_heartbeats(
     awaitable: Awaitable[Any],
     *,
@@ -13275,6 +13303,9 @@ class TemporalAgentRuntimeActivities:
             cleanup_managed_runtime_files,
             resolve_closed_workflows,
         )
+        from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+            filesystem_usage,
+        )
         from moonmind.workflows.temporal.runtime.managed_session_store import (
             ManagedSessionStore,
         )
@@ -13340,6 +13371,7 @@ class TemporalAgentRuntimeActivities:
                     config_payload.get("runtimeStoreRoot", config.runtime_store_root)
                 ),
                 artifact_root=Path(config_payload.get("artifactRoot", config.artifact_root)),
+                pressure_watermark_percent=config.pressure_watermark_percent,
             )
         session_store = ManagedSessionStore(config.runtime_store_root / "managed_sessions")
         docker_state: DockerReferenceState | Mapping[str, object] | None = None
@@ -13423,6 +13455,7 @@ class TemporalAgentRuntimeActivities:
                     ),
                     closed_workflow_provider=_closed_workflow_provider,
                     progress_callback=_check_cleanup_cancellation,
+                    storage_usage_provider=filesystem_usage,
                 ),
                 cancellation_requested=cancellation_requested,
             ),
@@ -13450,7 +13483,8 @@ class TemporalAgentRuntimeActivities:
             "deleted_artifact_dirs=%s deleted_record_files=%s "
             "estimated_deleted_bytes=%s skipped_active=%s skipped_recent=%s "
             "skipped_unsafe_path=%s skipped_ambiguous_owner=%s "
-            "delete_budget_exhausted=%s errors=%s candidate_samples=%s",
+            "delete_budget_exhausted=%s pressure_evicted_roots=%s "
+            "storage_usage_percent=%s->%s errors=%s candidate_samples=%s",
             not result_payload.get("disabled", False),
             result_payload.get("dryRun"),
             result_payload.get("scannedRunRecords", 0),
@@ -13468,6 +13502,9 @@ class TemporalAgentRuntimeActivities:
             result_payload.get("skippedUnsafePath", 0),
             result_payload.get("skippedAmbiguousOwner", 0),
             result_payload.get("deleteBudgetExhausted", 0),
+            result_payload.get("pressureEvictedRoots", 0),
+            result_payload.get("storageUsagePercentBefore"),
+            result_payload.get("storageUsagePercentAfter"),
             len(result_payload.get("errors", [])),
             result_payload.get("candidateSamples", []),
         )
@@ -13509,7 +13546,8 @@ class TemporalAgentRuntimeActivities:
             )
         result = await _await_with_activity_heartbeats(
             self._session_controller.reclaim_docker_storage_pressure(
-                config=DockerStorageMaintenanceConfig.from_env()
+                config=DockerStorageMaintenanceConfig.from_env(),
+                retained_images=_retained_launch_images(),
             ),
             heartbeat_payload={
                 "activityType": "agent_runtime.reclaim_docker_storage",
