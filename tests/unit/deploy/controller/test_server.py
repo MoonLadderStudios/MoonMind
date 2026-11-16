@@ -1005,6 +1005,8 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     class Runner:
         def run(self, args, timeout_seconds):
             nonlocal attempts, storage_running
+            if args[-3:] == ("config", "--format", "json"):
+                return {"exit": 0, "output": json.dumps({"services": {name: {} for name in services}})}
             if "pull" in args:
                 phases.append("pull")
             if "up" in args:
@@ -1073,6 +1075,8 @@ def _exhausted_apply(
 
     class Runner:
         def run(self, args, timeout_seconds):
+            if args[-3:] == ("config", "--format", "json"):
+                return {"exit": 0, "output": json.dumps({"services": {name: {} for name in services}})}
             if "up" in args and "--no-recreate" not in args:
                 if args[-2:] == ("temporal-worker-agent-runtime", sweeper):
                     events.append(("recover", args))
@@ -2258,6 +2262,7 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                     "controller-handoff",
                     "storage-transfer-budget",
                     "journal-consumer-topology",
+                    "compose-owned-controller",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
@@ -2651,7 +2656,7 @@ def test_default_target_is_derived_from_the_mounted_checkout(
             commands.append(tuple(args))
             return {
                 "exit": 0,
-                "output": "api\ndocker-proxy\nsandbox-egress-proxy\npostgres\n",
+                "output": "api\ncontroller\ndocker-proxy\nsandbox-egress-proxy\npostgres\n",
             }
 
     target = server_mod.default_target("moonmind", repo=str(repo), runner=_Runner())
@@ -3461,10 +3466,11 @@ def test_managed_journal_rename_hands_off_only_after_install_and_on_restart(
     ]
 
 
+@pytest.mark.parametrize("capability", ["journal-consumer-topology", "compose-owned-controller", ("journal-consumer-topology", "compose-owned-controller")])
 @pytest.mark.parametrize("supported", [False, True])
 @pytest.mark.parametrize("phase", ["journal-prepare", "controller-handoff"])
 def test_journal_helper_capability_is_checked_before_calling_old_code(
-    controller_path, tmp_path, supported, phase
+    controller_path, tmp_path, supported, phase, capability
 ):
     import os
     import subprocess
@@ -3487,7 +3493,7 @@ def test_journal_helper_capability_is_checked_before_calling_old_code(
     called = tmp_path / "helper-called"
     (package / "deployment_release.py").write_text(
         "from pathlib import Path\n"
-        + ("JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED = True\n" if supported else "")
+        + ("JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED = True\nCOMPOSE_OWNED_CONTROLLER_SUPPORTED = True\n" if supported else "")
         + f"async def {server.CAPABILITY_STEPS[phase][0]}(phase, payload):\n"
         + f"    Path({str(called)!r}).touch()\n"
         + '    print(\'MOONMIND_OMNIGENT_RESULT={"status":"prepared"}\')\n'
@@ -3519,7 +3525,7 @@ def test_journal_helper_capability_is_checked_before_calling_old_code(
         overlay="overlay",
         phase=phase,
         helper_image="sha256:helper",
-        required_capability="journal-consumer-topology",
+        required_capability=capability,
     )
     assert result["status"] == ("prepared" if supported else "unsupported")
     assert called.exists() is supported
@@ -3615,3 +3621,32 @@ def test_recovery_resumes_surviving_service_that_relinquished_journals(
     )
     assert (former in commands[-1]) is not one_off
     assert writer in commands[-1]
+
+
+def test_production_apply_refuses_controller_in_explicit_target(controller_path, tmp_path, monkeypatch):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, {"project": "moonmind-test", "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"], "services": ["controller", "api"]})
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: pytest.fail("must refuse before Docker access"))
+    with pytest.raises(server.engine.SelfReplacementError):
+        server.production_apply(store, operation)
+
+
+@pytest.mark.parametrize("topology", [False, True])
+def test_compose_owned_controller_handoff_requires_safe_target(controller_path, tmp_path, monkeypatch, topology):
+    record, server = load("record"), load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    (store.state_dir / "controller-identity.json").write_text(json.dumps({"project": "moonmind-test", "targetProject": "moonmind-test"}))
+    if topology:
+        store.record_journal_transition(operation["operationId"], {"requiresTopologySupport": True})
+    calls = []
+    def step(*args, **kwargs):
+        calls.append(kwargs["required_capability"])
+        return {"status": "unsupported"}
+    monkeypatch.setattr(server, "run_omnigent_step", step)
+    server.hand_off_to_requested_controller(store, operation, runner=None, overlay="overlay")
+    assert calls == [("journal-consumer-topology", "compose-owned-controller") if topology else "compose-owned-controller"]
+    assert store.load(operation["operationId"])["installed"] is None

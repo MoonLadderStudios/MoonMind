@@ -34,6 +34,7 @@ from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECOND
 #: Excluded from every release's main pass: the updater's own transport plus
 #: the stateful substrate (postgres, the egress gateway) the staged passes own.
 PROTECTED_SUBSTRATE_SERVICES = (
+    "controller",
     DEPLOYMENT_TRANSPORT_SERVICE,
     "sandbox-egress-proxy",
     "postgres",
@@ -163,6 +164,7 @@ async def inspect_owned(name, owner):
 
 # The controller checks this before invoking a requested release's helper.
 JOURNAL_CONSUMER_TOPOLOGY_SUPPORTED = True
+COMPOSE_OWNED_CONTROLLER_SUPPORTED = True
 
 
 def _legacy_journal_consumer(config, labels):

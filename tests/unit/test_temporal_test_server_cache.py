@@ -7,8 +7,6 @@ import pytest
 
 from api_service.docker import cache_temporal_test_server as cache
 
-PINNED = {"test_server_download_version": cache.TIME_SKIPPING_TEST_SERVER_VERSION}
-
 
 @pytest.fixture
 def servers(monkeypatch):
@@ -60,7 +58,7 @@ async def test_transient_download_retries_only_the_unfinished_server(
 
     await cache._cache_test_server()
 
-    servers.starts.start_time_skipping.assert_awaited_once_with(**PINNED)
+    servers.starts.start_time_skipping.assert_awaited_once_with()
     assert servers.starts.start_local.await_count == 2
     servers.sleep.assert_awaited_once_with(30)
     servers.skipping.shutdown.assert_awaited_once_with()
@@ -77,7 +75,7 @@ async def test_persistent_download_failure_stops_after_bounded_retries(servers, 
         await cache._cache_test_server()
 
     assert raised.value is error
-    assert servers.starts.start_time_skipping.await_args_list == [call(**PINNED)] * 3
+    assert servers.starts.start_time_skipping.await_count == 3
     assert servers.sleep.await_args_list == [call(30), call(60)]
     servers.starts.start_local.assert_not_awaited()
     servers.skipping.shutdown.assert_not_awaited()
@@ -101,9 +99,34 @@ async def test_permanent_startup_errors_are_not_retried(servers, error):
         await cache._cache_test_server()
 
     assert raised.value is error
-    servers.starts.start_time_skipping.assert_awaited_once_with(**PINNED)
+    servers.starts.start_time_skipping.assert_awaited_once_with()
     servers.sleep.assert_not_awaited()
     servers.starts.start_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_selection_defaults_time_skipping_server_and_honors_explicit_choice(
+    monkeypatch,
+):
+    class Environment:
+        @classmethod
+        async def start_time_skipping(cls, **kwargs):
+            return cls, kwargs
+
+    monkeypatch.setattr(cache, "WorkflowEnvironment", Environment)
+
+    cache.select_time_skipping_test_server()
+
+    assert await Environment.start_time_skipping(port=7) == (
+        Environment,
+        {
+            "test_server_download_version": cache.TIME_SKIPPING_TEST_SERVER_VERSION,
+            "port": 7,
+        },
+    )
+    assert await Environment.start_time_skipping(
+        test_server_download_version="default"
+    ) == (Environment, {"test_server_download_version": "default"})
 
 
 @pytest.mark.asyncio
@@ -115,6 +138,6 @@ async def test_shutdown_failure_does_not_start_another_server(servers):
         await cache._cache_test_server()
 
     assert raised.value is error
-    servers.starts.start_time_skipping.assert_awaited_once_with(**PINNED)
+    servers.starts.start_time_skipping.assert_awaited_once_with()
     servers.sleep.assert_not_awaited()
     servers.starts.start_local.assert_not_awaited()

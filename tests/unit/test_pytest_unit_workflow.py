@@ -339,7 +339,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     for job in (hermetic, journeys):
         assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
     assert hermetic["timeout-minutes"] == 70
-    assert journeys["timeout-minutes"] == 85
+    assert journeys["timeout-minutes"] == 90
     assert any(
         "./tools/test_integration.sh" in step.get("run", "")
         for step in hermetic["steps"]
@@ -375,7 +375,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
 
 @pytest.mark.parametrize(
     ("suite", "execution_minutes"),
-    [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 20)],
+    [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 30)],
 )
 @pytest.mark.parametrize("image_source", ["registry", "archive"])
 def test_journey_job_reserves_setup_execution_and_reporting(

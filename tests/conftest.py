@@ -13,27 +13,12 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from temporalio.testing import WorkflowEnvironment
 
 from api_service.docker.cache_temporal_test_server import (
-    TIME_SKIPPING_TEST_SERVER_VERSION,
+    select_time_skipping_test_server,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-
-_start_time_skipping = WorkflowEnvironment.start_time_skipping
-
-
-async def _start_cached_time_skipping(**options):
-    # Start the server the test images cache; see the version's reason there.
-    if "test_server_existing_path" not in options:
-        options.setdefault(
-            "test_server_download_version", TIME_SKIPPING_TEST_SERVER_VERSION
-        )
-    return await _start_time_skipping(**options)
-
-
-WorkflowEnvironment.start_time_skipping = staticmethod(_start_cached_time_skipping)
 
 _SLOW_TEST_MODULES = {
     Path("tests/unit/api/routers/test_agent_runs.py"),
@@ -266,6 +251,10 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
     asyncio.run(_run_test_with_keepalive())
     return True
+
+
+# Every time-skipping environment starts the test server the image pre-warms.
+select_time_skipping_test_server()
 
 
 # ── atexit cleanup for orphaned Temporal test-server processes ──────────────
