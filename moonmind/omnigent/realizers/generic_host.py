@@ -30,6 +30,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+    artifact_storage_outage,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
@@ -1026,11 +1027,10 @@ class GenericOmnigentHostRealizer:
         from moonmind.omnigent.attempt_completion import (
             artifact_storage_unavailable_result,
         )
-        from moonmind.workflows.temporal.artifacts import artifact_storage_failure
 
         if not isinstance(primary_error, Exception):
             return None
-        failure = artifact_storage_failure(primary_error)
+        failure = artifact_storage_outage(primary_error)
         if failure is None:
             return None
         result = artifact_storage_unavailable_result(
@@ -1887,10 +1887,6 @@ class GenericOmnigentHostRealizer:
         cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
         if self._artifacts is not None:
-            from moonmind.workflows.temporal.artifacts import (
-                TemporalArtifactUnavailableError,
-            )
-
             try:
                 evidence_ref = await self._artifacts.write_json(
                     request=request,
@@ -1903,14 +1899,16 @@ class GenericOmnigentHostRealizer:
                     },
                     link_type="evidence.cleanup",
                 )
-            except TemporalArtifactUnavailableError as exc:
+            except Exception as exc:
+                if artifact_storage_outage(exc) is None:
+                    raise
                 # The host is already stopped. Holding provider capacity until
                 # the store recovers would block the step's successor too.
                 logger.warning(
                     "Cleanup evidence for binding %s was not stored (%s); "
                     "settlement stays on the binding",
                     binding.bindingId,
-                    exc.code,
+                    getattr(exc, "code", type(exc).__name__),
                 )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)

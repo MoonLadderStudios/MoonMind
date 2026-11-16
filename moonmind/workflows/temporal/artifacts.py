@@ -361,23 +361,6 @@ _STORAGE_FULL_CODES = frozenset(
     {"XMinioStorageFull", "StorageFull", "InsufficientStorage"}
 )
 
-
-def artifact_storage_failure(
-    exc: BaseException | None,
-) -> TemporalArtifactUnavailableError | None:
-    """Return the artifact storage outage in ``exc``'s cause chain, if any."""
-
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        if (
-            isinstance(exc, TemporalArtifactUnavailableError)
-            and exc.dependency == "storage"
-        ):
-            return exc
-        seen.add(id(exc))
-        exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
-    return None
-
 class TemporalArtifactStorageAccessError(TemporalArtifactError):
     """The storage transport rejected its configured access, not the reader."""
 

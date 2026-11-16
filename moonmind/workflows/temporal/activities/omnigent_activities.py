@@ -1099,9 +1099,9 @@ def _artifact_storage_failure_result(exc: BaseException) -> AgentRunResult | Non
     from moonmind.omnigent.attempt_completion import (
         artifact_storage_unavailable_result,
     )
-    from moonmind.workflows.temporal.artifacts import artifact_storage_failure
+    from moonmind.omnigent.harness_platform.failures import artifact_storage_outage
 
-    storage = artifact_storage_failure(exc)
+    storage = artifact_storage_outage(exc)
     if storage is None:
         return None
     return artifact_storage_unavailable_result(
