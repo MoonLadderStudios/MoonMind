@@ -265,7 +265,9 @@ def mock_run_environment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_workflow_pause_resume(mock_run_environment):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    # Control RPCs need the full server: the legacy Java time-skipping server
+    # can stall accepting an update. These cases do not need virtual time.
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
@@ -295,7 +297,7 @@ async def test_run_workflow_pause_resume(mock_run_environment):
 
 @pytest.mark.asyncio
 async def test_run_workflow_update_parameters(mock_run_environment):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
@@ -325,7 +327,7 @@ async def test_run_workflow_update_parameters(mock_run_environment):
 
 @pytest.mark.asyncio
 async def test_run_workflow_cancel_signal(mock_run_environment):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-signals",
@@ -971,7 +973,7 @@ async def test_update_inputs_skips_parent_visibility_refresh_when_unpatched(
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
     mock_run_environment,
 ):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message",
@@ -1005,7 +1007,7 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
 async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
     mock_run_environment,
 ):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message-invalid",
@@ -1041,7 +1043,7 @@ async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
 async def test_run_workflow_send_message_update_rejects_blank_message(
     mock_run_environment,
 ):
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    async with await WorkflowEnvironment.start_local() as env:
         async with Worker(
             env.client,
             task_queue="test-task-queue-send-message-blank",
