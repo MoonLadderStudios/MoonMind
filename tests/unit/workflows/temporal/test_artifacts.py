@@ -144,6 +144,61 @@ async def test_serving_failure_survives_consumer_cleanup_failure(tmp_path, monke
             assert any("ConnectionError" in note for note in raised.value.__notes__)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        ClientError(
+            {
+                "Error": {
+                    "Code": "XMinioStorageFull",
+                    "Message": "Storage backend has reached its minimum free drive threshold.",
+                },
+                "ResponseMetadata": {"HTTPStatusCode": 507},
+            },
+            "PutObject",
+        ),
+        ClientError(
+            {
+                "Error": {"Code": "InsufficientStorage"},
+                "ResponseMetadata": {"HTTPStatusCode": 507},
+            },
+            "PutObject",
+        ),
+    ],
+)
+async def test_full_storage_is_reported_as_disk_full_and_stays_retryable(
+    tmp_path, monkeypatch, fault
+):
+    """A full disk is its own diagnosis, still waited out like any outage."""
+
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(repository, store=store)
+            artifact, _ = await service.create(
+                principal="owner", content_type="text/plain"
+            )
+
+            def fail(*args, **kwargs):
+                raise fault
+
+            monkeypatch.setattr(store, "write_bytes", fail)
+            with pytest.raises(
+                artifact_module.TemporalArtifactUnavailableError
+            ) as raised:
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="owner",
+                    payload=b"journal",
+                )
+    assert raised.value.code == "artifact_storage_full"
+    assert raised.value.dependency == "storage"
+    assert raised.value.retryable is True
+    assert "disk full" in str(raised.value)
+    assert raised.value.__cause__ is fault
+
+
 @pytest.mark.parametrize(("fault", "code", "retryable"), [
     (TimeoutError("synthetic preview write outage"), "artifact_storage_unavailable", True),
     (PermissionError("synthetic preview write denial"), "artifact_storage_forbidden", False),

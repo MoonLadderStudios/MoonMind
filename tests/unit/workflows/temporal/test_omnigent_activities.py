@@ -613,6 +613,121 @@ async def test_generic_auth_failure_stops_step_retries_and_names_reauthenticatio
     execute.assert_awaited_once()
 
 
+def _explicit_plan_request(plan, *, explicit_binding: bool, key: str):
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=f"workflow-{key}",
+        idempotencyKey=f"step-{key}",
+        resolvedSkillsetRef="artifact:skills",
+        parameters={"executionPlanRef": plan.planRef},
+        omnigentExecutionPlan=(
+            OmnigentExecutionPlanBinding(
+                planRef=plan.planRef,
+                planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+                planArtifactRef="artifact:plan",
+                taskInputSnapshotRef="artifact:input",
+                taskInputSnapshotDigest="sha256:" + "a" * 64,
+            )
+            if explicit_binding
+            else None
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_binding", [False, True])
+async def test_full_artifact_store_is_a_diagnosed_retryable_step_failure(
+    explicit_binding: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disk full is named as such and restarts only the interrupted step.
+
+    Production reported ``OMNIGENT_GENERIC_DISPATCH_FAILED`` with
+    ``contact_administrator``, so the parent failed the whole workflow.
+    """
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("gpt-6.1-sol")
+    execute = AsyncMock(
+        side_effect=TemporalArtifactStorageFullError(
+            "art_journal", operation="write_complete"
+        )
+    )
+    result = await _try_generic_realizer_dispatch(
+        _explicit_plan_request(plan, explicit_binding=explicit_binding, key="full"),
+        plan_store=SimpleNamespace(load=AsyncMock(return_value=plan)),
+        realizer_registry=SimpleNamespace(
+            require=lambda _ref: SimpleNamespace(execute=execute)
+        ),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.retry_disposition == "retry"
+    assert "disk full" in result.summary
+    assert result.metadata["artifactStorageFailureCode"] == "artifact_storage_full"
+    # The parent decides from the canonical envelope it maps the child into.
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    mapped = MoonMindRunWorkflow()._map_agent_run_result(
+        AgentRunResult.model_validate(result.model_dump(by_alias=True, mode="json"))
+    )
+    assert mapped["outputs"]["agentResult"]["retryDisposition"] == "retry"
+    assert MoonMindRunWorkflow()._activity_result_retryable(
+        mapped, failure_message="execution_error", tool_type="agent_runtime"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_binding", [False, True])
+async def test_retry_materialization_gets_a_bounded_step_dispatch_retry(
+    explicit_binding: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timed-out host image pull is re-dispatched, not a terminal failure."""
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("gpt-6.1-sol")
+    execute = AsyncMock(
+        side_effect=HarnessPlatformError(
+            "digest-pinned writer image pull timed out: ghcr.io/example/host@sha256:"
+            + "f" * 64,
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        )
+    )
+    result = await _try_generic_realizer_dispatch(
+        _explicit_plan_request(plan, explicit_binding=explicit_binding, key="pull"),
+        plan_store=SimpleNamespace(load=AsyncMock(return_value=plan)),
+        realizer_registry=SimpleNamespace(
+            require=lambda _ref: SimpleNamespace(execute=execute)
+        ),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
+    assert result.retry_recommendation == "retry_materialization"
+    assert result.retry_disposition == "retry"
+    # The parent decides from the canonical envelope it maps the child into.
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    mapped = MoonMindRunWorkflow()._map_agent_run_result(
+        AgentRunResult.model_validate(result.model_dump(by_alias=True, mode="json"))
+    )
+    assert mapped["outputs"]["agentResult"]["retryDisposition"] == "retry"
+    assert MoonMindRunWorkflow()._activity_result_retryable(
+        mapped, failure_message="execution_error", tool_type="agent_runtime"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("code", "recommendation", "message"),

@@ -98,6 +98,10 @@ from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     prepend_skill_activation_summary,
 )
+from moonmind.workflows.temporal.activity_catalog import (
+    ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS,
+)
+from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
 
 _NON_TERMINAL_STATUSES = {
     "created",
@@ -140,6 +144,13 @@ _JOURNAL_CHUNK_MAX_BYTES = 4 * 1024 * 1024
 # flush for at most this many events, amortizing fixed artifact and database
 # overhead instead of falling behind a fast stream.
 _JOURNAL_FLUSH_MAX_EVENTS = 32
+# A full or unreachable artifact store must not end a live turn. Its events stay
+# buffered (the whole history is kept in memory for the capture bundle anyway)
+# and later flushes retry with growing back-off. The flush that ends the turn
+# waits for storage instead. Both give up once the outage outlasts the window
+# artifact-writing Activities use, so the step restarts from its kept workspace.
+_JOURNAL_STORAGE_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 300.0)
+_JOURNAL_STORAGE_OUTAGE_WINDOW_SECONDS = float(ARTIFACT_STORAGE_OUTAGE_WINDOW_SECONDS)
 # Statuses that end or pause the turn are committed before acting on them.
 _JOURNAL_FLUSH_NOW_STATUSES = frozenset(
     {
@@ -2642,6 +2653,9 @@ class _ActiveJournal:
         self._normalized_start = len(normalized_events)
         self._chunk_committed = False
         self._unindexed: list[dict[str, Any]] = []
+        self._storage_outage_started: float | None = None
+        self._storage_failures = 0
+        self._storage_retry_at: float | None = None
 
     @property
     def pending(self) -> int:
@@ -2654,9 +2668,74 @@ class _ActiveJournal:
         if self._run_store is not None:
             self._unindexed.append(event)
 
-    async def flush(self) -> None:
+    async def flush(self, *, wait_for_storage: bool = False) -> None:
+        """Commit buffered events, riding out an artifact storage outage.
+
+        ``wait_for_storage`` is for the flush that ends the turn: it waits for
+        storage with the same back-off instead of deferring.
+        """
+
         if self._run_store is None or not self._unindexed:
             return
+        while True:
+            if (
+                not wait_for_storage
+                and self._storage_retry_at is not None
+                and time.monotonic() < self._storage_retry_at
+            ):
+                return
+            try:
+                await self._commit_open_chunk()
+            except TemporalArtifactUnavailableError as exc:
+                delay = self.storage_retry_delay(exc)
+                if delay is None:
+                    raise
+                if not wait_for_storage:
+                    return
+                await asyncio.sleep(delay)
+            else:
+                if self._storage_outage_started is not None:
+                    _logger.info(
+                        "Live Omnigent journal flush resumed after %.0fs of "
+                        "artifact storage outage",
+                        time.monotonic() - self._storage_outage_started,
+                    )
+                self._storage_outage_started = None
+                self._storage_failures = 0
+                self._storage_retry_at = None
+                return
+
+    def storage_retry_delay(
+        self, exc: TemporalArtifactUnavailableError
+    ) -> float | None:
+        """Return the wait before the next storage write, or ``None`` to give up.
+
+        Journal flushes and the terminal capture share this outage clock, so
+        one outage gets one window however its writes are split.
+        """
+
+        if exc.dependency != "storage":
+            return None
+        now = time.monotonic()
+        if self._storage_outage_started is None:
+            self._storage_outage_started = now
+        if now - self._storage_outage_started >= _JOURNAL_STORAGE_OUTAGE_WINDOW_SECONDS:
+            return None
+        delays = _JOURNAL_STORAGE_RETRY_DELAYS_SECONDS
+        delay = delays[min(self._storage_failures, len(delays) - 1)]
+        self._storage_failures += 1
+        self._storage_retry_at = now + delay
+        _logger.warning(
+            "Artifact storage unavailable: %s (%s); %d journal events buffered, "
+            "retrying in %.0fs",
+            exc,
+            exc.code,
+            len(self._unindexed),
+            delay,
+        )
+        return delay
+
+    async def _commit_open_chunk(self) -> None:
         count = len(self.normalized_events) - self._normalized_start
         name = f"{self._normalized_start:08d}.{count:08d}"
         raw_payload = _journal_jsonl(
@@ -2690,8 +2769,12 @@ class _ActiveJournal:
         # every event in it, indexed or not, is now located there.
         for event in self.normalized_events[self._normalized_start :]:
             event["artifactRef"] = normalized_ref
-        await self._run_store.append_events(self._bridge_session_id, self._unindexed)
-        self._unindexed = []
+        # A backlog buffered through a storage outage can exceed the query
+        # arguments one index write may bind, so it is indexed in batches.
+        while self._unindexed:
+            batch = self._unindexed[:_JOURNAL_CHUNK_MAX_EVENTS]
+            await self._run_store.append_events(self._bridge_session_id, batch)
+            del self._unindexed[: len(batch)]
         if (
             count >= _JOURNAL_CHUNK_MAX_EVENTS
             or len(raw_payload) + len(normalized_payload) >= _JOURNAL_CHUNK_MAX_BYTES
@@ -2874,6 +2957,7 @@ async def run_omnigent_execution(
     delete_after_harvest = False
     capture_policy: dict[str, Any] | None = None
     external_state: dict[str, Any] | None = None
+    terminal_status: str | None = None
     try:
         # §16 rule 1: authorize the MoonMind principal + workflow + AgentRun +
         # bridge session before any provider call. Fails closed on missing
@@ -4053,7 +4137,8 @@ async def run_omnigent_execution(
                 await cancel_and_wait(stream_task)
                 if observation_diagnostics:
                     external_state["observationDiagnostics"] = observation_diagnostics
-            await journal.flush()
+            # Terminal evidence is committed before the turn's outcome is acted on.
+            await journal.flush(wait_for_storage=True)
 
             final_snapshot_observed_at: float | None = None
             final_snapshot_completed_at: float | None = None
@@ -4203,34 +4288,48 @@ async def run_omnigent_execution(
                     )
                     journal.append(normalized_bridge_event.event)
                     event_count["value"] += 1
-                    await journal.flush()
+                    await journal.flush(wait_for_storage=True)
             if terminal_status is None:
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
                 )
-            bundle = await _build_capture_bundle(
-                client=client,
-                artifact_gateway=artifact_gateway,
-                request=request,
-                session_id=session_id,
-                agent_id=target.agent_id,
-                initial_snapshot=initial_snapshot,
-                final_snapshot=final_snapshot,
-                first_message_request=first_message,
-                first_message_response=first_message_response,
-                first_message_posted=first_message_posted,
-                first_message_response_identifiers=first_message_response_identifiers,
-                raw_events=raw_events,
-                normalized_events=normalized_events,
-                terminal_status=terminal_status,
-                diagnostics={
-                    "failureClass": failure_class_for_terminal_status(terminal_status),
-                    "eventDiagnostics": event_diagnostics,
-                },
-                harvest_resources=True,
-                external_state=external_state,
-                capture_policy=capture_policy,
-            )
+            # The turn's receipt is recorded only after its evidence, so the
+            # capture waits out a storage outage like the journal does.
+            while True:
+                try:
+                    bundle = await _build_capture_bundle(
+                        client=client,
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        initial_snapshot=initial_snapshot,
+                        final_snapshot=final_snapshot,
+                        first_message_request=first_message,
+                        first_message_response=first_message_response,
+                        first_message_posted=first_message_posted,
+                        first_message_response_identifiers=(
+                            first_message_response_identifiers
+                        ),
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                        terminal_status=terminal_status,
+                        diagnostics={
+                            "failureClass": failure_class_for_terminal_status(
+                                terminal_status
+                            ),
+                            "eventDiagnostics": event_diagnostics,
+                        },
+                        harvest_resources=True,
+                        external_state=external_state,
+                        capture_policy=capture_policy,
+                    )
+                    break
+                except TemporalArtifactUnavailableError as exc:
+                    delay = journal.storage_retry_delay(exc)
+                    if delay is None:
+                        raise
+                await asyncio.sleep(delay)
             terminal_refs = build_omnigent_terminal_refs(
                 bundle,
                 terminal_status=terminal_status,
@@ -4394,6 +4493,39 @@ async def run_omnigent_execution(
                 "normalizedStatus": "failed",
                 "providerName": "omnigent",
                 **bundle.metadata_refs,
+            },
+        )
+    except TemporalArtifactUnavailableError as exc:
+        if exc.dependency != "storage":
+            raise
+        # Artifact storage stayed unavailable past the journal's outage window.
+        # Stop this attempt's turn and end its bridge row, which would
+        # otherwise stay ``active``. A running turn is interrupted: the caller
+        # keeps the workspace, so only the step restarts from it. A completed
+        # turn stops without a retry, since a successor would bill it again.
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
+        if client is not None and session_id:
+            with suppress(Exception):
+                await _cancel_omnigent_session(client, session_id)
+        if run_store is not None:
+            with suppress(Exception):
+                await run_store.mark_terminal(request.idempotency_key, status="failed")
+        if terminal_status != "completed":
+            raise
+        return AgentRunResult(
+            summary=(
+                f"{exc}. The agent's turn completed, but its evidence could not "
+                "be stored before the storage outage window closed."
+            ),
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE",
+            retryRecommendation="do_not_retry",
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                "artifactStorageFailureCode": exc.code,
+                "unfinishedPhase": "evidence",
             },
         )
     except OmnigentAuthorizationError as exc:

@@ -334,7 +334,13 @@ recorded, using `SAVED_WORK_UNSAVED_LOCAL_RETENTION` from the saved-work
 retention owner, and repeated failures do not extend it. A later
 successful save clears the marker and returns the workspace to ordinary
 retention. If the marker cannot be written, cleanup stays pending instead of
-releasing anything.
+releasing anything. When a full or unreachable artifact store stops a running
+turn, the attempt reports `OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE` with
+`retry_step_execution`: the parent's after-execution checkpoint capture waits
+for storage, and only that step restarts, from the captured workspace. A
+finished turn never restarts, which would bill it again: its save waits up to
+75 minutes for storage, then the step stops with `do_not_retry` and this marker
+keeps the workspace.
 
 ### 6.6 Managed runtime artifact directory
 
