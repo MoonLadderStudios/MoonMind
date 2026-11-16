@@ -406,6 +406,25 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
 )
 
 
+def installed_host_class_image_refs() -> tuple[str, ...]:
+    """Return each digest-pinned image a current Host Class would launch.
+
+    Storage maintenance keeps these through image pruning. An image that does
+    not resolve (unset, unpinned or quarantined) cannot launch and is omitted.
+    """
+
+    environment = _installed_environment()
+    refs: list[str] = []
+    for image_env in dict.fromkeys(
+        template.image_env for template in DEFAULT_HOST_CLASS_TEMPLATES
+    ):
+        try:
+            refs.append(_require_image_ref(environment, image_env))
+        except HarnessPlatformError:
+            continue
+    return tuple(dict.fromkeys(refs))
+
+
 class OmnigentHostClassSelector:
     """Select a Host Class from catalog identity and deployment data."""
 

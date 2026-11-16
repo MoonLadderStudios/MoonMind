@@ -16,6 +16,13 @@ _BUILDX_INSPECT_FORMAT = (
     '{"name":{{json .Name}},"running":{{json .State.Running}},'
     '"entrypoint":{{json .Config.Entrypoint}},"mounts":{{json .Mounts}}}'
 )
+#: Shared with the workspace janitor: one definition of critical pressure.
+CRITICAL_WATERMARK_ENV = "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT"
+DEFAULT_CRITICAL_WATERMARK_PERCENT = 90
+_IMAGE_HOLD_KIND = "moonmind.kind=image-retention-hold"
+_IMAGE_HOLD_ID_LABEL = "moonmind.retained_image_id"
+_IMAGE_HOLD_FORMAT = '{{.ID}} {{.Label "moonmind.retained_image_id"}}'
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +37,7 @@ class DockerStorageMaintenanceConfig:
     enabled: bool = True
     data_path: Path = Path("/work/agent_jobs")
     high_watermark_percent: int = 80
-    critical_watermark_percent: int = 90
+    critical_watermark_percent: int = DEFAULT_CRITICAL_WATERMARK_PERCENT
     image_min_age_hours: int = 24
     build_cache_min_age_hours: int = 24
 
@@ -52,8 +59,8 @@ class DockerStorageMaintenanceConfig:
             ),
             critical_watermark_percent=_required_int(
                 source,
-                "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT",
-                90,
+                CRITICAL_WATERMARK_ENV,
+                DEFAULT_CRITICAL_WATERMARK_PERCENT,
             ),
             image_min_age_hours=_required_int(
                 source,
@@ -96,6 +103,7 @@ class DockerStorageMaintenanceResult:
     reclaimed_bytes: int
     commands_attempted: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    retained_images: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -110,6 +118,7 @@ class DockerStorageMaintenanceResult:
             "reclaimedBytes": self.reclaimed_bytes,
             "commandsAttempted": list(self.commands_attempted),
             "errors": list(self.errors),
+            "retainedImages": list(self.retained_images),
         }
 
 
@@ -123,6 +132,7 @@ async def reclaim_docker_storage_under_pressure(
     command_runner: DockerCommandRunner,
     disk_usage: DiskUsageProvider | None = None,
     docker_binary: str = "docker",
+    retained_images: Sequence[str] = (),
 ) -> DockerStorageMaintenanceResult:
     """Expire unused cache every pass, then escalate under critical pressure.
 
@@ -134,11 +144,14 @@ async def reclaim_docker_storage_under_pressure(
     last use, so an all-images age filter deletes a reused tagged image (such
     as a declared container-job base image) whenever no container holds it.
     Superseded digest-pinned releases are untagged and still expire. Tagged
-    unused images are removed only under critical pressure.
+    unused images are removed only under critical pressure, after MoonMind's
+    own reclaimable state is gone, and never the ``retained_images`` the
+    current configuration launches: a never-started hold container references
+    each one, and image prunes wait until every present one is held.
     """
 
     config.validate()
-    usage_provider = disk_usage or _disk_usage
+    usage_provider = disk_usage or filesystem_usage
     before = usage_provider(config.data_path)
     if not config.enabled:
         return _result(
@@ -152,24 +165,34 @@ async def reclaim_docker_storage_under_pressure(
     commands_attempted: list[str] = []
     errors: list[str] = []
 
-    async def run(label: str, command: tuple[str, ...]) -> tuple[int, str]:
+    async def run(
+        label: str, command: tuple[str, ...], *, absent_ok: bool = False
+    ) -> tuple[int, str, bool]:
+        """Run one command; the flag reports a tolerated "no such image"."""
         commands_attempted.append(label)
-        code, stdout, _stderr = await command_runner(command)
-        if code:
+        code, stdout, stderr = await command_runner(command)
+        absent = bool(code) and absent_ok and "no such image" in stderr.lower()
+        if code and not absent:
             errors.append(f"{label} exited with code {code}")
-        return code, stdout
+        return code, stdout, absent
 
-    await run(
-        "age-bounded image prune",
-        (
-            docker_binary,
-            "image",
-            "prune",
-            "-f",
-            "--filter",
-            f"until={config.image_min_age_hours}h",
-        ),
+    held_images, images_held = await _hold_retained_images(
+        run, docker_binary, retained_images
     )
+    if images_held:
+        await run(
+            "age-bounded image prune",
+            (
+                docker_binary,
+                "image",
+                "prune",
+                "-f",
+                "--filter",
+                f"until={config.image_min_age_hours}h",
+            ),
+        )
+    else:
+        errors.append("image prunes skipped until every retained image is held")
     await run(
         "age-bounded builder prune",
         (
@@ -199,11 +222,30 @@ async def reclaim_docker_storage_under_pressure(
             "label=com.docker.volume.anonymous",
         ),
     )
+    # Container-job caches were once keyed by job principal, which is
+    # execution-scoped, so each run created a multi-gigabyte cache no later
+    # run mounts. Only those volumes carry the owner label; the declared
+    # deployment cache volumes that jobs now reuse never do. Docker refuses
+    # to prune a volume any container still references.
+    await run(
+        "legacy owner-scoped cache volume prune",
+        (
+            docker_binary,
+            "volume",
+            "prune",
+            "--all",
+            "-f",
+            "--filter",
+            "label=moonmind.kind=container-job-cache",
+            "--filter",
+            "label=moonmind.cache_owner",
+        ),
+    )
 
     # Buildx's docker-container driver owns a separate cache that the daemon's
     # builder prune cannot reach. Discover it from Docker, since the runtime
     # worker does not share the operator's ~/.docker/buildx configuration.
-    code, builder_ids = await run(
+    code, builder_ids, _ = await run(
         "Buildx builder discovery",
         (
             docker_binary,
@@ -221,7 +263,7 @@ async def reclaim_docker_storage_under_pressure(
             if not re.fullmatch(r"[0-9a-f]{64}", builder_id):
                 errors.append("Buildx discovery returned an invalid container ID")
                 continue
-            code, details = await run(
+            code, details, _ = await run(
                 f"Buildx builder inspection {builder_id}",
                 (
                     docker_binary,
@@ -265,10 +307,11 @@ async def reclaim_docker_storage_under_pressure(
     )
     after = after_aged
     if critical_pressure_detected:
-        await run(
-            "critical image prune",
-            (docker_binary, "image", "prune", "-af"),
-        )
+        if images_held:
+            await run(
+                "critical image prune",
+                (docker_binary, "image", "prune", "-af"),
+            )
         await run(
             "critical builder prune",
             (docker_binary, "builder", "prune", "-af"),
@@ -288,7 +331,98 @@ async def reclaim_docker_storage_under_pressure(
         critical_pressure_detected=critical_pressure_detected,
         commands_attempted=tuple(commands_attempted),
         errors=tuple(errors),
+        retained_images=held_images,
     )
+
+
+async def _hold_retained_images(
+    run: Callable[..., Awaitable[tuple[int, str, bool]]],
+    docker_binary: str,
+    retained_images: Sequence[str],
+) -> tuple[tuple[str, ...], bool]:
+    """Keep each present retained image referenced by a hold container.
+
+    Docker has no image pin, but no prune removes an image a container
+    references. Holds are created, never started, from the exact image ID,
+    and released once their image is no longer retained so it can expire.
+    Returns the held refs and whether every present retained image is held.
+    """
+
+    wanted: dict[str, str] = {}
+    complete = True
+    for ref in dict.fromkeys(ref.strip() for ref in retained_images if ref.strip()):
+        code, stdout, absent = await run(
+            f"retained image inspection {ref}",
+            (docker_binary, "image", "inspect", "--format", "{{.Id}}", ref),
+            absent_ok=True,
+        )
+        image_id = stdout.strip()
+        if not code and _IMAGE_ID.fullmatch(image_id):
+            wanted.setdefault(image_id, ref)
+        elif not absent:
+            # Neither an image ID nor a clean absence: protection is unknown.
+            complete = False
+
+    code, listing, _ = await run(
+        "image retention hold discovery",
+        (
+            docker_binary,
+            "container",
+            "ls",
+            "--all",
+            "--no-trunc",
+            "--filter",
+            f"label={_IMAGE_HOLD_KIND}",
+            "--format",
+            _IMAGE_HOLD_FORMAT,
+        ),
+    )
+    held: set[str] = set()
+    if code:
+        complete = False
+    else:
+        for line in listing.splitlines():
+            container_id, _, image_id = line.strip().partition(" ")
+            if not container_id:
+                continue
+            if image_id in wanted and image_id not in held:
+                held.add(image_id)
+                continue
+            await run(
+                f"image retention hold release {container_id}",
+                (docker_binary, "container", "rm", container_id),
+            )
+
+    for image_id, ref in wanted.items():
+        if image_id in held:
+            continue
+        code, _, _ = await run(
+            f"image retention hold {ref}",
+            (
+                docker_binary,
+                "container",
+                "create",
+                "--pull",
+                "never",
+                "--name",
+                f"moonmind-image-hold-{image_id.removeprefix('sha256:')[:24]}",
+                "--label",
+                _IMAGE_HOLD_KIND,
+                "--label",
+                f"{_IMAGE_HOLD_ID_LABEL}={image_id}",
+                "--label",
+                f"moonmind.retained_image={ref}",
+                "--network",
+                "none",
+                image_id,
+                "true",
+            ),
+        )
+        if code:
+            complete = False
+        else:
+            held.add(image_id)
+    return tuple(ref for image_id, ref in wanted.items() if image_id in held), complete
 
 
 def _is_buildx_builder(value: object) -> bool:
@@ -325,6 +459,7 @@ def _result(
     critical_pressure_detected: bool,
     commands_attempted: tuple[str, ...] = (),
     errors: tuple[str, ...] = (),
+    retained_images: tuple[str, ...] = (),
 ) -> DockerStorageMaintenanceResult:
     return DockerStorageMaintenanceResult(
         enabled=config.enabled,
@@ -338,10 +473,11 @@ def _result(
         reclaimed_bytes=max(0, after.free - before.free),
         commands_attempted=commands_attempted,
         errors=errors,
+        retained_images=retained_images,
     )
 
 
-def _disk_usage(path: Path) -> DiskUsageSnapshot:
+def filesystem_usage(path: Path) -> DiskUsageSnapshot:
     usage = shutil.disk_usage(path)
     return DiskUsageSnapshot(total=usage.total, used=usage.used, free=usage.free)
 
@@ -383,8 +519,12 @@ def _required_int(source: Mapping[str, str], key: str, default: int) -> int:
 
 
 __all__ = [
+    "CRITICAL_WATERMARK_ENV",
+    "DEFAULT_CRITICAL_WATERMARK_PERCENT",
+    "DiskUsageProvider",
     "DiskUsageSnapshot",
     "DockerStorageMaintenanceConfig",
     "DockerStorageMaintenanceResult",
+    "filesystem_usage",
     "reclaim_docker_storage_under_pressure",
 ]

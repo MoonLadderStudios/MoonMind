@@ -526,13 +526,12 @@ identity, ambient Docker login, or anonymous pull.
 Images survive job, session, and workflow completion, and job cleanup never
 prunes images globally. The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup`
 workflow runs Docker storage maintenance on the trusted agent-runtime worker:
-it removes day-old unused untagged images, stale build cache, and unreferenced
-anonymous volumes, keeps tagged images (such as declared container-job images)
-so later jobs reuse them, and escalates to all unused images and build cache
-when the `/work/agent_jobs` filesystem stays above its critical watermark. Named
-volumes and containers are never targets. [Managed Runtime
-Cleanup](ManagedRuntimeCleanup.md) describes thresholds and
-`MOONMIND_DOCKER_STORAGE_*` tuning.
+it removes day-old unused untagged images, stale build cache, unreferenced
+anonymous volumes and retired per-principal cache volumes, and escalates to
+other unused images and build cache when the `/work/agent_jobs` filesystem stays
+above its critical watermark. Declared container-job and Host Class images are
+never pruned. [Managed Runtime Cleanup](ManagedRuntimeCleanup.md) describes
+thresholds and `MOONMIND_DOCKER_STORAGE_*` tuning.
 
 `tools/cleanup-docker-space.sh` is the operator recovery path and works when the
 Docker data root is full: inspection launches no diagnostic container, and
@@ -769,8 +768,8 @@ a configured backend. Workflow text and environment overrides cannot elevate
 the profile's decision.
 
 The `tactics-unreal` source uses the approved Unreal image. Compose supplies
-`unreal-ccache`, `unreal-ubt`, and writable `unreal-ddc`. Owner-scoped volumes
-persist across jobs; explicit cache declarations replace the defaults. The
+`unreal-ccache`, `unreal-ubt`, and writable `unreal-ddc`. Every job reuses the
+declared volume; explicit cache declarations replace the defaults. The
 `tactics-test` Skill uses managed Container Jobs and standalone Docker.
 
 ---

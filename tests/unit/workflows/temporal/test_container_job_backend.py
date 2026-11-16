@@ -1613,16 +1613,11 @@ async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
 
     create = next(command for command in commands if command[0] == "create")
     cache_mounts = [item for item in create if item.startswith("type=volume,src=")]
-    assert len(cache_mounts) == 2
-    assert any(
-        item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
-        and item.endswith(f",dst={PRIMARY_CACHE_TARGET}")
-        for item in cache_mounts
-    )
-    assert any(
-        item.startswith(f"type=volume,src={SECONDARY_CACHE_VOLUME}-")
-        and item.endswith(f"dst={SECONDARY_CACHE_TARGET}")
-        for item in cache_mounts
+    assert sorted(cache_mounts) == sorted(
+        [
+            f"type=volume,src={PRIMARY_CACHE_VOLUME},dst={PRIMARY_CACHE_TARGET}",
+            f"type=volume,src={SECONDARY_CACHE_VOLUME},dst={SECONDARY_CACHE_TARGET}",
+        ]
     )
     cache_volume_commands = [
         command for command in commands if command[:2] == ("volume", "create")
@@ -1632,15 +1627,24 @@ async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
         "moonmind.kind=container-job-cache" in command
         for command in cache_volume_commands
     )
-    assert all(
-        any(item.startswith("moonmind.cache_owner=") for item in command)
+    # The owner label marks the retired per-principal volumes that hourly
+    # maintenance reclaims; the deployment volume must never carry it.
+    assert not any(
+        item.startswith("moonmind.cache_owner=")
         for command in cache_volume_commands
+        for item in command
     )
     assert result.resolved_cache_refs == (PRIMARY_CACHE_REF, SECONDARY_CACHE_REF)
 
 
 @pytest.mark.asyncio
-async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
+async def test_cache_volume_is_reused_across_runs(tmp_path) -> None:
+    """Every run mounts the deployment's declared cache volume.
+
+    Job principals are execution-scoped, so keying the volume by principal
+    gave each run a fresh multi-gigabyte cache that was never reused and never
+    removed until the shared Docker disk filled.
+    """
     (tmp_path / "art_workspace").mkdir()
     first_commands: list[tuple[str, ...]] = []
     second_commands: list[tuple[str, ...]] = []
@@ -1663,19 +1667,10 @@ async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
     await _cache_backend(tmp_path, first_commands).create_container(first_request)
     await _cache_backend(tmp_path, second_commands).create_container(second_request)
 
-    first_mount = next(
-        item
-        for command in first_commands
-        for item in command
-        if item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
-    )
-    second_mount = next(
-        item
-        for command in second_commands
-        for item in command
-        if item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
-    )
-    assert first_mount != second_mount
+    expected = f"type=volume,src={PRIMARY_CACHE_VOLUME},dst={PRIMARY_CACHE_TARGET}"
+    for commands in (first_commands, second_commands):
+        create = next(command for command in commands if command[0] == "create")
+        assert expected in create
 
 
 @pytest.mark.asyncio

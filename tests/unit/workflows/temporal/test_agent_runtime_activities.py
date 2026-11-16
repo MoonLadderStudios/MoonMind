@@ -6434,14 +6434,17 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         docker_reference_provider: Any,
         closed_workflow_provider: Any,
         progress_callback: Any,
+        storage_usage_provider: Any,
     ) -> _CleanupResult:
         cleanup_calls.append(
             {
                 "run_store": run_store,
                 "session_store_root": session_store.store_root,
                 "runtime_store_root": config.runtime_store_root,
+                "pressure_watermark_percent": config.pressure_watermark_percent,
                 "docker_reference_provider": docker_reference_provider,
                 "progress_callback": progress_callback,
+                "storage_usage_provider": storage_usage_provider,
             }
         )
         return _CleanupResult()
@@ -6490,6 +6493,13 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
     assert cleanup_call["runtime_store_root"] == tmp_path
     assert cleanup_call["docker_reference_provider"] is None
     assert callable(cleanup_call["progress_callback"])
+    # The pass reads real disk usage so critical pressure can shorten retention.
+    from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+        filesystem_usage,
+    )
+
+    assert cleanup_call["storage_usage_provider"] is filesystem_usage
+    assert cleanup_call["pressure_watermark_percent"] == 90
     assert heartbeat_payloads == [
         {
             "activityType": "agent_runtime.cleanup_managed_runtime_files",
@@ -6506,6 +6516,9 @@ async def test_agent_runtime_reclaims_docker_storage_through_controller_boundary
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_configs: list[Any] = []
+    observed_retained: list[tuple[str, ...]] = []
+    host_image = "ghcr.io/example/omnigent-host@sha256:" + "1" * 64
+    job_image = "ghcr.io/example/engine-base:5.8"
 
     class _Result:
         def to_dict(self) -> dict[str, Any]:
@@ -6517,9 +6530,31 @@ async def test_agent_runtime_reclaims_docker_storage_through_controller_boundary
             }
 
     class _Controller:
-        async def reclaim_docker_storage_pressure(self, *, config: Any) -> _Result:
+        async def reclaim_docker_storage_pressure(
+            self, *, config: Any, retained_images: tuple[str, ...]
+        ) -> _Result:
             observed_configs.append(config)
+            observed_retained.append(retained_images)
             return _Result()
+
+    # The images the current configuration launches are retained through
+    # pruning: Host Class images and declared container-job image sources.
+    from moonmind.config import container_backend_settings
+    from moonmind.omnigent.harness_platform import host_classes
+
+    monkeypatch.setattr(
+        host_classes, "installed_host_class_image_refs", lambda: (host_image,)
+    )
+    monkeypatch.setattr(
+        container_backend_settings,
+        "resolve_container_backend_settings",
+        lambda: SimpleNamespace(
+            image_sources=(
+                SimpleNamespace(image=job_image),
+                SimpleNamespace(image=host_image),
+            )
+        ),
+    )
 
     heartbeat_payloads: list[dict[str, Any]] = []
 
@@ -6543,6 +6578,7 @@ async def test_agent_runtime_reclaims_docker_storage_through_controller_boundary
     result = await activities.agent_runtime_reclaim_docker_storage({})
 
     assert len(observed_configs) == 1
+    assert observed_retained == [(host_image, job_image)]
     assert heartbeat_payloads == [
         {"activityType": "agent_runtime.reclaim_docker_storage"}
     ]

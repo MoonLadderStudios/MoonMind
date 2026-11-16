@@ -10,7 +10,6 @@ variables and Compose supplies the derived default.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -182,7 +181,7 @@ _TACTICS_CACHES = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("service", _DECLARING_SERVICES)
-async def test_default_tactics_cache_request_reuses_owner_scoped_ddc(tmp_path, service):
+async def test_default_tactics_cache_request_reuses_deployment_ddc(tmp_path, service):
     """Real Compose defaults must admit the repository runner's complete request."""
     environment = _service_environment(service)
     settings = resolve_container_backend_settings(
@@ -219,36 +218,24 @@ async def test_default_tactics_cache_request_reuses_owner_scoped_ddc(tmp_path, s
     assert ddc.volume_name == "unreal_ddc_volume"
     assert ddc.target == _TACTICS_CACHES[2]["target"]
     assert not ddc.read_only
-    owner_digest = hashlib.sha256(
-        f"{first.owner.principal_type}:{first.owner.principal_id}".encode()
-    ).hexdigest()[:20]
-    mount = f"type=volume,src=unreal_ddc_volume-{owner_digest},dst={ddc.target}"
-    assert mount in creates[0] and mount in creates[1]
-    assert mount not in creates[2]
-    assert (
-        len(
-            [
-                item
-                for item in creates[2]
-                if item.startswith("type=volume,src=unreal_ddc_volume-")
-            ]
-        )
-        == 1
-    )
+    # Retries and other principals share the one declared deployment cache.
+    mount = f"type=volume,src=unreal_ddc_volume,dst={ddc.target}"
+    assert all(mount in create for create in creates)
     provisioned = [
         command for command in commands if command[:2] == ("volume", "create")
     ]
     assert all(
         "moonmind.kind=container-job-cache" in command for command in provisioned
     )
-    assert (
-        sum("moonmind.cache_ref=unreal-ddc" in command for command in provisioned) == 3
-    )
-    assert (
-        sum(
-            f"moonmind.cache_owner={owner_digest}" in command for command in provisioned
-        )
-        == 6
+    assert {command[-1] for command in provisioned} == {
+        "unreal_ccache_volume",
+        "unreal_ubt_volume",
+        "unreal_ddc_volume",
+    }
+    assert not any(
+        item.startswith("moonmind.cache_owner=")
+        for command in provisioned
+        for item in command
     )
 
 

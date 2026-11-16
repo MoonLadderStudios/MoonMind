@@ -295,7 +295,7 @@ eligibility:
   deleteWhen:
     - Temporal reports the owner workflow closed (or no longer retains its history)
     - every unexpired existing-workspace claim belongs to a closed workflow
-    - newest activity (owner close time, record files, path mtime) is older than workspace retention
+    - newest activity (owner close time, record files, path mtime) is older than workspace retention, or than grace at the critical storage watermark
     - no live container mounts the workspace path or its volume subpath
     - no unexpired unsaved-work marker records a failed required save
   deleteWith:
@@ -335,6 +335,13 @@ retention owner, and repeated failures do not extend it. A later
 successful save clears the marker and returns the workspace to ordinary
 retention. If the marker cannot be written, cleanup stays pending instead of
 releasing anything.
+
+While the runtime filesystem, which also holds MinIO artifacts, is at or above
+`MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` (default 90), the pass
+removes sandbox workspaces that only retention protects, oldest first, until
+usage drops below it. Every other gate still applies, so the unsaved-work
+marker keeps the only copy of failed-save work. Run/session roots carry no save
+evidence and keep full retention.
 
 ### 6.6 Managed runtime artifact directory
 
@@ -489,20 +496,25 @@ reported as degraded maintenance and retried by the next hourly run; it does not
 erase a successful workspace result.
 
 Unused untagged images older than 24 hours, build cache unused for 24 hours,
-and anonymous volumes no container references expire on every pass, even below
-the filesystem high watermark. Docker Desktop's sparse VM disk can report
-available capacity while the Mac's backing filesystem is full, so that reading
-must not disable routine expiry. Superseded digest-pinned releases are untagged
-and expire routinely. Tagged images are kept by routine expiry: Docker ages an
-image from its build time, not its last use, so a reused tagged image such as a
-deployment-declared container-job base image would otherwise be deleted
-whenever no container held it and re-pulled by the next job. Critical disk
-pressure still permits the broader pass that removes every unused image and
-all unused cache. Docker protects container-referenced images and active build
-cache. An anonymous volume that no container references cannot be reattached,
-so it is garbage; named volumes, including deployment data, caches and builder
-state, are never pruned. Explicit image/cache age settings and the
-Docker-maintenance opt-out remain deployment-owned.
+anonymous volumes no container references, and unused cache volumes labeled
+`moonmind.cache_owner` expire on every pass, even below the filesystem high
+watermark. Docker Desktop's sparse VM disk can report available capacity while
+the Mac's backing filesystem is full, so that reading must not disable routine
+expiry. Superseded digest-pinned releases are untagged and expire routinely.
+Routine expiry keeps tagged images, because Docker ages an image from its build
+time, not its last use. If usage is still critical once that MoonMind-owned
+waste is gone, the pass removes every other unused image and all unused cache.
+Images the current configuration launches (Host Class images and declared
+container-job image sources) are never pruned, since that only forces a re-pull
+under the same pressure. Docker has no image pin, so a never-started
+`moonmind.kind=image-retention-hold` container references each one until it is
+no longer configured, and image prunes wait until every hold exists. Docker
+protects container-referenced images and active build cache. Unreferenced
+anonymous volumes cannot be reattached, and owner-labeled cache volumes were
+keyed by execution-scoped job principal, so no job mounts them again; other
+named volumes, including deployment data, current caches and builder state, are
+never pruned. Explicit image/cache age settings and the Docker-maintenance
+opt-out remain deployment-owned.
 
 Docker-container Buildx builders keep a separate cache in their state volumes.
 The hourly pass discovers running builders through Docker rather than relying
@@ -613,6 +625,7 @@ Environment variables:
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS` | `100` | Per-pass deletion cap. Hourly repetition lets larger backlogs converge. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES` | unset | Optional per-pass estimated byte cap. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH` | `/work/agent_jobs/.janitor.lock` | Process-level janitor lock. |
+| `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` | `90` | Usage at which saved sandbox workspaces lose remaining retention; shared with Docker maintenance. |
 
 ### 8.7.1 Upgrade behavior
 
@@ -636,7 +649,8 @@ Before deleting a workspace or artifact root, the janitor must verify all of the
    root (for example `agent_workspaces:/work/agent_jobs`) is not per-candidate
    liveness evidence; active MoonMind owner/correlation labels provide that
    evidence.
-9. The newest relevant timestamp is older than both retention and grace windows,
+9. The newest relevant timestamp is older than both retention (none for a
+   sandbox workspace at the critical storage watermark) and grace windows,
    and no unexpired unsaved-work marker protects a sandbox workspace.
 10. The candidate is still eligible after a second just-before-delete scan.
 11. The per-pass path and byte budgets allow deletion.

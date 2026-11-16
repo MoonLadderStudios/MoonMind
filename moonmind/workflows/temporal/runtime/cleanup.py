@@ -13,7 +13,7 @@ import re
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -23,6 +23,11 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+    CRITICAL_WATERMARK_ENV,
+    DEFAULT_CRITICAL_WATERMARK_PERCENT,
+    DiskUsageProvider,
+)
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
     ManagedSessionStore,
@@ -108,6 +113,9 @@ class ManagedRuntimeCleanupConfig:
     lock_path: Path = Path("/work/agent_jobs/.janitor.lock")
     runtime_store_root: Path = Path("/work/agent_jobs")
     artifact_root: Path = Path("/work/agent_jobs/artifacts")
+    # Filesystem usage at which saved sandbox workspaces lose their remaining
+    # retention, oldest first. Shared with Docker storage maintenance.
+    pressure_watermark_percent: int = DEFAULT_CRITICAL_WATERMARK_PERCENT
 
     @classmethod
     def from_env(
@@ -171,6 +179,7 @@ class ManagedRuntimeCleanupConfig:
             ),
             runtime_store_root=runtime_store_root,
             artifact_root=artifact_root,
+            pressure_watermark_percent=_pressure_watermark(source),
         )
 
 
@@ -216,6 +225,8 @@ class ManagedRuntimeCleanupDecision:
     reason: str
     newest_activity_at: datetime | None = None
     estimated_bytes: int = 0
+    # Removed (or, in dry-run, selected) before retention under disk pressure.
+    pressure: bool = False
 
 
 @dataclass(frozen=True)
@@ -264,6 +275,9 @@ class ManagedRuntimeCleanupResult:
     candidate_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
     deleted_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
     decisions: tuple[ManagedRuntimeCleanupDecision, ...] = ()
+    pressure_evicted_roots: int = 0
+    storage_usage_percent_before: int | None = None
+    storage_usage_percent_after: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -294,6 +308,9 @@ class ManagedRuntimeCleanupResult:
                 sample.to_dict() for sample in self.candidate_samples
             ],
             "deletedSamples": [sample.to_dict() for sample in self.deleted_samples],
+            "pressureEvictedRoots": self.pressure_evicted_roots,
+            "storageUsagePercentBefore": self.storage_usage_percent_before,
+            "storageUsagePercentAfter": self.storage_usage_percent_after,
         }
 
 
@@ -446,12 +463,15 @@ class ManagedRuntimeWorkspaceJanitor:
         closed_workflow_provider: ClosedWorkflowProvider | None = None,
         progress_callback: CleanupProgressCallback | None = None,
         now: Callable[[], datetime] | None = None,
+        storage_usage_provider: DiskUsageProvider | None = None,
     ) -> None:
         self._run_store = run_store
         self._session_store = session_store
         self._config = config or ManagedRuntimeCleanupConfig.from_env()
         self._docker_reference_provider = docker_reference_provider
         self._closed_workflow_provider = closed_workflow_provider
+        # Without a usage reading the janitor never evicts before retention.
+        self._storage_usage_provider = storage_usage_provider
         self._progress_callback = progress_callback
         self._now = now or (lambda: datetime.now(tz=UTC))
         self._unreadable_protected_paths: frozenset[Path] = frozenset()
@@ -528,6 +548,13 @@ class ManagedRuntimeWorkspaceJanitor:
                     budget=budget,
                 )
             )
+        storage_usage = self._relieve_storage_pressure(
+            candidates,
+            decisions,
+            docker_state=docker_state,
+            budget=budget,
+            errors=errors,
+        )
         decisions.extend(
             self._classify_unreadable_records(
                 unreadable,
@@ -541,6 +568,100 @@ class ManagedRuntimeWorkspaceJanitor:
             scanned_session_records=len(session_records),
             unreadable_owner_records=len(unreadable),
             errors=tuple(errors),
+            storage_usage=storage_usage,
+        )
+
+    def _relieve_storage_pressure(
+        self,
+        candidates: Sequence[ManagedRuntimeCleanupCandidate],
+        decisions: list[ManagedRuntimeCleanupDecision],
+        *,
+        docker_state: DockerReferenceState,
+        budget: _CleanupBudget,
+        errors: list[str],
+    ) -> tuple[int | None, int | None]:
+        """Evict the oldest saved sandbox workspaces while the disk is critical.
+
+        Retention keeps finished checkouts for debugging, never at the cost of
+        the shared disk every artifact write needs. At the critical watermark,
+        closed-owner sandbox workspaces past the grace window lose their
+        remaining retention, oldest first, until usage falls below it. Every
+        other gate still applies: open owners or claims, live mounts and an
+        unexpired unsaved-work marker (the only copy of a failed save) keep
+        the workspace. Returns usage percent before and after.
+        """
+
+        provider = self._storage_usage_provider
+        if provider is None:
+            return None, None
+        root = self._config.runtime_store_root
+        try:
+            usage = provider(root)
+            total = usage.total
+            if total <= 0:
+                raise ValueError("filesystem reported a non-positive size")
+        except (OSError, ValueError) as exc:
+            errors.append(f"storage usage unavailable: {exc}")
+            return None, None
+        used = usage.used
+        before = _percent(used, total)
+        watermark = self._config.pressure_watermark_percent
+        order = sorted(
+            (
+                index
+                for index, candidate in enumerate(candidates)
+                if self._pressure_evictable(candidate, decisions[index])
+            ),
+            key=lambda index: decisions[index].newest_activity_at,  # type: ignore[arg-type,return-value]
+        )
+        for index in order:
+            if used * 100 < total * watermark:
+                break
+            decision = self._classify_candidate(
+                candidates[index],
+                docker_state=docker_state,
+                budget=budget,
+                pressure=True,
+            )
+            if decision.classification == "deleted":
+                decision = replace(
+                    decision,
+                    pressure=True,
+                    reason="deleted under critical storage pressure",
+                )
+            elif decision.classification == "eligible":
+                decision = replace(
+                    decision,
+                    pressure=True,
+                    reason="dry-run would delete under critical storage pressure",
+                )
+            decisions[index] = decision
+            if decision.classification == "budget_exhausted":
+                break
+            if decision.classification == "eligible":
+                used -= decision.estimated_bytes
+            elif decision.classification == "deleted":
+                try:
+                    used = provider(root).used
+                except (OSError, ValueError) as exc:
+                    errors.append(f"storage usage unavailable: {exc}")
+                    break
+        return before, _percent(used, total)
+
+    def _pressure_evictable(
+        self,
+        candidate: ManagedRuntimeCleanupCandidate,
+        decision: ManagedRuntimeCleanupDecision,
+    ) -> bool:
+        """Only retention, not any other gate, keeps this sandbox workspace."""
+
+        return (
+            candidate.kind == "workspace"
+            and candidate.sandbox_owner is not None
+            and not candidate.quarantine
+            and decision.classification == "protected_recent"
+            and decision.newest_activity_at is not None
+            and self._now() - decision.newest_activity_at >= self._config.grace
         )
 
     def _quarantine_candidates(self) -> tuple[ManagedRuntimeCleanupCandidate, ...]:
@@ -1069,6 +1190,7 @@ class ManagedRuntimeWorkspaceJanitor:
         *,
         docker_state: DockerReferenceState,
         budget: _CleanupBudget,
+        pressure: bool = False,
     ) -> ManagedRuntimeCleanupDecision:
         path = candidate.path
         kind = candidate.kind
@@ -1151,7 +1273,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     "protected_recent",
                     "missing owner and filesystem timestamps",
                 )
-            retention = self._retention_for(kind)
+            retention = self._retention_for(kind, pressure=pressure)
             if retention is None:
                 return self._decision(
                     candidate, "protected_recent", "record retention disabled", newest
@@ -1190,7 +1312,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "eligible", "dry-run would delete", newest, estimated_bytes
                 )
-            if self._rescan_blocks_delete(candidate):
+            if self._rescan_blocks_delete(candidate, pressure=pressure):
                 return self._decision(
                     candidate,
                     "protected_active",
@@ -1397,7 +1519,12 @@ class ManagedRuntimeWorkspaceJanitor:
             return None
         return max(_ensure_aware(ts) for ts in timestamps)
 
-    def _retention_for(self, kind: ManagedRuntimeCandidateKind) -> timedelta | None:
+    def _retention_for(
+        self, kind: ManagedRuntimeCandidateKind, *, pressure: bool = False
+    ) -> timedelta | None:
+        if pressure and kind == "workspace":
+            # Only the grace window still applies under critical pressure.
+            return timedelta(0)
         if kind == "artifact":
             return self._config.artifact_retention
         if kind in {"run_record", "session_record"}:
@@ -1426,7 +1553,9 @@ class ManagedRuntimeWorkspaceJanitor:
             reason=str(raw.get("reason") or "") or None,
         )
 
-    def _rescan_blocks_delete(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+    def _rescan_blocks_delete(
+        self, candidate: ManagedRuntimeCleanupCandidate, *, pressure: bool = False
+    ) -> bool:
         if not self._path_allowed(
             candidate.kind, candidate.path
         ) or candidate.path.is_symlink():
@@ -1460,7 +1589,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     ):
                         return True
                     newest = self._newest_activity(fresh)
-                    retention = self._retention_for(fresh.kind)
+                    retention = self._retention_for(fresh.kind, pressure=pressure)
                     if newest is None or retention is None:
                         return True
                     age = self._now() - newest
@@ -1563,6 +1692,7 @@ class ManagedRuntimeWorkspaceJanitor:
         scanned_session_records: int,
         errors: tuple[str, ...],
         unreadable_owner_records: int = 0,
+        storage_usage: tuple[int | None, int | None] = (None, None),
     ) -> ManagedRuntimeCleanupResult:
         all_errors = list(errors)
         all_errors.extend(
@@ -1669,6 +1799,11 @@ class ManagedRuntimeWorkspaceJanitor:
             candidate_samples=candidate_samples,
             deleted_samples=deleted_samples,
             decisions=tuple(decisions),
+            pressure_evicted_roots=sum(
+                1 for d in decisions if d.pressure and d.classification == "deleted"
+            ),
+            storage_usage_percent_before=storage_usage[0],
+            storage_usage_percent_after=storage_usage[1],
         )
 
 
@@ -1712,6 +1847,7 @@ def cleanup_managed_runtime_files(
     docker_reference_provider: DockerReferenceProvider | None = None,
     closed_workflow_provider: ClosedWorkflowProvider | None = None,
     progress_callback: CleanupProgressCallback | None = None,
+    storage_usage_provider: DiskUsageProvider | None = None,
 ) -> ManagedRuntimeCleanupResult:
     """Run one managed-runtime retained cleanup pass."""
     return ManagedRuntimeWorkspaceJanitor(
@@ -1721,6 +1857,7 @@ def cleanup_managed_runtime_files(
         docker_reference_provider=docker_reference_provider,
         closed_workflow_provider=closed_workflow_provider,
         progress_callback=progress_callback,
+        storage_usage_provider=storage_usage_provider,
     ).run()
 
 
@@ -1739,6 +1876,17 @@ def _env_int(source: Mapping[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _pressure_watermark(source: Mapping[str, str]) -> int:
+    # Docker storage maintenance rejects an out-of-range value loudly; the
+    # janitor keeps the default rather than evicting at a nonsensical bound.
+    value = _env_int(source, CRITICAL_WATERMARK_ENV, DEFAULT_CRITICAL_WATERMARK_PERCENT)
+    return value if 2 <= value <= 99 else DEFAULT_CRITICAL_WATERMARK_PERCENT
+
+
+def _percent(used: int, total: int) -> int:
+    return min(100, max(0, round(used * 100 / total)))
 
 
 def _env_optional_int(source: Mapping[str, str], key: str) -> int | None:
