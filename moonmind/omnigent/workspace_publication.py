@@ -473,13 +473,21 @@ class OmnigentWorkspacePublicationService:
             }
         if not publish_saved_work:
             return workspace_evidence
-        return {
+        saved = {
             **workspace_evidence,
             **await self._index_saved_workspace(
                 request, workspace_evidence,
                 manifest_bytes=verified_manifests[workspace_evidence["manifestRef"]],
             ),
         }
+        # Only this stopped-boundary save proves another copy exists; a live
+        # probe can be followed by more work. Cleanup relies on it under pressure.
+        await asyncio.to_thread(
+            SandboxWorkspaceRecordStore(self._workspace_root).mark_saved,
+            self._owned_sandbox_workspace_id(request),
+            recorded_at=datetime.now(UTC),
+        )
+        return saved
 
     async def _index_saved_workspace(self, request, saved, *, manifest_bytes):
         """Index already verified checkpoint bytes for independent publication.

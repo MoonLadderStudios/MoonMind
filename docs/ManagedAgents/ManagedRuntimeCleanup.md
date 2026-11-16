@@ -295,7 +295,7 @@ eligibility:
   deleteWhen:
     - Temporal reports the owner workflow closed (or no longer retains its history)
     - every unexpired existing-workspace claim belongs to a closed workflow
-    - newest activity (owner close time, record files, path mtime) is older than workspace retention, or than grace at the critical storage watermark
+    - newest activity (owner close time, record files, path mtime) is older than workspace retention, or than grace at the critical storage watermark once a current verified save exists
     - no live container mounts the workspace path or its volume subpath
     - no unexpired unsaved-work marker records a failed required save
   deleteWith:
@@ -339,9 +339,11 @@ releasing anything.
 While the runtime filesystem, which also holds MinIO artifacts, is at or above
 `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` (default 90), the pass
 removes sandbox workspaces that only retention protects, oldest first, until
-usage drops below it. Every other gate still applies, so the unsaved-work
-marker keeps the only copy of failed-save work. Run/session roots carry no save
-evidence and keep full retention.
+usage drops below it, and only when another copy is proven: the canonical
+stopped-boundary save writes `<workspace_id>.saved.json`, which must be newer
+than any later owner-record, readiness or claim change. Not every producer
+records a failed save, so a missing unsaved marker proves nothing. Workspaces
+without current save evidence, and run/session roots, keep full retention.
 
 ### 6.6 Managed runtime artifact directory
 
@@ -508,7 +510,9 @@ Images the current configuration launches (Host Class images and declared
 container-job image sources) are never pruned, since that only forces a re-pull
 under the same pressure. Docker has no image pin, so a never-started
 `moonmind.kind=image-retention-hold` container references each one until it is
-no longer configured, and image prunes wait until every hold exists. Docker
+no longer configured, and image prunes wait until every hold exists. Holds are
+labeled with the deployment's `MOONMIND_DEPLOYMENT_PROJECT_NAME`, and each
+deployment on a shared daemon releases only its own. Docker
 protects container-referenced images and active build cache. Unreferenced
 anonymous volumes cannot be reattached, and owner-labeled cache volumes were
 keyed by execution-scoped job principal, so no job mounts them again; other
@@ -625,7 +629,7 @@ Environment variables:
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS` | `100` | Per-pass deletion cap. Hourly repetition lets larger backlogs converge. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES` | unset | Optional per-pass estimated byte cap. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH` | `/work/agent_jobs/.janitor.lock` | Process-level janitor lock. |
-| `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` | `90` | Usage at which saved sandbox workspaces lose remaining retention; shared with Docker maintenance. |
+| `MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT` | `90` | Usage at which sandbox workspaces with a current verified save lose remaining retention; shared with Docker maintenance. |
 
 ### 8.7.1 Upgrade behavior
 
@@ -650,7 +654,8 @@ Before deleting a workspace or artifact root, the janitor must verify all of the
    liveness evidence; active MoonMind owner/correlation labels provide that
    evidence.
 9. The newest relevant timestamp is older than both retention (none for a
-   sandbox workspace at the critical storage watermark) and grace windows,
+   sandbox workspace with a current verified save at the critical storage
+   watermark) and grace windows,
    and no unexpired unsaved-work marker protects a sandbox workspace.
 10. The candidate is still eligible after a second just-before-delete scan.
 11. The per-pass path and byte budgets allow deletion.

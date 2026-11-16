@@ -199,6 +199,8 @@ class SandboxWorkspaceOwner:
     error: str | None = None
     # A required save has not completed; the workspace is the only copy.
     unsaved_until: datetime | None = None
+    # A verified save postdates every later use, so another copy exists.
+    save_current: bool = False
 
     @property
     def workflow_ids(self) -> tuple[str, ...]:
@@ -584,11 +586,13 @@ class ManagedRuntimeWorkspaceJanitor:
 
         Retention keeps finished checkouts for debugging, never at the cost of
         the shared disk every artifact write needs. At the critical watermark,
-        closed-owner sandbox workspaces past the grace window lose their
-        remaining retention, oldest first, until usage falls below it. Every
-        other gate still applies: open owners or claims, live mounts and an
-        unexpired unsaved-work marker (the only copy of a failed save) keep
-        the workspace. Returns usage percent before and after.
+        closed-owner sandbox workspaces past the grace window whose verified
+        save is current lose their remaining retention, oldest first, until
+        usage falls below it. A workspace without that positive evidence may
+        hold the only copy of its work and keeps full retention. Every other
+        gate still applies: open owners or claims, live mounts and an
+        unexpired unsaved-work marker keep the workspace. Returns usage
+        percent before and after.
         """
 
         provider = self._storage_usage_provider
@@ -653,11 +657,12 @@ class ManagedRuntimeWorkspaceJanitor:
         candidate: ManagedRuntimeCleanupCandidate,
         decision: ManagedRuntimeCleanupDecision,
     ) -> bool:
-        """Only retention, not any other gate, keeps this sandbox workspace."""
+        """Only retention keeps this saved sandbox workspace."""
 
         return (
             candidate.kind == "workspace"
             and candidate.sandbox_owner is not None
+            and candidate.sandbox_owner.save_current
             and not candidate.quarantine
             and decision.classification == "protected_recent"
             and decision.newest_activity_at is not None
@@ -1011,6 +1016,7 @@ class ManagedRuntimeWorkspaceJanitor:
             grantees = store.active_claim_grantees(workspace_id, now=self._now())
             record_paths = store.record_paths(workspace_id)
             unsaved = store.read_unsaved(workspace_id)
+            save_current = store.save_is_current(workspace_id)
         except (OSError, ValueError) as exc:
             return SandboxWorkspaceOwner(
                 workspace_id=workspace_id,
@@ -1025,6 +1031,7 @@ class ManagedRuntimeWorkspaceJanitor:
             unsaved_until=(
                 datetime.fromisoformat(unsaved["retainUntil"]) if unsaved else None
             ),
+            save_current=save_current,
         )
 
     def _unsaved_protects(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
@@ -1586,6 +1593,11 @@ class ManagedRuntimeWorkspaceJanitor:
                         self._has_active_owner(fresh)
                         or self._has_live_docker_reference(fresh, docker_state)
                         or self._unsaved_protects(fresh)
+                    ):
+                        return True
+                    if pressure and not (
+                        fresh.sandbox_owner is not None
+                        and fresh.sandbox_owner.save_current
                     ):
                         return True
                     newest = self._newest_activity(fresh)

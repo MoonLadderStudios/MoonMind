@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,8 @@ CRITICAL_WATERMARK_ENV = "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT"
 DEFAULT_CRITICAL_WATERMARK_PERCENT = 90
 _IMAGE_HOLD_KIND = "moonmind.kind=image-retention-hold"
 _IMAGE_HOLD_ID_LABEL = "moonmind.retained_image_id"
+# Not Compose's own project label: `up --remove-orphans` would delete the holds.
+_IMAGE_HOLD_DEPLOYMENT_LABEL = "moonmind.deployment"
 _IMAGE_HOLD_FORMAT = '{{.ID}} {{.Label "moonmind.retained_image_id"}}'
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -40,6 +43,9 @@ class DockerStorageMaintenanceConfig:
     critical_watermark_percent: int = DEFAULT_CRITICAL_WATERMARK_PERCENT
     image_min_age_hours: int = 24
     build_cache_min_age_hours: int = 24
+    # Compose project that owns this pass's image holds. Deployments sharing a
+    # daemon keep their own holds, so neither releases the other's.
+    deployment: str = "moonmind"
 
     @classmethod
     def from_env(
@@ -71,6 +77,10 @@ class DockerStorageMaintenanceConfig:
                 source,
                 "MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS",
                 24,
+            ),
+            deployment=(
+                str(source.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "").strip()
+                or "moonmind"
             ),
         )
         config.validate()
@@ -177,7 +187,7 @@ async def reclaim_docker_storage_under_pressure(
         return code, stdout, absent
 
     held_images, images_held = await _hold_retained_images(
-        run, docker_binary, retained_images
+        run, docker_binary, retained_images, deployment=config.deployment
     )
     if images_held:
         await run(
@@ -339,13 +349,16 @@ async def _hold_retained_images(
     run: Callable[..., Awaitable[tuple[int, str, bool]]],
     docker_binary: str,
     retained_images: Sequence[str],
+    *,
+    deployment: str,
 ) -> tuple[tuple[str, ...], bool]:
     """Keep each present retained image referenced by a hold container.
 
     Docker has no image pin, but no prune removes an image a container
     references. Holds are created, never started, from the exact image ID,
     and released once their image is no longer retained so it can expire.
-    Returns the held refs and whether every present retained image is held.
+    Each deployment reconciles only its own holds. Returns the held refs and
+    whether every present retained image is held.
     """
 
     wanted: dict[str, str] = {}
@@ -373,6 +386,8 @@ async def _hold_retained_images(
             "--no-trunc",
             "--filter",
             f"label={_IMAGE_HOLD_KIND}",
+            "--filter",
+            f"label={_IMAGE_HOLD_DEPLOYMENT_LABEL}={deployment}",
             "--format",
             _IMAGE_HOLD_FORMAT,
         ),
@@ -393,6 +408,7 @@ async def _hold_retained_images(
                 (docker_binary, "container", "rm", container_id),
             )
 
+    owner = hashlib.sha256(deployment.encode()).hexdigest()[:8]
     for image_id, ref in wanted.items():
         if image_id in held:
             continue
@@ -405,9 +421,11 @@ async def _hold_retained_images(
                 "--pull",
                 "never",
                 "--name",
-                f"moonmind-image-hold-{image_id.removeprefix('sha256:')[:24]}",
+                f"moonmind-image-hold-{owner}-{image_id.removeprefix('sha256:')[:24]}",
                 "--label",
                 _IMAGE_HOLD_KIND,
+                "--label",
+                f"{_IMAGE_HOLD_DEPLOYMENT_LABEL}={deployment}",
                 "--label",
                 f"{_IMAGE_HOLD_ID_LABEL}={image_id}",
                 "--label",

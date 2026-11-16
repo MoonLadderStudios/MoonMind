@@ -54,6 +54,8 @@ HOLD_DISCOVERY = (
     "--no-trunc",
     "--filter",
     "label=moonmind.kind=image-retention-hold",
+    "--filter",
+    "label=moonmind.deployment=moonmind",
     "--format",
     '{{.ID}} {{.Label "moonmind.retained_image_id"}}',
 )
@@ -431,6 +433,7 @@ async def test_launch_images_are_held_before_any_image_prune() -> None:
     assert create[-2:] == (JOB_IMAGE_ID, "true")
     assert "--pull" in create and create[create.index("--pull") + 1] == "never"
     assert "moonmind.kind=image-retention-hold" in create
+    assert "moonmind.deployment=moonmind" in create
     assert f"moonmind.retained_image_id={JOB_IMAGE_ID}" in create
     assert ("docker", "image", "prune", "-af") in commands[first_prune:]
     assert result.retained_images == (HOST_IMAGE, JOB_IMAGE)
@@ -460,3 +463,110 @@ async def test_image_prunes_wait_until_launch_images_are_held() -> None:
     assert result.retained_images == ()
     assert "image retention hold" in " ".join(result.errors)
     assert any("image prunes skipped" in error for error in result.errors)
+
+
+class _HoldDaemon:
+    """A daemon that applies label filters and refuses duplicate names."""
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.holds: dict[str, tuple[str, dict[str, str]]] = {}
+        self.created = 0
+
+    def add(self, container_id: str, name: str, labels: dict[str, str]) -> None:
+        self.holds[container_id] = (name, labels)
+
+    @staticmethod
+    def _option_values(command: tuple[str, ...], option: str) -> list[str]:
+        return [command[i + 1] for i, arg in enumerate(command) if arg == option]
+
+    async def __call__(self, command: Sequence[str]) -> tuple[int, str, str]:
+        command = tuple(command)
+        self.commands.append(command)
+        if command[1:3] == ("image", "inspect"):
+            return 0, JOB_IMAGE_ID + "\n", ""
+        if command[1:3] == ("container", "ls"):
+            wanted = [
+                tuple(f.removeprefix("label=").split("=", 1))
+                for f in self._option_values(command, "--filter")
+            ]
+            lines = [
+                f"{container_id} {labels.get('moonmind.retained_image_id', '')}"
+                for container_id, (_name, labels) in self.holds.items()
+                if all(
+                    key in labels and (len(rest) == 0 or labels[key] == rest[0])
+                    for key, *rest in wanted
+                )
+            ]
+            return 0, "".join(line + "\n" for line in lines), ""
+        if command[1:3] == ("container", "rm"):
+            self.holds.pop(command[3], None)
+            return 0, "", ""
+        if command[1:3] == ("container", "create"):
+            name = self._option_values(command, "--name")[0]
+            if any(existing == name for existing, _ in self.holds.values()):
+                return 1, "", f"Conflict. The container name {name} is already in use"
+            labels = dict(
+                label.split("=", 1) for label in self._option_values(command, "--label")
+            )
+            self.created += 1
+            self.add(f"{self.created:064x}", name, labels)
+            return 0, "", ""
+        return 0, "", ""
+
+    def held(self, deployment: str) -> set[str]:
+        return {
+            labels["moonmind.retained_image_id"]
+            for _name, labels in self.holds.values()
+            if labels.get("moonmind.deployment") == deployment
+        }
+
+
+@pytest.mark.asyncio
+async def test_each_deployment_reconciles_only_its_own_holds() -> None:
+    """Deployments sharing a daemon keep every image either of them launches.
+
+    Releasing another deployment's hold, or colliding with its hold name,
+    would expose that deployment's launch image to the critical prune.
+    """
+    daemon = _HoldDaemon()
+    daemon.add(
+        "f" * 64,
+        "moonmind-image-hold-other",
+        {
+            "moonmind.kind": "image-retention-hold",
+            "moonmind.deployment": "moonmind-b",
+            "moonmind.retained_image_id": SUPERSEDED_IMAGE_ID,
+        },
+    )
+
+    first = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(deployment="moonmind-a"),
+        command_runner=daemon,
+        disk_usage=lambda _path: _usage(40),
+        retained_images=(JOB_IMAGE,),
+    )
+    assert daemon.held("moonmind-b") == {SUPERSEDED_IMAGE_ID}
+    assert daemon.held("moonmind-a") == {JOB_IMAGE_ID}
+
+    second = await reclaim_docker_storage_under_pressure(
+        config=DockerStorageMaintenanceConfig(deployment="moonmind-b"),
+        command_runner=daemon,
+        disk_usage=lambda _path: _usage(40),
+        retained_images=(JOB_IMAGE,),
+    )
+    # B releases only its own superseded hold and holds the shared image itself.
+    assert daemon.held("moonmind-b") == {JOB_IMAGE_ID}
+    assert daemon.held("moonmind-a") == {JOB_IMAGE_ID}
+    assert first.errors == () and second.errors == ()
+    assert first.retained_images == second.retained_images == (JOB_IMAGE,)
+
+
+def test_hold_owner_follows_the_compose_project() -> None:
+    assert DockerStorageMaintenanceConfig.from_env({}).deployment == "moonmind"
+    assert (
+        DockerStorageMaintenanceConfig.from_env(
+            {"MOONMIND_DEPLOYMENT_PROJECT_NAME": " moonmind-b "}
+        ).deployment
+        == "moonmind-b"
+    )

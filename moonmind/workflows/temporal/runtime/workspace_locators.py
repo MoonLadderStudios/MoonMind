@@ -424,6 +424,66 @@ class SandboxWorkspaceRecordStore:
 
         self._unsaved_marker_path(workspace_id).unlink(missing_ok=True)
 
+    def _saved_marker_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.saved.json").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace saved marker escapes its authority",
+            )
+        return candidate
+
+    def mark_saved(self, workspace_id: str, *, recorded_at: datetime) -> None:
+        """Record that a verified save holds this workspace's current work.
+
+        A missing unsaved marker is not proof of a save, because not every
+        producer records failed saves. Cleanup shortens retention under disk
+        pressure only for workspaces with this positive evidence.
+        """
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._saved_marker_path(workspace_id)
+        staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "version": "saved-v1",
+                        "recordedAt": recorded_at.astimezone(UTC).isoformat(),
+                    },
+                    sort_keys=True,
+                )
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, path)
+
+    def save_is_current(self, workspace_id: str) -> bool:
+        """Whether the last verified save postdates every later use.
+
+        A retry rebinds readiness and another workflow's grant writes a claim;
+        either can change files after the save, which then no longer holds
+        the workspace's only copy of that work.
+        """
+
+        try:
+            saved_at = self._saved_marker_path(workspace_id).stat().st_mtime
+        except FileNotFoundError:
+            return False
+        for path in (
+            self._record_path(workspace_id),
+            self._completion_marker_path(workspace_id),
+            self._readiness_marker_path(workspace_id),
+            self._claims_dir(workspace_id),
+        ):
+            try:
+                if path.stat().st_mtime > saved_at:
+                    return False
+            except FileNotFoundError:
+                continue
+        return True
+
     def _claims_dir(self, workspace_id: str) -> Path:
         candidate = (self.store_root / f"{workspace_id}.grants").resolve()
         if candidate.parent != self.store_root.resolve():
@@ -717,6 +777,7 @@ class SandboxWorkspaceRecordStore:
                 self._completion_marker_path(workspace_id),
                 self._readiness_marker_path(workspace_id),
                 self._unsaved_marker_path(workspace_id),
+                self._saved_marker_path(workspace_id),
                 self._claims_dir(workspace_id),
             )
             if path.exists()

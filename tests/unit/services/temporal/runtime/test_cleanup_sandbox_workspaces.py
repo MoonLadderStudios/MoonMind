@@ -769,6 +769,15 @@ class _Disk:
         return DiskUsageSnapshot(total=100, used=used, free=100 - used)
 
 
+def _mark_saved(root: Path, *workspace_ids: str) -> None:
+    """Record the verified stopped-boundary save of each workspace."""
+
+    store = SandboxWorkspaceRecordStore(root)
+    for workspace_id in workspace_ids:
+        store.mark_saved(workspace_id, recorded_at=OLD)
+    _age(store.store_root)
+
+
 def _pressure_janitor(
     root: Path,
     closures,
@@ -811,6 +820,7 @@ def test_critical_pressure_evicts_oldest_saved_workspaces_until_relieved(
             "mm:newest": NOW - timedelta(days=2),
         }
     )
+    _mark_saved(root, *owners)
     # 80% plus 5% per workspace: 95% -> 90% -> 85%.
     disk = _Disk(root, base_percent=80)
 
@@ -843,6 +853,7 @@ def test_critical_pressure_never_evicts_unsaved_open_or_just_closed_work(
     just_closed = _sandbox_workspace(root, "c" * 24, owner="mm:just-closed")
     saved = _sandbox_workspace(root, "d" * 24, owner="mm:saved")
     store = SandboxWorkspaceRecordStore(root)
+    _mark_saved(root, "a" * 24, "b" * 24, "c" * 24, "d" * 24)
     store.mark_unsaved(
         "a" * 24, reason_code="WORKSPACE_SAVE_UNAVAILABLE", recorded_at=NOW
     )
@@ -868,9 +879,47 @@ def test_critical_pressure_never_evicts_unsaved_open_or_just_closed_work(
     assert result.pressure_evicted_roots == 1
 
 
+def test_critical_pressure_keeps_work_without_a_current_save(tmp_path: Path) -> None:
+    """Only positive save evidence lets pressure take a workspace early.
+
+    Not every producer records a failed save (a workflow checkpoint capture
+    that fails while the artifact store is full leaves no unsaved marker), so
+    the absence of that marker is not proof the work is saved. A save that a
+    later attempt's rebinding outdates is not proof either.
+    """
+
+    root = tmp_path / "agent_jobs"
+    unconfirmed = _sandbox_workspace(root, "a" * 24, owner="mm:unconfirmed")
+    outdated = _sandbox_workspace(root, "b" * 24, owner="mm:outdated")
+    saved = _sandbox_workspace(root, "c" * 24, owner="mm:saved")
+    _mark_saved(root, "b" * 24, "c" * 24)
+    store = SandboxWorkspaceRecordStore(root)
+    # A retry rebound the workspace after its last save.
+    _age(store.store_root / f"{'b' * 24}.ready.json", OLD + timedelta(days=1))
+    closures = _Closures(
+        {
+            "mm:unconfirmed": NOW - timedelta(days=6),
+            "mm:outdated": NOW - timedelta(days=5),
+            "mm:saved": NOW - timedelta(days=4),
+        }
+    )
+    disk = _Disk(root, base_percent=80)
+
+    result = _pressure_janitor(root, closures, disk).run()
+
+    assert _decision(result, unconfirmed).classification == "protected_recent"
+    assert _decision(result, outdated).classification == "protected_recent"
+    assert _decision(result, saved).classification == "deleted"
+    assert unconfirmed.exists() and outdated.exists() and not saved.exists()
+    # The record goes with the workspace it described.
+    assert not (store.store_root / f"{'c' * 24}.saved.json").exists()
+    assert result.pressure_evicted_roots == 1
+
+
 def test_retention_holds_below_the_critical_watermark(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     workspace = _sandbox_workspace(root)
+    _mark_saved(root, WORKSPACE_ID)
     disk = _Disk(root, base_percent=84)
 
     result = _pressure_janitor(
@@ -885,6 +934,7 @@ def test_retention_holds_below_the_critical_watermark(tmp_path: Path) -> None:
 def test_dry_run_reports_pressure_eviction_without_deleting(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     workspace = _sandbox_workspace(root)
+    _mark_saved(root, WORKSPACE_ID)
     disk = _Disk(root, base_percent=92)
 
     result = _pressure_janitor(
