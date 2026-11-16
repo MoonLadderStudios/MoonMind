@@ -399,7 +399,10 @@ def host_checks():
         for name, service in rendered["services"].items():
             for mount in service.get("volumes", []):
                 if mount.get("source") == "/var/run/docker.sock":
-                    assert name == "docker-proxy", (name, mount)
+                    # The deployment controller is the intentional privileged
+                    # lifecycle owner; application/worker services still must
+                    # use the policy-enforcing proxy.
+                    assert name in {"docker-proxy", "controller"}, (name, mount)
         # The supplied CI image carries the candidate proxy payload. Local
         # runs build the small target that release images copy unchanged.
         proxy["image"] = client_image

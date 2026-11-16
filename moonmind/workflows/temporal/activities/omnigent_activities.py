@@ -1279,6 +1279,11 @@ async def _omnigent_execute_activity(
         return generic_dispatch
 
     if not request.execution_profile_ref:
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            bind_remediation_context_inputs,
+        )
+
+        request = await bind_remediation_context_inputs(request)
         # The supported unprofiled path still creates a provider session and
         # posts its first message, so it claims the same canonical turn command
         # every other execution path claims (#3707 §1). Without this it mutated
@@ -1328,7 +1333,12 @@ async def _omnigent_execute_activity(
 
         lore_repository_adapter = build_lore_repository_adapter_from_environment()
         host_repository = OmnigentOAuthHostRepository(async_session_maker)
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            bind_remediation_context_inputs,
+        )
+
         coordinator = OmnigentProfileBoundExecutionCoordinator(
+            request_input_binder=bind_remediation_context_inputs,
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
             host_repository=host_repository,

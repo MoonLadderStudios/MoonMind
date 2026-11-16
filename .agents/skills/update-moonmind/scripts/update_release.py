@@ -32,7 +32,7 @@ _DEFAULT_CONTROLLER_URL = os.environ.get(
 # Services the controller never recreates through itself: the Docker transport
 # substrate. Postgres stays in the service set: `up` is a no-op while its
 # definition is unchanged, and required init-db gating stays inside Compose.
-_CONTROLLER_EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
+_CONTROLLER_EXCLUDED_SERVICES = frozenset({"controller", "docker-proxy", "sandbox-egress-proxy"})
 _CONTROLLER_POLL_INTERVAL_SECONDS = 10
 _CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
 _CONTROLLER_STORAGE_COPY_SECONDS = 4 * 60 * 60 + 900
@@ -429,7 +429,7 @@ def _submit_release(
 def _installed_controller_url(repo, default):
     """Derive the loopback endpoint from the installed controller identity."""
     identity = _controller_identity(repo)
-    port = identity.get("port") if identity else None
+    port = identity.get("hostPort", identity.get("port")) if identity else None
     if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
         return f"http://127.0.0.1:{port}"
     return default

@@ -283,11 +283,17 @@ keys = (
 )
 environment = {key: os.environ[key] for key in keys}
 services = json.load(sys.stdin)["services"]
-Path(sys.argv[1]).write_text(json.dumps({"services": {
+overrides = {
     name: {"environment": environment} for name in services
     if name in ("api", "omnigent-runtime-bootstrap") or name.startswith("temporal-worker-")
-}}))
-' "$ISOLATION_OVERRIDE"
+}
+# This one journey deliberately starts without a controller, then installs
+# a no-daemon server to exercise Settings failure/reconnect handling. Fresh
+# and upgrade journeys retain the real integrated controller unchanged.
+if sys.argv[2] == "controller" and "controller" in services:
+    overrides["controller"] = {"profiles": ["journey-controller-intentionally-absent"]}
+Path(sys.argv[1]).write_text(json.dumps({"services": overrides}))
+' "$ISOLATION_OVERRIDE" "$MODE"
 }
 
 prepare_worker_measurement() {

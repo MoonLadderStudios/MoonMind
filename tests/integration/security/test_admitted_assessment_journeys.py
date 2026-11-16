@@ -697,6 +697,153 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
     )
 
 
+@pytest.mark.parametrize("secret_backend", ["exec", "vault"])
+@pytest.mark.parametrize("present", [False, True])
+async def test_image_preset_checks_external_credential_before_planning_or_jobs(
+    environment, tmp_path, monkeypatch, secret_backend, present
+):
+    """#5187: real preset, resolver and planning gate; controlled secret owners."""
+    import os
+    from dataclasses import replace
+
+    import httpx
+    from sqlalchemy import select
+    from temporalio.exceptions import ApplicationError
+
+    from api_service.db.models import ContainerJobRecord
+    from api_service.services import (
+        assessment_runtime_readiness,
+        registry_authorization,
+    )
+    from moonmind.workflows.temporal.workflows import run
+
+    reference = (
+        "exec://op?read?registry-login"
+        if secret_backend == "exec"
+        else "vault://kv/registry#credential"
+    )
+    assessment = ImageAssessment(
+        operation="sbom-generate",
+        target="registry",
+        imageReference=image.REGISTRY + "/private/app:1.0",
+        egressPolicyRef="registry",
+        targetCredentialRef=reference,
+    )
+    step = await expand_preset(
+        environment, tmp_path, monkeypatch, "security-image-sbom", assessment
+    )
+    policy = PrivateImageAuthorizationPolicy.model_validate(
+        {
+            "grants": [
+                {
+                    "credentialRef": reference,
+                    "registry": image.REGISTRY,
+                    "repositories": ["private/*"],
+                    "principals": ["user:operator"],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        registry_authorization, "load_default_authorization_policy", lambda: policy
+    )
+    value = '{"username":"audit","password":"readiness-integration-canary"}'
+    if secret_backend == "exec":
+        binary = tmp_path / "op"
+        binary.write_text(
+            f"#!{sys.executable}\nimport sys\n"
+            "assert sys.argv[1:] == ['read', 'registry-login']\n"
+            + (f"print({value!r})\n" if present else "raise SystemExit(1)\n")
+        )
+        binary.chmod(0o700)
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    else:
+        monkeypatch.setenv("MOONMIND_VAULT_ADDR", "https://vault.example.test")
+        monkeypatch.setenv("MOONMIND_VAULT_TOKEN", "controlled-vault-token")
+
+        def vault(request):
+            assert str(request.url) == "https://vault.example.test/v1/kv/data/registry"
+            assert request.headers["X-Vault-Token"] == "controlled-vault-token"
+            return httpx.Response(
+                200 if present else 404,
+                json={"data": {"data": {"credential": value}}} if present else {},
+            )
+
+        client = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kwargs: client(transport=httpx.MockTransport(vault), **kwargs),
+        )
+    runner = AsyncMock()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path / "worker",
+        settings=replace(image.settings(), enabled=True),
+        command_runner=runner,
+    )
+    backend.assessment_readiness = AsyncMock(
+        return_value={
+            "status": "ready",
+            "checks": [
+                {"component": "trivy", "status": "ready", "code": "scanner_available"}
+            ],
+            "diagnostics": [],
+        }
+    )
+    observations = []
+
+    async def activity(name, payload, **kwargs):
+        assert name == "container_job.assessment_readiness"
+        result = await assessment_runtime_readiness.check_assessment_runtime_readiness(
+            payload["parameters"],
+            owner=payload["owner"],
+            workflow_id="assessment",
+            run_id="run",
+            backend=backend,
+            session=environment.session,
+        )
+        observations.append(result)
+        return result
+
+    monkeypatch.setattr(
+        run.workflow,
+        "patched",
+        lambda marker: marker == run.RUN_ASSESSMENT_RUNTIME_READINESS_PATCH,
+    )
+    monkeypatch.setattr(
+        run.workflow, "info", lambda: SimpleNamespace(continued_run_id=None)
+    )
+    monkeypatch.setattr(run.workflow, "execute_activity", activity)
+    monkeypatch.setattr(run.workflow, "upsert_memo", lambda memo: None)
+    planning = AsyncMock(side_effect=AssertionError("provider planning must not run"))
+    monkeypatch.setattr(run, "execute_typed_activity", planning)
+    instance = run.MoonMindRunWorkflow()
+    instance._owner_type, instance._owner_id = "user", "operator"
+    monkeypatch.setattr(
+        instance, "_execute_kwargs_for_route", lambda *args, **kwargs: {}
+    )
+    check = instance._run_planning_stage(
+        parameters={"workflow": {"steps": [step]}}, input_ref=None, plan_ref="saved-plan"
+    )
+    if present:
+        assert await check == "saved-plan"
+        assert observations[0]["status"] == "ready"
+        assert {
+            "component": "credentialValidity",
+            "status": "unverified",
+            "code": "not_probed",
+        } in observations[0]["checks"]
+        backend.assessment_readiness.assert_awaited_once()
+    else:
+        with pytest.raises(ApplicationError, match="credential_unavailable"):
+            _ = await check
+        backend.assessment_readiness.assert_not_awaited()
+    assert "readiness-integration-canary" not in str(observations)
+    planning.assert_not_awaited()
+    runner.assert_not_awaited()
+    assert (await environment.session.execute(select(ContainerJobRecord))).first() is None
+
+
 async def expand_preset(environment, tmp_path, monkeypatch, slug, assessment):
     """Expand the maintained seed through its production HTTP boundary."""
     await run_guarded_upgrade(environment.session, operator_authorized=True)

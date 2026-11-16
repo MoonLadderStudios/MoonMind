@@ -1226,6 +1226,100 @@ async def test_started_turn_failure_does_not_probe_credentials(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("required", [False, "authored", "legacy_skill", "security"])
+@pytest.mark.parametrize("context_ref", [None, "artifact://art-context"])
+async def test_direct_execution_delivers_admitted_remediation_context_before_dispatch(
+    monkeypatch, isolated_control_plane, required, context_ref
+):
+    """The ordinary realizer path must deliver the same inputs as supervision."""
+    from moonmind.workflows.temporal.activities import omnigent_session_activities
+
+    lookup = AsyncMock(return_value=context_ref)
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_context_input_ref", lookup
+    )
+    security_lookup = AsyncMock(return_value=["artifact://art-native"])
+    monkeypatch.setattr(
+        omnigent_session_activities, "_remediation_security_input_refs", security_lookup
+    )
+    dispatch = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        omnigent_activities_module, "_try_generic_realizer_dispatch", dispatch
+    )
+    execute = AsyncMock(return_value=AgentRunResult(summary="done"))
+    monkeypatch.setattr(omnigent_execute_module, "run_omnigent_execution", execute)
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="mm:repair",
+        idempotencyKey="step-1",
+        inputRefs=["artifact://art-existing"],
+        parameters=(
+            {"workflow": {"remediation": {"target": {"workflowId": "mm:failed"}}}}
+            if required in {"authored", "security"}
+            else (
+                {"metadata": {"moonmind": {"selectedSkill": "remediate-workflow"}}}
+                if required == "legacy_skill"
+                else {}
+            )
+        ),
+    )
+    if required == "security":
+        request.parameters["workflow"]["remediation"]["target"]["securityFinding"] = {
+            "findingId": "finding-1"
+        }
+
+    if required and context_ref is None:
+        with pytest.raises(ValueError, match="remediation context"):
+            await ActivityEnvironment().run(omnigent_execute_activity, request)
+        execute.assert_not_awaited()
+    else:
+        await ActivityEnvironment().run(omnigent_execute_activity, request)
+        delivered = execute.await_args.args[0]
+        assert delivered.input_refs == [
+            "artifact://art-existing",
+            *([context_ref] if required else []),
+            *(["artifact://art-native"] if required == "security" else []),
+        ]
+    if required:
+        lookup.assert_awaited_once_with("mm:repair")
+    else:
+        lookup.assert_not_awaited()
+    if required == "security" and context_ref:
+        security_lookup.assert_awaited_once_with("mm:repair")
+    else:
+        security_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_remediation_input_binding_reuses_same_context_without_mutating_request(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.activities import omnigent_session_activities
+
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_remediation_context_input_ref",
+        AsyncMock(return_value="artifact://art-context"),
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="mm:repair",
+        idempotencyKey="step-1",
+        inputRefs=["artifact://art-existing"],
+        parameters={
+            "workflow": {"remediation": {"target": {"workflowId": "mm:failed"}}}
+        },
+    )
+    bound = await omnigent_session_activities.bind_remediation_context_inputs(request)
+    rebound = await omnigent_session_activities.bind_remediation_context_inputs(bound)
+    assert rebound.input_refs == ["artifact://art-existing", "artifact://art-context"]
+    assert request.input_refs == ["artifact://art-existing"]
+    assert rebound.idempotency_key == request.idempotency_key
+
+
+@pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_omnigent_execute_activity_delegates(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane

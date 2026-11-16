@@ -3823,6 +3823,30 @@ def test_materialized_loop_attempts_dispatch_on_the_selected_managed_runtime(
 
 
 @pytest.mark.parametrize("context_patch_enabled", [False, True])
+def test_remediation_request_preserves_admitted_target_for_input_delivery(
+    mock_run_workflow: MoonMindRunWorkflow, monkeypatch, context_patch_enabled
+) -> None:
+    remediation = {"target": {"workflowId": "mm:failed", "runId": "failed-run"}}
+    mock_run_workflow._record_remediation_context({}, {"remediation": remediation})
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: context_patch_enabled
+        and patch_id == "run-remediation-input-delivery-v1",
+    )
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs={"instructions": "Diagnose the failed run."},
+        node_id="node-1",
+        tool_name="omnigent",
+        workflow_parameters={"targetRuntime": "omnigent"},
+    )
+    if context_patch_enabled:
+        assert request.parameters["workflow"]["remediation"] == remediation
+    else:
+        assert "remediation" not in request.parameters.get("workflow", {})
+
+
+@pytest.mark.parametrize("context_patch_enabled", [False, True])
 def test_materialized_loop_attempts_preserve_candidate_context_in_runtime_request(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,

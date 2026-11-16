@@ -47,6 +47,9 @@ describe('rendered dashboard control presentation', () => {
         await commands.pointerButton('up');
       }
       expect(getByRole('menu')).toBeTruthy();
+      // The menu assigns its initial safe action focus in React effects.
+      // Wait for that opening transition before exercising Escape restoration.
+      await expect.poll(() => document.activeElement).toBe(getByRole('menuitem', { name: 'Rerun' }));
       await userEvent.keyboard('{Escape}');
       expect(document.activeElement).toBe(trigger);
     });

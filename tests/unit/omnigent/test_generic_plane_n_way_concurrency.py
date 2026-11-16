@@ -93,6 +93,9 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
 )
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    bind_remediation_context_inputs,
+)
 
 #: The deployment-selectable ceilings the generic plane must stay correct for.
 #: MoonLadderStudios/MoonMind#3880 AC7 requires the chosen 8 and 16 execution
@@ -683,6 +686,7 @@ def _build_realizer(
             return await super().acquire(**kwargs)
 
     return GenericOmnigentHostRealizer(
+        request_input_binder=bind_remediation_context_inputs,
         runtime_binding_store=BindingStore(),
         provider_lease_coordinator=Leases(),
         credential_provisioning_service=Credentials(),

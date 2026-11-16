@@ -55,6 +55,42 @@ def _success(metadata: dict[str, Any] | None = None) -> TerminalEvidenceEvaluati
     )
 
 
+def apply_remediation_terminal_evaluation(
+    result, evaluation: TerminalEvidenceEvaluation
+):
+    """Project the Skill's verdict before any runtime can publish its workspace."""
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    if result.failure_class is not None:
+        return result
+    metadata = {**(result.metadata or {}), **evaluation.metadata}
+    if evaluation.satisfied:
+        updates = {
+            "objective_outcome": "succeeded",
+            "summary": metadata["remediationSummary"],
+            "metadata": metadata,
+        }
+    else:
+        missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        updates = {
+            "failure_class": "execution_error",
+            "objective_outcome": "failed",
+            "publication_state": (
+                "published"
+                if result.publication_state == "published"
+                else "not_published"
+            ),
+            "provider_error_code": evaluation.failure_code,
+            "retry_recommendation": "do_not_retry",
+            "summary": metadata.get("terminalFailureMessage")
+            or f"Remediation ended without required outcome evidence: {missing}",
+            "metadata": metadata,
+        }
+    return AgentRunResult.model_validate(
+        result.model_copy(update=updates).model_dump(mode="json", by_alias=True)
+    )
+
+
 def _evaluate_auto_publish_evidence(
     payload: Mapping[str, Any],
     *,
@@ -408,6 +444,7 @@ def evaluate_terminal_evidence(
         "batch_dependabot_resolver_fanout.v1",
         "batch_workflows_fanout.v1",
         "pr_resolver_terminal.v1",
+        "remediate_workflow_terminal.v1",
     }:
         return _failure("UNSUPPORTED_TERMINAL_CONTRACT")
     relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
@@ -449,6 +486,31 @@ def evaluate_terminal_evidence(
                 else None
             ),
         )
+    if contract_id == "remediate_workflow_terminal.v1":
+        expected_execution = str(
+            contract.get("executionRef") or contract.get("execution_ref") or ""
+        ).strip()
+        if (
+            payload.get("schemaVersion") != "moonmind.remediate-workflow-result.v1"
+            or not isinstance(payload.get("status"), str)
+            or payload.get("status") not in {"succeeded", "blocked", "failed"}
+            or not isinstance(payload.get("summary"), str)
+            or not payload["summary"].strip()
+        ):
+            return _failure("MALFORMED_TERMINAL_EVIDENCE")
+        if not expected_execution or payload.get("executionRef") != expected_execution:
+            return _failure("STALE_TERMINAL_EVIDENCE")
+        summary = _first_compact_verdict_text(redact_sensitive_text(payload["summary"]))
+        metadata = {
+            "terminalContractId": contract_id,
+            "terminalContractEvidencePath": normalized_relative,
+            "remediationStatus": payload["status"],
+            "remediationSummary": summary,
+        }
+        if payload["status"] == "succeeded":
+            return _success(metadata)
+        metadata["terminalFailureMessage"] = summary
+        return _failure(f"REMEDIATION_{payload['status'].upper()}", metadata=metadata)
     if payload.get("phase") == "intermediate":
         continuation = payload.get("skillContinuation")
         expected_execution = str(contract.get("executionRef") or contract.get("execution_ref") or "")
