@@ -2763,8 +2763,12 @@ class _ActiveJournal:
         # every event in it, indexed or not, is now located there.
         for event in self.normalized_events[self._normalized_start :]:
             event["artifactRef"] = normalized_ref
-        await self._run_store.append_events(self._bridge_session_id, self._unindexed)
-        self._unindexed = []
+        # A backlog buffered through a storage outage can exceed the query
+        # arguments one index write may bind, so it is indexed in batches.
+        while self._unindexed:
+            batch = self._unindexed[:_JOURNAL_CHUNK_MAX_EVENTS]
+            await self._run_store.append_events(self._bridge_session_id, batch)
+            del self._unindexed[: len(batch)]
         if (
             count >= _JOURNAL_CHUNK_MAX_EVENTS
             or len(raw_payload) + len(normalized_payload) >= _JOURNAL_CHUNK_MAX_BYTES

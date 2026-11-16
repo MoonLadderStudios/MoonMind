@@ -4208,6 +4208,103 @@ async def test_full_artifact_store_keeps_workspace_and_restarts_only_the_step() 
     assert harness.events == events_before
 
 
+async def _completed_turn_with_full_store(*, failed_saves: int | None):
+    """Finish one provider turn, then fail its workspace saves on a full disk."""
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    publisher = harness.realizer._workspace_publisher
+    save = publisher.save_request_workspace
+    outage = {"remaining": failed_saves}
+
+    async def save_request_workspace(request):
+        if outage["remaining"] is None or outage["remaining"] > 0:
+            if outage["remaining"] is not None:
+                outage["remaining"] -= 1
+            harness.events.append("workspace-save-failed")
+            raise TemporalArtifactStorageFullError("art_full", operation="write_complete")
+        return await save(request)
+
+    async def retain_unsaved_request_workspace(_request, *, reason_code):
+        harness.events.append("workspace-retained")
+        return {"retained": True, "reasonCode": reason_code}
+
+    async def release_unsaved_request_workspace(_request):
+        harness.events.append("workspace-released")
+
+    publisher.save_request_workspace = save_request_workspace
+    publisher.retain_unsaved_request_workspace = retain_unsaved_request_workspace
+    publisher.release_unsaved_request_workspace = release_unsaved_request_workspace
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+    return harness, result
+
+
+@pytest.mark.asyncio
+async def test_full_store_after_a_completed_turn_saves_and_publishes_that_turn(
+    monkeypatch,
+) -> None:
+    """A full disk after the provider turn finished never repeats the turn.
+
+    The turn's receipts are already durable, so the save waits for storage and
+    finalization publishes the recorded result instead of licensing a successor
+    Step Execution that would bill the same work again.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.generic_host._STORAGE_SAVE_RETRY_DELAYS_SECONDS",
+        (0.0,),
+        raising=False,
+    )
+    harness, result = await _completed_turn_with_full_store(failed_saves=3)
+
+    assert harness.events.count("message-completed") == 1
+    assert harness.events.count("workspace-save-failed") == 3
+    assert result.failure_class is None
+    assert result.retry_recommendation != "retry_step_execution"
+    assert result.metadata["workPreserved"] is True
+    assert result.metadata["savedWorkspaceCheckpoint"]["archiveRef"] == (
+        "artifact://saved"
+    )
+    assert "workspace-published" in harness.events
+    assert "workspace-retained" not in harness.events
+
+
+@pytest.mark.asyncio
+async def test_store_that_stays_full_keeps_a_completed_turn_without_repeating_it(
+    monkeypatch,
+) -> None:
+    """Past its window the save stops, keeping the files but not restarting."""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.generic_host._STORAGE_SAVE_RETRY_DELAYS_SECONDS",
+        (0.01,),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.generic_host._STORAGE_SAVE_WINDOW_SECONDS",
+        0.02,
+        raising=False,
+    )
+    harness, result = await _completed_turn_with_full_store(failed_saves=None)
+
+    assert harness.events.count("message-completed") == 1
+    assert result.provider_error_code == "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
+    assert result.retry_recommendation == "do_not_retry"
+    assert result.retry_disposition == "no_retry"
+    assert result.metadata["unfinishedPhase"] == "save"
+    assert result.metadata["workPreserved"] is False
+    # The only copy of the finished work stays on disk; nothing was published.
+    assert "workspace-retained" in harness.events
+    assert "workspace-released" not in harness.events
+    assert "workspace-published" not in harness.events
+    binding = await harness.runtime_store.get(result.metadata["runtimeBindingRef"])
+    assert binding.state is RuntimeBindingState.cleaned
+    assert binding.terminalResult["retryRecommendation"] == "do_not_retry"
+
+
 @pytest.mark.asyncio
 async def test_late_predecessor_delivery_leaves_successor_authority_intact(
     monkeypatch,

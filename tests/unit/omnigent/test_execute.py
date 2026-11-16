@@ -3871,6 +3871,65 @@ async def test_storage_outage_past_its_window_ends_the_bridge_session(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
+async def test_journal_backlog_from_an_outage_is_indexed_in_bounded_batches() -> None:
+    """A long outage cannot buffer more events than one index write carries.
+
+    asyncpg accepts 32,767 query arguments and the bridge store binds one per
+    event (plus the session) to deduplicate them, so the backlog a recovered
+    store receives must not arrive as a single append.
+    """
+
+    from moonmind.omnigent.execute import _ActiveJournal
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStorageFullError
+
+    max_query_arguments = 32_767
+    storage = {"full": True}
+    indexed: list[dict] = []
+
+    class Gateway:
+        async def write_text(self, *, name, **_kwargs):
+            if storage["full"]:
+                raise TemporalArtifactStorageFullError(
+                    "art_journal", operation="write_complete"
+                )
+            return f"art_{name}"
+
+    class Store:
+        async def attach_active_journal_refs(self, *_args, **_kwargs):
+            return None
+
+        async def append_events(self, _bridge_session_id, events):
+            if len(events) + 1 > max_query_arguments:
+                raise RuntimeError(
+                    "the number of query arguments cannot exceed 32767"
+                )
+            indexed.extend(events)
+
+    journal = _ActiveJournal(
+        artifact_gateway=Gateway(),
+        request=None,
+        run_store=Store(),
+        bridge_session_id="brs_backlog",
+        raw_events=[],
+        normalized_events=[],
+    )
+    for index in range(max_query_arguments):
+        journal.raw_events.append({"type": "delta", "index": index})
+        journal.append({"type": "delta", "sequence": index})
+    await journal.flush()
+    assert journal.pending == max_query_arguments
+
+    storage["full"] = False
+    await journal.flush(wait_for_storage=True)
+
+    assert journal.pending == 0
+    assert [event["sequence"] for event in indexed] == list(
+        range(max_query_arguments)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("compact_before_retry", [False, True])
 async def test_retry_restores_every_committed_journal_chunk(
     monkeypatch, tmp_path, compact_before_retry
