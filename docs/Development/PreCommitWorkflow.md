@@ -118,6 +118,17 @@ Samples crossing phase boundaries or missing container inventory remain excluded
 These short controlled journeys do not establish one-to-two-day normal-use safety;
 record that gap separately from measured memory savings or passing functional checks.
 
+### Code Scanning
+
+GitHub runs two separate CodeQL products as dynamic workflows, with no file under `.github/workflows`. Neither is a required check, and they are not duplicate security analyses.
+
+- **CodeQL** is security code scanning in repository default setup: default query suite, remote threat model, and the `actions`, `javascript-typescript` and `python` languages, on pull requests to `main`, pushes to `main` and a weekly schedule. Default setup cannot cancel a superseded run. Pull-request analyses are incremental (overlay database) and diff-informed, so they usually finish in about three minutes and are rarely still running when the next push arrives; a full `main` analysis costs more than twice as much runner time. Per-PR or per-ref cancellation through advanced setup was measured to save only a few percent of this product's runner time, so default setup stays. Switching needs a separately authorized security-setting change: GitHub rejects CodeQL uploads from workflows while default setup is enabled, so an advanced workflow merged first would run duplicate scans that fail to upload. A switch should keep the `CodeQL` workflow name, which pr-resolver uses to classify security checks, and the existing `/language:<lang>` categories, and confirm each language's analysis and the open alerts on `main` before default setup is retired.
+- **CodeQL - Code Quality** has its own settings and runs the `code-quality` query suite for `javascript-typescript` and `python` on the same triggers. Its only controls, in repository settings or `PATCH /repos/{owner}/{repo}/code-quality/setup`, are enablement, languages, runner type or label, and AI findings. It has no concurrency or cancellation control, and switching security scanning to advanced setup neither replaces nor cancels it. Its pull-request analyses extract the whole repository without an overlay database, so each costs about as much as a `main` analysis. Python takes most of its runner time, and reducing that means dropping a language or disabling the product.
+
+Both products analyze test code. Tests, fixtures and helpers can contain security-relevant code, so do not exclude `tests/` wholesale; a narrower generated, vendored or test-only exclusion (`paths-ignore` in a CodeQL configuration, which changes what is analyzed) needs measured coverage and timing evidence. Workflow trigger path filters only decide whether a scan runs; almost every `main` commit touches analyzed files, so they would save little.
+
+To re-measure, list each workflow's runs with `gh api repos/{owner}/{repo}/actions/workflows/{id}/runs` and their jobs with `.../actions/runs/{id}/jobs`. Every run's event is `dynamic`; the display title (`PR #N`, `Push on main`, `Scheduled`) identifies the trigger.
+
 ## Setup
 
 Install `pre-commit` into the Python environment you use for MoonMind development:

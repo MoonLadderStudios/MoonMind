@@ -286,7 +286,7 @@ For primary backend execution it consumes the matrix aggregate result, not the l
 
 `preflight-policy` remains the existing owner of repository policy checks and the other always-run static invariants (the MoonSpec projection drift gate and the shard-ownership verifier), not a reason to rescan the repository in test rows or test documentation phrasing. The ownership verifier protects complete/disjoint selection.
 
-Branch-protection requirements remain `ci-required` for the aggregated suites, the standalone `migration-gate`, and applicable independent repository checks such as CodeQL. Do not rename public required contexts or change branch protection as a side effect of test optimization. Separate requirements for retired/renamed internal aggregators should be reconciled through their owning configuration, not worked around with fake checks.
+Branch-protection requirements remain `ci-required` for the aggregated suites and the standalone `migration-gate`. Do not rename public required contexts or change branch protection as a side effect of test optimization. Separate requirements for retired/renamed internal aggregators should be reconciled through their owning configuration, not worked around with fake checks.
 
 Required evidence must correspond to the current merge candidate. Use the existing merge-group path where available, or keep the PR up to date with main before merging. A green run from a different base does not prove that concurrent migrations compose correctly.
 
