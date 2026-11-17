@@ -243,10 +243,11 @@ def configure_logging(
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
 
-    # Set specific loggers to appropriate levels
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # Client-library request tracing is not MoonMind diagnostics. At DEBUG,
+    # botocore alone logs hooks, signing, and endpoints for every artifact
+    # read or write, which filled most of a worker's container log.
+    for name in ("httpx", "httpcore", "urllib3", "botocore", "boto3", "s3transfer"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
     logger.info(f"Logging configured with level: {level}")
