@@ -26,11 +26,13 @@ from api_service.db.models import (
     Base,
     OmnigentExecutionPlanRecord,
     OmnigentExecutionPlanUsageRecord,
+    RecurringWorkflowDefinition,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
 )
 from moonmind import cli
 from moonmind.config.settings import settings
+from moonmind.omnigent import retired_path_inventory
 from moonmind.omnigent.retired_path_inventory import (
     RECORDED_PATH_CATEGORIES,
     RETIRED_PATH_CATEGORIES,
@@ -174,6 +176,20 @@ async def _seed_plan(sessions, plan_ref, *, realizer="codex-profile-bound@1"):
         await session.commit()
 
 
+async def _seed_schedule(sessions, plan_ref, *, enabled) -> str:
+    definition = RecurringWorkflowDefinition(
+        name="nightly",
+        enabled=enabled,
+        cron="0 3 * * *",
+        timezone="UTC",
+        target={"initialParameters": {"omnigentExecutionPlan": {"planRef": plan_ref}}},
+    )
+    async with sessions() as session:
+        session.add(definition)
+        await session.commit()
+    return str(definition.id)
+
+
 async def _seed_execution(sessions, workflow_id, plan_ref, *, run_id, start, close):
     async with sessions() as session:
         session.add(
@@ -252,13 +268,16 @@ async def test_seeded_open_profile_bound_plan_reports_active_and_changes_nothing
         "MoonMind.AgentSession", {}, id=session_id, task_queue=USER_QUEUE
     )
     await client.start_workflow(
-        "MoonMind.Run",
+        "MoonMind.UserWorkflow",
         {},
         id=legacy_id,
         task_queue=settings.temporal.workflow_task_queue,
     )
-    for plan_ref in (_plan_ref("a"), _plan_ref("b"), _plan_ref("c")):
+    for plan_ref in (_plan_ref(char) for char in "abcde"):
         await _seed_plan(sessions, plan_ref)
+    # Enabled schedules hold their recorded plan without any open execution.
+    schedule_id = await _seed_schedule(sessions, _plan_ref("d"), enabled=True)
+    await _seed_schedule(sessions, _plan_ref("e"), enabled=False)
     await _seed_execution(
         sessions,
         running_id,
@@ -299,7 +318,13 @@ async def test_seeded_open_profile_bound_plan_reports_active_and_changes_nothing
         _plan_ref("a"): "active",
         _plan_ref("b"): "active",
         _plan_ref("c"): "clean",
+        _plan_ref("d"): "active",
+        _plan_ref("e"): "clean",
     }
+    scheduled = next(
+        item for item in items["profile_bound_plans"] if item["id"] == _plan_ref("d")
+    )
+    assert scheduled["scheduleIds"] == [schedule_id]
     assert items["profile_bound_retries"] == [
         {"id": running_id, "state": "active", "planRefs": [_plan_ref("a")]}
     ]
@@ -354,3 +379,46 @@ async def test_unreachable_source_reports_unknown_never_clean(
         assert report["items"][category] == []
     assert "unused@" not in result.output
     assert await _row_state(engine) == rows_before
+
+
+async def test_stalled_database_read_reports_unknown_and_still_reads_temporal(
+    database, temporal, monkeypatch, tmp_path
+):
+    url, engine, _ = database
+    client = temporal.client
+    legacy_id = f"legacy-{uuid4().hex[:8]}"
+    await client.start_workflow(
+        "MoonMind.UserWorkflow",
+        {},
+        id=legacy_id,
+        task_queue=settings.temporal.workflow_task_queue,
+    )
+    await _wait_until_visible(client, [legacy_id])
+    monkeypatch.setattr(retired_path_inventory, "_READ_TIMEOUT_SECONDS", 1.0)
+
+    # A migration holding an exclusive lock blocks every read of the table.
+    async with engine.connect() as migration:
+        await migration.execute(
+            text("LOCK TABLE omnigent_execution_plans IN ACCESS EXCLUSIVE MODE")
+        )
+        result = await asyncio.wait_for(
+            _run_cli(
+                monkeypatch,
+                tmp_path,
+                database_url=url,
+                temporal_address=client.service_client.config.target_host,
+            ),
+            timeout=60,
+        )
+        await migration.rollback()
+
+    assert result.exit_code == 1, result.output
+    report = json.loads(result.output)
+    assert report["deletable"] is False
+    for category in RECORDED_PATH_CATEGORIES:
+        [item] = report["items"][category]
+        assert item["state"] == "unknown"
+        assert item["error"]
+    assert [item["id"] for item in report["items"]["legacy_task_queue_workflows"]] == [
+        legacy_id
+    ]

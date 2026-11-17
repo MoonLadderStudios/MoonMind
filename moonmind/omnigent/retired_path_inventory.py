@@ -7,8 +7,9 @@ every item through the drain report in
 terminates, signals, or rewrites anything: PostgreSQL is read inside one
 read-only transaction and Temporal is only listed and described.
 
-An item is ``active`` while open work holds it, ``clean`` once nothing open
-can load it, and ``unknown`` when its source could not be read. Open
+An item is ``active`` while open work or an enabled schedule holds it,
+``clean`` once nothing open can load it, and ``unknown`` when its source could
+not be read or the read exceeded its deadline. Open
 ``MoonMind.AgentSession`` children are still a supported product path, so
 they are listed for information and never decide the exit status.
 """
@@ -16,7 +17,7 @@ they are listed for information and never decide the exit status.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping
 
 from moonmind.omnigent.codex_cutover_drain import run_codex_drain_procedure
@@ -50,6 +51,9 @@ RECORDED_PATH_CATEGORIES: tuple[str, ...] = (
 _PLAN_REF_KEYS = frozenset({"planRef", "plan_ref", "executionPlanRef"})
 _HOST_CLASS_KEYS = frozenset({"hostClassRef", "host_class_ref"})
 _CONNECT_TIMEOUT_SECONDS = 30.0
+#: PostgreSQL ends any read still waiting after this, including one queued
+#: behind a migration's lock, so the report marks those categories unknown.
+_READ_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +74,10 @@ class RecordedState:
     plan_workflow_ids: Mapping[str, frozenset[str]]
     open_executions: Mapping[str, OpenExecution]
     recorded_workflow_ids: frozenset[str]
+    #: Enabled schedule definitions per retired plan. A schedule loads its
+    #: recorded plan on every refresh and occurrence, so it holds the plan
+    #: even while no occurrence is open.
+    plan_schedule_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     def unrecorded_workflow_ids(self) -> list[str]:
         """Plan holders with no execution source record, to ask Temporal."""
@@ -113,6 +121,7 @@ async def read_recorded_state(engine: Any) -> RecordedState:
     from api_service.db.models import MoonMindWorkflowState
     from api_service.db.models import OmnigentExecutionPlanRecord as Plan
     from api_service.db.models import OmnigentExecutionPlanUsageRecord as Usage
+    from api_service.db.models import RecurringWorkflowDefinition as Schedule
     from api_service.db.models import TemporalExecutionCanonicalRecord as Source
 
     retired = or_(
@@ -131,6 +140,9 @@ async def read_recorded_state(engine: Any) -> RecordedState:
         # The first statement fixes one snapshot and refuses every write.
         await connection.execute(
             text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        )
+        await connection.execute(
+            text(f"SET LOCAL statement_timeout = {int(_READ_TIMEOUT_SECONDS * 1000)}")
         )
         try:
             plan_rows = (
@@ -162,6 +174,13 @@ async def read_recorded_state(engine: Any) -> RecordedState:
                     select(Source.workflow_id).where(Source.workflow_id.in_(holder_ids))
                 )
             ).all()
+            schedule_rows = (
+                await connection.execute(
+                    select(Schedule.id, Schedule.target).where(
+                        Schedule.enabled.is_(True)
+                    )
+                )
+            ).all()
         finally:
             await connection.rollback()
 
@@ -182,12 +201,17 @@ async def read_recorded_state(engine: Any) -> RecordedState:
     for execution in open_executions.values():
         for plan_ref in execution.plan_refs & set(plans):
             holders[plan_ref].add(execution.workflow_id)
+    schedules: dict[str, set[str]] = {}
+    for row in schedule_rows:
+        for plan_ref in _collect_values(row.target, _PLAN_REF_KEYS) & set(plans):
+            schedules.setdefault(plan_ref, set()).add(str(row.id))
     return RecordedState(
         plans=plans,
         plan_workflow_ids={ref: frozenset(ids) for ref, ids in holders.items()},
         open_executions=open_executions,
         recorded_workflow_ids=frozenset(row.workflow_id for row in recorded_rows)
         | frozenset(open_executions),
+        plan_schedule_ids={ref: frozenset(ids) for ref, ids in schedules.items()},
     )
 
 
@@ -214,17 +238,21 @@ def recorded_path_items(
                 continue
             holders = sorted(state.plan_workflow_ids.get(plan_ref, ()))
             open_ids = [workflow_id for workflow_id in holders if is_open(workflow_id)]
+            schedule_ids = sorted(state.plan_schedule_ids.get(plan_ref, ()))
             unresolved = [
                 workflow_id
                 for workflow_id in holders
                 if temporal_status.get(workflow_id) == "unknown"
             ]
+            active = bool(open_ids or schedule_ids)
             item: dict[str, Any] = {
                 "id": plan_ref,
-                "state": "active" if open_ids else "unknown" if unresolved else "clean",
+                "state": "active" if active else "unknown" if unresolved else "clean",
                 "openWorkflowIds": open_ids,
             }
-            if unresolved and not open_ids:
+            if schedule_ids:
+                item["scheduleIds"] = schedule_ids
+            if unresolved and not active:
                 item["unresolvedWorkflowIds"] = unresolved
             items.append(item)
         return items

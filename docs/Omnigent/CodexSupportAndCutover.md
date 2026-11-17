@@ -121,7 +121,10 @@ PostgreSQL (one read-only transaction) and Temporal visibility for recorded
 `codex-profile-bound@1` plans, queued starts and retries, recorded
 `omnigent-opencode@1` plans and explicit Host Class requests, and open
 workflows on the legacy `TEMPORAL_WORKFLOW_TASK_QUEUE`, and exits 1 unless
-every item is clean. Open `MoonMind.AgentSession` children are listed for
+every item is clean. An enabled schedule keeps its recorded plan active,
+because each refresh and occurrence loads that plan. A read that waits past
+its statement timeout, for example behind a migration lock, reports its
+categories as `unknown`. Open `MoonMind.AgentSession` children are listed for
 information only, since that path is still supported. The API's `cutover` projection publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in

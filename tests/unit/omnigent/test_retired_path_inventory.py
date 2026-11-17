@@ -25,13 +25,16 @@ def _plan(realizer="codex-native@1", host_class="omnigent-codex@2"):
     return {"realizer": realizer, "hostClass": host_class}
 
 
-def _state(*, plans, holders, executions, recorded=()):
+def _state(*, plans, holders, executions, recorded=(), schedules=None):
     return RecordedState(
         plans=plans,
         plan_workflow_ids={ref: frozenset(holders.get(ref, ())) for ref in plans},
         open_executions={item.workflow_id: item for item in executions},
         recorded_workflow_ids=frozenset(recorded)
         | frozenset(item.workflow_id for item in executions),
+        plan_schedule_ids={
+            ref: frozenset(ids) for ref, ids in (schedules or {}).items()
+        },
     )
 
 
@@ -113,6 +116,33 @@ def test_plan_held_only_by_a_running_temporal_workflow_is_an_active_retry():
     closed = recorded_path_items(state, {"wf-child": "closed"})
     assert closed["profile_bound_plans"][0]["state"] == "clean"
     assert closed["profile_bound_retries"] == []
+
+
+def test_plan_held_by_an_enabled_schedule_stays_active_without_open_work():
+    state = _state(
+        plans={
+            "plan-scheduled": _plan(realizer=PROFILE_BOUND),
+            "plan-opencode": _plan(host_class=OPENCODE_V1),
+        },
+        holders={},
+        executions=[],
+        schedules={"plan-scheduled": {"sched-1"}, "plan-opencode": {"sched-2"}},
+    )
+
+    items = recorded_path_items(state, {})
+
+    assert items["profile_bound_plans"] == [
+        {
+            "id": "plan-scheduled",
+            "state": "active",
+            "openWorkflowIds": [],
+            "scheduleIds": ["sched-1"],
+        }
+    ]
+    assert items["opencode_v1_plans"][0]["state"] == "active"
+    # A schedule is neither a queued start nor a retry.
+    assert items["profile_bound_queued_starts"] == []
+    assert items["profile_bound_retries"] == []
 
 
 class _Execution:
@@ -232,7 +262,7 @@ async def test_open_legacy_queue_workflow_and_unrecorded_holders_gate_the_drain(
         executions=[],
     )
     client = _Client(
-        [_Execution("legacy-1", "MoonMind.Run", "mm.workflow")],
+        [_Execution("legacy-1", "MoonMind.UserWorkflow", "mm.workflow")],
         describe={
             "wf-gone": RPCError("gone", RPCStatusCode.NOT_FOUND, b""),
             "wf-running": WorkflowExecutionStatus.RUNNING,
