@@ -3634,6 +3634,28 @@ def test_production_apply_refuses_controller_in_explicit_target(controller_path,
         server.production_apply(store, operation)
 
 
+def test_production_apply_excludes_controller_from_all_services_target(controller_path, tmp_path, monkeypatch):
+    """A controller predating the Compose-owned service bound "all" to every rendered service."""
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "projectDir": str(tmp_path),
+        "composeFiles": ["release-compose.json"], "serviceSelection": "all",
+        "services": ["api", "controller"]}
+    operation = _begin_op(record, store, target)
+    runner = _verification_runner(server.engine, monkeypatch)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    result = server.production_apply(store, operation, dispatch_probe=lambda: True,
+        omnigent_migrator=lambda summary: {"status": "aligned"})
+    assert result["status"] == "succeeded", result
+    loaded = store.load(operation["operationId"])
+    # Release helpers match the bound target as the operation's identity.
+    assert loaded["target"] == target
+    assert "service:controller" not in {check["name"] for check in loaded["verification"]}
+    applied = [args for args in runner.commands if "up" in args]
+    assert applied and all("controller" not in args for args in applied)
+
+
 @pytest.mark.parametrize("topology", [False, True])
 def test_compose_owned_controller_handoff_requires_safe_target(controller_path, tmp_path, monkeypatch, topology):
     record, server = load("record"), load("server")
