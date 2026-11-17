@@ -281,12 +281,14 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
     )
     assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
-    assert api_env["OMNIGENT_HOST_IMAGE"] == (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
-    )
-    assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
-    )
+    # The legacy generic host image aliases are deprecated; the API selects
+    # the host image only through OMNIGENT_SHARED_HOST_IMAGE*.
+    for legacy_name in (
+        "OMNIGENT_HOST_IMAGE_REF",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
+    ):
+        assert legacy_name not in api_env
     assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
         "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}"
     )
@@ -1094,9 +1096,6 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_OIDC_ALLOW_INVITES",
         "OMNIGENT_DOMAIN",
         "OMNIGENT_CONFIG",
-        "OMNIGENT_HOST_IMAGE_REF",
-        "OMNIGENT_HOST_IMAGE",
-        "OMNIGENT_HOST_IMAGE_TAG",
         "COMPOSE_PROFILES",
     ):
         assert f"{expected_name}=" in env_template
@@ -1110,6 +1109,9 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_BUILTIN_USER_PASSWORD",
         "OMNIGENT_OIDC_ENABLED",
         "OMNIGENT_OIDC_ISSUER_URL",
+        "OMNIGENT_HOST_IMAGE_REF",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
     ):
         assert f"{removed_name}=" not in env_template
 

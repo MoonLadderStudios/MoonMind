@@ -75,21 +75,15 @@ Production and credentialed conformance may set complete immutable references:
 
 ```dotenv
 OMNIGENT_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-server@sha256:<digest>
-OMNIGENT_HOST_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
-```
-
-These `*_IMAGE_REF` values take precedence over the bootstrap-compatible
-image/tag pairs. Workflow-requested Codex and Claude on-demand hosts do not read
-`OMNIGENT_HOST_IMAGE_REF`; they launch the shared host image that owns the
-MoonMind tools. Pin those launches with the shared host digest:
-
-```dotenv
 OMNIGENT_SHARED_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
-When on-demand hosts are enabled, production and credentialed conformance must
-pin both paths. A selected policy or conformance profile that requires
-immutable images must fail rather than fall back to mutable tags.
+These `*_IMAGE_REF` values take precedence over the bootstrap-compatible
+image/tag pairs. Codex, Claude Code, and OpenCode on-demand hosts launch the
+shared host image that owns the MoonMind tools. When on-demand hosts are
+enabled, production and credentialed conformance must pin both images. A
+selected policy or conformance profile that requires immutable images must fail
+rather than fall back to mutable tags.
 
 ## DOC-REQ-003 Existing-Volume Validation Startup
 
@@ -189,8 +183,12 @@ The legacy image variables (`OMNIGENT_HOST_IMAGE_REF`, `OMNIGENT_HOST_IMAGE`,
 `OMNIGENT_HOST_IMAGE_TAG`, `OMNIGENT_OPENCODE_HOST_IMAGE_REF`,
 `OMNIGENT_PI_HOST_IMAGE_REF`) each carry a retirement row. A deprecated value is
 honored with a startup warning naming its replacement; after removal, startup is
-rejected rather than silently ignoring it. The OpenCode variable is deprecated;
-no Host Class launches it.
+rejected rather than silently ignoring it. A blank value or the default an older
+`.env-template` shipped counts as unset, so a copied `.env` upgrades without an
+edit. The OpenCode variable is deprecated; no Host Class launches it. The three
+`OMNIGENT_HOST_IMAGE*` variables are deprecated too, are no longer in
+`.env-template` or the API's Compose environment, and are removed one release
+after their deprecation.
 
 ## DOC-REQ-009 Optional Destructive Cleanup
 

@@ -392,7 +392,7 @@ closed. A mutable tag is input to reconciliation, never launch authority. If a
 tag cannot be resolved and no safe local repository digest exists, activation
 fails closed with image readiness evidence. Credentialed conformance and release
 manifests name the resolved immutable `OMNIGENT_IMAGE_REF` and
-`OMNIGENT_HOST_IMAGE_REF` explicitly.
+`OMNIGENT_SHARED_HOST_IMAGE_REF` explicitly.
 
 Bootstrap-owned policy defaults get a new immutable version only for a
 resource-default migration or an image of another repository family; a
