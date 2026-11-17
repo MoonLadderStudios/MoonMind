@@ -1189,6 +1189,20 @@ def require_retired_profiles_migrated(exported, *, runner, project, env_files):
     )
 
 
+def application_services(target: dict) -> tuple:
+    """The services an application apply recreates and verifies.
+
+    Controllers predating the Compose-owned controller bound an "all"
+    selection to every rendered service, the controller included. The bound
+    target stays as recorded, since release helpers match it as the
+    operation's identity, but "all" never selects an excluded service.
+    """
+    services = tuple(target.get("services") or ())
+    if target.get("serviceSelection") == "all":
+        return tuple(name for name in services if name not in DEFAULT_EXCLUDED_SERVICES)
+    return services
+
+
 def prepare_release_configuration(store, operation, *, runner, overlay):
     """Use the chosen image's base, retaining operator overrides and settings.
 
@@ -2332,7 +2346,7 @@ def production_apply(
     """Default applier: stage images, apply, verify, and record the result."""
     target = operation.get("target") or {}
     project = target.get("project", operation.get("stack"))
-    if "controller" in target.get("services", ()):
+    if "controller" in application_services(target):
         raise engine.SelfReplacementError("Controller cannot be selected for application apply")
     checks = engine.pre_apply_checks(
         config_valid=bool(target.get("projectDir") and target.get("composeFiles")),
@@ -2460,7 +2474,7 @@ def production_apply(
             project=project,
             project_dir=target.get("projectDir", ""),
             compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
-            services=tuple(target.get("services", ())),
+            services=application_services(target),
             images=(selected_image(operation),),
             env_files=env_files,
             before_compose=before_compose,
@@ -2562,7 +2576,7 @@ def _verify_applied_release(
     terminal status to ``partially_verified`` instead of silent success.
     """
     target = operation.get("target") or {}
-    services = tuple(target.get("services", ()))
+    services = application_services(target)
     operation_id = operation["operationId"]
     completed_services: list = []
     service_health: dict = {}
