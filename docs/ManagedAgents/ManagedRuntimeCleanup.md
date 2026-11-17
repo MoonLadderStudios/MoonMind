@@ -63,7 +63,8 @@ This document does not define retention for unrelated MoonMind state, such as:
 - provider-profile credentials and OAuth auth volumes,
 - memory indexes,
 - deployment desired-state files,
-- application logs outside the managed-runtime workspace root.
+- application logs outside the managed-runtime workspace root. Compose bounds
+  each application service's container log to three 50 MB files instead.
 
 Those systems may adopt the same cleanup-catalog shape later, but they remain separate ownership domains.
 

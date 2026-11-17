@@ -102,3 +102,30 @@ def test_configure_logging_preserves_filter_injected_fields_for_native_structlog
 
     assert structlog_record["trace_id"] == "trace-from-filter"
     assert structlog_record["workflow_id"] == "wf-from-event"
+
+
+def test_debug_level_keeps_aws_sdk_request_tracing_quiet(capsys):
+    """DEBUG workers must not log every artifact-store request.
+
+    botocore's per-request hook, signing, and endpoint tracing made up about
+    96% of a DEBUG agent-runtime worker's container log, roughly 190 MB per hour.
+    """
+
+    original_handlers = list(logging.root.handlers)
+    original_level = logging.root.level
+    try:
+        configure_logging(level="DEBUG", structured=False)
+        for name in ("botocore", "botocore.hooks", "boto3", "s3transfer"):
+            logging.getLogger(name).debug("signing request")
+            logging.getLogger(name).info("request sent")
+        logging.getLogger("botocore.retries").warning("retrying request")
+        logging.getLogger("moonmind.workflows.temporal.artifacts").debug("artifact read")
+
+        output = capsys.readouterr().out
+        assert "signing request" not in output
+        assert "request sent" not in output
+        assert "retrying request" in output
+        assert "artifact read" in output
+    finally:
+        logging.root.handlers[:] = original_handlers
+        logging.root.setLevel(original_level)

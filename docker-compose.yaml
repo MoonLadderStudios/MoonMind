@@ -1,3 +1,11 @@
+# Docker keeps json-file container logs until the container is removed, and
+# long-lived workers otherwise grow them without limit between updates.
+x-container-logs: &container-logs
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
 
   # Same Compose lifecycle as the app; updates use an external handoff to
@@ -32,6 +40,7 @@ services:
       retries: 12
 
   api:
+    logging: *container-logs
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     restart: unless-stopped
@@ -242,6 +251,7 @@ services:
         condition: service_started
 
   postgres:
+    logging: *container-logs
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -274,6 +284,7 @@ services:
       retries: 5
 
   temporal:
+    logging: *container-logs
     image: temporalio/auto-setup:${TEMPORAL_VERSION:-1.29.1}
     environment:
       - DB=postgres12
@@ -308,6 +319,7 @@ services:
   # when other compose stacks on this network also expose MinIO as `minio` (DNS returns
   # multiple backends → intermittent NoSuchKey).
   minio:
+    logging: *container-logs
     # Silo retains the S3/configuration interface; data moves through verified
     # S3 copying into a separate volume under the deployment controller.
     image: ${TEMPORAL_ARTIFACT_S3_IMAGE:-pgsty/silo:latest}
@@ -338,6 +350,7 @@ services:
     restart: unless-stopped
 
   temporal-namespace-init:
+    logging: *container-logs
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     environment:
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -358,6 +371,7 @@ services:
     restart: "no"
 
   temporal-visibility-rehearsal:
+    logging: *container-logs
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     profiles: ["temporal-tools"]
     environment:
@@ -384,6 +398,7 @@ services:
     restart: "no"
 
   temporal-admin-tools:
+    logging: *container-logs
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     profiles: ["temporal-tools"]
     environment:
@@ -399,6 +414,7 @@ services:
     restart: unless-stopped
 
   temporal-ui:
+    logging: *container-logs
     image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.34.0}
     profiles: ["temporal-ui"]
     environment:
@@ -415,6 +431,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-core:
+    logging: *container-logs
     stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
@@ -505,6 +522,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-sandbox:
+    logging: *container-logs
     stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
@@ -592,6 +610,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
+    logging: *container-logs
     stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
@@ -798,6 +817,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-deployment-control:
+    logging: *container-logs
     stop_grace_period: 6m
     image: ${MOONMIND_DEPLOYMENT_WORKER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
     init: true
@@ -922,6 +942,7 @@ services:
   # operator action, never automatic.
 
   omnigent-runtime-bootstrap:
+    logging: *container-logs
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     environment:
@@ -959,6 +980,7 @@ services:
     restart: "no"
 
   init-db:
+    logging: *container-logs
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       # Match the application's installed sync driver rather than relying on
@@ -988,6 +1010,7 @@ services:
     # service is retired from this Compose file.
 
   omnigent-db-init:
+    logging: *container-logs
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       - PGHOST=postgres
@@ -1033,6 +1056,7 @@ services:
     restart: "no"
 
   omnigent-agent-init:
+    logging: *container-logs
     image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
     environment:
       - DATABASE_URL=postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/${OMNIGENT_POSTGRES_DB:-omnigent}
@@ -1055,6 +1079,7 @@ services:
     restart: "no"
 
   omnigent:
+    logging: *container-logs
     image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
     env_file:
       - path: .env
@@ -1116,6 +1141,7 @@ services:
     restart: unless-stopped
 
   agent-workspaces-init:
+    logging: *container-logs
     image: alpine:3.24
     command: >-
       sh -lc "set -e; for dir in /work/agent_jobs /work/agent_jobs/artifacts
@@ -1127,6 +1153,7 @@ services:
     restart: "no"
 
   codex-auth-init:
+    logging: *container-logs
     image: alpine:3.24
     environment:
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -1139,6 +1166,7 @@ services:
     restart: "no"
 
   claude-auth-init:
+    logging: *container-logs
     image: alpine:3.24
     command: >-
       sh -lc "mkdir -p ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chown -R
@@ -1149,6 +1177,7 @@ services:
     restart: "no"
 
   docker-proxy:
+    logging: *container-logs
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     user: "0:0"
     entrypoint: ["python", "/app/docker/docker-proxy/start.py"]
@@ -1169,6 +1198,7 @@ services:
     restart: unless-stopped
 
   sandbox-egress-proxy:
+    logging: *container-logs
     container_name: moonmind-sandbox-egress-proxy
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     user: "0:0"
