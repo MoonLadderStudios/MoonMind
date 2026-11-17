@@ -1,7 +1,8 @@
 """Legacy retirement admission table + guard tests.
 
 Source issues: MoonLadderStudios/MoonMind#3712, MoonLadderStudios/MoonMind#3835,
-MoonLadderStudios/MoonMind#3932, MoonLadderStudios/MoonMind#5342.
+MoonLadderStudios/MoonMind#3932, MoonLadderStudios/MoonMind#5342,
+MoonLadderStudios/MoonMind#5341.
 """
 
 from __future__ import annotations
@@ -434,11 +435,78 @@ def test_obsolete_configuration_fails_with_an_actionable_message() -> None:
     assert assert_obsolete_configuration({}, configuration=removed) == ()
 
 
-def test_obsolete_configuration_rows_name_real_retirement_paths() -> None:
-    known = {path.path_id for path in RETIREMENT_INVENTORY}
+def test_every_obsolete_configuration_row_records_when_it_is_deleted() -> None:
+    """A row's deletion condition lives on its retirement row or on the row."""
+
+    inventory = {path.path_id: path for path in RETIREMENT_INVENTORY}
     for entry in OBSOLETE_CONFIGURATION:
-        assert entry.retirement_path_id in known, entry.variable
-        assert entry.replacement.strip(), entry.variable
+        if entry.retirement_path_id:
+            condition = inventory[entry.retirement_path_id].removal_condition
+        else:
+            condition = entry.removal_condition
+        assert condition.strip(), entry.variable
+
+
+def test_obsolete_configuration_row_has_exactly_one_deletion_owner() -> None:
+    with pytest.raises(ValueError, match="removal condition"):
+        ObsoleteConfiguration(
+            variable="MINIO_BUCKET", replacement="TEMPORAL_ARTIFACT_S3_BUCKET"
+        )
+    with pytest.raises(ValueError, match="removal condition"):
+        ObsoleteConfiguration(
+            variable="OMNIGENT_HOST_IMAGE_REF",
+            retirementPathId="omnigent.legacy.host_image_variable_alias",
+            replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
+            removalCondition="Fixture condition.",
+        )
+
+
+RETIRED_ALIASES = {
+    "MINIO_ENDPOINT": "TEMPORAL_ARTIFACT_S3_ENDPOINT",
+    "MINIO_BUCKET": "TEMPORAL_ARTIFACT_S3_BUCKET",
+    "MINIO_ACCESS_KEY": "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
+    "MINIO_SECRET_KEY": "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
+    "TEMPORAL_ARTIFACTS_ROOT": "TEMPORAL_ARTIFACT_ROOT",
+}
+
+
+@pytest.mark.parametrize(("alias", "replacement"), sorted(RETIRED_ALIASES.items()))
+def test_a_retired_alias_fails_startup_naming_its_replacement(
+    alias: str, replacement: str
+) -> None:
+    """Ignoring a credential alias would silently fall back to defaults (#5341)."""
+
+    expected = f"{alias} is obsolete; set {replacement} instead"
+    with pytest.raises(ObsoleteConfigurationError, match=expected):
+        assert_obsolete_configuration({alias: "deployment-value"})
+    # Settings read environment names case-insensitively, so every spelling
+    # the alias was honored under is rejected.
+    with pytest.raises(ObsoleteConfigurationError, match=replacement):
+        assert_obsolete_configuration({alias.lower(): "deployment-value"})
+    assert assert_obsolete_configuration({alias: "  "}) == ()
+
+
+def test_silo_server_and_test_endpoint_names_are_not_retired_aliases() -> None:
+    assert (
+        assert_obsolete_configuration(
+            {
+                "MINIO_ROOT_USER": "operator",
+                "MINIO_ROOT_PASSWORD": "operator-secret",
+                "MINIO_API_PORT": "9100",
+                "MINIO_CONSOLE_PORT": "9101",
+                "MOONMIND_TEST_MINIO_ENDPOINT": "http://minio:9000",
+            }
+        )
+        == ()
+    )
+
+
+def test_a_retired_long_term_memory_provider_fails_startup() -> None:
+    with pytest.raises(ObsoleteConfigurationError, match="MEMORY_LONG_TERM"):
+        assert_obsolete_configuration({"MEMORY_LONG_TERM": "mem0"})
+    # The template shipped ``off``, which selects what omitting it selects.
+    for shipped in ("off", " OFF ", ""):
+        assert assert_obsolete_configuration({"MEMORY_LONG_TERM": shipped}) == ()
 
 
 def test_obsolete_configuration_cannot_skip_its_deprecation_window() -> None:

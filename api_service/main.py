@@ -2872,11 +2872,11 @@ def _register_settings_change_subscribers() -> None:
 
 
 def _assert_omnigent_configuration_is_current() -> None:
-    """Fail fast (or warn) on obsolete Omnigent configuration.
+    """Fail fast (or warn) on obsolete configuration.
 
-    Source issue: MoonLadderStudios/MoonMind#3835 required work section 10.
-    A legacy image/environment identity must never be silently ignored: while
-    its retirement row is still in its deprecation window the operator gets an
+    Source issues: MoonLadderStudios/MoonMind#3835 required work section 10,
+    MoonLadderStudios/MoonMind#5341. A retired environment name must never be
+    silently ignored: during its deprecation window the operator gets an
     actionable warning naming the replacement, and after removal startup is
     rejected outright.
 

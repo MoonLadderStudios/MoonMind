@@ -229,9 +229,10 @@ from the S3 label.
 
 Production, integration and reliability stacks use `pgsty/silo:latest`, with
 `TEMPORAL_ARTIFACT_S3_IMAGE` honoring an explicit image selection. The `minio`
-service name, internal/public endpoints, ports and `MINIO_*` credential settings
-remain stable. Internal clients use `moonmind-temporal-artifacts-s3`; public
-presigned URLs use `TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT`.
+service name, endpoints, ports and `MINIO_ROOT_*` server credentials remain
+stable; MoonMind clients read only `TEMPORAL_ARTIFACT_S3_*`. Internal clients use
+`moonmind-temporal-artifacts-s3`; public presigned URLs use
+`TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT`.
 
 Silo uses **`artifact-data`**, never the predecessor’s `minio-data` volume.
 Existing installations use the deployment controller’s bounded S3 transfer,

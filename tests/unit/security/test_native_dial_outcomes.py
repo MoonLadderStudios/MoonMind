@@ -111,11 +111,13 @@ async def test_dial_errno_mapping_has_no_exception_or_target_text(
 async def test_dial_timeout_is_not_absolute_authority_expiry(
     tmp_path, monkeypatch, absolute_expiry
 ):
+    # Expiry must still follow fsync-bound startup and the accepted CONNECT;
+    # the longer connect limit leaves the remaining authority bounding the dial.
     gateway = NativeTCPGateway(
         config(
             12345,
-            connectSeconds=0.02,
-            deadlineUnix=time.time() + (0.01 if absolute_expiry else 10),
+            connectSeconds=2 if absolute_expiry else 0.02,
+            deadlineUnix=time.time() + (0.5 if absolute_expiry else 10),
         ),
         state_directory=tmp_path,
     )

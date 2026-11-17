@@ -4,7 +4,7 @@ import re
 from typing import Annotated, Any, Literal, Optional, Sequence
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from moonmind.claude.runtime import (
@@ -64,13 +64,6 @@ class DatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
-_REMOVED_USER_WORKFLOW_CUTOVER_SETTINGS = frozenset(
-    {
-        "TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
-        "TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
-    }
-)
-
 
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
@@ -96,12 +89,6 @@ class TemporalSettings(BaseSettings):
         "mm.workflow.user.v2",
         validation_alias="TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
     )
-    # MoonLadderStudios/MoonMind#3951: the MM-730 cutover record and release-note
-    # paths were removed. New user Workflow Execution starts resolve from the
-    # queue settings above; no cutover file or release-note prose is consulted.
-    # The names stay listed in _REMOVED_USER_WORKFLOW_CUTOVER_SETTINGS so an
-    # operator with stale environment still gets an actionable startup error
-    # instead of a silent behavior change.
     activity_artifacts_task_queue: str = Field(
         "mm.activity.artifacts",
         validation_alias="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
@@ -284,48 +271,6 @@ class TemporalSettings(BaseSettings):
     def _normalize_user_workflow_contract_mode(cls, value: Any) -> str:
         return str(value or "renamed_contract").strip().lower()
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_removed_user_workflow_cutover_settings(cls, data: Any) -> Any:
-        """Fail fast when stale MM-730 cutover paths are still configured.
-
-        ``extra="ignore"`` would otherwise swallow the removed variables
-        silently. Unset them: user Workflow Execution routing now resolves
-        from ``TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`` (starts) and
-        ``TEMPORAL_WORKFLOW_TASK_QUEUE`` (retained-history replay) alone.
-        Environment names match case-insensitively so previously accepted
-        lower/mixed-case spellings also fail fast.
-        """
-
-        stale = [
-            name
-            for name in _REMOVED_USER_WORKFLOW_CUTOVER_SETTINGS
-            if str(
-                {
-                    str(k or "").strip().upper(): v
-                    for k, v in os.environ.items()
-                }.get(name, "")
-                or ""
-            ).strip()
-        ]
-        if isinstance(data, dict):
-            for key in data:
-                candidate = str(key or "").strip().upper()
-                if candidate in _REMOVED_USER_WORKFLOW_CUTOVER_SETTINGS or candidate in {
-                    "USER_WORKFLOW_CUTOVER_RECORD_PATH",
-                    "USER_WORKFLOW_RELEASE_NOTES_PATH",
-                }:
-                    stale.append(str(key))
-        if stale:
-            names = ", ".join(sorted(set(stale)))
-            raise ValueError(
-                f"{names} is obsolete and no longer honored "
-                "(MoonLadderStudios/MoonMind#3951). Remove it from the "
-                "environment; user Workflow Execution routing now resolves "
-                "from TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE and "
-                "TEMPORAL_WORKFLOW_TASK_QUEUE without cutover files."
-            )
-        return data
 
 class TemporalDashboardSettings(BaseSettings):
     """Workflow-console Temporal source contract and rollout flags."""
@@ -474,10 +419,7 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_root: str = Field(
         "var/artifacts/temporal_artifacts",
-        validation_alias=AliasChoices(
-            "TEMPORAL_ARTIFACT_ROOT",
-            "TEMPORAL_ARTIFACTS_ROOT",
-        ),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_ROOT"),
         description="Filesystem location where local-dev Temporal artifacts are persisted.",
     )
     temporal_artifact_backend: str = Field(
@@ -487,9 +429,7 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_s3_endpoint: str = Field(
         "http://minio:9000",
-        validation_alias=AliasChoices(
-            "TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"
-        ),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_ENDPOINT"),
         description=(
             "S3-compatible endpoint used by Temporal artifact storage. "
             "Docker Compose sets TEMPORAL_ARTIFACT_S3_ENDPOINT to "
@@ -506,23 +446,17 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_s3_bucket: str = Field(
         "moonmind-temporal-artifacts",
-        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_BUCKET"),
         description="S3 bucket used to persist Temporal artifact bytes.",
     )
     temporal_artifact_s3_access_key_id: str = Field(
         "minioadmin",
-        validation_alias=AliasChoices(
-            "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
-            "MINIO_ACCESS_KEY",
-        ),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID"),
         description="Access key for the Temporal artifact S3-compatible backend.",
     )
     temporal_artifact_s3_secret_access_key: str = Field(
         "minioadmin",
-        validation_alias=AliasChoices(
-            "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
-            "MINIO_SECRET_KEY",
-        ),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY"),
         description="Secret key for the Temporal artifact S3-compatible backend.",
     )
     temporal_artifact_s3_region: str = Field(
@@ -1606,35 +1540,6 @@ class AtlassianSettings(BaseSettings):
                 jira_transition_env.lower() == "true"
             )
 
-class MemorySettings(BaseSettings):
-    """Reject configuration that selects a retired long-term memory provider."""
-
-    long_term: Literal["off"] = Field(
-        "off",
-        description=(
-            "Retired long-term memory provider "
-            "(MoonLadderStudios/MoonMind#4109). Hosted Mem0 memory was removed "
-            "because its SDK mandatorily requires Qdrant; only 'off' parses. "
-            "A stale 'mem0' value fails fast instead of being silently ignored."
-        ),
-    )
-
-    @field_validator("long_term", mode="before")
-    @classmethod
-    def _normalize_provider(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="MEMORY_",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
 
@@ -1981,7 +1886,6 @@ class AppSettings(BaseSettings):
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
-    memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
 
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)

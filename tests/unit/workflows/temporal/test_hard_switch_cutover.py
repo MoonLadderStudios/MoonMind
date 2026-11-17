@@ -2,17 +2,22 @@
 
 MoonLadderStudios/MoonMind#3951: startup resolves the ``MoonMind.UserWorkflow``
 type and v2 Task Queue from queue settings alone. No cutover record or
-release-note prose is consulted; stale cutover environment fails fast at
-settings validation. The workflow fleet keeps polling the legacy replay queue
-until retained histories drain, and ``moonmind.statuses.compat`` remains the
-historical-read loader for ``no_changes``/``NO_CHANGES`` outcomes.
+release-note prose is consulted; stale cutover environment fails API and
+worker startup through the shared obsolete-configuration table. The workflow
+fleet keeps polling the legacy replay queue until retained histories drain, and
+``moonmind.statuses.compat`` remains the historical-read loader for
+``no_changes``/``NO_CHANGES`` outcomes.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from moonmind.config.settings import TemporalSettings, settings
+from moonmind.config.settings import settings
+from moonmind.omnigent.legacy_retirement import (
+    ObsoleteConfigurationError,
+    assert_obsolete_configuration,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_FLEET,
     WORKFLOW_TASK_QUEUE,
@@ -84,39 +89,25 @@ def test_renamed_contract_requires_distinct_queue() -> None:
         resolve_user_workflow_start_contract(temporal_settings)
 
 
-def test_stale_cutover_environment_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
+        "TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
+        # Lower-case spellings settings previously accepted also fail.
+        "temporal_user_workflow_cutover_record_path",
+    ],
+)
+def test_stale_cutover_environment_fails_startup(variable: str) -> None:
     """Removed cutover paths must error instead of being silently ignored."""
 
-    monkeypatch.setenv(
-        "TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
-        "docs/ReleaseNotes/MM-730-hard-switch-cutover.json",
-    )
-    with pytest.raises(ValueError, match="CUTOVER_RECORD_PATH.*obsolete"):
-        TemporalSettings()
-
-
-def test_stale_release_notes_environment_fails_fast(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
-        "docs/ReleaseNotes/MM-730-hard-switch-cutover.md",
-    )
-    with pytest.raises(ValueError, match="RELEASE_NOTES_PATH.*obsolete"):
-        TemporalSettings()
-
-
-def test_stale_cutover_environment_fails_fast_case_insensitive(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Lower-case spellings previously accepted must also fail fast."""
-
-    monkeypatch.setenv(
-        "temporal_user_workflow_cutover_record_path",
-        "docs/ReleaseNotes/MM-730-hard-switch-cutover.json",
-    )
-    with pytest.raises(ValueError, match="CUTOVER_RECORD_PATH.*obsolete"):
-        TemporalSettings()
+    with pytest.raises(
+        ObsoleteConfigurationError,
+        match=f"{variable.upper()} is obsolete.*TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
+    ):
+        assert_obsolete_configuration(
+            {variable: "docs/ReleaseNotes/MM-730-hard-switch-cutover.json"}
+        )
 
 
 def test_renamed_contract_routes_new_starts_to_distinct_queue() -> None:

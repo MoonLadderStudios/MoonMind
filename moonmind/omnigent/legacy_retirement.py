@@ -1,7 +1,7 @@
 """Code-owned admission table for retained legacy Omnigent paths.
 
 Source issues: MoonLadderStudios/MoonMind#3712, MoonLadderStudios/MoonMind#3835,
-MoonLadderStudios/MoonMind#3932.
+MoonLadderStudios/MoonMind#3932, MoonLadderStudios/MoonMind#5341.
 
 Each row names a retained legacy surface that a new-admission boundary can still
 select (a runtime strategy, a non-generic realizer, a provider-specific startup
@@ -20,6 +20,10 @@ The guard helpers here:
 * fail when the repository grows a legacy surface no row classifies; and
 * fail when a row names a surface that is gone, so deleting a legacy component
   deletes its row in the same change instead of leaving a stale entry.
+
+``OBSOLETE_CONFIGURATION`` is the one deprecate-then-reject table for retired
+environment names, MoonMind settings with no Omnigent path included; the API and
+every worker check it at startup.
 
 Removing a component is ordinary engineering: delete the code, its row, and the
 tests that only existed for it, and keep the behavior tests of the surviving
@@ -470,8 +474,13 @@ class ObsoleteConfiguration(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     variable: str
-    retirement_path_id: str = Field(alias="retirementPathId")
-    replacement: str
+    # Who decides when the row is deleted: a retirement row whose code still
+    # honors the variable, or, for a variable nothing honors any more, the
+    # row's own removal condition. Exactly one is set.
+    retirement_path_id: str = Field("", alias="retirementPathId")
+    removal_condition: str = Field("", alias="removalCondition")
+    # Empty when nothing replaces the variable; the deployment removes it.
+    replacement: str = ""
     # False while the variable is still honored (nothing to warn about yet).
     # True once the deployment must stop supplying it.
     deprecated: bool = False
@@ -484,6 +493,13 @@ class ObsoleteConfiguration(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "ObsoleteConfiguration":
+        if bool(self.retirement_path_id.strip()) == bool(
+            self.removal_condition.strip()
+        ):
+            raise ValueError(
+                f"{self.variable}: name a retirement path or record a removal "
+                "condition, not both"
+            )
         if self.removed and not self.deprecated:
             raise ValueError(
                 f"{self.variable}: a removed variable must pass through its "
@@ -503,8 +519,20 @@ _HOST_IMAGE_ALIAS_GUIDANCE = (
     "until it is removed one release after its 2026-11-17 deprecation."
 )
 
-# Every legacy configuration identity that produces an actionable startup
-# warning during its deprecation window and a failure once removed. The Pi
+# For names nothing reads any more. Rejecting such a name keeps a value a
+# deployment still sets (a credential alias, say) from silently falling back to
+# a default; after one release of rejection the row is deleted.
+_REJECTED_FOR_ONE_RELEASE = (
+    "One release after 2026-11-17, when this table became the variable's only "
+    "rejecter: delete the row."
+)
+_ARTIFACT_ALIAS_GUIDANCE = (
+    "The alias is no longer read, so the artifact store would otherwise fall "
+    "back to its default. Rename it in the deployment's .env."
+)
+
+# Every obsolete configuration identity: the API and every worker warn about it
+# during its deprecation window and fail startup once it is removed. The Pi
 # alias is not deprecated yet: it remains a supported way to pin a prior image.
 OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
     ObsoleteConfiguration(
@@ -546,6 +574,52 @@ OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
         variable="OMNIGENT_PI_HOST_IMAGE_REF",
         retirementPathId="omnigent.legacy.pi_host_image_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
+    ),
+    *(
+        ObsoleteConfiguration(
+            variable=alias,
+            removalCondition=_REJECTED_FOR_ONE_RELEASE,
+            replacement=replacement,
+            deprecated=True,
+            removed=True,
+            guidance=_ARTIFACT_ALIAS_GUIDANCE,
+        )
+        for alias, replacement in (
+            ("MINIO_ENDPOINT", "TEMPORAL_ARTIFACT_S3_ENDPOINT"),
+            ("MINIO_BUCKET", "TEMPORAL_ARTIFACT_S3_BUCKET"),
+            ("MINIO_ACCESS_KEY", "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID"),
+            ("MINIO_SECRET_KEY", "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY"),
+            ("TEMPORAL_ARTIFACTS_ROOT", "TEMPORAL_ARTIFACT_ROOT"),
+        )
+    ),
+    *(
+        ObsoleteConfiguration(
+            variable=variable,
+            removalCondition=_REJECTED_FOR_ONE_RELEASE,
+            deprecated=True,
+            removed=True,
+            guidance=(
+                "The cutover record and release notes were removed; user "
+                "Workflow Execution routing resolves from "
+                "TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE and "
+                "TEMPORAL_WORKFLOW_TASK_QUEUE."
+            ),
+        )
+        for variable in (
+            "TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH",
+            "TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH",
+        )
+    ),
+    ObsoleteConfiguration(
+        variable="MEMORY_LONG_TERM",
+        removalCondition=_REJECTED_FOR_ONE_RELEASE,
+        deprecated=True,
+        removed=True,
+        guidance=(
+            "Long-term memory providers were retired; Mem0 required Qdrant. "
+            "No provider replaces them."
+        ),
+        shippedDefault="off",
     ),
 )
 
@@ -786,29 +860,42 @@ def assert_obsolete_configuration(
     During the deprecation window a supplied variable produces an actionable
     operator warning naming its replacement. After removal the same variable is
     rejected outright instead of being silently ignored. A blank value or the
-    shipped default is treated as omitted.
+    shipped default is treated as omitted. Names and the shipped default match
+    case-insensitively, as settings read them.
     """
 
     if configuration is None:
         configuration = OBSOLETE_CONFIGURATION
+    supplied: dict[str, list[str]] = {}
+    for key, raw in env.items():
+        value = str(raw or "").strip()
+        if value:
+            supplied.setdefault(str(key).strip().upper(), []).append(value)
     warnings: list[str] = []
     rejected: list[str] = []
     for entry in configuration:
-        value = str(env.get(entry.variable, "") or "").strip()
-        if not value or value == entry.shipped_default:
+        default = entry.shipped_default.casefold()
+        if all(
+            value.casefold() == default
+            for value in supplied.get(entry.variable.upper(), ())
+        ):
             continue
-        message = (
-            f"{entry.variable} is obsolete; set {entry.replacement} instead "
-            f"(retirement row {entry.retirement_path_id})."
+        action = (
+            f"set {entry.replacement} instead" if entry.replacement else "remove it"
         )
+        owner = (
+            f" (retirement row {entry.retirement_path_id})"
+            if entry.retirement_path_id
+            else ""
+        )
+        message = f"{entry.variable} is obsolete; {action}{owner}."
         if entry.removed:
             rejected.append(f"{message} {entry.guidance}".strip())
         elif entry.deprecated:
             warnings.append(f"{message} {entry.guidance}".strip())
     if rejected:
         raise ObsoleteConfigurationError(
-            "obsolete Omnigent configuration is no longer honored: "
-            + " ".join(rejected)
+            "obsolete configuration is no longer honored: " + " ".join(rejected)
         )
     return tuple(warnings)
 
@@ -819,7 +906,7 @@ def enforce_obsolete_configuration_at_startup(
     env: Mapping[str, str] | None = None,
     configuration: tuple[ObsoleteConfiguration, ...] | None = None,
 ) -> tuple[str, ...]:
-    """The shared process-startup check for obsolete Omnigent configuration.
+    """The shared process-startup check for obsolete configuration.
 
     Every process that consumes these settings calls this — the API and each
     separately restartable Temporal worker — so restarting or deploying one
@@ -830,9 +917,21 @@ def enforce_obsolete_configuration_at_startup(
     deprecation warnings it logged.
     """
 
+    from dotenv import dotenv_values
+
+    from moonmind.config import paths
     from moonmind.omnigent.bootstrap.store import load_installed_release_image_env
 
-    source = os.environ if env is None else env
+    environment = os.environ if env is None else env
+    # Settings also load ``.env`` without exporting it. As there, the process
+    # environment wins over the file, matching names case-insensitively.
+    exported = {str(key).strip().upper() for key in environment}
+    source = {
+        key: value or ""
+        for key, value in dotenv_values(paths.ENV_FILE, encoding="utf-8").items()
+        if key.strip().upper() not in exported
+    }
+    source.update(environment)
     # The release controller renders its recorded refs into ``.env.deploy``.
     # Only a value the deployment supplies itself is obsolete configuration.
     generated = load_installed_release_image_env()
@@ -841,7 +940,7 @@ def enforce_obsolete_configuration_at_startup(
         configuration=configuration,
     )
     for warning in warnings:
-        log.warning("Obsolete Omnigent configuration: %s", warning)
+        log.warning("Obsolete configuration: %s", warning)
     return warnings
 
 

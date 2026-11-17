@@ -6,7 +6,6 @@ from moonmind.config.settings import (
     AtlassianSettings,
     FeatureFlagsSettings,
     GoogleSettings,
-    MemorySettings,
     OpenAISettings,
     WorkflowSettings,
     TemporalDashboardSettings,
@@ -295,26 +294,6 @@ class TestFeatureFlagsSettings:
             name.startswith("jira_create_page") for name in settings.model_dump()
         )
 
-class TestMemorySettings:
-    def test_retired_long_term_memory_defaults_off(self, monkeypatch):
-        monkeypatch.delenv("MEMORY_LONG_TERM", raising=False)
-
-        assert MemorySettings(_env_file=None).long_term == "off"
-
-    def test_memory_retired_mem0_long_term_fails_fast(self, monkeypatch):
-        # MoonLadderStudios/MoonMind#4109: hosted Mem0 is retired because its
-        # SDK mandatorily requires Qdrant; a stale opt-in must fail fast.
-        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
-
-        with pytest.raises(ValidationError):
-            MemorySettings(_env_file=None)
-
-
-    def test_retired_long_term_memory_off_value_is_normalized(self, monkeypatch):
-        monkeypatch.setenv("MEMORY_LONG_TERM", " OFF ")
-
-        assert MemorySettings(_env_file=None).long_term == "off"
-
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)
     def _clear_spec_env(self, monkeypatch):
@@ -345,6 +324,47 @@ class TestWorkflowSettings:
             WorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
             == 50 * 1024 * 1024
         )
+
+    def test_artifact_store_reads_each_setting_under_one_name(self, monkeypatch):
+        """Retired aliases are no longer read; startup rejects them (#5341)."""
+
+        names = {
+            "temporal_artifact_s3_endpoint": (
+                "TEMPORAL_ARTIFACT_S3_ENDPOINT",
+                "MINIO_ENDPOINT",
+            ),
+            "temporal_artifact_s3_bucket": (
+                "TEMPORAL_ARTIFACT_S3_BUCKET",
+                "MINIO_BUCKET",
+            ),
+            "temporal_artifact_s3_access_key_id": (
+                "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
+                "MINIO_ACCESS_KEY",
+            ),
+            "temporal_artifact_s3_secret_access_key": (
+                "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
+                "MINIO_SECRET_KEY",
+            ),
+            "temporal_artifact_root": (
+                "TEMPORAL_ARTIFACT_ROOT",
+                "TEMPORAL_ARTIFACTS_ROOT",
+            ),
+        }
+        for canonical, alias in names.values():
+            monkeypatch.delenv(canonical, raising=False)
+            monkeypatch.setenv(alias, "retired-alias-value")
+
+        settings = WorkflowSettings(_env_file=None)
+        for field in names:
+            assert (
+                getattr(settings, field) == WorkflowSettings.model_fields[field].default
+            ), field
+
+        for canonical, _alias in names.values():
+            monkeypatch.setenv(canonical, f"canonical-{canonical}")
+        settings = WorkflowSettings(_env_file=None)
+        for field, (canonical, _alias) in names.items():
+            assert getattr(settings, field) == f"canonical-{canonical}", field
 
     def test_agent_job_artifact_env_overrides(self, monkeypatch):
         """Environment variables should override queue artifact settings."""

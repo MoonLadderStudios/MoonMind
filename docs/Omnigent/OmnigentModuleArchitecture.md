@@ -444,17 +444,22 @@ in-handler readiness projection reading the materializer descriptor registry
 
 ### 5.4 Obsolete configuration
 
-`OBSOLETE_CONFIGURATION` names each legacy image/environment identity, its
-replacement, and its owning retirement row. `assert_obsolete_configuration` runs
-at API and worker startup: during a variable's deprecation window a supplied
-value produces an actionable operator warning naming the replacement, and after
-removal startup is rejected outright. No obsolete value is ever silently
-ignored. `OMNIGENT_OPENCODE_HOST_IMAGE_REF` is in its deprecation window: it is
-still honored, and a deployment-supplied value warns at startup naming
-`OMNIGENT_SHARED_HOST_IMAGE_REF`. Values the release controller renders into
-`.env.deploy` from its installed release record are not deployment-supplied and
-do not warn. The generic and Pi aliases are not deprecated; they remain a
-supported way to pin a prior image.
+`OBSOLETE_CONFIGURATION` is the one deprecate-then-reject table for retired
+environment names. Each row names its replacement (or says to remove the
+variable) and its deletion owner: the retirement row whose code still honors it,
+or its own removal condition once nothing reads it. API and worker startup check
+it against what settings read, the process environment over `.env`: during a
+deprecation window a supplied value warns naming the replacement; after removal
+startup fails. Names match case-insensitively. A blank value, the
+shipped template default, or a value the release controller rendered into
+`.env.deploy` counts as omitted.
+
+The generic host-image aliases and `OMNIGENT_OPENCODE_HOST_IMAGE_REF` are in
+their deprecation window and still honored; the Pi alias is not deprecated.
+Names nothing reads any more (`MINIO_ENDPOINT`, `MINIO_BUCKET`,
+`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TEMPORAL_ARTIFACTS_ROOT`, the user
+Workflow cutover paths and `MEMORY_LONG_TERM`) fail startup for one release,
+since ignoring a credential alias would silently fall back to a default.
 
 ## 6. Adding an approved harness
 
