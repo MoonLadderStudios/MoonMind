@@ -18,6 +18,7 @@ import logging
 
 import pytest
 
+from moonmind.config import paths as config_paths
 from moonmind.omnigent import legacy_retirement
 from moonmind.omnigent.legacy_retirement import (
     ObsoleteConfiguration,
@@ -38,6 +39,15 @@ def _startup_modules_loaded() -> None:
 
     importlib.import_module("api_service.main")
     importlib.import_module("moonmind.workflows.temporal.worker_runtime")
+
+
+@pytest.fixture(autouse=True)
+def dotenv_file(monkeypatch, tmp_path):
+    """The ``.env`` settings load; absent unless a test writes it."""
+
+    path = tmp_path / ".env"
+    monkeypatch.setattr(config_paths, "ENV_FILE", path)
+    return path
 
 
 def _startup_guard():
@@ -354,6 +364,45 @@ def test_retired_name_fails_api_and_worker_startup(
     ):
         with pytest.raises(ObsoleteConfigurationError, match=replacement):
             check()
+
+
+@pytest.mark.parametrize(
+    ("line", "replacement"),
+    [
+        (
+            "MINIO_ENDPOINT=http://storage.internal:9000",
+            "TEMPORAL_ARTIFACT_S3_ENDPOINT",
+        ),
+        ("MEMORY_LONG_TERM=mem0", "remove it"),
+    ],
+)
+def test_retired_name_only_in_dotenv_fails_api_and_worker_startup(
+    monkeypatch, dotenv_file, line: str, replacement: str
+) -> None:
+    """Settings load ``.env`` without exporting it, so the check reads it too."""
+
+    from moonmind.workflows.temporal import worker_runtime
+
+    dotenv_file.write_text(line + "\n")
+    monkeypatch.delenv(line.split("=", 1)[0], raising=False)
+    for check in (
+        _startup_guard(),
+        lambda: legacy_retirement.enforce_obsolete_configuration_at_startup(
+            worker_runtime.logger
+        ),
+    ):
+        with pytest.raises(ObsoleteConfigurationError, match=replacement):
+            check()
+
+
+def test_environment_overrides_dotenv_for_retired_names(
+    monkeypatch, dotenv_file
+) -> None:
+    """As in settings, the process environment wins over ``.env``."""
+
+    dotenv_file.write_text("memory_long_term=mem0\n")
+    monkeypatch.setenv("MEMORY_LONG_TERM", "off")
+    _startup_guard()()
 
 
 def test_template_values_of_retired_settings_start_cleanly(monkeypatch) -> None:

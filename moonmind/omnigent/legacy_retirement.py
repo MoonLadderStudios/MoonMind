@@ -917,9 +917,21 @@ def enforce_obsolete_configuration_at_startup(
     deprecation warnings it logged.
     """
 
+    from dotenv import dotenv_values
+
+    from moonmind.config import paths
     from moonmind.omnigent.bootstrap.store import load_installed_release_image_env
 
-    source = os.environ if env is None else env
+    environment = os.environ if env is None else env
+    # Settings also load ``.env`` without exporting it. As there, the process
+    # environment wins over the file, matching names case-insensitively.
+    exported = {str(key).strip().upper() for key in environment}
+    source = {
+        key: value or ""
+        for key, value in dotenv_values(paths.ENV_FILE, encoding="utf-8").items()
+        if key.strip().upper() not in exported
+    }
+    source.update(environment)
     # The release controller renders its recorded refs into ``.env.deploy``.
     # Only a value the deployment supplies itself is obsolete configuration.
     generated = load_installed_release_image_env()

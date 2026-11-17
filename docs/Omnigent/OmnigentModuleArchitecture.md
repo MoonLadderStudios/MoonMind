@@ -447,8 +447,9 @@ in-handler readiness projection reading the materializer descriptor registry
 environment names. Each row names its replacement (or says to remove the
 variable) and its deletion owner: the retirement row whose code still honors it,
 or its own removal condition once nothing reads it. API and worker startup check
-it: during a deprecation window a supplied value warns naming the replacement;
-after removal startup fails. Names match case-insensitively. A blank value, the
+it against what settings read, the process environment over `.env`: during a
+deprecation window a supplied value warns naming the replacement; after removal
+startup fails. Names match case-insensitively. A blank value, the
 shipped template default, or a value the release controller rendered into
 `.env.deploy` counts as omitted.
 
