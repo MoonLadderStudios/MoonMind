@@ -7,7 +7,7 @@ Adapter enforcement consumes the deterministic snapshot defined by
 **Status:** Current  
 **Owners:** MoonMind Platform  
 **Last updated:** 2026-10-02  
-**Authority:** Canonical MoonMind contract for Omnigent agent identity, bridge execution, and profile-bound Codex host orchestration
+**Authority:** Canonical MoonMind contract for Omnigent agent identity, bridge execution, and on-demand Codex host orchestration
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the compatibility rules that implementations must preserve.
 
@@ -36,7 +36,7 @@ The canonical execution topology is:
 
 ```text
 MoonMind.UserWorkflow / MoonMind.AgentRun
-  -> profile-bound Omnigent execution coordinator
+  -> admitted execution plan + generic-omnigent-host@1 realizer
       -> Provider Profile lease + durable host lease
       -> deterministic on-demand Docker host
       -> MoonMind Omnigent bridge
@@ -47,7 +47,7 @@ MoonMind.UserWorkflow / MoonMind.AgentRun
 This is a hybrid ownership model:
 
 - Omnigent remains a canonical external agent identity at the workflow contract boundary.
-- MoonMind may directly materialize and control the profile-bound host container used by that external session.
+- MoonMind may directly materialize and control the on-demand host container used by that external session.
 - Omnigent owns the live runner and harness protocol inside the selected host.
 - MoonMind owns durable authorization, lifecycle evidence, artifacts, cleanup ordering, and recovery decisions.
 
@@ -72,7 +72,7 @@ This stable identity keeps routing, checkpoint selection, bridge projections, po
 
 ### 2.2 Codex host orchestration is MoonMind-owned
 
-For an OAuth-backed Codex request, MoonMind resolves `executionProfileRef`, acquires the shared Provider Profile lease, resolves or creates the profile-bound host binding, creates an idempotent host lease, prepares the exact host, and binds the resulting host and session identities to the bridge record.
+For an OAuth-backed Codex request, the shared realizer follows the admitted execution plan: it acquires the Provider Profile lease, binds the `codex-oauth-home@1` credential generation, creates an idempotent host lease, launches and attests the exact host, and binds the resulting host and session identities to the bridge record.
 
 The workflow request never supplies a Docker volume name, credential body, arbitrary host id, or daemon-visible host path. Those values are resolved at trusted activity and runtime boundaries.
 
@@ -99,7 +99,7 @@ Omnigent streams, snapshots, resources, files, and diagnostics are provider obse
 | Provider Profile selection and account capacity | MoonMind Provider Profile Manager |
 | Host-mode and runtime policy | MoonMind policy/profile selection |
 | Host binding, host lease, credential generation | MoonMind durable Omnigent host records |
-| Docker materialization for profile-bound hosts | MoonMind Omnigent host runtime |
+| Docker materialization for on-demand hosts | MoonMind Omnigent host runtime |
 | Host registration and runner protocol | Stock Omnigent server/host |
 | Live Codex process and harness semantics | Omnigent host and `codex-native` runner |
 | Session/event compatibility boundary | MoonMind Omnigent bridge |
@@ -112,7 +112,7 @@ No boundary may silently substitute a different Provider Profile, credential sou
 
 ## 4. Canonical request contract
 
-A profile-bound Codex Omnigent request uses `AgentExecutionRequest`:
+A Codex Omnigent request uses `AgentExecutionRequest`:
 
 ```json
 {
@@ -143,10 +143,9 @@ A profile-bound Codex Omnigent request uses `AgentExecutionRequest`:
 
 Rules:
 
-- `executionProfileRef` is required for the profile-bound Codex path.
+- `executionProfileRef` selects the Codex OAuth Provider Profile. A profiled request without an admitted execution plan fails closed with `OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE`, as does a recorded `codex-profile-bound@1` plan.
 - The selected profile must be enabled, connected, launch-ready, OpenAI-backed, and compatible with `codex_cli` OAuth materialization.
-- A caller-provided `session.hostId` is always rejected. The trusted coordinator alone injects the exact host id from the durable profile binding immediately before session creation; product flows never accept manual host ids.
-- The coordinator injects `hostType=external`, the exact registered host id, the resolved workspace path, `codex-native`, and a safe profile-authorization envelope immediately before session creation.
+- The trusted realizer alone injects `hostType=external`, the exact registered host id from the runtime binding, the resolved workspace path, the planned harness, and a safe profile-authorization envelope immediately before session creation; product flows never accept manual host ids.
 - The admitted execution plan owns the resolved Model and Effort. Its shared request binder carries that pair into the session request, and the adapter emits native `model_override` and `reasoning_effort` fields. Codex dispatch binds the pair before lifecycle effects and rejects conflicting authored execution or session values. Omitted model/effort use the plan's recorded defaults. Preflight model evidence proves availability, while native session and usage observations record what actually ran.
 - Raw credentials, host registration tokens, Docker volume names, and absolute daemon paths never enter workflow-authored parameters.
 
@@ -156,7 +155,7 @@ Large instructions and inputs remain artifact-backed. The bridge posts the first
 
 ## 5. Launch modes
 
-The profile-bound Codex lane has one host mode under its binding, bridge, readiness, evidence, and cleanup contract. Stored `static_compose` plans remain readable history but fail closed rather than execute, because their Compose host no longer exists.
+Codex has one host mode, on-demand Docker, under its binding, bridge, readiness, evidence, and cleanup contract. Stored `static_compose` plans remain readable history but fail closed rather than execute, because their Compose host no longer exists.
 
 ### 5.1 Deterministic on-demand Docker
 
@@ -174,11 +173,6 @@ before acquiring a Provider Profile lease or mutating a host. Existing durable
 bindings remain authoritative for retry and conflicting explicit policy fails
 closed.
 
-`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when configured, supplies
-host-substrate settings after on-demand policy selection and cannot override a
-product-owned selection or durable binding. Workflow requests cannot provide
-host IDs, Docker volume names, credential bodies, or absolute bind sources.
-
 ### 5.3 Image authority
 
 Stock repository/tag values, including `latest`, are convenient bootstrap
@@ -192,12 +186,12 @@ images explicitly.
 
 ## 6. Durable lifecycle
 
-For one logical idempotency key, the coordinator follows this order:
+For one logical idempotency key, the realizer follows this order:
 
 1. Reserve or load the bridge attempt envelope.
 2. Validate `executionProfileRef` and profile readiness.
 3. Acquire the purpose-aware Provider Profile lease.
-4. Resolve the profile-bound host binding.
+4. Create or load the runtime binding.
 5. Create or reattach the deterministic host lease.
 6. Persist bridge authorization with profile, provider lease, credential generation, binding, and host-lease refs.
 7. Launch the on-demand host.
@@ -227,13 +221,13 @@ could change both model input and the idempotency digest.
 
 ## 7. Capacity and policy hierarchy
 
-This section describes the **profile-bound OAuth** adapter path. Its capacity of one comes from the mutable authentication home that path shares, not from a platform-wide limit. Credentialless profiles on the generic plane are governed by the four-layer model in `OmnigentHarnessPlatformDesign.md` §11.5 and may be configured above one.
+This section describes the **OAuth** adapter path. Its capacity of one comes from the mutable authentication home that path shares, not from a platform-wide limit. Credentialless profiles on the generic plane are governed by the four-layer model in `OmnigentHarnessPlatformDesign.md` §11.5 and may be configured above one.
 
 The capacity hierarchy is additive, not competing:
 
 1. **Provider Profile capacity** protects the mutable OpenAI OAuth identity and remains authoritative. OAuth capacity is one across direct execution, Omnigent execution, and credential-maintenance operations.
 2. **Host capacity** permits at most one active host for the profile binding.
-3. **Session capacity** permits at most one active session/runner on that profile-bound host.
+3. **Session capacity** permits at most one active session/runner on that host.
 4. **Machine and Docker capacity** governs whether a worker may materialize another container.
 5. **Runtime resource policy** governs CPU, memory, process, temporary-storage, image, and timeout limits.
 6. **Network policy** governs network attachment and allowed egress.
@@ -258,7 +252,7 @@ When the daemon shares the worker filesystem (`WORKFLOW_DOCKER_DAEMON_MODE=local
 
 | State class | Canonical target | Rule |
 | --- | --- | --- |
-| Codex OAuth home | `/home/app/.codex` | Profile-bound, read/write, generation-checked, exclusive |
+| Codex OAuth home | `/home/app/.codex` | Profile-owned, read/write, generation-checked, exclusive |
 | Omnigent host state | `/home/app/.omnigent` | Separate host or lease-owned state; never the OAuth volume |
 | Workflow workspace | `/workspaces/run` for on-demand | Workflow-scoped, policy-resolved, daemon-visible |
 | Resolved skills | `/opt/moonmind-skills` | Immutable run snapshot, read-only; the OpenCode agent's file tools hold a read grant for it |
@@ -432,12 +426,13 @@ A branch always obtains independent host/session authority and does not concurre
 Checkpoint Branch turns enter this adapter only through the durable branch-turn
 execution owner. That owner validates checkpoint, instruction, lineage, git,
 profile, policy, and credential authority before compiling the same canonical
-`AgentExecutionRequest` used by ordinary profile-bound work, with
-the wire decision `checkpointRecovery.recoveryAction = branch_required`. The
-Omnigent Activity maps that decision to the coordinator's
-`branch_from_checkpoint` method, which then owns fresh binding, lease, host,
-session, first-message, harvest, cleanup, and release-last evidence. Public APIs
-and remediation actions do not reconstruct or bypass this lifecycle.
+`AgentExecutionRequest` used by ordinary work, carrying the checkpoint's
+recorded execution plan and the wire decision
+`checkpointRecovery.recoveryAction = branch_required`. The Omnigent Activity
+binds the checkpoint into the request and dispatches it through the shared
+realizer, which then owns fresh binding, lease, host, session, first-message,
+harvest, cleanup, and release-last evidence. Public APIs and remediation actions
+do not reconstruct or bypass this lifecycle.
 
 Cold restore checks out the pinned baseline in a clean authorized workspace,
 applies the validated checkpoint/diff/head artifact, restores immutable
@@ -454,7 +449,7 @@ codes, readiness/capacity blocks, artifact refs/digests, and validation status.
 
 The generic Container Jobs/workload plane owns reusable primitives for `WorkspaceLocator` resolution, daemon-visible path translation, bounded/redacted logs, output manifests, runtime diagnostics, cancellation, and cleanup.
 
-Profile-bound Omnigent hosts should reuse those primitives where their contracts match. They remain a distinct long-lived host/session lease model rather than being forced into a one-shot Container Job abstraction. Shared code must preserve:
+On-demand Omnigent hosts should reuse those primitives where their contracts match. They remain a distinct long-lived host/session lease model rather than being forced into a one-shot Container Job abstraction. Shared code must preserve:
 
 - host and session identity across the live bridge lifecycle;
 - exclusive credential ownership;

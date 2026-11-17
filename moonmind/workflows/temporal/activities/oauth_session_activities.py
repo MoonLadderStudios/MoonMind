@@ -58,9 +58,7 @@ async def _create_oauth_validation_binding(
     from moonmind.omnigent.execution_profiles import (
         compile_persisted_effective_launch,
     )
-    from moonmind.omnigent.profile_bound_execution import (
-        on_demand_binding_policy_ref,
-    )
+    from moonmind.omnigent.oauth_hosts import on_demand_binding_policy_ref
 
     async with async_session_maker() as db:
         profile = await db.get(ManagedAgentProviderProfile, profile_id)
@@ -118,18 +116,20 @@ async def _create_oauth_validation_binding(
 async def oauth_session_prepare_credential_maintenance(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Drain the Profile's generic and profile-bound hosts before mutating OAuth state."""
+    """Drain the Profile's generic and OAuth-ledger hosts before mutating OAuth state."""
 
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.host_services.legacy_host_containers import (
+        LegacyOmnigentHostContainerService,
+    )
+    from moonmind.omnigent.host_services.oauth_credential_validation import (
+        run_host_command,
+    )
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.settings import (
         resolved_api_token,
         resolved_proxy_forward_headers,
         resolved_server_url,
-    )
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
     )
     from moonmind.workflows.adapters.omnigent_client import (
         OmnigentHttpClient,
@@ -152,10 +152,7 @@ async def oauth_session_prepare_credential_maintenance(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        runtime = OmnigentOAuthHostRuntime(
-            client=client,
-            lore_repository_adapter=build_lore_repository_adapter_from_environment(),
-        )
+        containers = LegacyOmnigentHostContainerService(run_command=run_host_command)
         drained = 0
         for host_lease in leases:
             if host_lease.omnigent_session_id:
@@ -167,7 +164,7 @@ async def oauth_session_prepare_credential_maintenance(
                         "Failed to stop stale Omnigent session before credential maintenance",
                         exc_info=True,
                     )
-            await runtime.stop_host(binding=binding, host_lease=host_lease)
+            await containers.stop_host(binding=binding, host_lease=host_lease)
             await repository.mark_host_lease_stopped(host_lease.lease_id)
             drained += 1
     return {"profile_id": profile_id, "drained": drained + generic_drained}
@@ -214,20 +211,13 @@ async def oauth_session_revalidate_bound_host(
     from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
     from moonmind.omnigent.host_image_drift import bind_installed_shared_host_launch
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.host_services.oauth_credential_validation import (
+        OmnigentOAuthCredentialValidator,
+    )
     from moonmind.omnigent.oauth_hosts import (
         HostPreflightFailure,
         OmnigentOAuthHostRepository,
         deterministic_host_lease_id,
-    )
-    from moonmind.omnigent.settings import (
-        resolved_api_token,
-        resolved_proxy_forward_headers,
-        resolved_server_url,
-    )
-    from moonmind.workflows.adapters.omnigent_client import (
-        OmnigentHttpClient,
-        pooled_http_client,
     )
 
     profile_id = str(request.get("profile_id") or "").strip()
@@ -297,79 +287,72 @@ async def oauth_session_revalidate_bound_host(
     credential_validation_failed = False
     cleanup_proven = False
     try:
-        async with pooled_http_client() as http_client:
-            client = OmnigentHttpClient(
-                base_url=resolved_server_url(),
-                api_token=resolved_api_token(),
-                client=http_client,
-                upstream_header_allowlist=resolved_proxy_forward_headers(),
-            )
-            runtime = OmnigentOAuthHostRuntime(client=client)
-            preflight_error: BaseException | None = None
-            preflight: dict[str, Any] | None = None
-            for attempt in range(3):
-                try:
-                    preflight = await runtime.validate_credential_mount(
-                        binding=binding,
-                        host_lease=lease,
-                        effective_launch=(
-                            lease.effective_launch_snapshot
-                            or binding.effective_launch_snapshot
-                        ),
-                    )
-                    preflight_error = None
-                    break
-                except (Exception, asyncio.CancelledError) as exc:
-                    preflight_error = exc
-                    logger.warning(
-                        "OAuth credential preflight unavailable: profile_id=%s "
-                        "attempt=%s error_type=%s failure_code=%s",
-                        profile_id,
-                        attempt + 1,
-                        type(exc).__name__,
-                        (
-                            exc.code
-                            if isinstance(exc, OmnigentOAuthHostError)
-                            else "unclassified"
-                        ),
-                    )
-                    retryable = isinstance(
-                        exc, OmnigentOAuthHostError
-                    ) and exc.code in {
-                        HostPreflightFailure.LOGIN_STATUS_FAILED.value,
-                        HostPreflightFailure.VALIDATION_UNAVAILABLE.value,
-                    }
-                    if not retryable or attempt == 2:
-                        break
-                    try:
-                        await asyncio.sleep(2**attempt)
-                    except asyncio.CancelledError as cancelled:
-                        preflight_error = cancelled
-                        break
-            credential_validation_failed = (
-                isinstance(preflight_error, OmnigentOAuthHostError)
-                and preflight_error.code
-                == HostPreflightFailure.LOGIN_STATUS_FAILED.value
-            )
-
-            cleanup_error: BaseException | None = None
+        validator = OmnigentOAuthCredentialValidator()
+        preflight_error: BaseException | None = None
+        preflight: dict[str, Any] | None = None
+        for attempt in range(3):
             try:
-                cleanup = await runtime.stop_host(binding=binding, host_lease=lease)
-                if cleanup.get("cleanupResult") != "succeeded":
-                    raise OmnigentOAuthHostError(
-                        "OAuth credential validator cleanup was not proven",
-                        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
-                    )
+                preflight = await validator.validate_credential_mount(
+                    binding=binding,
+                    host_lease=lease,
+                    effective_launch=(
+                        lease.effective_launch_snapshot
+                        or binding.effective_launch_snapshot
+                    ),
+                )
+                preflight_error = None
+                break
             except (Exception, asyncio.CancelledError) as exc:
-                cleanup_error = exc
-            if cleanup_error is not None:
-                if preflight_error is not None:
-                    raise cleanup_error from preflight_error
-                raise cleanup_error
-            await repository.mark_host_lease_stopped(lease.lease_id)
-            cleanup_proven = True
+                preflight_error = exc
+                logger.warning(
+                    "OAuth credential preflight unavailable: profile_id=%s "
+                    "attempt=%s error_type=%s failure_code=%s",
+                    profile_id,
+                    attempt + 1,
+                    type(exc).__name__,
+                    (
+                        exc.code
+                        if isinstance(exc, OmnigentOAuthHostError)
+                        else "unclassified"
+                    ),
+                )
+                retryable = isinstance(
+                    exc, OmnigentOAuthHostError
+                ) and exc.code in {
+                    HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                    HostPreflightFailure.VALIDATION_UNAVAILABLE.value,
+                }
+                if not retryable or attempt == 2:
+                    break
+                try:
+                    await asyncio.sleep(2**attempt)
+                except asyncio.CancelledError as cancelled:
+                    preflight_error = cancelled
+                    break
+        credential_validation_failed = (
+            isinstance(preflight_error, OmnigentOAuthHostError)
+            and preflight_error.code
+            == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+        )
+
+        cleanup_error: BaseException | None = None
+        try:
+            cleanup = await validator.stop_host(binding=binding, host_lease=lease)
+            if cleanup.get("cleanupResult") != "succeeded":
+                raise OmnigentOAuthHostError(
+                    "OAuth credential validator cleanup was not proven",
+                    code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                )
+        except (Exception, asyncio.CancelledError) as exc:
+            cleanup_error = exc
+        if cleanup_error is not None:
             if preflight_error is not None:
-                raise preflight_error
+                raise cleanup_error from preflight_error
+            raise cleanup_error
+        await repository.mark_host_lease_stopped(lease.lease_id)
+        cleanup_proven = True
+        if preflight_error is not None:
+            raise preflight_error
     except (Exception, asyncio.CancelledError):
         # Destination binding, Docker, cleanup, and egress failures do not prove
         # that the credential is invalid.  Revoking the Provider Profile for

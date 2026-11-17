@@ -21,27 +21,39 @@ disabled or removed.
 from __future__ import annotations
 
 import builtins
+import importlib.util
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.omnigent_bridge import (
+    OMNIGENT_BRIDGE_MOUNT_PATH,
     _bridge_event_payload,
+    _get_bridge_store,
+    _get_execution_service,
+    _require_bridge_enabled,
     _terminal_envelope,
+    router,
 )
+from api_service.auth_providers import get_instance_access
 from api_service.db.models import Base
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.security.operator_admission import OperatorAdmission
 
 CLAUDE_COMPAT_PROFILE = "moonmind.claude_direct_compat.v1"
 PROFILE_BOUND_REALIZER = "codex-profile-bound@1"
 GENERIC_REALIZER = "generic-omnigent-host@1"
 
-# The launch modules that are eventually deleted. Historical reads must
-# not depend on any of them.
+# Launch modules that are deleted or will be. Historical reads must not
+# depend on any of them.
 LEGACY_LAUNCH_MODULES = (
     "moonmind.omnigent.oauth_host_runtime",
     "moonmind.omnigent.profile_bound_execution",
@@ -376,3 +388,97 @@ async def test_reads_do_not_import_legacy_launch_modules(
     ]
     session_row = await store.get_bridge_session(bridge_session_id)
     assert _terminal_envelope(session_row) is not None
+
+
+@pytest.mark.asyncio
+async def test_completed_profile_bound_run_reads_through_workflow_detail_routes(
+    store,
+) -> None:
+    """Workflow Detail serves a completed profile-bound run after its code is gone.
+
+    The run's recorded outcome and terminal artifacts resolve through the
+    production bridge routes with no profile-bound module in the repository.
+    """
+
+    for removed in (
+        "moonmind.omnigent.profile_bound_execution",
+        "moonmind.omnigent.oauth_host_runtime",
+        "moonmind.omnigent.realizers.codex_profile_bound",
+    ):
+        assert importlib.util.find_spec(removed) is None
+
+    bridge_session_id, request = await _seed_session(
+        store,
+        idempotency_key="profile-bound-detail",
+        agent_id="codex_cli",
+        agent_name="Codex CLI",
+        correlation_id="mm:wf-profile-bound-detail",
+        endpoint_ref="omnigent-codex",
+        session_id="codex-session-detail",
+        target_metadata={"executionRealizerRef": PROFILE_BOUND_REALIZER},
+        provenance={
+            "source": "omnigent",
+            "executionRealizerRef": PROFILE_BOUND_REALIZER,
+        },
+        summary="Profile-bound Codex execution completed.",
+    )
+    await store.mark_terminal(
+        request.idempotency_key,
+        status="completed",
+        terminal_refs={
+            "summary": "Profile-bound Codex execution completed.",
+            "diagnosticsRef": "artifact:art_profile_bound_diagnostics",
+            "metadataRefs": {
+                "captureManifestRef": "artifact:art_profile_bound_manifest",
+                "finalSnapshotRef": "artifact:art_profile_bound_final",
+            },
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
+
+    async def describe_execution(workflow_id: str):
+        return SimpleNamespace(owner_id=uuid4())
+
+    app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(
+        describe_execution=describe_execution
+    )
+    app.dependency_overrides[_require_bridge_enabled] = lambda: SimpleNamespace(
+        enabled=True
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        resolved = await client.get(
+            f"{base}/resolve", params={"workflowId": "mm:wf-profile-bound-detail"}
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["bridgeSessionId"] == bridge_session_id
+        assert resolved.json()["status"] == "completed"
+        page = await client.get(f"{base}/{bridge_session_id}/events")
+        assert page.status_code == 200, page.text
+        body = page.json()
+
+    assert [item["kind"] for item in body["items"]] == [
+        "session_started",
+        "assistant_message",
+        "response_completed",
+    ]
+    for item in body["items"]:
+        assert (
+            item["metadata"]["moonmind"]["executionRealizerRef"]
+            == PROFILE_BOUND_REALIZER
+        )
+    envelope = body["terminalEnvelope"]
+    assert envelope["status"] == "completed"
+    assert envelope["summary"] == "Profile-bound Codex execution completed."
+    assert envelope["diagnosticsRef"] == "artifact:art_profile_bound_diagnostics"
+    assert envelope["captureManifestRef"] == "artifact:art_profile_bound_manifest"
+    assert envelope["finalSnapshotRef"] == "artifact:art_profile_bound_final"

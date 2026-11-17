@@ -284,11 +284,11 @@ Profile and persists the immutable plan before scheduling. A raw
 Omnigent, or omits the runtime under an Omnigent default, is rejected with
 `omnigent_product_boundary_required` instead of reaching a plan-less lane.
 `generic-omnigent-host@1` runs through
-`integration.omnigent.profile_bound_execute`; a plan recording
-`codex-profile-bound@1` uses `integration.omnigent.execute` with its recorded
-coordinator. The realizer launches the host and session, delivers the first
-turn, and owns the terminal result and cleanup; AgentRun starts no second
-supervisor around it. The live session belongs to Omnigent, while MoonMind owns
+`integration.omnigent.profile_bound_execute`, a replay-visible name; a plan
+recording `codex-profile-bound@1` fails closed with
+`OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE`. The realizer launches the host and
+session, delivers the first turn, and owns the terminal result and cleanup;
+AgentRun starts no second supervisor around it. The live session belongs to Omnigent, while MoonMind owns
 profile authorization and host lifecycle in this order:
 
 ```text
@@ -316,18 +316,15 @@ pass, which requires a stored snapshot to match the schedule's durable Agent
 Profile usage and names definitions it cannot yet compile in its failures for
 the next pass.
 
-AgentRuns that carry no persisted plan (histories admitted before plan
-admission, exact reruns of them, and occurrences of a still plan-less schedule)
-use the retained `MoonMind.OmnigentSession` supervisor (§7.3). Its plan-less
-admission is a distinct bounded Activity behind its own replay patch, and the
-legacy profile-bound Activity stays behind a Temporal patch boundary so replay
-does not transfer ownership in flight. Fully bound, reference-only, and
-plan-less inputs all apply the operator's supervisor rollback control before new
-admission, while recorded decisions from retired canary/allowlist modes still
-replay. An admitted child never re-evaluates admission, so blocking new
-admission cannot disable replay, query, cancellation, cleanup, or historical
-reads. The plan-less branch can be removed once no retained plan-less execution
-can be replayed or exactly rerun and no stored Omnigent schedule lacks a plan.
+A profiled AgentRun with no persisted plan (a history admitted before plan
+admission, an exact rerun of one, or an occurrence of a still plan-less
+schedule) also fails closed with `OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE`; the
+retained `MoonMind.OmnigentSession` supervisor (§7.3) does not admit it.
+Supervisor admission stays behind its own replay patch and still applies the
+operator's rollback control, while recorded decisions from retired
+canary/allowlist modes replay. An admitted child never re-evaluates admission,
+so blocking new admission cannot disable replay, query, cancellation, cleanup,
+or historical reads.
 
 ### 7.2 Why the identity stays external
 
@@ -340,34 +337,18 @@ The top-level identity describes the session and interaction provider, not only 
 
 ### 7.3 Retained session supervisor
 
-For plan-less AgentRuns, `MoonMind.OmnigentSession` keeps a deterministic canonical
-session identity. Its input contains only immutable owner identities, a
-compiled-intent artifact ref and digest, the initial turn-attempt identity, and
-frozen feature/compatibility versions; provider content, credentials, and
-mutable host paths stay outside workflow history. The supervisor drives the pure reconciliation contract and delegates
-each side effect to a short, idempotent activity. It:
-
-1. reserves or loads the durable bridge attempt envelope;
-2. requires and validates `executionProfileRef`;
-3. acquires the purpose-aware Provider Profile lease;
-4. resolves the profile-bound host binding;
-5. creates or reattaches the deterministic host lease;
-6. persists profile authorization before host/session side effects become ambiguous;
-7. launches the on-demand host;
-8. validates the exact credential generation and mount;
-9. verifies Codex login state inside the exact host environment;
-10. resolves exactly one online host advertising `codex-native`;
-11. updates bridge authorization with the host identity;
-12. creates or reattaches the session on that host;
-13. persists session and first-message evidence before posting;
-14. consumes provider events only in bounded batches and keeps a periodic
-    authoritative snapshot deadline active while terminality is unresolved;
-15. persists each decision and fenced logical command before execution;
-16. harvests and publishes terminal evidence;
-17. stops or drains the session and host in independently retryable phases;
-18. releases Provider Profile capacity only after cleanup.
-
-A caller cannot supply an arbitrary profile-bound host id, Docker volume, or credential. The coordinator injects the exact host and safe authorization envelope immediately before session creation.
+For sessions it admitted before plan admission, `MoonMind.OmnigentSession`
+keeps a deterministic canonical session identity. Its input contains only
+immutable owner identities, a compiled-intent artifact ref and digest, the
+initial turn-attempt identity, and frozen feature/compatibility versions;
+provider content, credentials, and mutable host paths stay outside workflow
+history. The supervisor drives the
+pure reconciliation contract and delegates each side effect to a short,
+idempotent activity. Its host-launch Activity fails with a non-retryable
+`OmnigentExecutionRealizerUnavailable` error, so a retained session cannot start
+a host. Its failure handling still stops the session and the host it recorded
+(through `host_services/legacy_host_containers.py`) in independently retryable
+phases and releases Provider Profile capacity only after cleanup.
 
 The supervisor accepts reference-only signals (provider observations,
 continuation, cancellation, approval/intervention, cleanup, operator
@@ -536,7 +517,7 @@ exclusivity and machine/worker capacity stay separate layers.
 Execution may be constrained by several independent layers:
 
 1. Provider Profile account capacity;
-2. profile-bound host count;
+2. OAuth host count per Provider Profile;
 3. sessions per host;
 4. aggregate generic-host count and cold-launch rate;
 5. container-job slots;
@@ -554,7 +535,7 @@ Activity or consuming a host attempt. An existing owned lease is admitted
 unconditionally; atomic allocation remains the final fence. Container-job
 capacity waits use durable timers under the original timeout.
 
-For profile-bound Codex Omnigent execution, the initial safe topology is one profile lease, one host lease, one active host, and one active session.
+For OAuth Codex Omnigent execution, the safe topology is one profile lease, one host lease, one active host, and one active session.
 
 ---
 
@@ -607,7 +588,7 @@ forwarded. Root-launched Claude processes use native pre-exec UID/GID changes,
 with supplementary groups cleared, before profile environment values can affect
 the executable or dynamic loader.
 
-A runtime whose normalized `requiredCapabilities` include `execution.fanout` (derived from a resolved Skill's `sideEffect.kind: enqueue_children`) receives a separate short-lived fan-out bearer after policy authorization; [Required Capabilities §7.5](../Workflows/RequiredCapabilities.md#75-executionfanout) owns its authority and API limits. The Run workflow carries the mint authorization from immutable resolved-Skill provenance in `stepExecution.skillSourcePolicy.executionFanout`; repo/local Skills and top-level-only declarations are denied before launch, and an absent field is a replay marker, not a current default. Launch context also carries `MOONMIND_REPOSITORY_CONNECTION_REF` from the canonical workspace request when the parent declares repository connection authority; ambient or Provider Profile environment cannot substitute another connection. Profile-bound Omnigent hosts expose the bearer through a lease-owned read-only file and pass only its non-secret selector to runner and login-shell environments, and restricted egress additionally requires the fan-out marker and bearer on the exact create and child-describe paths. Hosts without the requirement receive neither.
+A runtime whose normalized `requiredCapabilities` include `execution.fanout` (derived from a resolved Skill's `sideEffect.kind: enqueue_children`) receives a separate short-lived fan-out bearer after policy authorization; [Required Capabilities §7.5](../Workflows/RequiredCapabilities.md#75-executionfanout) owns its authority and API limits. The Run workflow carries the mint authorization from immutable resolved-Skill provenance in `stepExecution.skillSourcePolicy.executionFanout`; repo/local Skills and top-level-only declarations are denied before launch, and an absent field is a replay marker, not a current default. Launch context also carries `MOONMIND_REPOSITORY_CONNECTION_REF` from the canonical workspace request when the parent declares repository connection authority; ambient or Provider Profile environment cannot substitute another connection. Omnigent hosts expose the bearer through a lease-owned read-only file and pass only its non-secret selector to runner and login-shell environments, and restricted egress additionally requires the fan-out marker and bearer on the exact create and child-describe paths. Hosts without the requirement receive neither.
 
 Merge automation resolver children require `git`, `gh`, and `docker` through
 the capability mechanism, including omitted and historical templates that name
@@ -618,13 +599,13 @@ before launch. Temporal patching preserves the capability payload of
 already-recorded child starts; no live token or persisted plan is amended to
 retrofit missing authority.
 
-### 11.2 Profile-bound Omnigent hosts
+### 11.2 OAuth Omnigent hosts
 
 The Codex host filesystem separates:
 
 | State | Target | Rule |
 | --- | --- | --- |
-| Codex OAuth home | `/home/app/.codex` | Exclusive profile-bound read/write mount, generation-checked |
+| Codex OAuth home | `/home/app/.codex` | Exclusive profile-owned read/write mount, generation-checked |
 | Omnigent state | `/home/app/.omnigent` | Separate lease-owned state |
 | Workflow workspace | `/workspaces/run` for on-demand | Resolved from canonical workspace authority |
 | Resolved Skills | `/opt/moonmind-skills` | Immutable and read-only |
@@ -929,7 +910,7 @@ excluded Skill inputs go through the current run's own admission.
 
 An admitted runtime capability snapshot freezes three independent planes: agent
 identity and session continuity, repository workspace ownership, and host
-realization. For profile-bound Omnigent, Omnigent owns session reattach evidence
+realization. Omnigent owns session reattach evidence
 while MoonMind owns the sandbox `WorkspaceLocator` and repository checkpoint
 capture, validation, and restore. An `external_state_ref` proves session
 continuity only and cannot satisfy workspace restore preflight. Recovery uses

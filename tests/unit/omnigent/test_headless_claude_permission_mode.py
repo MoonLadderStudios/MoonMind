@@ -16,7 +16,6 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.bridge_store import WORKFLOW_LAUNCH_DEFAULTS
-from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -36,19 +35,6 @@ def _request(session: dict | None = None) -> AgentExecutionRequest:
         correlationId="mm:wf",
         idempotencyKey="mm:wf:node-1",
         parameters={"omnigent": omnigent},
-    )
-
-
-def _bind_profile(
-    request: AgentExecutionRequest, harness: str
-) -> AgentExecutionRequest:
-    return bind_exact_host(
-        request,
-        host_id="host-1",
-        workspace_path="/workspaces/run",
-        profile_authorization={},
-        harness=harness,
-        agent_name=f"{harness}-ui",
     )
 
 
@@ -94,7 +80,7 @@ def _launch_args(bound: AgentExecutionRequest) -> list[str]:
     return payload["terminal_launch_args"]
 
 
-_BINDERS = pytest.mark.parametrize("bind", [_bind_profile, _bind_generic])
+_BINDERS = pytest.mark.parametrize("bind", [_bind_generic])
 _DENY_WAKEUP = ["--disallowedTools", "ScheduleWakeup"]
 
 

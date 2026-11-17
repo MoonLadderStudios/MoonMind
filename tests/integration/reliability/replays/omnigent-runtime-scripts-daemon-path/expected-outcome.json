@@ -1,6 +1,0 @@
-{
-  "invariant": "MoonMind runtime scripts are copied into the run-owned workspace root and mounted through the selected named volume subpath before host creation",
-  "daemonRoot": "/mnt/data/docker/volumes/agent_workspaces/_data",
-  "volumeName": "agent_workspaces",
-  "scriptsSubpath": ".omnigent-runtime-scripts/5de9e0013df382bfecb790b5"
-}

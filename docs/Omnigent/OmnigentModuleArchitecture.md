@@ -37,19 +37,18 @@ dependency direction.
 | `moonmind/omnigent/reconciler/` | Pure lifecycle contracts and reducer | Pure |
 | `moonmind/omnigent/control_plane/records.py`, `identities.py` | Canonical session/turn records and the single owner of deterministic identity vocabulary | Pure |
 | `moonmind/omnigent/harness_platform/` value modules (`agent_profile`, `attestation`, `capabilities`, `catalog`, `credential_bindings`, `execution_plan`, `failures`, `harness_registry`, `runtime_binding`, `skills`, `support`) | Immutable schemas, capability/support decisions, approved-harness registration data | Pure |
-| `moonmind/omnigent/codex_execution_decisions.py` | Launch classification, budget authority, request identity, and authored-request binding for the legacy Codex realizer | Pure |
+| `moonmind/omnigent/codex_execution_decisions.py` | Request identity, checkpoint branch binding, and follow-up retrieval policy shared by dispatch and admission | Pure |
 | `moonmind/omnigent/host_failures.py` | Host failure vocabulary | Pure |
-| `moonmind/omnigent/host_ports.py`, `execution_ports.py` | Narrow ports for host realization and profile-bound execution | Pure |
+| `moonmind/omnigent/host_ports.py` | Narrow ports for host realization and OAuth host-ledger reclamation | Pure |
 | `moonmind/omnigent/control_plane/turn_commands.py` | Canonical turn command use case | Application |
 | `moonmind/omnigent/host_runtime.py` | Harness-neutral host realization and cleanup use case | Application |
 | `moonmind/omnigent/realizers/` | Versioned execution realizers and the trusted realizer registry | Application |
 | `moonmind/omnigent/control_plane/repositories.py` | Session, turn, observation, command, decision, alias, cleanup-authority persistence | Persistence |
 | `moonmind/omnigent/harness_platform/stores.py` | Execution-plan, plan-usage, and runtime-binding persistence | Persistence |
-| `moonmind/omnigent/execution_adapters.py` | Provider Profile authority, execution policy snapshot, and Temporal attempt adapters | Persistence |
-| `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, legacy host container inventory | Adapter |
-| `moonmind/omnigent/mounted_tool_preflight.py` | Shared GitHub credential visibility and repository-access checks for generic and retained profile-bound hosts | Adapter |
+| `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, credential-only OAuth validation (`oauth_credential_validation.py`), and OAuth host-ledger inventory and reclamation (`legacy_host_containers.py`) | Adapter |
+| `moonmind/omnigent/mounted_tool_preflight.py` | GitHub credential visibility and repository-access checks for generic hosts | Adapter |
 | `moonmind/omnigent/harness_platform/materializers.py`, `credential_materializers.py` | Credential materializer descriptors and provisioning | Adapter |
-| `moonmind/omnigent/bridge_*.py`, `execute.py`, `oauth_host_runtime.py`, `profile_bound_execution.py` | Replay-visible legacy Codex transport, session driver, host lifecycle, and coordinator | Adapter (legacy) |
+| `moonmind/omnigent/bridge_*.py`, `execute.py` | Replay-visible bridge transport and session driver | Adapter |
 | `moonmind/omnigent/workspace_publication.py`, `bridge_artifacts.py`, `remediation_workspace.py` | Workspace publication, artifact/evidence, checkpoint adapters | Adapter |
 | `moonmind/omnigent/bootstrap/` | Deployment bootstrap, image resolution, qualification, provider revalidation | Adapter / composition |
 | `moonmind/omnigent/production.py` | Composition root for the generic execution plane | Composition |
@@ -62,7 +61,7 @@ dependency direction.
 | `tools/omnigent_faultlab/` | Fault-injection corpus, reference model, and invariants for the reconciler | Evidence (test-facing) |
 
 GitHub projection readiness separates local credential delivery from remote
-repository access. Both host paths use the same preflight owner: token lookup
+repository access. The preflight owner's token lookup
 discards the token inside the host, and one repository query per execution
 environment checks the requested identity and, when required, write permission.
 Generic hosts check the host, runner, and OpenCode shell when applicable.
@@ -109,8 +108,7 @@ pure contracts.
 Additional enforced rules:
 
 - Container and process authority (`docker`, `subprocess`) exists only in
-  `host_services/`, `oauth_host_runtime.py`, `bootstrap/qualification.py`, and
-  `production.py`.
+  `host_services/`, `bootstrap/qualification.py`, and `production.py`.
 - Environment variables and deployment settings are read at the
   composition/infrastructure boundary. Pure, application, persistence, UI, and
   evidence modules receive them as data.
@@ -159,19 +157,18 @@ cannot drift apart, without a second implementation to pair against.
 | Provider inventory | `harness_platform/catalog_service.py::OmnigentInventoryClient` | `OmnigentHttpClient` | Conformance |
 | Host realization and cleanup | `host_ports.py` (`launcher`, `registration`, `attestation`, `cleanup`) | Docker adapters, test doubles | Conformance |
 | Legacy host container inventory and reclamation | `host_ports.py::OmnigentHostContainerInventoryPort` | `host_services/legacy_host_containers.py`, hermetic double | Paired |
-| Host preparation, workspace publication, provider session inspection, host release | `execution_ports.py`, `host_ports.py::OmnigentHostReleasePort` | `oauth_host_runtime.py` | Conformance + signature drift |
+| Ledger host release | `host_ports.py::OmnigentHostReleasePort` | `host_services/legacy_host_containers.py` | Conformance + typed signature |
 | Workspace, skills, tools, GitHub credentials, egress | `host_ports.py` | `host_services/` adapters | Conformance |
 | Host leases | `host_leases.py::OmnigentHostLeaseRepository` | in-memory, DB | Paired |
 | Provider Profile leases | `provider_leases.py::ProviderLeaseClient` | `ProviderProfileLeaseClient` | Conformance |
 | Credential materialization | `harness_platform/materializers.py`, `credential_materializers.py` | per-materializer descriptors | Paired (descriptor contract) |
-| Provider Profile authority, policy snapshot, attempt ordinal | `execution_ports.py` | `execution_adapters.py` | Conformance |
 | Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
 | Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
 
-The generic workspace port and retained coordinator use the same remediation
-owner and canonical checkpoint restore service. The port validates the controller
-head, execution identity and admitted Profile/launch snapshot before transferring
-or restoring its attempt-owned workspace. Preparation retries preserve candidate
+The generic workspace port uses the remediation owner and canonical checkpoint
+restore service. It validates the controller head, execution identity and
+admitted Profile/launch snapshot before transferring or restoring its
+attempt-owned workspace. Preparation retries preserve candidate
 edits; interrupted transfers reconcile their recorded intent. New Git save
 handoffs use the canonical checkpoint to restore HEAD, index and worktree,
 including deletions, after local workspace loss. They carry the admitted
@@ -179,7 +176,7 @@ repository identity so self-contained saves retain Enterprise remotes without
 acquiring source credentials. Recorded archive handoffs retain their additive
 interpretation. Restored directories and contents transfer to the
 selected runtime UID. An existing candidate without admission
-proof is preserved with an explicit uncertainty error. Both paths use the scoped
+proof is preserved with an explicit uncertainty error. The port uses the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
 Canonical GitHub repository sources use the selected account's shared plan when
 the controller supports repository-to-save handoffs. A separate versioned
@@ -216,13 +213,11 @@ reproduced against PostgreSQL; the DB implementation is therefore
 conformance-checked here and behavior-verified against a real PostgreSQL
 deployment.
 
-The legacy Codex host adapter satisfies four separate ports — host preparation,
-workspace publication, provider session inspection, and host release — each with
-a declared signature rather than an untyped `**kwargs` payload. The contract
-suite fails if a port reunifies those capabilities, reopens `**kwargs`, or
-drifts away from the adapter's signature. `ProfileBoundHostPorts` and
-`OmnigentHostReclamationPorts` declare *dependency sets* over those ports; a
-contract asserts they add no capability of their own.
+The ledger host release port declares one typed `stop_host` capability. The
+contract suite fails if it gains another capability, reopens `**kwargs`, or
+loses its deployed adapter. `OmnigentHostReclamationPorts` declares the
+janitor's *dependency set* over inventory and release; a contract asserts it
+adds no capability of its own.
 
 ## 5. Retained duplicate architecture and its retirement owners
 
@@ -239,8 +234,9 @@ legacy surface that no row classifies.
   condition. A row that still admits new work also names the shared
   lifecycle operation that would serve its consumer and the concrete outcome
   that operation still lacks, so a path stays live for a named gap, not its
-  age. Direct Codex/Claude launch, the managed-runtime launcher and the
-  direct Codex AgentSession each have a row.
+  age. Direct Codex/Claude launch, the managed-runtime launcher, the direct
+  Codex AgentSession, the legacy image variables and the native UI chat
+  projection each have a row.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
   row each one shelters.
 - `moonmind/omnigent/retirement_surfaces.py` derives the legacy surfaces the
@@ -294,11 +290,8 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
 | `ManagedRuntimeLauncher` for the direct strategies | `omnigent.legacy.managed_runtime_launcher` | `active_product_path` |
 | Direct Codex `MoonMind.AgentSession`, session runtime and Docker controller | `omnigent.legacy.direct_agent_session` | `active_product_path` |
-| `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `new_admission_disabled` |
-| `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `new_admission_disabled` |
-| `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `new_admission_disabled` |
 | Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
-| OpenCode image variable for existing deployments / legacy Host Classes | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
+| Deprecated OpenCode image variable | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 
@@ -390,8 +383,13 @@ model/provider/tool authority and enrollment remain intact. Protected settings,
 uncarried tool/auth configuration and other HOME choices retain their adapter
 until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
-Profile-bound execution and its OAuth host launcher admit no new plans;
-they retain queued starts, retries and cleanup under their recorded authority.
+Codex runs only on the shared realizer. Recorded `codex-profile-bound@1` plans
+and profiled requests without a plan fail closed with a typed
+`OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE` result. The legacy session supervisor
+launches no host but still stops hosts it recorded. Credential maintenance
+validates OAuth homes through the credential-only validator in
+`host_services/oauth_credential_validation.py` and reclaims ledger hosts
+through `host_services/legacy_host_containers.py`.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
@@ -439,14 +437,9 @@ Skill and repository context is prepared. Native Claude receives the command
 first; harnesses without command transport receive the complete authored text
 as literal input. Retries reuse the recorded prepared-message artifact.
 
-Three enforced-boundary exemptions are owned by rows above:
-`omnigent_catalog.py`'s in-handler readiness projection reading the materializer
-descriptor registry (`omnigent.legacy.native_ui_compat`),
-`profile_bound_execution.py`'s default port selection
-(`omnigent.legacy.profile_bound_execution`), and `oauth_host_runtime.py`'s raw
-Docker/Compose argument vectors (`omnigent.legacy.oauth_host_runtime`) — moving
-the launch argument vector would change what in-flight histories were started
-with.
+One enforced-boundary exemption is owned by a row above: `omnigent_catalog.py`'s
+in-handler readiness projection reading the materializer descriptor registry
+(`omnigent.legacy.native_ui_compat`).
 
 ### 5.4 Obsolete configuration
 
@@ -455,8 +448,12 @@ replacement, and its owning retirement row. `assert_obsolete_configuration` runs
 at API and worker startup: during a variable's deprecation window a supplied
 value produces an actionable operator warning naming the replacement, and after
 removal startup is rejected outright. No obsolete value is ever silently
-ignored. Nothing is deprecated today — the aliases remain the supported way to
-pin a prior image while the rollback window is open.
+ignored. `OMNIGENT_OPENCODE_HOST_IMAGE_REF` is in its deprecation window: it is
+still honored, and a deployment-supplied value warns at startup naming
+`OMNIGENT_SHARED_HOST_IMAGE_REF`. Values the release controller renders into
+`.env.deploy` from its installed release record are not deployment-supplied and
+do not warn. The generic and Pi aliases are not deprecated; they remain a
+supported way to pin a prior image.
 
 ## 6. Adding an approved harness
 

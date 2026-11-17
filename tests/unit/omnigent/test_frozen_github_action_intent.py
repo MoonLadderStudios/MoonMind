@@ -10,9 +10,6 @@ from api_service.services import omnigent_execution_plan_service as plan_service
 from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
 )
-from moonmind.omnigent.profile_bound_execution import (
-    OmnigentProfileBoundExecutionCoordinator,
-)
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
     authored_repository_source,
@@ -540,69 +537,6 @@ async def test_generic_credential_owner_rejects_conflicting_repositories_before_
     assert excinfo.value.code == "repository_intent_conflict"
     artifacts.read_repository_access_snapshot.assert_not_awaited()
     artifacts.read_bytes.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_profile_conflicting_repositories_fail_before_any_host_or_token(
-    monkeypatch,
-):
-    resolver = AsyncMock()
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_default_github_connection_credential",
-        resolver,
-    )
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    result = await coordinator.execute(
-        _request("owner/repo-a", repository="owner/repo-b")
-    )
-    assert result.provider_error_code == "repository_intent_conflict"
-    resolver.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_profile_preflight_and_publisher_use_the_same_canonical_repository(
-    monkeypatch,
-):
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
-    from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-        _drive_authority_chain_coordinator,
-    )
-
-    calls = {}
-    initialize = OmnigentProfileBoundExecutionCoordinator.__init__
-
-    def capture_runtime(self, *args, **kwargs):
-        initialize(self, *args, **kwargs)
-        runtime = kwargs["host_runtime"]
-        for name in ("prepare_host", "publish_workspace"):
-            calls[name] = AsyncMock(wraps=getattr(runtime, name))
-            setattr(runtime, name, calls[name])
-
-    monkeypatch.setattr(
-        OmnigentProfileBoundExecutionCoordinator, "__init__", capture_runtime
-    )
-    identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
-    from tests.helpers.publication_identity import recorded_publication_identity
-
-    recorded_publication_identity(monkeypatch, identity)
-    *_, result = await _drive_authority_chain_coordinator(
-        AsyncMock(return_value=AgentRunResult(summary="done")),
-        request_parameters={
-            "repository": "https://github.com/OWNER/REPO.git",
-            "publicationGitIdentityAdmission": {"schemaVersion": "v1", "identity": identity},
-        },
-    )
-    assert result.failure_class is None
-    assert calls["prepare_host"].await_args.kwargs["target_repository"] == "owner/repo"
-    assert (
-        calls["prepare_host"].await_args.kwargs.get("publication_git_identity")
-        == identity
-    )
-    assert calls["publish_workspace"].await_args.kwargs["repository"] == "owner/repo"
-    assert (
-        calls["publish_workspace"].await_args.kwargs.get("publication_git_identity")
-        == identity
-    )
 
 
 @pytest.mark.asyncio

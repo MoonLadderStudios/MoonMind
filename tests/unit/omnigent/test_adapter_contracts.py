@@ -638,26 +638,6 @@ def test_production_host_adapters_satisfy_their_narrow_port(
     )
 
 
-def test_execution_adapters_satisfy_the_profile_bound_ports() -> None:
-    from moonmind.omnigent.execution_adapters import (
-        DbExecutionPolicyAuthority,
-        DbProviderProfileAuthority,
-        TemporalExecutionAttempt,
-    )
-    from moonmind.omnigent.execution_ports import (
-        ExecutionAttemptPort,
-        ExecutionPolicyAuthorityPort,
-        ProviderProfileAuthorityPort,
-    )
-
-    assert isinstance(DbProviderProfileAuthority(lambda: None), ProviderProfileAuthorityPort)
-    assert isinstance(DbExecutionPolicyAuthority(lambda: None), ExecutionPolicyAuthorityPort)
-    attempts = TemporalExecutionAttempt()
-    assert isinstance(attempts, ExecutionAttemptPort)
-    # Outside an Activity the attempt ordinal is one, never zero or negative.
-    assert attempts.current_attempt() == 1
-
-
 # ---------------------------------------------------------------------------
 # Legacy host container inventory (#3711 required work 3)
 #
@@ -882,112 +862,67 @@ async def test_host_inventory_binds_a_container_to_its_current_lease(
 
 
 # ---------------------------------------------------------------------------
-# Profile-bound host ports (#3711 required work 2 and 3)
+# Host release port (#3711 required work 3)
 #
-# The legacy Codex coordinator depends on four separate host capabilities, each
-# with a typed signature. These contracts fail if a port is reunified into one
-# broad runtime interface, reopens an untyped ``**kwargs`` payload, or drifts
-# away from the adapter that implements it.
+# Releasing one ledger host is its own capability with a typed signature. These
+# contracts fail if the port is reunified into one broad runtime interface,
+# reopens an untyped ``**kwargs`` payload, or loses its deployed adapter.
 # ---------------------------------------------------------------------------
 
 
-def _profile_bound_host_ports():
-    from moonmind.omnigent import execution_ports, host_ports
+def _host_release_ports():
+    from moonmind.omnigent import host_ports
 
-    return (
-        (execution_ports.OmnigentHostPreparationPort, "prepare_host"),
-        (execution_ports.OmnigentWorkspacePublicationPort, "publish_workspace"),
-        (
-            execution_ports.OmnigentProviderSessionInspectionPort,
-            "inspect_session_completion",
-        ),
-        (host_ports.OmnigentHostReleasePort, "stop_host"),
-    )
+    return ((host_ports.OmnigentHostReleasePort, "stop_host"),)
 
 
 @pytest.mark.parametrize(
     ("port", "operation"),
-    _profile_bound_host_ports(),
+    _host_release_ports(),
     ids=lambda value: getattr(value, "__name__", str(value)),
 )
-def test_profile_bound_host_ports_own_exactly_one_capability(port, operation) -> None:
+def test_host_release_ports_own_exactly_one_capability(port, operation) -> None:
     assert set(port.__protocol_attrs__) == {operation}, (
-        f"{port.__name__} owns more than one capability; keep host preparation, "
-        "workspace publication, session inspection, and host release separate"
+        f"{port.__name__} owns more than one capability; keep host release "
+        "separate from container inventory"
     )
 
 
 @pytest.mark.parametrize(
     ("port", "operation"),
-    _profile_bound_host_ports(),
+    _host_release_ports(),
     ids=lambda value: getattr(value, "__name__", str(value)),
 )
-def test_profile_bound_host_ports_are_typed_not_kwargs_bags(port, operation) -> None:
+def test_host_release_ports_are_typed_not_kwargs_bags(port, operation) -> None:
     import inspect
 
     signature = inspect.signature(getattr(port, operation))
     kinds = [parameter.kind for parameter in signature.parameters.values()]
     assert inspect.Parameter.VAR_KEYWORD not in kinds, (
         f"{port.__name__}.{operation} accepts **kwargs; declare the parameters "
-        "so an adapter cannot silently diverge from the coordinator"
+        "so an adapter cannot silently diverge from its callers"
     )
     assert inspect.Parameter.VAR_POSITIONAL not in kinds
 
 
-@pytest.mark.parametrize(
-    ("port", "operation"),
-    _profile_bound_host_ports(),
-    ids=lambda value: getattr(value, "__name__", str(value)),
-)
-def test_deployed_legacy_host_runtime_matches_each_port_signature(
-    port, operation
-) -> None:
-    """The deployed Codex host adapter is the paired implementation here."""
+def test_legacy_host_containers_satisfy_every_reclamation_port() -> None:
+    from moonmind.omnigent import host_ports
 
-    import inspect
-
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-
-    declared = set(inspect.signature(getattr(port, operation)).parameters) - {"self"}
-    implemented = set(
-        inspect.signature(getattr(OmnigentOAuthHostRuntime, operation)).parameters
-    ) - {"self"}
-    assert declared == implemented, (
-        f"{port.__name__}.{operation} drifted from OmnigentOAuthHostRuntime: "
-        f"port-only={sorted(declared - implemented)}, "
-        f"adapter-only={sorted(implemented - declared)}"
-    )
-
-
-def test_legacy_host_runtime_satisfies_every_narrow_host_port() -> None:
-    from moonmind.omnigent import execution_ports, host_ports
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-
-    runtime = OmnigentOAuthHostRuntime(client=None)
+    service = LegacyOmnigentHostContainerService(run_command=_FakeDockerDaemon())
     for port in (
-        execution_ports.OmnigentHostPreparationPort,
-        execution_ports.OmnigentWorkspacePublicationPort,
-        execution_ports.OmnigentProviderSessionInspectionPort,
-        execution_ports.ProfileBoundHostPorts,
         host_ports.OmnigentHostReleasePort,
         host_ports.OmnigentHostContainerInventoryPort,
         host_ports.OmnigentHostReclamationPorts,
     ):
-        assert isinstance(runtime, port), f"{port.__name__} is unsatisfied"
+        assert isinstance(service, port), f"{port.__name__} is unsatisfied"
 
 
 def test_dependency_set_protocols_add_no_capability_of_their_own() -> None:
-    """A composed protocol declares a dependency set, never a fifth capability."""
+    """A composed protocol declares a dependency set, never a third capability."""
 
-    from moonmind.omnigent import execution_ports, host_ports
+    from moonmind.omnigent import host_ports
 
     composed = {
-        execution_ports.ProfileBoundHostPorts: (
-            execution_ports.OmnigentHostPreparationPort,
-            execution_ports.OmnigentWorkspacePublicationPort,
-            execution_ports.OmnigentProviderSessionInspectionPort,
-            host_ports.OmnigentHostReleasePort,
-        ),
         host_ports.OmnigentHostReclamationPorts: (
             host_ports.OmnigentHostContainerInventoryPort,
             host_ports.OmnigentHostReleasePort,

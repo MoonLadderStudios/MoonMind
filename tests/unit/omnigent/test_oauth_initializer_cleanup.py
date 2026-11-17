@@ -1,27 +1,16 @@
 """Interrupted OAuth initialization must not retain Provider Profile capacity."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_services.legacy_host_containers import (
+    LegacyOmnigentHostContainerService,
+)
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-
-
-@pytest.fixture(autouse=True)
-def _immutable_images(monkeypatch):
-    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
-    monkeypatch.setenv(
-        "OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
-    )
-    monkeypatch.setenv(
-        "OMNIGENT_SHARED_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64
-    )
 
 
 class _DockerDaemon:
@@ -33,7 +22,6 @@ class _DockerDaemon:
         lease_id="lease-1",
         kind="omnigent-oauth-host",
         remove_fails=False,
-        cancel_initializer=False,
     ):
         self.initializer = "host-1-init"
         self.labels = {"moonmind.kind": kind, "moonmind.host_lease_id": lease_id}
@@ -42,7 +30,6 @@ class _DockerDaemon:
         }
         self.volumes.add("profile-oauth")
         self.remove_fails = remove_fails
-        self.cancel_initializer = cancel_initializer
         self.calls = []
 
     async def run(self, *argv, **_kwargs):
@@ -87,15 +74,6 @@ class _DockerDaemon:
             )
         if argv[:2] == ("docker", "stop"):
             return (1, "", "No such container")
-        if argv[:2] == ("docker", "run"):
-            if "/opt/moonmind/init-oauth-host.sh" in argv:
-                if self.initializer:
-                    raise OmnigentOAuthHostError("initializer name already in use")
-                self.initializer = argv[argv.index("--name") + 1]
-                if self.cancel_initializer:
-                    raise asyncio.CancelledError()
-                self.initializer = None  # Successful --rm initialization.
-            return (0, "", "")
         raise AssertionError(f"unexpected Docker command: {argv}")
 
 
@@ -128,79 +106,19 @@ def _authority():
     return binding, lease
 
 
-def _launch(runtime, tmp_path):
-    binding, lease = _authority()
-    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-    return runtime._launch_on_demand(
-        binding=binding,
-        host_lease=lease,
-        container_name=lease.container_name,
-        workspace_source=tmp_path,
-        skill_projection=tmp_path / "skills",
-        runtime_scripts=tmp_path / "scripts",
-        current_step_execution_id="workflow:run:node-1:execution:1",
-        effective_launch=compile_effective_launch(
-            profile_ref="omnigent-codex@1",
-            policy_ref="codex-on-demand@1",
-            provider_profile_id="profile-1",
-        ),
-        egress_attestation=SimpleNamespace(
-            profile_ref="restricted",
-            profile_digest="sha256:" + "a" * 64,
-            applied_rule_digest="sha256:" + "b" * 64,
-        ),
+def _containers(run, tmp_path):
+    return LegacyOmnigentHostContainerService(
+        run_command=run, runtime_scripts_root=tmp_path / ".omnigent-runtime-scripts"
     )
-
-
-@pytest.mark.asyncio
-async def test_retry_reconciles_initializer_before_launching_again(tmp_path):
-    daemon = _DockerDaemon()
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime._run = daemon.run
-
-    await _launch(runtime, tmp_path)
-
-    assert daemon.initializer is None
-    assert any(call[:3] == ("docker", "run", "-d") for call in daemon.calls)
-    assert daemon.calls.index(("docker", "rm", "-f", "host-1-init")) < next(
-        index
-        for index, call in enumerate(daemon.calls)
-        if "/opt/moonmind/init-oauth-host.sh" in call
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cleanup_fails", [False, True])
-async def test_initializer_cancellation_preserves_original_error_and_cleanup(
-    tmp_path, cleanup_fails
-):
-    daemon = _DockerDaemon(cancel_initializer=True, remove_fails=cleanup_fails)
-    daemon.initializer = None
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime._run = daemon.run
-
-    with pytest.raises(asyncio.CancelledError):
-        await _launch(runtime, tmp_path)
-
-    assert not any(call[:3] == ("docker", "run", "-d") for call in daemon.calls)
-    assert ("docker", "rm", "-f", "host-1-init") in daemon.calls
-    assert (daemon.initializer is not None) == cleanup_fails
 
 
 @pytest.mark.asyncio
 async def test_stop_host_removes_abandoned_initializer_before_volumes(tmp_path):
     daemon = _DockerDaemon()
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime._run = daemon.run
+    containers = _containers(daemon.run, tmp_path)
     binding, lease = _authority()
 
-    result = await runtime.stop_host(binding=binding, host_lease=lease)
+    result = await containers.stop_host(binding=binding, host_lease=lease)
 
     assert result["cleanupResult"] == "succeeded"
     assert daemon.initializer is None
@@ -215,17 +133,13 @@ async def test_stop_host_removes_abandoned_initializer_before_volumes(tmp_path):
 @pytest.mark.asyncio
 async def test_initializer_auto_removal_during_inspection_is_reconciled(tmp_path):
     daemon = _DockerDaemon()
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
 
     async def run(*argv, **kwargs):
         if argv[:2] == ("docker", "inspect") and argv[-1] == "host-1-init":
             daemon.initializer = None
         return await daemon.run(*argv, **kwargs)
 
-    runtime._run = run
-    await runtime._containers.remove_initializer(
+    await _containers(run, tmp_path).remove_initializer(
         container_name="host-1", lease_id="lease-1"
     )
     assert daemon.initializer is None
@@ -240,19 +154,15 @@ async def test_initializer_auto_removal_during_inspection_is_reconciled(tmp_path
 @pytest.mark.asyncio
 async def test_unavailable_initializer_inventory_keeps_cleanup_unconfirmed(tmp_path):
     daemon = _DockerDaemon()
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
 
     async def run(*argv, **kwargs):
         if argv[:2] == ("docker", "ps"):
             return (1, "", "daemon unavailable")
         return await daemon.run(*argv, **kwargs)
 
-    runtime._run = run
     binding, lease = _authority()
     with pytest.raises(OmnigentOAuthHostError) as failure:
-        await runtime.stop_host(binding=binding, host_lease=lease)
+        await _containers(run, tmp_path).stop_host(binding=binding, host_lease=lease)
     assert failure.value.code == "OMNIGENT_HOST_CLEANUP_INCOMPLETE"
     assert len(daemon.volumes) == 4
 
@@ -265,14 +175,11 @@ async def test_stop_host_preserves_initializer_outside_lease_authority(
     tmp_path, labels
 ):
     daemon = _DockerDaemon(**labels)
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime._run = daemon.run
+    containers = _containers(daemon.run, tmp_path)
     binding, lease = _authority()
 
     with pytest.raises(OmnigentOAuthHostError) as failure:
-        await runtime.stop_host(binding=binding, host_lease=lease)
+        await containers.stop_host(binding=binding, host_lease=lease)
 
     assert failure.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
     assert daemon.initializer == "host-1-init"
@@ -306,13 +213,9 @@ async def test_janitor_keeps_capacity_until_initializer_cleanup_succeeds(tmp_pat
             released.append(grant.lease_id)
 
     def janitor_after_restart():
-        runtime = OmnigentOAuthHostRuntime(
-            client=SimpleNamespace(), workspace_root=tmp_path
-        )
-        runtime._run = daemon.run
         return OmnigentOAuthHostJanitor(
             repository=Repository(),
-            runtime=runtime,
+            runtime=_containers(daemon.run, tmp_path),
             client=SimpleNamespace(),
             lease_client=LeaseClient(),
         )
@@ -418,11 +321,9 @@ async def test_session_api_failure_cannot_outlive_verified_host_teardown(
     )
 
     async def run_after_restart():
-        runtime = OmnigentOAuthHostRuntime(client=client, workspace_root=tmp_path)
-        runtime._run = daemon.run
         return await OmnigentOAuthHostJanitor(
             repository=Repository(),
-            runtime=runtime,
+            runtime=_containers(daemon.run, tmp_path),
             client=client,
             lease_client=LeaseClient(),
         ).run()

@@ -83,6 +83,8 @@ from moonmind.omnigent.host_services.cleanup import DockerOmnigentHostCleanupSer
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.registration import (
+    HOST_REGISTRATION_ATTEMPTS,
+    HOST_REGISTRATION_INTERVAL_SECONDS,
     OmnigentHostRegistrationService,
 )
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
@@ -988,6 +990,37 @@ def _assert_credential_free_session_healthy(snapshot):
     assert isinstance(snapshot["items"], list)
 
 
+async def _resume_preserved_session(client, session_id, *, expected_host_id):
+    """Restore the runner through Omnigent's same-session retry owner.
+
+    Upstream ``retry_session`` launches a replacement runner on this host and
+    re-initializes the existing provider session; it never replays user input.
+    """
+
+    async def runner_online():
+        snapshot = await client.get_session(session_id)
+        host_id = str(snapshot.get("host_id") or snapshot.get("hostId") or "")
+        observed_session_id = str(
+            snapshot.get("id")
+            or snapshot.get("session_id")
+            or snapshot.get("sessionId")
+            or ""
+        )
+        if host_id != expected_host_id or observed_session_id != session_id:
+            raise AssertionError("recovered session/host authority changed")
+        return snapshot.get("runner_online") is True
+
+    if await runner_online():
+        return
+    await client.post_event(session_id, {"type": "retry_session", "data": {}})
+    for attempt in range(HOST_REGISTRATION_ATTEMPTS):
+        if await runner_online():
+            return
+        if attempt + 1 < HOST_REGISTRATION_ATTEMPTS:
+            await asyncio.sleep(HOST_REGISTRATION_INTERVAL_SECONDS)
+    raise AssertionError("the original session's runner never came back online")
+
+
 async def _admit_stock_native_catalog(client, factory, host_class, monkeypatch):
     """Check stock discovery and admission for the inspected OpenCode host.
 
@@ -1111,14 +1144,13 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
     tmp_path,
     monkeypatch,
 ):
-    """Qualify the credential-free Docker/session boundary of legacy recovery.
+    """Qualify the exact image's credential-free Docker/session boundary.
 
-    Use the existing pinned-image launcher and actual upstream retry owner. No
-    message or model request is submitted: this row proves runner restoration,
-    state-volume retention, current workspace save, stable bridge/session
-    identity, and the production credential projection fence on the exact image.
-    The OAuth-specific launcher/cleanup-CAS paths have separate
-    deterministic boundary tests; a missing real environment is not a pass.
+    Use the existing pinned-image launcher and Omnigent's upstream same-session
+    retry owner. No message or model request is submitted: this row proves
+    runner restoration, state-volume retention, current workspace save, stable
+    bridge/session identity, and the production credential projection fence on
+    the exact image. A missing real environment is not a pass.
     """
     import json
     from pathlib import Path
@@ -1128,7 +1160,6 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
     from api_service.db.models import Base
     from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.workspace_publication import (
         OmnigentWorkspacePublicationService,
     )
@@ -1240,7 +1271,6 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
         client=client, expected_owner=_expected_host_owner(), backend=backend
     )
     cleanup = DockerOmnigentHostCleanupService(backend)
-    runtime = OmnigentOAuthHostRuntime(client=client, workspace_root=tmp_path)
     publisher = OmnigentWorkspacePublicationService(
         tmp_path, artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path / "saved")
     )
@@ -1309,9 +1339,8 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
             }
         )
         session_id = created["id"]
-        receipt = {"omnigentSessionId": session_id}
-        await runtime._resume_preserved_session(
-            receipt, expected_host_id=spec.expectedOmnigentHostId
+        await _resume_preserved_session(
+            client, session_id, expected_host_id=spec.expectedOmnigentHostId
         )
         initial = await client.get_session(session_id)
         assert initial["agent_id"] == agent["id"]
@@ -1368,8 +1397,8 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
         assert after_facts["containerId"] != before_facts["containerId"]
         assert after_facts["hostImageId"] == before_facts["hostImageId"]
         assert after_facts["stateVolume"] == before_facts["stateVolume"]
-        await runtime._resume_preserved_session(
-            receipt, expected_host_id=spec.expectedOmnigentHostId
+        await _resume_preserved_session(
+            client, session_id, expected_host_id=spec.expectedOmnigentHostId
         )
         resumed = await client.get_session(session_id)
         assert resumed["id"] == session_id

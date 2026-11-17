@@ -129,7 +129,7 @@ curl -fsS http://localhost:8000/health
 
 Both commands should return successfully before treating the combined stack as ready for operator validation.
 
-Application health does not by itself prove a profile-bound host is ready. A Codex run additionally requires profile readiness, lease acquisition, credential preflight, exact host registration, `codex-native` capability, bridge reachability, and session readiness.
+Application health does not by itself prove an execution host is ready. A Codex run additionally requires profile readiness, lease acquisition, credential preflight, exact host registration, `codex-native` capability, bridge reachability, and session readiness.
 
 ## DOC-REQ-006 Omnigent First Admin Setup
 
@@ -187,11 +187,10 @@ legacy path's retirement class only says whether it still admits new work. See
 
 The legacy image variables (`OMNIGENT_HOST_IMAGE_REF`, `OMNIGENT_HOST_IMAGE`,
 `OMNIGENT_HOST_IMAGE_TAG`, `OMNIGENT_OPENCODE_HOST_IMAGE_REF`,
-`OMNIGENT_PI_HOST_IMAGE_REF`) each carry a retirement row and remain supported
-while their rollback window is open. Once a variable enters its deprecation
-window, supplying it produces an actionable startup warning naming the
-replacement; after removal, startup is rejected rather than silently ignoring
-the value.
+`OMNIGENT_PI_HOST_IMAGE_REF`) each carry a retirement row. A deprecated value is
+honored with a startup warning naming its replacement; after removal, startup is
+rejected rather than silently ignoring it. The OpenCode variable is deprecated;
+no Host Class launches it.
 
 ## DOC-REQ-009 Optional Destructive Cleanup
 

@@ -64,7 +64,7 @@ ZEN_MODEL = "opencode/muse-spark-1.2-contributor-free"
 RUNTIME_ID = "opencode"
 CAPACITY_SCOPE = "opencode-zen:contributor-free"
 CREDENTIAL_GENERATION = 4
-HOST_CLASS_REF = "omnigent-opencode@1"
+HOST_CLASS_REF = "omnigent-opencode@2"
 LAUNCH_POLICY_REF = "omnigent-on-demand@1"
 GENERIC_REALIZER_REF = "generic-omnigent-host@1"
 
@@ -89,7 +89,7 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     from moonmind.omnigent.bootstrap import store
 
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
-    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", _OPENCODE_IMAGE_REF)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _OPENCODE_IMAGE_REF)
     monkeypatch.setattr(
         store,
         "load_resolved_state",
@@ -229,7 +229,7 @@ def _compile_kwargs(catalog, run: str) -> dict[str, Any]:
     host_class = OmnigentHostClassSelector(
         environment={
             "OMNIGENT_IMAGE_REF": _SERVER_IMAGE_REF,
-            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
         }
     ).select(
         harness=catalog.harnesses[0],

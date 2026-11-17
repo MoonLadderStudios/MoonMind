@@ -300,31 +300,13 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
                 return {"cleanupResult": "failed"}
             return {"cleanupResult": "succeeded"}
 
-    class Client:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
     )
     monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
-    )
-    monkeypatch.setattr(
-        "moonmind.repositories.lore_runtime.build_lore_repository_adapter_from_environment",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_server_url", lambda: "http://omnigent"
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_proxy_forward_headers", lambda: ()
+        "moonmind.omnigent.host_services.oauth_credential_validation."
+        "OmnigentOAuthCredentialValidator",
+        Runtime,
     )
 
     result = await oauth_session_activities.oauth_session_revalidate_bound_host(
@@ -554,10 +536,9 @@ async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
             return {"cleanupResult": "succeeded"}
 
     monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+        "moonmind.omnigent.host_services.oauth_credential_validation."
+        "OmnigentOAuthCredentialValidator",
+        Runtime,
     )
     request = {
         "session_id": "oas-installed-images",
@@ -703,10 +684,9 @@ async def test_revalidate_migrates_retained_static_binding_only_while_idle(
         "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
     )
     monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+        "moonmind.omnigent.host_services.oauth_credential_validation."
+        "OmnigentOAuthCredentialValidator",
+        Runtime,
     )
 
     result = await oauth_session_activities.oauth_session_revalidate_bound_host(
@@ -857,10 +837,6 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         async def stop_host(self, **_kwargs):
             return {"cleanupResult": "succeeded"}
 
-    class Client:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
     @asynccontextmanager
     async def session_maker():
         class Database:
@@ -873,10 +849,9 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
     )
     monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
+        "moonmind.omnigent.host_services.oauth_credential_validation."
+        "OmnigentOAuthCredentialValidator",
+        Runtime,
     )
     monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
     monkeypatch.setattr(
@@ -885,15 +860,6 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
     monkeypatch.setattr(
         "moonmind.omnigent.execution_profiles.compile_persisted_effective_launch",
         lambda _policy, *, provider_profile_id: launch,
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_server_url", lambda: "http://omnigent"
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.settings.resolved_proxy_forward_headers", lambda: ()
     )
 
     result = await oauth_session_activities.oauth_session_revalidate_bound_host(

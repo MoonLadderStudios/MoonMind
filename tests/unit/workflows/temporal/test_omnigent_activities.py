@@ -28,6 +28,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _try_generic_realizer_dispatch,
     omnigent_execute_activity,
     omnigent_prepare_child_execution_plan_activity,
+    omnigent_profile_bound_execute_activity,
 )
 from tests.artifact_access import access_for_test
 
@@ -1179,167 +1180,6 @@ def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -
     }
 
 
-def _never_started_codex_result(code: str) -> AgentRunResult:
-    return AgentRunResult(
-        summary="Codex is still starting in this session's terminal",
-        failureClass="integration_error",
-        providerErrorCode=code,
-        retryRecommendation="retry_step_execution",
-        metadata={
-            "normalizedStatus": "failed",
-            "omnigentCheckpointCapture": {
-                "providerProfileId": "codex_openai_oauth",
-                "hostBindingRef": "omnigent-oauth:codex_openai_oauth",
-                "credentialGeneration": 3,
-            },
-        },
-    )
-
-
-async def _execute_with_login_session_verdict(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_run,
-    *,
-    code: str,
-    verdict: str,
-    binding_ref: str = "omnigent-oauth:codex_openai_oauth",
-    credential_generation: int = 3,
-):
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-
-    binding = SimpleNamespace(
-        binding_ref=binding_ref,
-        credential_mount_ref=SimpleNamespace(
-            auth_volume_ref=SimpleNamespace(credential_generation=credential_generation)
-        ),
-        effective_launch_snapshot={"snapshotRef": "launch-1"},
-    )
-    lookups: list[str] = []
-
-    async def get_binding_for_profile(_self, profile_id: str):
-        lookups.append(profile_id)
-        return binding
-
-    from moonmind.omnigent import codex_login
-
-    record_ended_login = AsyncMock()
-    monkeypatch.setattr(
-        codex_login, "record_ended_codex_login", record_ended_login, raising=False
-    )
-    probe = AsyncMock(return_value=verdict)
-    monkeypatch.setattr(
-        OmnigentOAuthHostRepository, "get_binding_for_profile", get_binding_for_profile
-    )
-    monkeypatch.setattr(OmnigentOAuthHostRuntime, "probe_login_session", probe)
-    mock_run.return_value = _never_started_codex_result(code)
-    result = await ActivityEnvironment().run(
-        omnigent_execute_activity,
-        AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            correlationId="workflow-ended-login",
-            idempotencyKey="step-ended-login",
-        ),
-    )
-    return result, lookups, probe, binding, record_ended_login
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "code", ["agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"]
-)
-@patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_never_started_codex_turn_on_ended_login_requires_reauthentication(
-    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, code: str
-):
-    """An ended ChatGPT login cannot be fixed by retrying on a fresh host."""
-    result, lookups, probe, binding, record = await _execute_with_login_session_verdict(
-        monkeypatch, mock_run, code=code, verdict="ended"
-    )
-
-    assert lookups == ["codex_openai_oauth"]
-    record.assert_awaited_once_with("codex_openai_oauth", 3)
-    probe.assert_awaited_once_with(
-        binding=binding, effective_launch={"snapshotRef": "launch-1"}
-    )
-    assert result.provider_error_code == "codex_reauth_required"
-    assert result.retry_recommendation == "reauthenticate"
-    assert result.failure_class == "integration_error"
-    assert "codex_openai_oauth" in result.summary
-    assert "re-authenticate" in result.summary
-    assert result.metadata["codexLoginSession"] == {
-        "verdict": "ended",
-        "harnessStartFailureCode": code,
-    }
-    assert (
-        result.metadata["omnigentCheckpointCapture"]
-        == _never_started_codex_result(code).metadata["omnigentCheckpointCapture"]
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("verdict", ["active", "unknown"])
-@patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_never_started_codex_turn_keeps_retry_without_ended_login_proof(
-    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, verdict: str
-):
-    result, _lookups, probe, _binding, record = (
-        await _execute_with_login_session_verdict(
-            monkeypatch, mock_run, code="agent_startup_pending", verdict=verdict
-        )
-    )
-
-    probe.assert_awaited_once()
-    record.assert_not_awaited()
-    assert result == _never_started_codex_result("agent_startup_pending")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "moved_on",
-    [
-        {"binding_ref": "omnigent-oauth:replacement"},
-        {"credential_generation": 4},
-    ],
-)
-@patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_login_session_probe_is_fenced_to_the_attempted_credential(
-    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, moved_on
-):
-    """A reconnected profile's new credential cannot classify the old attempt."""
-    result, _lookups, probe, _binding, record = (
-        await _execute_with_login_session_verdict(
-            monkeypatch,
-            mock_run,
-            code="agent_startup_pending",
-            verdict="ended",
-            **moved_on,
-        )
-    )
-
-    probe.assert_not_awaited()
-    record.assert_not_awaited()
-    assert result == _never_started_codex_result("agent_startup_pending")
-
-
-@pytest.mark.asyncio
-@patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_started_turn_failure_does_not_probe_credentials(
-    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
-):
-    result, lookups, probe, _binding, record = (
-        await _execute_with_login_session_verdict(
-            monkeypatch, mock_run, code="codex_turn_error", verdict="ended"
-        )
-    )
-
-    assert lookups == []
-    record.assert_not_awaited()
-    probe.assert_not_awaited()
-    assert result == _never_started_codex_result("codex_turn_error")
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("required", [False, "authored", "legacy_skill", "security"])
 @pytest.mark.parametrize("context_ref", [None, "artifact://art-context"])
@@ -1493,13 +1333,13 @@ async def test_omnigent_execute_activity_delegates(
 
 
 @pytest.mark.asyncio
-async def test_plan_bound_execute_dispatches_only_recorded_codex_realizer(
+async def test_plan_bound_execute_dispatches_only_recorded_realizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
     plan = SimpleNamespace(
         planRef=plan_ref,
-        payload=SimpleNamespace(executionRealizerRef="codex-profile-bound@1"),
+        payload=SimpleNamespace(executionRealizerRef="generic-omnigent-host@1"),
     )
     calls: list[str] = []
 
@@ -1511,17 +1351,17 @@ async def test_plan_bound_execute_dispatches_only_recorded_codex_realizer(
             assert loaded_ref == plan_ref
             return plan
 
-    class RecordedCodexRealizer:
+    class RecordedRealizer:
         async def execute(self, request, loaded_plan):
-            calls.append("codex-profile-bound@1")
+            calls.append("generic-omnigent-host@1")
             assert loaded_plan is plan
-            return AgentRunResult(summary="recorded Codex realizer completed")
+            return AgentRunResult(summary="recorded realizer completed")
 
     class Registry:
         def require(self, realizer_ref: str):
             calls.append(f"require:{realizer_ref}")
-            assert realizer_ref == "codex-profile-bound@1"
-            return RecordedCodexRealizer()
+            assert realizer_ref == "generic-omnigent-host@1"
+            return RecordedRealizer()
 
     from moonmind.omnigent.harness_platform import stores
     from moonmind.omnigent.realizers import registry
@@ -1550,10 +1390,10 @@ async def test_plan_bound_execute_dispatches_only_recorded_codex_realizer(
     )
 
     assert result is not None
-    assert result.summary == "recorded Codex realizer completed"
+    assert result.summary == "recorded realizer completed"
     assert calls == [
-        "require:codex-profile-bound@1",
-        "codex-profile-bound@1",
+        "require:generic-omnigent-host@1",
+        "generic-omnigent-host@1",
     ]
 
 
@@ -1999,58 +1839,31 @@ async def _async_value(value):
 
 
 @pytest.mark.asyncio
-async def test_profile_bound_activity_coordinator_claims_canonical_continuations(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+@pytest.mark.parametrize(
+    "activity_fn",
+    [omnigent_execute_activity, omnigent_profile_bound_execute_activity],
+    ids=["execute", "profile_bound_execute"],
+)
+async def test_profiled_request_without_plan_returns_typed_retirement_result(
+    monkeypatch: pytest.MonkeyPatch, isolated_control_plane, activity_fn
 ) -> None:
-    """The legacy coordinator path owns the canonical turn boundary (#3707 §1).
+    """A profiled request with no admitted plan ran only on the removed coordinator.
 
-    A profile-bound Codex request that carries no execution plan and no Agent
-    Profile ref is not realizer-dispatched: ``_try_generic_realizer_dispatch``
-    returns ``None`` and this activity builds the coordinator directly. That
-    construction must inject the canonical turn service, or every repository
-    continuation on this path submits outside the boundary and fences no
-    cleanup.
-
-    This drives the real activity, captures the coordinator it actually built,
-    and then exercises that coordinator's real continuation-claim method against
-    a real control-plane store.
+    It must not reach the provider; it reports the typed realizer-unavailable
+    result with the retirement message so the operator can recreate the step.
     """
 
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.orm import sessionmaker
-
-    import api_service.db.base as db_base
-    from api_service.db.models import Base
-    from moonmind.omnigent import profile_bound_execution as pbe_module
-    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
-    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
-    from moonmind.omnigent.control_plane.turn_commands import (
-        CanonicalTurnCommandService,
+    from moonmind.omnigent.harness_platform.support import (
+        PROFILE_BOUND_RETIRED_MESSAGE,
     )
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/legacy_path.db")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
-
-    built: list[object] = []
-    expected_result = AgentRunResult(summary="legacy path", output_refs=[])
-
-    class CapturingCoordinator(pbe_module.OmnigentProfileBoundExecutionCoordinator):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            built.append(self)
-
-        async def execute(self, request):
-            return expected_result
 
     monkeypatch.setattr(
-        pbe_module,
-        "OmnigentProfileBoundExecutionCoordinator",
-        CapturingCoordinator,
+        omnigent_activities_module,
+        "_try_generic_realizer_dispatch",
+        AsyncMock(return_value=None),
     )
-
+    execute = AsyncMock(return_value=AgentRunResult(summary="must not run"))
+    monkeypatch.setattr(omnigent_execute_module, "run_omnigent_execution", execute)
     request = AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
@@ -2060,48 +1873,12 @@ async def test_profile_bound_activity_coordinator_claims_canonical_continuations
         parameters={"publishMode": "none"},
     )
 
-    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+    result = await ActivityEnvironment().run(activity_fn, request)
 
-    assert result == expected_result
-    assert len(built) == 1
-    coordinator = built[0]
-    # The activity-built coordinator owns the canonical turn service.
-    assert isinstance(coordinator._turn_commands, CanonicalTurnCommandService)
-
-    # Drive the coordinator's real continuation admission.
-    continuation = request.model_copy(
-        deep=True,
-        update={"idempotency_key": f"{request.idempotency_key}:repository-continuation:1"},
-    )
-    claim = await coordinator._claim_continuation_turn(
-        request=continuation,
-        source_request=request,
-        workflow_id="legacy-run",
-        step_execution_id="legacy-step",
-        recorded_plan=None,
-        provider_profile_id="codex-profile-1",
-        credential_generation=1,
-        runtime_binding_ref=None,
-    )
-    assert claim is not None
-
-    expected_session_id = canonical_omnigent_session_id(
-        workflow_id="legacy-run",
-        step_execution_id="legacy-step",
-        agent_run_id="legacy-run",
-    )
-    assert claim.session_id == expected_session_id
-
-    store = OmnigentControlPlaneStore(session_factory)
-    async with store.transaction() as repos:
-        turns = await repos.turn_attempts.list_for_session(expected_session_id)
-        cleanup = await repos.cleanup.get(expected_session_id)
-    lineages = [turn.lineage_kind for turn in turns]
-    assert TurnSource.REPOSITORY_CONTINUATION.value in lineages
-    # The admitted continuation fenced incompatible cleanup before mutation.
-    assert cleanup is not None and cleanup.generation >= 1
-
-    await engine.dispose()
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE"
+    assert result.summary == PROFILE_BOUND_RETIRED_MESSAGE
+    execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2110,9 +1887,8 @@ async def test_unprofiled_execute_claims_the_canonical_turn_boundary(
 ) -> None:
     """The unprofiled path mutates the provider, so it claims like every other.
 
-    A request with no ``executionProfileRef`` is not realizer-dispatched and
-    never reaches the coordinator, yet ``run_omnigent_execution`` creates a
-    provider session and posts its first message. Before this boundary it did so
+    A request with no ``executionProfileRef`` is not realizer-dispatched, yet
+    ``run_omnigent_execution`` creates a provider session and posts its first message. Before this boundary it did so
     with no command claim, no immutable admission, no owner check, and no
     cleanup fence.
     """

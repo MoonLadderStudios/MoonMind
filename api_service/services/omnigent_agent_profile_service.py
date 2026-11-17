@@ -96,11 +96,9 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
     )
     from moonmind.omnigent.execution_profiles import PROFILES
     from moonmind.omnigent.harness_platform.catalog import HarnessCatalogSnapshot
-    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.harness_platform.host_classes import (
         DEFAULT_HOST_CLASS_TEMPLATES,
-        OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
-        get_opencode_host_image_ref,
+        qualified_template_image_ref,
     )
     from moonmind.omnigent.settings import (
         generic_host_enabled,
@@ -157,14 +155,11 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
                     and not opencode_support_enabled()
                 ):
                     continue
-                if template.image_env == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
-                    try:
-                        image = get_opencode_host_image_ref()
-                    except HarnessPlatformError:
-                        # The shared image resolver quarantines an incompatible
-                        # server/host pair. Inventory must not advertise that
-                        # runtime while plan compilation will reject it.
-                        continue
+                if template.requires_opencode_qualification:
+                    # The resolver quarantines an incompatible server/host
+                    # pair. Inventory must not advertise that runtime while
+                    # plan compilation will reject it.
+                    image = qualified_template_image_ref(template) or ""
                 else:
                     image = str(os.getenv(template.image_env) or "").strip()
                 if _IMMUTABLE_IMAGE.fullmatch(image) and not image.endswith("0" * 64):

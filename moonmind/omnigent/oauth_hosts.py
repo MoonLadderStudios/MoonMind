@@ -87,6 +87,35 @@ def deterministic_host_container_name(host_lease_id: str) -> str:
     return f"mm-omnigent-host-{safe[:40]}"
 
 
+# Policies that only ever selected the removed static-connected hosts.
+_RETIRED_STATIC_POLICY_IDS = frozenset(
+    {"codex-static", "claude-static", "opencode-static", "omnigent-codex"}
+)
+
+
+def on_demand_binding_policy_ref(binding: Any) -> str | None:
+    """Return a binding's launch policy only when it selects an on-demand host.
+
+    Static-connected hosts were removed, so a binding retained from them has no
+    policy that can still launch and falls back to its provider's on-demand
+    default. An unmarked binding keeps its policy when its stored launch proves
+    on-demand mode, or when no launch is stored (bootstrap cutover clears it)
+    and the policy is not a retired static one.
+    """
+
+    policy_ref = str(binding.launch_policy_ref or "")
+    if not policy_ref:
+        return None
+    if binding.host_launch_profile_ref:
+        return policy_ref
+    host_mode = (binding.effective_launch_snapshot or {}).get("hostMode")
+    if host_mode is not None:
+        return policy_ref if host_mode == "on_demand_docker" else None
+    if policy_ref.rpartition("@")[0] in _RETIRED_STATIC_POLICY_IDS:
+        return None
+    return policy_ref
+
+
 class OmnigentOAuthHostRepository:
     """SQLAlchemy repository with validated loads and CAS transitions."""
 
@@ -1036,5 +1065,6 @@ __all__ = [
     "RETIRED_STATIC_LEASE_PURPOSE",
     "deterministic_host_container_name",
     "deterministic_host_lease_id",
+    "on_demand_binding_policy_ref",
     "validate_preflight_result",
 ]

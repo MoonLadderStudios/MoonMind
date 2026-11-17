@@ -645,7 +645,7 @@ session-local `DOCKER_HOST`. The Omnigent side (startup path, Host Classes,
 credential materializers, session control) is described in the
 [Omnigent module entrypoint](../Omnigent/README.md).
 
-The profile-bound Omnigent host receives a host-lease-scoped bearer capability
+The on-demand Omnigent host receives a host-lease-scoped bearer capability
 and a dependency-free `moonmind` CLI projection. The capability pins the exact
 sandbox WorkspaceLocator, Step Execution owner, runtime, and host lease, and the
 scoped endpoint rejects any other sandbox or correlation identity. The

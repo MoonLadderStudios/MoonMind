@@ -1,4 +1,8 @@
-"""Reconcile stale profile-bound Omnigent OAuth hosts and durable leases."""
+"""Reconcile stale OAuth host-ledger hosts and durable leases.
+
+The ledger holds credential validators and hosts left by the removed
+profile-bound lifecycle.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +10,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from moonmind.omnigent.host_ports import OmnigentHostReclamationPorts
-from moonmind.omnigent.oauth_host_runtime import (
-    OmnigentEgressEvidenceRequestIdentity,
-)
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.harness_platform.runtime_binding import (
     runtime_binding_execution_scope,
@@ -36,7 +37,6 @@ class OmnigentOAuthHostJanitor:
         client: OmnigentHttpClient,
         run_store: Any | None = None,
         lease_client: ProviderProfileLeaseClient | None = None,
-        artifact_gateway: Any | None = None,
         runtime_binding_store: Any | None = None,
         control_plane_store: Any | None = None,
         heartbeat_timeout_seconds: int = 90,
@@ -46,7 +46,6 @@ class OmnigentOAuthHostJanitor:
         self._client = client
         self._run_store = run_store
         self._lease_client = lease_client
-        self._artifact_gateway = artifact_gateway
         self._runtime_binding_store = runtime_binding_store
         self._control_plane_store = control_plane_store
         self._heartbeat_timeout = timedelta(
@@ -536,47 +535,22 @@ class OmnigentOAuthHostJanitor:
         self, *, binding: Any, lease: Any
     ) -> dict[str, Any]:
         authority = await self._cleanup_authority(lease, binding=binding)
-        if authority is None:
-            result = await self._runtime.stop_host(
-                binding=binding,
-                host_lease=lease,
-                cleanup_authority_store=self._run_store,
+        result = await self._runtime.stop_host(binding=binding, host_lease=lease)
+        cleanup = dict(result or {})
+        launch = getattr(lease, "effective_launch_snapshot", None)
+        if isinstance(launch, dict) and launch.get("enforcedEgress") is True:
+            # The stop owner reconciles removal without claiming egress
+            # conformance before release proceeds. Terminal egress attestation
+            # left with the profile-bound host runtime, so even a host whose
+            # launch recorded authority is reclaimed without it.
+            cleanup["cleanupAuthorityDisposition"] = (
+                "terminal_attestation_retired"
+                if authority is not None
+                else "attachment_absent_before_cleanup"
+                if launch.get("egressCleanupAuthorityRequired") is True
+                else "pre_upgrade_cutover"
             )
-            cleanup = dict(result or {})
-            launch = getattr(lease, "effective_launch_snapshot", None)
-            if isinstance(launch, dict) and launch.get("enforcedEgress") is True:
-                # Historical leases and admissions with no attachment cannot
-                # supply launch evidence. The stop owner reconciles absence
-                # without claiming egress conformance before release proceeds.
-                cleanup["cleanupAuthorityDisposition"] = (
-                    "attachment_absent_before_cleanup"
-                    if launch.get("egressCleanupAuthorityRequired") is True
-                    else "pre_upgrade_cutover"
-                )
-            return cleanup
-        if self._artifact_gateway is None:
-            raise ValueError(
-                "restricted-egress host cleanup evidence publisher is unavailable"
-            )
-        request_identity = authority.get("evidenceRequest")
-        effective_launch = authority.get("effectiveLaunch")
-        egress_evidence = authority.get("egressEvidence")
-        if not isinstance(request_identity, dict) or not isinstance(
-            effective_launch, dict
-        ) or not isinstance(egress_evidence, dict):
-            raise ValueError("restricted-egress host cleanup authority is incomplete")
-        return await self._runtime.stop_host(
-            binding=binding,
-            host_lease=lease,
-            effective_launch=effective_launch,
-            egress_evidence=egress_evidence,
-            launch_evidence_ref=str(authority.get("launchEvidenceRef") or "") or None,
-            evidence_request=OmnigentEgressEvidenceRequestIdentity.from_mapping(
-                request_identity
-            ),
-            artifact_gateway=self._artifact_gateway,
-            cleanup_authority_store=self._run_store,
-        )
+        return cleanup
 
     async def _record_terminal_cleanup(
         self,

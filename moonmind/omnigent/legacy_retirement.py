@@ -341,48 +341,6 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
     ),
     LegacyPathRecord(
-        pathId="omnigent.legacy.profile_bound_realizer",
-        owner="omnigent-control-plane",
-        description=(
-            "``codex-profile-bound@1`` execution realizer registration and "
-            "trusted planner selection."
-        ),
-        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
-        surfaces=(
-            "python:moonmind.omnigent.realizers.codex_profile_bound:"
-            "CodexProfileBoundRealizer",
-            "realizer:codex-profile-bound@1",
-        ),
-        consumer="Recorded ``codex-profile-bound@1`` plans, queued starts, retries, cancellation and recovery. New plans use the shared realizer.",
-        removalCondition="No open plan or retained history can execute or retry ``codex-profile-bound@1``; historical evidence remains independently readable.",
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.profile_bound_execution",
-        owner="omnigent-control-plane",
-        description="Legacy profile-bound execution coordinator and routing.",
-        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
-        surfaces=(
-            "python:moonmind.omnigent.profile_bound_execution:"
-            "OmnigentProfileBoundExecutionCoordinator",
-        ),
-        consumer="Execution, cancellation, recovery, cleanup and saved-work publication for recorded ``codex-profile-bound@1`` plans.",
-        removalCondition="The profile-bound realizer is removable and persisted-launch helpers are consumed through their shared owner.",
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.oauth_host_runtime",
-        owner="omnigent-runtime-plane",
-        description=(
-            "Legacy OAuth host runtime that assembles Codex host launch, mount, "
-            "credential-volume, and egress attestation argument vectors."
-        ),
-        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
-        surfaces=(
-            "python:moonmind.omnigent.oauth_host_runtime:OmnigentOAuthHostRuntime",
-        ),
-        consumer="Recorded profile-bound OAuth host launches and their maintenance, draining, attestation and cleanup.",
-        removalCondition="Retained profile-bound hosts and retries are gone and credential maintenance no longer needs their adapter.",
-    ),
-    LegacyPathRecord(
         pathId="omnigent.legacy.host_image_variable_alias",
         owner="omnigent-deployment",
         description=(
@@ -418,8 +376,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.opencode_host_image_alias",
         owner="omnigent-deployment",
         description=(
-            "OpenCode-specific image variable retained for existing deployment "
-            "configuration and legacy Host Classes; defaults to the shared image."
+            "Deprecated OpenCode-specific image variable; defaults to the "
+            "shared image."
         ),
         retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         surfaces=(
@@ -432,24 +390,20 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "get_opencode_host_image_ref"
         ),
         consumer=(
-            "Plans and retries that recorded ``omnigent-opencode@1`` and "
-            "explicit ``omnigent.hostClassRef`` requests for it. Fresh "
-            "``opencode-native`` work selects the shared-image "
-            "``omnigent-opencode@2``. Deployments that pin the OpenCode host "
-            "through this variable still have it judged by bootstrap."
+            "Deployments that still pin the OpenCode host through this "
+            "variable: bootstrap judges the pin, and OpenCode credential "
+            "validation runs in it. No Host Class launches it; "
+            "``opencode-native`` runs ``omnigent-opencode@2`` on the shared "
+            "image."
         ),
         removalCondition=(
-            "No open plan or retained history records "
-            "``omnigent-opencode@1`` and the variable completes its "
-            "obsolete-configuration deprecation window."
+            "The variable completes its obsolete-configuration deprecation "
+            "window and OpenCode credential validation reads the shared image."
         ),
-        sharedOperation=(
-            "``omnigent-opencode@2`` on the shared image, already "
-            "selected for fresh work."
-        ),
+        sharedOperation="``OMNIGENT_SHARED_HOST_IMAGE_REF``.",
         missingOutcome=(
-            "Nothing for new work; recorded ``omnigent-opencode@1`` plans"
-            " and explicit requests for it still resolve this variable."
+            "Nothing functional; deployments still supplying the variable keep "
+            "their pinned image until the deprecation window ends."
         ),
     ),
     LegacyPathRecord(
@@ -535,10 +489,10 @@ class ObsoleteConfiguration(BaseModel):
         return self
 
 
-# Every legacy configuration identity that will produce an actionable startup
-# failure once its owning retirement row stops admitting new work. Nothing is
-# deprecated yet: each owning row is still an active product path, so the
-# aliases remain a supported way to pin a prior host image.
+# Every legacy configuration identity that produces an actionable startup
+# warning during its deprecation window and a failure once removed. The generic
+# and Pi aliases are not deprecated yet: they remain a supported way to pin a
+# prior host image.
 OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE_REF",
@@ -559,6 +513,13 @@ OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
         variable="OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         retirementPathId="omnigent.legacy.opencode_host_image_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
+        deprecated=True,
+        guidance=(
+            "No Host Class launches this image any more; OpenCode runs "
+            "omnigent-opencode@2 on the shared host image. Pin that image "
+            "through OMNIGENT_SHARED_HOST_IMAGE_REF and remove this variable "
+            "from the deployment's .env."
+        ),
     ),
     ObsoleteConfiguration(
         variable="OMNIGENT_PI_HOST_IMAGE_REF",
@@ -606,34 +567,6 @@ ARCHITECTURE_BOUNDARY_EXCEPTIONS: tuple[ArchitectureBoundaryException, ...] = (
             "name resolution and performs no materialization side effect."
         ),
         retirementPathId="omnigent.legacy.native_ui_compat",
-    ),
-    ArchitectureBoundaryException(
-        exceptionId="omnigent.exception.profile_bound_coordinator_default_ports",
-        module="moonmind/omnigent/profile_bound_execution.py",
-        rule="application_receives_infrastructure_at_composition_boundary",
-        reason=(
-            "The replay-visible Codex coordinator selects its production "
-            "Provider Profile, policy, and attempt adapters when a caller "
-            "omits them, so existing histories keep the same deployment "
-            "adapters instead of a second execution path."
-        ),
-        retirementPathId="omnigent.legacy.profile_bound_execution",
-    ),
-    ArchitectureBoundaryException(
-        exceptionId="omnigent.exception.oauth_host_runtime_raw_container_commands",
-        module="moonmind/omnigent/oauth_host_runtime.py",
-        rule="adapter_issues_no_raw_container_command",
-        reason=(
-            "The retained Codex host lifecycle still assembles its own Docker "
-            "and Compose argument vectors for launch, mount, credential-volume, "
-            "and egress attestation. Container/volume inventory and reclamation "
-            "already moved to host_services/legacy_host_containers.py behind "
-            "OmnigentHostContainerInventoryPort; the launch path stays here "
-            "until the replay-visible coordinator retires, because moving it "
-            "would change the launch argument vector that in-flight histories "
-            "were started with."
-        ),
-        retirementPathId="omnigent.legacy.oauth_host_runtime",
     ),
 )
 
@@ -875,8 +808,15 @@ def enforce_obsolete_configuration_at_startup(
     deprecation warnings it logged.
     """
 
+    from moonmind.omnigent.bootstrap.store import load_installed_release_image_env
+
+    source = os.environ if env is None else env
+    # The release controller renders its recorded refs into ``.env.deploy``.
+    # Only a value the deployment supplies itself is obsolete configuration.
+    generated = load_installed_release_image_env()
     warnings = assert_obsolete_configuration(
-        os.environ if env is None else env, configuration=configuration
+        {key: value for key, value in source.items() if generated.get(key) != value},
+        configuration=configuration,
     )
     for warning in warnings:
         log.warning("Obsolete Omnigent configuration: %s", warning)

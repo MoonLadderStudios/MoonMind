@@ -99,15 +99,10 @@ class _Runtime:
     async def container_present(self, _name):
         return True
 
-    async def stop_host(self, **kwargs):
+    async def stop_host(self, *, binding, host_lease):
         self.order.append("host_stopped")
         self.stopped += 1
-        self.stop_kwargs.append(kwargs)
-        if kwargs.get("effective_launch") is not None:
-            return {
-                "evidenceRef": "artifact://terminal-egress",
-                "launchEvidenceRef": kwargs.get("launch_evidence_ref"),
-            }
+        self.stop_kwargs.append({"binding": binding, "host_lease": host_lease})
         return {}
 
     async def list_managed_containers(self):
@@ -426,8 +421,22 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
     assert (await binding_store.get_state(initial.runtimeBindingRef)) == state
 
 
+def _recorded_cleanups(janitor: OmnigentOAuthHostJanitor) -> list[dict]:
+    """Record what the janitor's fenced stop step hands to terminal cleanup."""
+
+    cleanups: list[dict] = []
+    stop = janitor._stop_host_with_authority
+
+    async def recording_stop(**kwargs):
+        cleanups.append(await stop(**kwargs))
+        return cleanups[-1]
+
+    janitor._stop_host_with_authority = recording_stop
+    return cleanups
+
+
 @pytest.mark.asyncio
-async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidence() -> None:
+async def test_recorded_egress_authority_stops_host_without_attestation() -> None:
     lease = _lease()
     lease.effective_launch_snapshot = {"enforcedEgress": True}
     repository = _Repository(lease)
@@ -458,14 +467,15 @@ async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidenc
         async def record_terminal_cleanup(self, **kwargs):
             terminal_records.append(kwargs)
 
-    result = await OmnigentOAuthHostJanitor(
+    janitor = OmnigentOAuthHostJanitor(
         repository=repository,
         runtime=runtime,
         client=_Client(),
         run_store=RunStore(),
         lease_client=lease_client,
-        artifact_gateway=object(),
-    ).run_action(
+    )
+    cleanups = _recorded_cleanups(janitor)
+    result = await janitor.run_action(
         action_kind="host.stop",
         profile_id="profile-1",
         host_lease_ref="lease-1",
@@ -473,18 +483,16 @@ async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidenc
         request_id="request-egress",
     )
 
-    cleanup_call = runtime.stop_kwargs[0]
-    assert cleanup_call["effective_launch"]["enforcedEgress"] is True
-    assert cleanup_call["egress_evidence"]["attachmentIdentity"] == "host-1"
-    assert cleanup_call["launch_evidence_ref"] == "artifact://launch-egress"
-    assert cleanup_call["evidence_request"].remediation_workspace is not None
-    assert cleanup_call["artifact_gateway"] is not None
-    assert result["beforeEvidenceRefs"][-1] == "artifact://launch-egress"
-    assert result["afterEvidenceRefs"][-1] == "artifact://terminal-egress"
+    # Terminal egress attestation left with the profile-bound host runtime:
+    # the stop owner reclaims the host and no egress evidence is claimed.
+    assert len(runtime.stop_kwargs) == 1
+    assert runtime.stop_kwargs[0]["host_lease"].lease_id == "lease-1"
+    assert cleanups == [{"cleanupAuthorityDisposition": "terminal_attestation_retired"}]
+    assert result["beforeEvidenceRefs"] == ["omnigent-host-lease:lease-1:state:ready"]
+    assert result["afterEvidenceRefs"] == ["omnigent-host-lease:lease-1:state:stopped"]
     assert terminal_records[-1]["completed"] is True
-    assert terminal_records[-1]["egress_evidence_ref"] == (
-        "artifact://terminal-egress"
-    )
+    assert terminal_records[-1]["egress_evidence_ref"] is None
+    assert terminal_records[-1]["launch_evidence_ref"] is None
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
@@ -494,21 +502,22 @@ async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidenc
 
 
 @pytest.mark.asyncio
-async def test_action_cleanup_failure_records_published_evidence_before_raise() -> None:
+async def test_action_cleanup_failure_records_incomplete_cleanup_before_raise() -> None:
     lease = _lease()
     lease.effective_launch_snapshot = {"enforcedEgress": True}
     repository = _Repository(lease)
+    lease_client = _LeaseClient()
     terminal_records: list[dict] = []
 
     class Runtime(_Runtime):
-        async def stop_host(self, **kwargs):
-            self.stop_kwargs.append(kwargs)
+        async def stop_host(self, *, binding, host_lease):
+            self.stop_kwargs.append({"binding": binding, "host_lease": host_lease})
             raise OmnigentOAuthHostError(
                 "cleanup incomplete",
-                egress_evidence_ref="artifact://terminal-failure",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
                 cleanup_evidence={
-                    "evidenceRef": "artifact://terminal-failure",
-                    "launchEvidenceRef": "artifact://launch-egress",
+                    "cleanupResult": "failed",
+                    "reconciliationResult": "required",
                 },
             )
 
@@ -528,14 +537,14 @@ async def test_action_cleanup_failure_records_published_evidence_before_raise() 
         async def record_terminal_cleanup(self, **kwargs):
             terminal_records.append(kwargs)
 
+    runtime = Runtime()
     with pytest.raises(OmnigentOAuthHostError, match="cleanup incomplete"):
         await OmnigentOAuthHostJanitor(
             repository=repository,
-            runtime=Runtime(),
+            runtime=runtime,
             client=_Client(),
             run_store=RunStore(),
-            lease_client=_LeaseClient(),
-            artifact_gateway=object(),
+            lease_client=lease_client,
         ).run_action(
             action_kind="host.remove",
             profile_id="profile-1",
@@ -544,10 +553,12 @@ async def test_action_cleanup_failure_records_published_evidence_before_raise() 
             request_id="request-failure",
         )
 
+    assert runtime.stop_kwargs[0]["host_lease"].lease_id == "lease-1"
     assert terminal_records[-1]["completed"] is False
-    assert terminal_records[-1]["egress_evidence_ref"] == (
-        "artifact://terminal-failure"
-    )
+    assert terminal_records[-1]["code"] == "OmnigentOAuthHostError"
+    assert terminal_records[-1]["lease_released"] is False
+    assert terminal_records[-1]["egress_evidence_ref"] is None
+    assert lease_client.released == []
     assert repository.stopped == []
 
 

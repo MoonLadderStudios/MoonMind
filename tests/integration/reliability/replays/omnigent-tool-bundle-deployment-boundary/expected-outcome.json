@@ -1,6 +1,0 @@
-{
-  "invariant": "deployment probes the image-owned gh without invoking Compose and without mounting, inspecting, or version-gating a tools volume",
-  "probeImage": "omnigent-host:test",
-  "failureCode": "tool_bundle_unavailable",
-  "composeInvokedByRuntime": false
-}

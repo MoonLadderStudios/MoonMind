@@ -2,7 +2,7 @@
 
 The owner validates every persisted authority input, allocates the semantic
 runtime identities, persists them, and only then starts the durable Temporal
-workflow that dispatches the canonical profile-bound Omnigent AgentRun.
+workflow that dispatches the canonical Omnigent AgentRun.
 """
 
 from __future__ import annotations
@@ -1523,8 +1523,8 @@ class CheckpointBranchTurnExecutionOwner:
         # A checkpoint continuation consumes the source session's immutable
         # plan. It must not re-resolve harness, model, Provider Profile, Host
         # Class, launch policy, repository, workspace, or Skill authority.
-        # Checkpoints created before plan admission remain on the replay-visible
-        # legacy path and therefore carry no synthesized replacement plan.
+        # Checkpoints created before plan admission carry no plan, and no
+        # replacement is synthesized: their turn fails closed as unrealizable.
         source_plan_ref = str(
             checkpoint.omnigent.execution_plan_ref or ""
         ).strip()

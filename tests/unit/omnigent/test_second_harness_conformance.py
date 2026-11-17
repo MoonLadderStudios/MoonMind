@@ -270,10 +270,6 @@ def test_second_harness_does_not_require_realizer_code_change():
     # as opencode-native.
 
     # Before: registry has generic-omnigent-host@1
-    from moonmind.omnigent.realizers.codex_profile_bound import (
-        CodexProfileBoundRealizer,
-    )
-
     class ReadyGenericRealizer:
         ref = "generic-omnigent-host@1"
 
@@ -284,14 +280,13 @@ def test_second_harness_does_not_require_realizer_code_change():
             return None
 
     registry = OmnigentExecutionRealizerRegistry()
-    registry.register(CodexProfileBoundRealizer())
     registry.register(ReadyGenericRealizer())
-    assert "generic-omnigent-host@1" in registry.list_refs()
-    assert "codex-profile-bound@1" in registry.list_refs()
+    assert registry.list_refs() == ["generic-omnigent-host@1"]
 
-    # Adding pi does not add a new realizer method
-    # The count of realizers remains 2
-    assert len(registry.list_refs()) == 2
+    # Adding pi does not add a new realizer: the generic one is the only one.
+    from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS
+
+    assert set(KNOWN_REALIZERS) == {"generic-omnigent-host@1"}
 
     # Planner without harness branches: check source for harness-specific if
     import inspect

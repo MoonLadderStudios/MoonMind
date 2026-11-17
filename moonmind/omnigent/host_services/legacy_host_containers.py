@@ -1,12 +1,12 @@
-"""Docker container and volume inventory for legacy profile-bound hosts.
+"""Docker container and volume reclamation for OAuth host-ledger leases.
 
-Source issue: MoonLadderStudios/MoonMind#3711 (required work 3).
-
-Orphan discovery and reclamation for the retained Codex host lifecycle. This is
-the container/volume infrastructure detail that used to live inside
-``oauth_host_runtime.py``; it now sits behind
-:class:`moonmind.omnigent.host_ports.OmnigentHostContainerInventoryPort` so the
-janitor depends on one narrow capability instead of the whole host runtime.
+Orphan discovery and reclamation for hosts recorded in the OAuth host ledger:
+credential validators and hosts left by the removed profile-bound lifecycle.
+The janitor, credential maintenance and the retained session supervisor depend
+on this one narrow capability
+(:class:`moonmind.omnigent.host_ports.OmnigentHostContainerInventoryPort` plus
+``stop_host``); nothing launches or writes to these hosts any more, so
+reclamation needs no writer fence first.
 
 Every operation is ownership-scoped by the deployment's Omnigent host label. An
 unlabeled or foreign container is refused with the shared host failure
@@ -15,10 +15,17 @@ vocabulary, never silently inspected or removed.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import shutil
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.oauth_hosts import deterministic_host_container_name
 
 # Label authority for a MoonMind-owned legacy Omnigent host container.
 HOST_OWNERSHIP_LABEL = "moonmind.kind"
@@ -38,8 +45,90 @@ def initializer_container_name(container_name: str) -> str:
 class LegacyOmnigentHostContainerService:
     """Ownership-scoped Docker inventory and reclamation for legacy hosts."""
 
-    def __init__(self, *, run_command: RuntimeCommand) -> None:
+    def __init__(
+        self,
+        *,
+        run_command: RuntimeCommand,
+        runtime_scripts_root: Path | None = None,
+    ) -> None:
         self._run = run_command
+        # Profile-bound launches wrote per-lease runtime scripts and capability
+        # files under the workspace root; reclaiming a lease removes them.
+        self._runtime_scripts_root = (
+            runtime_scripts_root
+            or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
+            / ".omnigent-runtime-scripts"
+        )
+
+    async def stop_host(self, *, binding: Any, host_lease: Any) -> dict[str, Any]:
+        """Remove one lease's container, owned volumes and runtime files."""
+
+        del binding
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+        if await self.container_present(container_name):
+            await self.assert_container_owned(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
+        await self.remove_initializer(
+            container_name=container_name, lease_id=host_lease.lease_id
+        )
+        await self._run("docker", "stop", "--time", "20", container_name, check=False)
+        await self._run("docker", "rm", "-f", container_name, check=False)
+        volume_names = tuple(
+            f"{container_name}-{suffix}" for suffix in HOST_VOLUME_SUFFIXES
+        )
+        for volume_name in volume_names:
+            await self._run("docker", "volume", "rm", "-f", volume_name, check=False)
+        container_present = await self.container_present(container_name)
+        remaining_volumes = [
+            name for name in volume_names if await self.volume_present(name)
+        ]
+        runtime_files_removed = False
+        if not container_present and not remaining_volumes:
+            try:
+                runtime_files_removed = self._remove_runtime_scripts(
+                    host_lease.lease_id
+                )
+            except OSError:
+                runtime_files_removed = False
+        cleanup_ok = runtime_files_removed
+        result: dict[str, Any] = {
+            "cleanupResult": "succeeded" if cleanup_ok else "failed",
+            "reconciliationResult": "succeeded" if cleanup_ok else "required",
+            "cleanupValidatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "attachmentIdentity": container_name,
+            "resourceCleanup": {
+                "containerPresent": container_present,
+                "remainingOwnedVolumes": remaining_volumes,
+                "runtimeCapabilityFilesRemoved": runtime_files_removed,
+                "mode": "on_demand_remove",
+            },
+        }
+        if not cleanup_ok:
+            raise OmnigentOAuthHostError(
+                "Omnigent host cleanup could not be reconciled",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                cleanup_evidence=result,
+            )
+        return result
+
+    def _remove_runtime_scripts(self, lease_id: str) -> bool:
+        root = self._runtime_scripts_root.resolve()
+        digest = hashlib.sha256(lease_id.encode("utf-8")).hexdigest()[:24]
+        target = (root / digest).resolve()
+        if not target.is_relative_to(root):
+            return False
+        if not target.exists():
+            return True
+        if target.is_symlink() or any(path.is_symlink() for path in target.rglob("*")):
+            return False
+        for path in sorted(target.rglob("*"), reverse=True):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        target.chmod(0o700)
+        shutil.rmtree(target)
+        return not target.exists()
 
     async def container_exists(self, container_name: str) -> bool:
         result = await self._run(

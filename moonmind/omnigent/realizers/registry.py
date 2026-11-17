@@ -9,7 +9,6 @@ startup and never mutated per-request. The Temporal activity does:
 
 It must NOT contain `if harness == "opencode-native": ...`.
 
-`codex-profile-bound@1` delegates to existing coordinator.
 `generic-omnigent-host@1` owns generic host realization.
 """
 
@@ -19,7 +18,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.harness_platform.support import validate_realizer
+from moonmind.omnigent.harness_platform.support import (
+    unavailable_realizer_message,
+    validate_realizer,
+)
 from moonmind.omnigent.realizers.base import OmnigentExecutionRealizer
 
 
@@ -47,7 +49,7 @@ class OmnigentExecutionRealizerRegistry:
         realizer = self._realizers.get(ref)
         if realizer is None:
             raise HarnessPlatformError(
-                f"execution realizer {ref} unavailable",
+                unavailable_realizer_message(ref),
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
         return realizer
@@ -67,16 +69,12 @@ _default_registry: OmnigentExecutionRealizerRegistry | None = None
 def realizer_authority_kinds(ref: str) -> tuple[str, ...]:
     """Read implementation-owned admission capabilities without runtime setup."""
 
-    from moonmind.omnigent.realizers.codex_profile_bound import (
-        CodexProfileBoundRealizer,
-    )
     from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 
-    for implementation in (CodexProfileBoundRealizer, GenericOmnigentHostRealizer):
-        if implementation.ref == ref:
-            return implementation.authority_kinds
+    if GenericOmnigentHostRealizer.ref == ref:
+        return GenericOmnigentHostRealizer.authority_kinds
     raise HarnessPlatformError(
-        f"execution realizer {ref} unavailable",
+        unavailable_realizer_message(ref),
         code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
     )
 
@@ -101,32 +99,10 @@ def get_default_registry() -> OmnigentExecutionRealizerRegistry:
         _default_registry = services.realizer_registry
         return _default_registry
 
-    from api_service.db.base import async_session_maker
-    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
-    from moonmind.omnigent.control_plane import (
-        CanonicalTurnCommandService,
-        OmnigentControlPlaneStore,
-    )
-    from moonmind.omnigent.realizers.codex_profile_bound import (
-        CodexProfileBoundRealizer,
-    )
-
-    registry = OmnigentExecutionRealizerRegistry()
-    registry.register(
-        CodexProfileBoundRealizer(
-            session_factory=async_session_maker,
-            # Codex shares the deployment's durable artifact gateway so an
-            # admitted request's ``art_...`` refs resolve on every path.
-            artifact_gateway=TemporalOmnigentArtifactGateway(async_session_maker),
-            # Codex shares the canonical session/turn ownership model even when
-            # the generic host is disabled (#3707 AC10).
-            turn_command_service=CanonicalTurnCommandService(
-                OmnigentControlPlaneStore(async_session_maker)
-            ),
-        )
-    )
-    _default_registry = registry
-    return registry
+    # The generic host plane's explicit kill switch leaves no realizer, so
+    # every plan fails closed as unavailable.
+    _default_registry = OmnigentExecutionRealizerRegistry()
+    return _default_registry
 
 
 def reset_default_registry() -> None:

@@ -6,14 +6,14 @@ Omnigent locator and mount classes are constrained by
 ## Hybrid session and workspace authority
 
 Workspace authority comes from the workspace plane of the frozen capability,
-independently of session identity. Profile-bound Omnigent accepts a MoonMind
-`sandbox` locator and mounts it at `/workspaces/run` in both static and on-demand
-hosts. MoonMind captures repository state through `workspace.capture_checkpoint`
-and restores it through `workspace.apply_checkpoint`, retaining normal containment,
-digest, and symlink checks. Omnigent session restore never applies a local archive,
-and workspace restore does not require the original Omnigent host.
+independently of session identity. Omnigent accepts a MoonMind `sandbox` locator
+and mounts it at `/workspaces/run` in on-demand hosts. MoonMind captures
+repository state through `workspace.capture_checkpoint` and restores it through
+`workspace.apply_checkpoint`, retaining normal containment, digest, and symlink
+checks. Omnigent session restore never applies a local archive, and workspace
+restore does not require the original Omnigent host.
 
-On-demand OAuth hosts use the same daemon attachment resolver as generic hosts.
+On-demand hosts share one daemon attachment resolver.
 A local daemon receives worker-visible bind sources. A remote daemon receives
 the deployment's named workspace volume and a containment-checked relative
 subpath for the repository, Skill projection, runtime scripts, and login-shell

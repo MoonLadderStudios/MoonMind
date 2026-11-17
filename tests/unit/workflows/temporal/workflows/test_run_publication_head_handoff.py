@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.run import (
@@ -120,48 +119,3 @@ async def test_request_carries_only_accepted_workflow_publication(
         current_step_execution_id="publish",
     )
     assert publish.await_args.kwargs["accepted_published_head"] == expected
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "git_identity",
-    [None, {"name": "Admitted operator", "email": "admitted@example.invalid"}],
-)
-@pytest.mark.parametrize(
-    "authority",
-    [
-        None,
-        {
-            "workflowId": "workflow",
-            "repository": "example/repository",
-            "branch": "candidate",
-            "headSha": "a" * 40,
-        },
-    ],
-)
-async def test_profile_host_publication_preserves_optional_authority(
-    tmp_path, monkeypatch, authority, git_identity
-):
-    publish = AsyncMock(return_value={"push_status": "no_commits"})
-    monkeypatch.setattr(
-        OmnigentWorkspacePublicationService, "publish_workspace", publish
-    )
-    kwargs = dict(
-        workspace_locator={},
-        current_workflow_id="workflow",
-        current_step_execution_id="step",
-        publication_identity="publication",
-        publish_mode="pr",
-        base_branch="candidate",
-        repository="example/repository",
-        github_token="fixture-credential",
-    )
-    if authority is not None:
-        kwargs["accepted_published_head"] = authority
-    if git_identity is not None:
-        kwargs["publication_git_identity"] = git_identity
-    await OmnigentOAuthHostRuntime.publish_workspace(
-        SimpleNamespace(_workspace_root=tmp_path), **kwargs
-    )
-    assert publish.await_args.kwargs["accepted_published_head"] == authority
-    assert publish.await_args.kwargs.get("publication_git_identity") == git_identity

@@ -50,14 +50,12 @@ from api_service.services.omnigent_policies import (
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
-from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_ITEM_FRONTIER_KEY,
     OmnigentBridgeSessionStore,
 )
-from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.execute import (
     OmnigentSameSessionContinuationRequired,
     OmnigentSessionStillRunningError,
@@ -77,23 +75,13 @@ from moonmind.omnigent.execute import (
     omnigent_activity_heartbeat,
     run_omnigent_execution,
 )
-from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.host_image_drift import (
     reconcile_effective_launch_to_selected_host,
 )
 from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-from moonmind.omnigent.oauth_hosts import (
-    HOST_CLEANUP_CLAIMED_ERROR_CODE,
-    HOST_PROFILE_BUSY_ERROR_CODE,
-)
-from moonmind.omnigent.profile_bound_execution import (
-    OmnigentProfileBoundExecutionCoordinator,
-)
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
@@ -115,13 +103,7 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
 )
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
-from moonmind.security.egress import (
-    EGRESS_CONFIG_DIGEST,
-    ENFORCER_IMPLEMENTATION,
-    OMNIGENT_EGRESS_PROFILE,
-    EgressAttestation,
-    omnigent_proxy_env,
-)
+from moonmind.security.egress import omnigent_proxy_env
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
@@ -135,7 +117,10 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
     build_omnigent_session_create_payload,
     resolve_omnigent_target,
 )
-from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+from moonmind.workflows.adapters.omnigent_client import (
+    OmnigentClientError,
+    OmnigentHttpClient,
+)
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -202,27 +187,6 @@ from moonmind.workflows.temporal.workflows import (
 from moonmind.workflows.temporal.workflows import (
     merge_automation as merge_automation_module,
 )
-from tests.artifact_access import access_for_test
-from tests.support.issue_claims import issue_claim_store  # noqa: F401
-
-
-def _egress_attestation() -> EgressAttestation:
-    return EgressAttestation(
-        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
-        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
-        enforcerImplementation=ENFORCER_IMPLEMENTATION,
-        backendRef="replay-test",
-        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
-        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
-        appliedRuleDigest="sha256:" + "a" * 64,
-        configDigest=EGRESS_CONFIG_DIGEST,
-        gatewayImageDigest="sha256:" + "b" * 64,
-        healthResult="healthy",
-        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
-        validationResult="passed",
-    )
-
-
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
@@ -255,28 +219,14 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.helpers.checkpoint_branch_turn_runtime import (
-    CheckpointBranchRuntimeLedger,
-    InjectedBoundaryFailure,
-    checkpoint_branch_policy_snapshot,
-    execute_checkpoint_branch_request,
-)
+from tests.artifact_access import access_for_test
 from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.integration.reliability.helpers import (
     FinalizationFaultInjector,
     NestedYieldProcess,
     load_replay,
 )
-from tests.unit.omnigent.test_oauth_profile_lifecycle import _binding as _oauth_binding
-from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-    _drive_authority_chain_coordinator,
-)
-from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-    _host_lease as _oauth_host_lease,
-)
-from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-    _run_coordinator_failure_case,
-)
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
     _pr_resolver_request,
@@ -588,162 +538,6 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
         manifest["observedServerImageRef"]
     )
 
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._run = AsyncMock(  # type: ignore[method-assign]
-        side_effect=[
-            (0, "omnigent-container-id\n", ""),
-            (0, json.dumps(manifest["configuredServerImageRef"]), ""),
-            (0, json.dumps(manifest["observedServerImageId"]), ""),
-            (
-                0,
-                json.dumps(
-                    {
-                        "repoDigests": [manifest["observedServerImageRef"]],
-                        "architecture": manifest["architecture"],
-                    }
-                ),
-                "",
-            ),
-        ]
-    )
-    evidence = await runtime._attest_server_image(
-        {
-            "serverImageRef": manifest["observedServerImageRef"],
-            "architectures": [manifest["architecture"]],
-        }
-    )
-
-    assert evidence["serverImageRefObserved"] == expected["serverImageRefObserved"]
-    assert evidence["serverArchitecture"] == expected["serverArchitecture"]
-
-
-def _egress_attestation() -> EgressAttestation:
-    return EgressAttestation(
-        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
-        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
-        enforcerImplementation=ENFORCER_IMPLEMENTATION,
-        backendRef="replay-test",
-        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
-        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
-        appliedRuleDigest="sha256:" + "a" * 64,
-        configDigest=EGRESS_CONFIG_DIGEST,
-        gatewayImageDigest="sha256:" + "b" * 64,
-        healthResult="healthy",
-        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
-        validationResult="passed",
-    )
-
-
-def _checkpoint_branch_turn_profile_request() -> AgentExecutionRequest:
-    policy = checkpoint_branch_policy_snapshot()
-    return AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="profile-1",
-        correlationId="checkpoint-branch-turn-retry-matrix",
-        idempotencyKey="checkpoint-branch-turn:retry-matrix",
-        instructionRef="artifact://branch/instruction",
-        inputRefs=["artifact://branch/instruction"],
-        stepExecution={
-            "schemaVersion": "v1",
-            "workflowId": "checkpoint-branch-turn:turn-retry",
-            "runId": "branch-turn-turn-retry",
-            "logicalStepId": "implement",
-            "executionOrdinal": 1,
-            "stepExecutionId": (
-                "checkpoint-branch-turn:turn-retry:branch-turn-turn-retry:"
-                "implement:execution:1"
-            ),
-            "reason": "checkpoint_branch",
-            "runtimeContextPolicy": "fresh_agent_run",
-            "contextBundleRef": "artifact://branch/context",
-            "contextBundleDigest": "sha256:" + "a" * 64,
-            "preparedInputRefs": ["artifact://branch/instruction"],
-        },
-        checkpointRecovery={
-            "recoveryAction": "branch_required",
-            "omnigentCheckpoint": {
-                "schemaVersion": "v2",
-                "workflowId": "source-workflow",
-                "runId": "source-run",
-                "logicalStepId": "implement",
-                "stepExecutionId": "source-step-execution",
-                "attemptOrdinal": 1,
-                "boundary": "after_execution",
-                "providerProfileId": "profile-1",
-                "credentialRef": "credential://profile-1",
-                "credentialGeneration": 1,
-                "providerLeaseRef": "source-provider-lease",
-                "hostBindingRef": "source-host-binding",
-                "hostLeaseRef": "source-host-lease",
-                "endpointRef": "default",
-                "omnigentHostId": "source-host",
-                "omnigentSessionId": "source-session",
-                "bridgeSessionId": "source-bridge",
-                "externalStateRef": "artifact://source/external-state",
-                "externalStateDigest": "sha256:" + "b" * 64,
-                "idempotencyKey": "source-first-message",
-                "executionProfileRef": "profile-1",
-                "launchPolicyRef": "codex-on-demand@1",
-                "policyId": policy["policyId"],
-                "policyVersion": policy["policyVersion"],
-                "policyRef": policy["policyRef"],
-                "policyDigest": policy["policyDigest"],
-                "policySnapshotRef": policy["snapshotRef"],
-                "policyValidation": policy["validation"],
-                "lastBridgeEventCursor": "9",
-                "firstMessageId": "source-message",
-                "firstMessageDigest": "sha256:" + "c" * 64,
-                "workspaceLocator": {
-                    "kind": "sandbox",
-                    "workspaceId": "source-workspace",
-                    "relativePath": "repo",
-                },
-                "baselineCommit": "abc123",
-                "headCommit": "def456",
-                "headRef": "artifact://source/head",
-                "headDigest": "sha256:" + "d" * 64,
-                "workspaceCheckpointRef": "artifact://source/workspace",
-                "workspaceCheckpointDigest": "sha256:" + "e" * 64,
-                "sourceBranch": "main",
-                "publicationState": "none",
-                "capturedAt": "2026-08-12T00:00:00Z",
-                "producerVersion": "moonmind-test",
-                "validation": {
-                    "valid": True,
-                    "liveReattachAvailable": True,
-                    "workspaceColdRestoreAvailable": True,
-                    "branchCreationAvailable": True,
-                },
-            },
-            "immutableSource": {"instructionDigest": "sha256:" + "f" * 64},
-            "immutableRequested": {"instructionDigest": "sha256:" + "0" * 64},
-        },
-        workspaceSpec={
-            "workspaceLocator": {
-                "kind": "sandbox",
-                "workspaceId": "branch-workspace-retry",
-                "relativePath": "repo",
-            },
-            "repository": "https://example.com/repo.git",
-            "startingBranch": "main",
-            "targetBranch": "checkpoint-branch/retry",
-            "checkoutCommit": "abc123",
-        },
-        parameters={
-            "repository": "https://example.com/repo.git",
-            "startingBranch": "main",
-            "targetBranch": "checkpoint-branch/retry",
-            "publishMode": "pr",
-            "omnigent": {
-                "target": {
-                    "profileRef": "omnigent-codex@1",
-                    "launchPolicyRef": "codex-on-demand@1",
-                }
-            },
-        },
-    )
-
 
 async def test_omnigent_pr_step_reuses_candidate_against_original_base(
     monkeypatch: pytest.MonkeyPatch,
@@ -794,8 +588,8 @@ async def _omnigent_activity_heartbeat_probe() -> None:
         await asyncio.sleep(0.035)
 
 
-async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_cleanup() -> None:
-    """Replay the resolver timeout/retry race at the Activity-host boundary."""
+async def test_omnigent_activity_heartbeats_within_profile_bound_route_timeout() -> None:
+    """Replay the resolver heartbeat-timeout race at the Activity boundary."""
 
     manifest = load_replay(
         "omnigent-profile-bound-heartbeat-timeout", "manifest.json"
@@ -829,22 +623,6 @@ async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_
         for payload in heartbeat_payloads
         if payload.get("activityAlive") is True
     )
-
-    events, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at="session_create",
-        code="activity_cancelled",
-        injected_error=asyncio.CancelledError(),
-    )
-    cleanup_event = next(
-        payload
-        for event_type, payload in events
-        if event_type == "host_cleanup" and payload["status"] == "waiting"
-    )
-    assert cleanup_event["metadata"]["janitorRequired"] is True
-    assert expected["cancelledAttemptCleanup"] == "retry_or_janitor_reconciliation"
-    assert "host_stop" not in owner_calls
-    assert "provider_released" not in actions
-    assert expected["releaseProviderLeaseOnCancellation"] is False
 
 
 async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot(
@@ -1025,8 +803,8 @@ async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot(
     assert expected["requiresNewTerminalSseEvent"] is False
 
 
-async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> None:
-    """Replay mm:d41f834c at both terminal and host-authority boundaries."""
+async def test_evicted_turn_marker_preserves_terminal_authority() -> None:
+    """Replay mm:d41f834c at the marked-turn terminal boundary."""
 
     replay_id = "omnigent-evicted-turn-marker-retry-authority"
     manifest = load_replay(replay_id, "manifest.json")
@@ -1080,25 +858,6 @@ async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> N
     )
     assert status == "completed"
     assert snapshot is terminal_snapshot
-
-    events, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at="resource_harvest",
-        code="OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS",
-        injected_error=OmnigentSessionStillRunningError(
-            "current marked turn did not reach terminal state"
-        ),
-    )
-    cleanup_event = next(
-        payload
-        for event_type, payload in events
-        if event_type == "host_cleanup" and payload["status"] == "waiting"
-    )
-    assert cleanup_event["code"] == expected["ambiguousCleanupCode"]
-    assert cleanup_event["metadata"]["janitorRequired"] is True
-    assert "host_stop" not in owner_calls
-    assert "host_remove" not in owner_calls
-    assert "provider_released" not in actions
-    assert expected["retryAuthority"] == "same_host_profile_and_bridge"
 
 
 async def test_running_session_requests_continuation_after_quiet_tool_output() -> None:
@@ -1249,16 +1008,8 @@ async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
     async def reject_upload(_bundle_ref: str):
         raise AssertionError("stock identity resolution must not upload a bundle")
 
-    bound_request = bind_exact_host(
-        request,
-        host_id="host-stock-replay",
-        workspace_path="/workspaces/run",
-        profile_authorization={"providerProfileId": "codex_openai_oauth"},
-        harness="codex-native",
-        agent_name=CODEX_STOCK_AGENT_NAME,
-    )
     target = await resolve_omnigent_target(
-        build_omnigent_selection(bound_request),
+        build_omnigent_selection(request),
         list_agents=list_agents,
         upload_agent_bundle=reject_upload,
         default_agent=None,
@@ -2835,35 +2586,8 @@ async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
             assert f"artifact://{artifact_id}" == restore_ref
             return {}, archive_buffer.getvalue()
 
-    workflow_id = "workflow-1"
-    step_execution_id = "step-1"
-    workspace_id = hashlib.sha256(
-        f"{workflow_id}:{step_execution_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
-    workspace.mkdir(parents=True)
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=tmp_path,
-    )
-    prepare_kwargs = dict(
-        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
-        current_workflow_id=workflow_id,
-        current_step_execution_id=step_execution_id,
-        workspace_checkpoint_restore_ref=restore_ref,
-        artifact_gateway=ReplayArtifactService(),
-    )
-    await runtime._prepare_workspace(**prepare_kwargs)
-
-    restored = workspace / manifest["archiveMember"]["path"]
-    assert restored.read_text(encoding="utf-8") == expected["restoredContent"]
-    restored.write_text(expected["retryPreservedContent"], encoding="utf-8")
-    await runtime._prepare_workspace(**prepare_kwargs)
-    assert restored.read_text(encoding="utf-8") == expected["retryPreservedContent"]
-
     # The incident's OpenCode profile is admitted through
-    # ``generic-omnigent-host@1``. Exercise that production materializer too;
-    # validating only the legacy OAuth host left the escaped regression intact.
+    # ``generic-omnigent-host@1``; exercise that production materializer.
     from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 
     generic_workflow_id = "generic-workflow-1"
@@ -3831,85 +3555,6 @@ async def test_omnigent_auto_run_resolves_empty_skill_projection(
     )
 
 
-async def test_omnigent_egress_attestation_uses_docker_command_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:706d05e2 at the trusted Docker command boundary."""
-
-    replay_id = "omnigent-egress-attestation-command"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._run = AsyncMock(return_value=(0, "{}", ""))
-
-    async def attest(*, runner, profile, backend_ref):
-        assert profile == OMNIGENT_EGRESS_PROFILE
-        assert backend_ref == manifest["backendRef"]
-        await runner(tuple(manifest["attestationSubcommand"]))
-        return {"status": "passed"}
-
-    monkeypatch.setattr(
-        oauth_host_runtime_module,
-        "attest_docker_egress",
-        attest,
-    )
-
-    result = await runtime._attest_egress(
-        {"networkRef": manifest["networkRef"]}
-    )
-
-    assert result == {"status": "passed"}
-    runtime._run.assert_awaited_once_with(
-        *expected["runtimeCommand"],
-        check=False,
-    )
-
-
-async def test_omnigent_runtime_scripts_cross_remote_daemon_path_boundary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Retain mm:b2f61d86's projection without a daemon-private bind source."""
-
-    replay_id = "omnigent-runtime-scripts-daemon-path"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    source = tmp_path / "source-scripts"
-    source.mkdir()
-    for name in manifest["requiredScripts"]:
-        script = source / name
-        script.write_text("#!/bin/sh\n", encoding="utf-8")
-        script.chmod(0o755)
-    worker_root = tmp_path / "worker-root"
-    daemon_root = Path(expected["daemonRoot"]).resolve()
-    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
-    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
-    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", str(daemon_root))
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=source,
-        workspace_root=worker_root,
-    )
-    runtime._run = AsyncMock(
-        return_value=(0, f"{daemon_root}\n", "")
-    )
-
-    worker_scripts = runtime._prepare_runtime_scripts(
-        manifest["workspaceKey"],
-        current_step_execution_id="workflow:run:step:execution:1",
-    )
-
-    assert worker_scripts == worker_root / expected["scriptsSubpath"]
-    assert worker_scripts != source
-    assert all((worker_scripts / name).is_file() for name in manifest["requiredScripts"])
-    assert (worker_scripts / "moonmind-execution.sh").is_file()
-    assert runtime._workspace_mount(worker_scripts, "/opt/moonmind", readonly=True) == (
-        f"type=volume,src={expected['volumeName']},dst=/opt/moonmind,"
-        f"volume-subpath={expected['scriptsSubpath']},readonly"
-    )
-    runtime._run.assert_not_awaited()
-
-
 async def test_agent_workspace_daemon_root_uses_compose_volume_identity() -> None:
     """Replay mm:cdf36806 at the Compose-to-Docker volume boundary."""
 
@@ -3939,230 +3584,6 @@ async def test_agent_workspace_daemon_root_uses_compose_volume_identity() -> Non
         == expected["volumeNameTemplate"]
     )
     assert "WORKFLOW_WORKSPACE_DAEMON_ROOT" not in worker_environment
-
-
-def _fresh_oauth_host_docker_result(
-    *args: str, **_kwargs: object
-) -> tuple[int, str, str]:
-    # Container inventory must not consume a later launch's response.
-    if args[:2] == ("docker", "inspect"):
-        return (1, "", "no such container")
-    if args[:2] == ("docker", "ps"):
-        return (0, "", "")
-    if args[:2] == ("docker", "run"):
-        return (0, "container-id" if "-d" in args else "", "")
-    raise AssertionError(f"Unexpected Docker command: {args}")
-
-
-async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:e96347f3 at the Docker options-to-entrypoint boundary."""
-
-    replay_id = "omnigent-host-entrypoint-env-order"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    login_manifest = load_replay("omnigent-host-login-tools-path", "manifest.json")
-    login_expected = load_replay(
-        "omnigent-host-login-tools-path", "expected-outcome.json"
-    )
-    monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
-    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime.container_exists = AsyncMock(return_value=False)
-    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-
-    runtime._run = AsyncMock(side_effect=_fresh_oauth_host_docker_result)
-    binding = _oauth_binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
-    host_lease = _oauth_host_lease().model_copy(
-        update={"container_name": "mm-host-replay"}
-    )
-    effective_launch = compile_effective_launch(
-        profile_ref="omnigent-codex@1",
-        policy_ref="codex-on-demand@1",
-        provider_profile_id="codex",
-    )
-    effective_launch["hostImageRef"] = manifest["hostImageRef"]
-
-    await runtime._launch_on_demand(
-        binding=binding,
-        host_lease=host_lease,
-        container_name="mm-host-replay",
-        workspace_source=tmp_path,
-        skill_projection=tmp_path / "skills",
-        runtime_scripts=tmp_path,
-        current_step_execution_id="workflow:run:node-1:execution:1",
-        effective_launch=effective_launch,
-        egress_attestation=_egress_attestation(),
-    )
-
-    command = runtime._run.await_args_list[-1].args
-    image_index = command.index(manifest["hostImageRef"])
-    assert command[image_index - 1] == expected["entrypoint"]
-    assert command[image_index + 1 : image_index + 3] == (
-        "-u",
-        expected["firstUnsetVariable"],
-    )
-    assert command[-1] == expected["startScript"]
-    assert login_manifest["hostImageRef"] == manifest["hostImageRef"]
-    # MoonLadderStudios/MoonMind#4558: the profile.d snippet is image-owned,
-    # so no bind mount may overlay it; PATH still leads with the image-owned
-    # tools directory for ordinary processes.
-    assert (
-        "type=bind,"
-        f"src={tmp_path / login_expected['sourceName']},"
-        f"dst={login_expected['containerPath']},readonly"
-    ) not in command
-    assert "PATH=/opt/moonmind-tools/bin:" in " ".join(
-        str(item) for item in command
-    )
-
-
-async def test_omnigent_stock_host_catalog_resolves_lease_owned_host() -> None:
-    """Replay mm:99f6a4a0 at the stock host-catalog boundary."""
-
-    replay_id = "omnigent-stock-host-catalog-contract"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == expected["path"]
-        return httpx.Response(
-            200,
-            json={
-                "hosts": [
-                    {
-                        "host_id": expected["hostId"],
-                        "name": manifest["containerName"],
-                        "status": "online",
-                        "configured_harnesses": {expected["harness"]: True},
-                    }
-                ]
-            },
-        )
-
-    client = oauth_host_runtime_module.OmnigentHttpClient(
-        base_url="https://omnigent.test",
-        transport=httpx.MockTransport(handler),
-    )
-    runtime = OmnigentOAuthHostRuntime(client=client)
-    binding = _oauth_binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
-    host_lease = _oauth_host_lease().model_copy(
-        update={
-            "container_name": manifest["containerName"],
-            "omnigent_host_id": None,
-        }
-    )
-
-    host = await runtime._resolve_exact_host(
-        binding=binding,
-        host_lease=host_lease,
-    )
-
-    assert host["host_id"] == expected["hostId"]
-    assert runtime._ready_host_harnesses(host) == {expected["harness"]}
-
-
-async def test_omnigent_host_registration_waits_for_catalog_publication(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:963a26ba at the host-registration publication boundary."""
-
-    replay_id = "omnigent-host-registration-publication"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    client = SimpleNamespace()
-    client.list_hosts = AsyncMock(
-        side_effect=[
-            [
-                {
-                    "host_id": host_id,
-                    "name": manifest["containerName"],
-                    "status": "online",
-                }
-                for host_id in catalog
-            ]
-            for catalog in manifest["catalogSequence"]
-        ]
-    )
-    runtime = OmnigentOAuthHostRuntime(client=client)
-    binding = _oauth_binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
-    host_lease = _oauth_host_lease().model_copy(
-        update={
-            "container_name": manifest["containerName"],
-            "omnigent_host_id": None,
-        }
-    )
-    sleep = AsyncMock()
-    monkeypatch.setattr(oauth_host_runtime_module.asyncio, "sleep", sleep)
-
-    host = await runtime._resolve_exact_host(
-        binding=binding,
-        host_lease=host_lease,
-    )
-
-    assert host["host_id"] == expected["hostId"]
-    assert client.list_hosts.await_count == expected["catalogReadCount"]
-    assert sleep.await_count == expected["sleepCount"]
-    sleep.assert_awaited_with(expected["sleepSeconds"])
-
-
-async def test_omnigent_host_registration_covers_observed_long_tail(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:e8ca7030 after two premature host teardowns."""
-
-    replay_id = "omnigent-host-registration-long-publication"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    ready_host = {
-        "host_id": expected["hostId"],
-        "name": manifest["containerName"],
-        "status": "online",
-        "configured_harnesses": {"codex-native": True},
-    }
-    client = SimpleNamespace(
-        list_hosts=AsyncMock(
-            side_effect=[
-                *([[]] * manifest["emptyCatalogReads"]),
-                [ready_host],
-            ]
-        )
-    )
-    runtime = OmnigentOAuthHostRuntime(client=client)
-    binding = _oauth_binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
-    host_lease = _oauth_host_lease().model_copy(
-        update={
-            "container_name": manifest["containerName"],
-            "omnigent_host_id": None,
-        }
-    )
-    sleep = AsyncMock()
-    monkeypatch.setattr(oauth_host_runtime_module.asyncio, "sleep", sleep)
-
-    host = await runtime._resolve_exact_host(
-        binding=binding,
-        host_lease=host_lease,
-    )
-
-    assert host["host_id"] == expected["hostId"]
-    assert client.list_hosts.await_count == expected["catalogReadCount"]
-    assert sleep.await_count == expected["sleepCount"]
-    sleep.assert_awaited_with(expected["sleepSeconds"])
 
 
 async def test_generic_host_registration_covers_direct_spawn_readiness_tail(
@@ -4235,126 +3656,6 @@ async def test_generic_host_registration_rejects_needs_auth_for_credentialed_pla
         )
 
 
-async def test_tool_output_only_omnigent_turn_continues_before_publication(
-    tmp_path: Path,
-) -> None:
-    """Replay mm:651a14f6 at the session-terminal/publication handoff."""
-
-    replay_id = "omnigent-tool-output-terminal-continuation"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    inspector = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(
-            get_session=AsyncMock(
-                return_value={
-                    "status": manifest["sessionStatus"],
-                    "items": manifest["items"],
-                }
-            )
-        ),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    incomplete = await inspector.inspect_session_completion(
-        expected["resumeSessionId"]
-    )
-    assert incomplete["terminalAssistantAfterWork"] is expected[
-        "terminalAssistantAfterWork"
-    ]
-    assert incomplete["toolResultCount"] == expected["toolResultCount"]
-
-    runner_calls: list[dict[str, object]] = []
-
-    async def execute(_request, **kwargs):
-        runner_calls.append(dict(kwargs))
-        return AgentRunResult(
-            summary="turn complete",
-            metadata={"omnigentSessionId": expected["resumeSessionId"]},
-        )
-
-    completed = {
-        **incomplete,
-        "itemCount": incomplete["itemCount"] + 2,
-        "assistantMessageCount": incomplete["assistantMessageCount"] + 1,
-        "terminalAssistantAfterWork": True,
-    }
-    _ordered, _authority, metadata, result = (
-        await _drive_authority_chain_coordinator(
-            execute,
-            completion_evidence=[incomplete, completed],
-        )
-    )
-
-    assert result.failure_class is None
-    assert metadata["push_status"] == expected["pushStatus"]
-    assert metadata["repositoryContinuationCount"] == expected[
-        "continuationCount"
-    ]
-    assert runner_calls[1]["resume_session_id"] == expected["resumeSessionId"]
-
-
-@pytest.mark.parametrize(
-    "harness", ["codex-native", "claude-native", "opencode-native", "custom", None]
-)
-async def test_turn_diff_publication_uses_canonical_session_harness(
-    tmp_path: Path,
-    harness: str | None,
-) -> None:
-    """Native instrumentation alone skips continuation at the real inspector boundary."""
-
-    replay_id = "omnigent-codex-turn-diff-terminal-answer"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    snapshot = {
-        "status": manifest["sessionStatus"],
-        "harness": harness,
-        "items": manifest["items"],
-    }
-    completed = {
-        **snapshot,
-        "items": [
-            *snapshot["items"],
-            {
-                "type": "message",
-                "data": {
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": "Done after tool work"}
-                    ],
-                },
-            },
-        ],
-    }
-    get_session = AsyncMock(side_effect=[snapshot, completed])
-    inspector = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(get_session=get_session),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runner_calls: list[dict[str, object]] = []
-
-    async def execute(_request, **kwargs):
-        runner_calls.append(dict(kwargs))
-        return AgentRunResult(
-            summary="turn complete",
-            metadata={"omnigentSessionId": expected["resumeSessionId"]},
-        )
-
-    _ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
-        execute,
-        session_inspector=inspector,
-    )
-
-    continuations = 0 if harness == manifest["harness"] else 1
-    assert result.failure_class is None
-    assert metadata["push_status"] == expected["pushStatus"]
-    assert metadata["repositoryContinuationCount"] == continuations
-    assert len(runner_calls) == 1 + continuations
-    assert get_session.await_count == 1 + continuations
-    if continuations:
-        assert runner_calls[1]["resume_session_id"] == expected["resumeSessionId"]
-
-
 async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     tmp_path: Path,
 ) -> None:
@@ -4403,138 +3704,6 @@ async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     assert reopened.omnigent_session_id is expected["omnigentSessionId"]
     assert reopened.metadata_["unpostedAttemptHistory"][-1]["status"] == expected[
         "archivedAttemptStatus"
-    ]
-
-
-@pytest.mark.parametrize("lease_released", [True, False])
-async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    lease_released: bool,
-) -> None:
-    """Replay mm:4e1c43a5 at host readiness and cleanup-authority handoffs."""
-
-    replay_id = "omnigent-cleanup-authority-retry"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock(
-        side_effect=[
-            (1, "", "container is not running"),
-            (1, "", "container is restarting"),
-            (0, "", ""),
-            (0, "", ""),
-        ]
-    )
-    sleep = AsyncMock()
-    monkeypatch.setattr(oauth_host_runtime_module.asyncio, "sleep", sleep)
-
-    await runtime._exec_check("mm-host-replay")
-
-    assert runtime._run.await_count == expected["preflightAttemptCount"] + 1
-    assert sleep.await_count == expected["preflightSleepCount"]
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    store = OmnigentBridgeSessionStore(sessions)
-    request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        correlationId=manifest["incidentWorkflowId"],
-        idempotencyKey=manifest["idempotencyKey"],
-    )
-    policy_authority = {
-        "policyId": "codex-static",
-        "policyVersion": 1,
-        "policyRef": "codex-static@1",
-        "policyDigest": "sha256:" + "1" * 64,
-        "snapshotRef": "policy:sha256:" + "2" * 64,
-        "validation": {"valid": True},
-    }
-    launch = {
-        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
-        "launchPolicyRef": "codex-static@1",
-        "policyAuthority": policy_authority,
-        "enforcedEgress": True,
-    }
-    try:
-        await store.bind_profile_authorization(
-            request=request,
-            endpoint_ref="embedded",
-            provider_profile_id="profile-replay",
-            provider_lease_id="provider-lease-1",
-            credential_generation=1,
-            host_binding_ref="binding-replay",
-            host_lease_ref="host-lease-replay",
-            omnigent_host_id="host-1",
-            effective_launch_snapshot=launch,
-        )
-        await store.bind_egress_cleanup_authority(
-            request=request,
-            host_lease_ref="host-lease-replay",
-            egress_evidence={
-                "attachmentIdentity": "host-container-replay",
-                "endpointIdentity": manifest["firstEndpointIdentity"],
-                "validationResult": "passed",
-            },
-            launch_evidence_ref="artifact://launch-1",
-        )
-        await store.record_lifecycle_event(
-            request.idempotency_key,
-            event_type="terminal",
-            status="failed",
-            metadata={"cleanupCompleted": True, "leaseReleased": lease_released},
-        )
-
-        reopened = await store.get_or_create(
-            request=request,
-            endpoint_ref="embedded",
-            agent_id=None,
-            agent_name=None,
-            target_metadata={},
-        )
-        await store.bind_profile_authorization(
-            request=request,
-            endpoint_ref="embedded",
-            provider_profile_id="profile-replay",
-            provider_lease_id="provider-lease-1",
-            credential_generation=1,
-            host_binding_ref="binding-replay",
-            host_lease_ref="host-lease-replay",
-            omnigent_host_id="host-2",
-            effective_launch_snapshot=launch,
-        )
-        await store.bind_egress_cleanup_authority(
-            request=request,
-            host_lease_ref="host-lease-replay",
-            egress_evidence={
-                "attachmentIdentity": "host-container-replay",
-                "endpointIdentity": manifest["replacementEndpointIdentity"],
-                "validationResult": "passed",
-            },
-            launch_evidence_ref="artifact://launch-2",
-        )
-        active = await store.get_egress_cleanup_authority(
-            host_lease_ref="host-lease-replay"
-        )
-    finally:
-        await engine.dispose()
-
-    assert reopened.status == expected["reopenedStatus"]
-    archived = reopened.metadata_["unpostedAttemptHistory"][-1]
-    assert archived["egressCleanupAuthority"]["phase"] == expected[
-        "archivedAuthorityPhase"
-    ]
-    assert active is not None
-    assert active["egressEvidence"]["endpointIdentity"] == expected[
-        "activeEndpointIdentity"
     ]
 
 
@@ -5327,7 +4496,7 @@ async def test_omnigent_injected_client_preserves_execution_timeouts() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler)
     ) as injected_client:
-        client = oauth_host_runtime_module.OmnigentHttpClient(
+        client = OmnigentHttpClient(
             base_url="https://omnigent.test",
             timeout_seconds=manifest["requestTimeoutSeconds"],
             event_timeout_seconds=manifest["eventTimeoutSeconds"],
@@ -5364,7 +4533,7 @@ async def test_omnigent_native_bootstrap_has_dispatch_timeout_margin() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler)
     ) as injected_client:
-        client = oauth_host_runtime_module.OmnigentHttpClient(
+        client = OmnigentHttpClient(
             base_url="https://omnigent.test",
             client=injected_client,
         )
@@ -5398,7 +4567,7 @@ async def test_omnigent_native_bootstrap_has_dispatch_timeout_margin() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(timeout_handler)
     ) as injected_client:
-        client = oauth_host_runtime_module.OmnigentHttpClient(
+        client = OmnigentHttpClient(
             base_url="https://omnigent.test",
             client=injected_client,
         )
@@ -5447,126 +4616,6 @@ async def test_omnigent_stock_sse_event_catalog_is_normalized() -> None:
         assert result.event["normalizedStatus"] == case["normalizedStatus"]
 
     assert len(observed) == expected["stockEventTypeCountWithoutSessionStatus"]
-
-
-async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:933a5f44 at the host-to-runner environment boundary."""
-
-    replay_id = "omnigent-runner-proxy-passthrough"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    monkeypatch.setenv("OMNIGENT_IMAGE_REF", manifest["hostImageRef"])
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", manifest["hostImageRef"])
-    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", manifest["hostImageRef"])
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime.container_exists = AsyncMock(return_value=False)
-    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
-    runtime._run = AsyncMock(side_effect=_fresh_oauth_host_docker_result)
-    binding = _oauth_binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
-    host_lease = _oauth_host_lease().model_copy(
-        update={
-            "container_name": manifest["containerName"],
-            "omnigent_host_id": None,
-        }
-    )
-
-    await runtime._launch_on_demand(
-        binding=binding,
-        host_lease=host_lease,
-        container_name=manifest["containerName"],
-        workspace_source=tmp_path,
-        skill_projection=tmp_path / "skills",
-        runtime_scripts=tmp_path,
-        current_step_execution_id="workflow:run:node-1:execution:1",
-        github_token="fixture_token",
-        github_projection_reservation={
-            "ownerRef": f"host-lease:{host_lease.lease_id}",
-            "revision": 1,
-            "reservationId": "c1ff73e9-c42d-48b5-acce-1e8c0f07c9c3",
-        },
-        recovery_request=SimpleNamespace(),
-        recovery_store=SimpleNamespace(validate_github_projection=AsyncMock()),
-        effective_launch=compile_effective_launch(
-            profile_ref="omnigent-codex@1",
-            policy_ref="codex-on-demand@1",
-            provider_profile_id="codex",
-        ),
-        egress_attestation=_egress_attestation(),
-    )
-
-    launch_command = runtime._run.await_args_list[-1].args
-    passthrough = next(
-        value.partition("=")[2]
-        for value in launch_command
-        if value.startswith("OMNIGENT_RUNNER_ENV_PASSTHROUGH=")
-    )
-    assert passthrough.split(",") == expected["passthroughNames"]
-
-
-async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:2d8480da at the Omnigent runner-to-Codex shell boundary."""
-
-    replay_id = "omnigent-codex-moonmind-env-handoff"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    monkeypatch.setenv("MOONMIND_URL", manifest["moonmindUrl"])
-    monkeypatch.setattr(
-        settings.security,
-        "JWT_SECRET_KEY",
-        "replay-container-capability-key",
-    )
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=REPO_ROOT / "services" / "omnigent" / "scripts",
-        workspace_root=tmp_path,
-    )
-    runtime_environment = runtime._container_job_environment(
-        binding=_oauth_binding().model_copy(
-            update={
-                "static_host_id": None,
-                "host_launch_profile_ref": "codex-oauth-v1",
-            }
-        ),
-        host_lease=_oauth_host_lease(),
-        workspace_locator=manifest["workspaceLocator"],
-        current_workflow_id=manifest["incidentWorkflowId"],
-        current_step_execution_id=manifest["stepExecutionId"],
-        timeout_seconds=3600,
-        required_capabilities=manifest["requiredCapabilities"],
-    )
-    runtime_scripts = runtime._prepare_runtime_scripts(
-        manifest["incidentWorkflowId"],
-        current_step_execution_id=manifest["stepExecutionId"],
-        runtime_environment=runtime_environment,
-    )
-    profile = (runtime_scripts / "moonmind-execution.sh").read_text(
-        encoding="utf-8"
-    )
-
-    for name in expected["toolShellEnvironmentNames"]:
-        assert f"export {name}=" in profile
-    assert f"'{manifest['moonmindUrl']}'" in profile
-    assert f"'{manifest['incidentWorkflowId']}'" in profile
-    for secret_name in expected["excludedSecretNames"]:
-        assert f"export {secret_name}=" not in profile
-        assert runtime_environment[secret_name] not in profile
-    capability_file = runtime_scripts / "capabilities" / "execution-fanout"
-    assert capability_file.read_text(encoding="utf-8").strip() == (
-        runtime_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"]
-    )
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_environment
 
 
 async def test_generic_omnigent_fanout_crosses_runner_and_opencode_shell() -> None:
@@ -5747,53 +4796,6 @@ async def test_omnigent_codex_remote_bridge_has_loopback_only_proxy_bypass() -> 
         expected["loopbackHosts"]
     )
     assert manifest["omnigentServerHost"] not in proxy_environment["NO_PROXY"]
-
-
-async def test_omnigent_workspace_owner_matches_isolated_host_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:cbb14c76 at workspace-to-host identity handoff."""
-
-    replay_id = "omnigent-workspace-runtime-ownership"
-    load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    workspace_root = tmp_path / "workspaces"
-    workspace = workspace_root / "run" / "repo"
-    workspace.mkdir(parents=True)
-    tracked = workspace / "tracked.txt"
-    tracked.write_text("tracked", encoding="utf-8")
-    outside = tmp_path / "outside.txt"
-    outside.write_text("outside", encoding="utf-8")
-    link = workspace / "outside-link"
-    link.symlink_to(outside)
-    observed: list[tuple[Path, int, int, bool]] = []
-
-    def record_chown(path, uid, gid, *, follow_symlinks=True):
-        observed.append((Path(path), uid, gid, follow_symlinks))
-
-    monkeypatch.setattr(oauth_host_runtime_module.os, "chown", record_chown)
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=workspace_root,
-    )
-    runtime._align_workspace_ownership(
-        workspace,
-        runtime_uid=expected["runtimeUid"],
-        runtime_gid=expected["runtimeGid"],
-    )
-    runtime._run = AsyncMock(return_value=(0, "", ""))
-    await runtime._exec_check("mm-omnigent-host-replay")
-
-    observed_paths = {path for path, _uid, _gid, _follow in observed}
-    assert {workspace.resolve(), tracked, link} <= observed_paths
-    assert outside not in observed_paths
-    assert all(
-        (uid, gid, follow)
-        == (expected["runtimeUid"], expected["runtimeGid"], False)
-        for _path, uid, gid, follow in observed
-    )
-    assert list(runtime._run.await_args_list[-1].args) == expected["gitPreflight"]
 
 
 async def test_omnigent_hybrid_checkpoint_keeps_session_and_workspace_planes(
@@ -6019,48 +5021,6 @@ async def test_invalid_required_omnigent_checkpoint_blocks_publication(
     assert outcome["status"] == expected["finalizationStatus"]
     assert outcome["failureCode"] == expected["failureCode"]
     assert parent._publish_status == expected["publishStatus"]
-
-
-async def test_active_omnigent_execution_renews_host_lease_until_terminal() -> None:
-    """Replay mm:f2400165 at the execution-to-janitor authority boundary."""
-
-    replay_id = "omnigent-active-host-lease-heartbeat"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    heartbeat_observed = asyncio.Event()
-
-    async def heartbeat_host_lease(lease_id: str, *, ttl_seconds: int):
-        assert lease_id == manifest["hostLeaseRef"]
-        assert ttl_seconds == expected["leaseTtlSeconds"]
-        heartbeat_observed.set()
-        return SimpleNamespace(lease_id=lease_id)
-
-    async def execution() -> AgentRunResult:
-        await heartbeat_observed.wait()
-        return AgentRunResult(summary="completed")
-
-    hosts = SimpleNamespace(
-        heartbeat_host_lease=AsyncMock(side_effect=heartbeat_host_lease)
-    )
-    coordinator = OmnigentProfileBoundExecutionCoordinator(
-        request_input_binder=bind_remediation_context_inputs,
-        session_factory=AsyncMock(),
-        lease_client=SimpleNamespace(),
-        host_repository=hosts,
-        host_runtime=SimpleNamespace(),
-        run_store=SimpleNamespace(),
-        execution_runner=AsyncMock(),
-        artifact_gateway=SimpleNamespace(),
-    )
-
-    result = await coordinator._execute_with_host_lease_heartbeat(
-        execution(),
-        host_lease_ref=manifest["hostLeaseRef"],
-        ttl_seconds=expected["leaseTtlSeconds"],
-    )
-
-    assert result.summary == expected["terminalSummary"]
-    hosts.heartbeat_host_lease.assert_awaited_once()
 
 
 async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
@@ -7573,21 +6533,6 @@ async def test_omnigent_pr_resolver_runtime_authority_replay(
         "token=" not in value.lower()
         for value in create_payload["terminal_launch_args"]
     )
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=REPO_ROOT / "services" / "omnigent" / "scripts",
-        workspace_root=tmp_path,
-    )
-    runtime_scripts = runtime._prepare_runtime_scripts(
-        manifest["idempotencyKey"],
-        current_step_execution_id=manifest["stepExecutionId"],
-    )
-    assert expected["stepExecutionIdentitySource"] == (
-        "/etc/profile.d/moonmind-execution.sh"
-    )
-    assert manifest["stepExecutionId"] in (
-        runtime_scripts / "moonmind-execution.sh"
-    ).read_text(encoding="utf-8")
 
     activities = TemporalAgentRuntimeActivities(
         workspace_root=tmp_path,
@@ -7640,19 +6585,16 @@ async def test_omnigent_profile_bound_skill_activation_replay() -> None:
         parameters={
             "metadata": {
                 "moonmind": {"selectedSkill": manifest["selectedSkill"]}
-            }
+            },
+            # The realizer binds host-verified profile authorization before
+            # the first message is built.
+            "omnigent": {
+                "_moonmindProfileAuthorization": {
+                    "providerProfileId": "codex_openai_oauth",
+                    "hostLeaseRef": "lease-replay",
+                }
+            },
         },
-    )
-    request = bind_exact_host(
-        request,
-        host_id="host-replay",
-        workspace_path="/workspaces/run",
-        profile_authorization={
-            "providerProfileId": "codex_openai_oauth",
-            "hostLeaseRef": "lease-replay",
-        },
-        harness="codex-native",
-        agent_name=CODEX_STOCK_AGENT_NAME,
     )
 
     class Gateway:
@@ -7807,113 +6749,6 @@ async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
     ]
 
 
-async def test_omnigent_canceled_host_rerun_waits_for_admission(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:c702174c after the immediately preceding run was canceled."""
-
-    replay_id = "omnigent-canceled-host-rerun-admission"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    binding = _oauth_binding().model_copy(
-        update={"provider_profile_id": manifest["providerProfileId"]}
-    )
-    resolved_lease = _oauth_host_lease().model_copy(update={"status": "allocating"})
-    hosts = SimpleNamespace(
-        create_or_get_host_lease=AsyncMock(
-            side_effect=[
-                OmnigentOAuthHostError(
-                    "prior canceled host is still active",
-                    code=HOST_PROFILE_BUSY_ERROR_CODE,
-                ),
-                resolved_lease,
-            ]
-        )
-    )
-    emit = AsyncMock()
-    coordinator = OmnigentProfileBoundExecutionCoordinator(
-        request_input_binder=bind_remediation_context_inputs,
-        session_factory=lambda: None,
-        lease_client=SimpleNamespace(),
-        host_repository=hosts,
-        host_runtime=SimpleNamespace(),
-        run_store=SimpleNamespace(),
-        execution_runner=AsyncMock(),
-        artifact_gateway=object(),
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_POLL_SECONDS",
-        0.0,
-    )
-
-    admitted = await coordinator._create_host_lease_after_profile_idle(
-        binding=binding,
-        provider_lease=SimpleNamespace(lease_id="provider-lease-rerun"),
-        workflow_id=manifest["incidentWorkflowId"],
-        step_execution_id="step-rerun",
-        idempotency_key="rerun-admission",
-        emit=emit,
-    )
-
-    assert admitted == resolved_lease
-    assert hosts.create_or_get_host_lease.await_count == 2
-    assert emit.await_args.kwargs["code"] == expected["busyCode"]
-    assert (
-        emit.await_args.kwargs["remediation_action"]
-        == expected["remediationAction"]
-    )
-
-
-async def test_omnigent_recovery_dispatch_waits_for_janitor_drained_host(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:20f53104 after a worker restart left its host lease silent."""
-
-    replay_id = "omnigent-recovery-janitor-drained-host"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    binding = _oauth_binding().model_copy(
-        update={"provider_profile_id": manifest["providerProfileId"]}
-    )
-    draining = _oauth_host_lease().model_copy(
-        update={"lease_id": manifest["hostLeaseRef"], "status": "draining"}
-    )
-    stopped = draining.model_copy(update={"status": "stopped"})
-    hosts = SimpleNamespace(get_host_lease=AsyncMock(side_effect=[draining, stopped]))
-    emit = AsyncMock()
-    coordinator = OmnigentProfileBoundExecutionCoordinator(
-        request_input_binder=bind_remediation_context_inputs,
-        session_factory=lambda: None,
-        lease_client=SimpleNamespace(
-            inspect_lease=AsyncMock(return_value={"active": True})
-        ),
-        host_repository=hosts,
-        host_runtime=SimpleNamespace(),
-        run_store=SimpleNamespace(),
-        execution_runner=AsyncMock(),
-        artifact_gateway=object(),
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_POLL_SECONDS",
-        0.0,
-    )
-
-    admitted = await coordinator._await_host_cleanup_owner(
-        draining,
-        binding=binding,
-        provider_lease=SimpleNamespace(lease_id=manifest["incidentChildWorkflowId"]),
-        emit=emit,
-    )
-
-    assert admitted.status == expected["resolvedHostStatus"]
-    assert expected["waitCode"] == HOST_CLEANUP_CLAIMED_ERROR_CODE
-    assert emit.await_args.kwargs["code"] == expected["waitCode"]
-    assert (
-        emit.await_args.kwargs["remediation_action"]
-        == expected["remediationAction"]
-    )
-
-
 async def test_omnigent_required_capability_authority_reaches_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7972,35 +6807,6 @@ async def test_omnigent_required_capability_authority_reaches_adapter(
         ),
     )
     assert payload["terminal_launch_args"] == expected["terminalLaunchArgs"]
-
-
-async def test_omnigent_tool_probe_uses_image_owned_gh_without_compose(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Replay mm:d4a7b625 at the worker-to-system-Docker boundary."""
-
-    replay_id = "omnigent-tool-bundle-deployment-boundary"
-    manifest = load_replay(replay_id, "manifest.json")
-    expected = load_replay(replay_id, "expected-outcome.json")
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        image=expected["probeImage"],
-    )
-    runtime._run = AsyncMock(return_value=(0, "gh version 2.76.2 (replay)\n", ""))
-
-    await runtime._initialize_required_tools()
-
-    command = runtime._run.await_args.args
-    assert manifest["failureCode"] == "CODEX_OAUTH_LOGIN_STATUS_FAILED"
-    assert command[:2] == ("docker", "run")
-    assert "compose" not in command
-    # MoonLadderStudios/MoonMind#4558: the probe runs the image-owned gh with
-    # no tools-volume mount and no Compose invocation.
-    assert "--entrypoint" in command
-    assert "/opt/moonmind-tools/bin/gh" in command
-    assert not any(
-        "moonmind-omnigent-tools" in str(item) for item in command
-    )
 
 
 @pytest.mark.parametrize(
@@ -8162,122 +6968,6 @@ async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
     ).hexdigest()
     assert rejection_payloads[0]["terminalPayloadDigest"] == expected_digest
     assert "agentResult" not in rejection_payloads[0]
-
-
-@pytest.mark.parametrize(
-    ("stage", "position"),
-    [
-        (stage, position)
-        for stage in (
-            "profile_lease",
-            "host_lease",
-            "host_start",
-            "session_creation",
-            "first_message",
-            "terminal_harvest",
-            "publication",
-            "cleanup",
-            "capacity_release",
-        )
-        for position in ("before", "after")
-    ],
-)
-async def test_checkpoint_branch_turn_restart_matrix_preserves_exact_once_authority(
-    stage: str,
-    position: str,
-) -> None:
-    """Restart and duplicate delivery reuse all coordinator-owned identities."""
-
-    request = _checkpoint_branch_turn_profile_request()
-    ledger = CheckpointBranchRuntimeLedger(
-        fail_stage=stage,
-        fail_position=position,
-    )
-    result: AgentRunResult | None = None
-
-    # A real Activity retry constructs a fresh coordinator against the same
-    # durable owners.  Cleanup/release/publication failures can return a bounded
-    # failed result rather than raising, so the harness also re-enters those
-    # completed calls once after the injected failure is observed.
-    for _attempt in range(3):
-        # A lost stop acknowledgment stays fenced until the janitor confirms it.
-        ledger.confirm_unconfirmed_host_stops()
-        try:
-            result = await execute_checkpoint_branch_request(
-                request,
-                ledger=ledger,
-            )
-        except InjectedBoundaryFailure:
-            continue
-        if ledger.failure_injected and result.failure_class:
-            continue
-        if ledger.failure_injected:
-            break
-
-    assert ledger.failure_injected is True
-    assert result is not None
-    if result.failure_class:
-        ledger.confirm_unconfirmed_host_stops()
-        result = await execute_checkpoint_branch_request(request, ledger=ledger)
-    assert result.failure_class is None
-
-    # Duplicate delivery after terminal completion must reattach to the exact
-    # same authority rather than create a second external effect.
-    ledger.confirm_unconfirmed_host_stops()
-    replayed = await execute_checkpoint_branch_request(request, ledger=ledger)
-    assert replayed.failure_class is None
-
-    for identity_kind in (
-        "provider_lease",
-        "host_lease",
-        "host",
-        "bridge_session",
-        "provider_session",
-        "first_message",
-        "output",
-        "branch",
-        "commit",
-        "pull_request",
-        "publication",
-        "cleanup",
-        "capacity_release",
-    ):
-        assert ledger.effect_counts[identity_kind] == 1, identity_kind
-        assert len(ledger.identities[identity_kind]) == 1, identity_kind
-
-    assert "source-provider-lease" not in ledger.identities["provider_lease"]
-    assert "source-host-lease" not in ledger.identities["host_lease"]
-    assert "source-host" not in ledger.identities["host"]
-    assert "source-bridge" not in ledger.identities["bridge_session"]
-    assert "source-session" not in ledger.identities["provider_session"]
-    assert "source-message" not in ledger.identities["first_message"]
-    assert len({request.step_execution.step_execution_id}) == 1
-    assert {
-        item.step_execution.step_execution_id for item in ledger.requests
-    } == {request.step_execution.step_execution_id}
-    assert {
-        item.workspace_spec["workspaceLocator"]["workspaceId"]
-        for item in ledger.requests
-    } == {"branch-workspace-retry"}
-
-    # Every successful retry cycle releases host authority before Provider
-    # Profile capacity and records terminal evidence last.
-    last_host_cleanup = max(
-        index
-        for index, event in enumerate(ledger.lifecycle)
-        if event == ("host_cleanup", "completed")
-    )
-    last_profile_release = max(
-        index
-        for index, event in enumerate(ledger.lifecycle)
-        if event == ("profile_lease_release", "completed")
-    )
-    last_terminal = max(
-        index
-        for index, (event_type, _status) in enumerate(ledger.lifecycle)
-        if event_type == "terminal"
-    )
-    assert last_host_cleanup < last_profile_release < last_terminal
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -8797,7 +7487,6 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
 
 
 @pytest.mark.parametrize("authored_base", [None, "main"])
-@pytest.mark.parametrize("entrypoint", ["generic", "profile_bound"])
 @pytest.mark.parametrize("operation", ["fetch", "ls-remote", "push"])
 @pytest.mark.parametrize(
     "failure", ["recovered", "exhausted", "authentication", "cancelled"]
@@ -8806,7 +7495,6 @@ async def test_publication_transport_recovery_preserves_workspace_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     authored_base: str | None,
-    entrypoint: str,
     operation: str,
     failure: str,
 ) -> None:
@@ -8879,24 +7567,9 @@ async def test_publication_transport_recovery_preserves_workspace_authority(
     monkeypatch.setattr("moonmind.omnigent.workspace_publication.asyncio.sleep", sleep)
 
     async def publish():
-        if entrypoint == "generic":
-            return await realizer._publish_repository(
-                request, AgentRunResult(summary="completed")
-            )
-        runtime = OmnigentOAuthHostRuntime(
-            client=SimpleNamespace(), workspace_root=tmp_path
+        return await realizer._publish_repository(
+            request, AgentRunResult(summary="completed")
         )
-        publication = await runtime.publish_workspace(
-            workspace_locator=request.workspace_spec["workspaceLocator"],
-            current_workflow_id=workflow_id,
-            current_step_execution_id=workflow_id,
-            publication_identity=request.idempotency_key,
-            publish_mode="branch",
-            base_branch=authored_base,
-            repository="MoonLadderStudios/Tactics",
-            github_token="fixture-credential",
-        )
-        return AgentRunResult(metadata=publication)
 
     if failure != "recovered" or operation == "push":
         expected_error = (
@@ -8920,10 +7593,7 @@ async def test_publication_transport_recovery_preserves_workspace_authority(
         assert result.metadata["push_head_sha"] == _git(
             origin, "rev-parse", "refs/heads/main"
         )
-        if entrypoint == "generic":
-            assert (
-                result.metadata["acceptedRepositoryEvidence"]["remoteVerified"] is True
-            )
+        assert result.metadata["acceptedRepositoryEvidence"]["remoteVerified"] is True
         assert _git(origin, "show", "main:implemented.txt") == "completed remediation"
         parent = MoonMindRunWorkflow()
         parent._record_publish_result(
@@ -8934,7 +7604,7 @@ async def test_publication_transport_recovery_preserves_workspace_authority(
         assert len(attempts) >= 3
         assert [call.args[0] for call in sleep.await_args_list] == [2, 4]
     assert all(attempt == attempts[0] for attempt in attempts[:3])
-    assert credential.await_count == (1 if entrypoint == "generic" else 0)
+    assert credential.await_count == 1
     if operation == "push" or failure == "authentication":
         sleep.assert_not_awaited()
     elif failure == "exhausted":

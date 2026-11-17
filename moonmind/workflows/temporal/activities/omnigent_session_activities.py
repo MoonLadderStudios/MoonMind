@@ -13,6 +13,7 @@ import json
 import os
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
 
@@ -418,6 +419,22 @@ def _assert_rollback_allows_new_admission(
         raise ValueError("recorded rollback generation blocks new supervisor admission")
 
 
+def _refuse_retired_realizer(realizer_ref: str | None) -> None:
+    """Stop a recorded plan whose realizer was removed, without retrying."""
+
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.omnigent.harness_platform.support import RETIRED_REALIZERS
+
+    message = RETIRED_REALIZERS.get(str(realizer_ref or ""))
+    if message is not None:
+        raise ApplicationError(
+            message,
+            type="OmnigentExecutionRealizerUnavailable",
+            non_retryable=True,
+        )
+
+
 async def omnigent_evaluate_session_admission_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -449,12 +466,10 @@ async def omnigent_evaluate_session_admission_activity(
             )
         from moonmind.omnigent.realizers.registry import get_default_registry
 
+        _refuse_retired_realizer(plan.payload.executionRealizerRef)
         realizer = get_default_registry().require(plan.payload.executionRealizerRef)
         _validate_plan_support_authority(plan)
-        managed_lifecycle = plan.payload.executionRealizerRef != "codex-profile-bound@1"
-        if managed_lifecycle and plan_bindings_have_repository_authority(
-            plan.payload.credentialBindings
-        ):
+        if plan_bindings_have_repository_authority(plan.payload.credentialBindings):
             from moonmind.workflows.temporal.activities.omnigent_activities import (
                 _parent_repository_binding_set,
             )
@@ -473,10 +488,8 @@ async def omnigent_evaluate_session_admission_activity(
             plan, execution_profile_ref=request.execution_profile_ref
         )
         return OmnigentSessionAdmissionDecision(
-            admitted=not managed_lifecycle,
-            reasonCode=(
-                "realizer_managed_lifecycle" if managed_lifecycle else "enabled"
-            ),
+            admitted=False,
+            reasonCode="realizer_managed_lifecycle",
             admissionMode="enabled",
             admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
             executionRealizerRef=plan.payload.executionRealizerRef,
@@ -491,24 +504,18 @@ async def omnigent_evaluate_session_admission_activity(
         )
         if plan is None:
             raise ValueError("admitted Omnigent execution plan is unavailable")
+        _refuse_retired_realizer(plan.payload.executionRealizerRef)
 
-    # Reference-only plans and retained plan-less histories follow the same
-    # rollback control as fully bound plans.
+    # Reference-only plans follow the same rollback control as fully bound
+    # plans. Plan-less requests ran only on the removed profile-bound
+    # supervisor host, so they are not admitted to it; the execution Activity
+    # reports their typed retirement.
     _assert_rollback_allows_new_admission(
         settings.feature_flags,
         recorded_execution_owner=(
             plan.payload.executionRealizerRef if plan is not None else ""
         ),
     )
-
-    admitted = True
-    reason = "enabled"
-    if (
-        plan is not None
-        and plan.payload.executionRealizerRef != "codex-profile-bound@1"
-    ):
-        admitted = False
-        reason = "realizer_managed_lifecycle"
 
     capacity_authority = (
         await _plan_capacity_authority(
@@ -518,8 +525,12 @@ async def omnigent_evaluate_session_admission_activity(
         else {}
     )
     return OmnigentSessionAdmissionDecision(
-        admitted=admitted,
-        reasonCode=reason,
+        admitted=False,
+        reasonCode=(
+            "realizer_managed_lifecycle"
+            if plan is not None
+            else "new_selection_disabled"
+        ),
         admissionMode="enabled",
         admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
         executionRealizerRef=(
@@ -554,10 +565,7 @@ async def _plan_capacity_authority(
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
 
-    if plan.payload.executionRealizerRef not in {
-        "generic-omnigent-host@1",
-        "codex-profile-bound@1",
-    }:
+    if plan.payload.executionRealizerRef != "generic-omnigent-host@1":
         return {}
     selected = sorted(
         {
@@ -693,21 +701,6 @@ def _validate_plan_support_authority(plan: Any) -> None:
 
     support_identity = plan.payload.supportIdentity
     if support_identity is None:
-        exact_fields = (
-            plan.payload.hostImageRef,
-            plan.payload.omnigentHostBuildDigest,
-            plan.payload.hostArchitecture,
-            plan.payload.effectiveLaunchSnapshotRef,
-            plan.payload.effectiveLaunchSnapshotDigest,
-        )
-        if (
-            plan.payload.executionRealizerRef == "codex-profile-bound@1"
-            and not any(exact_fields)
-        ):
-            # Replay-visible Codex plans admitted before complete support
-            # identity existed keep their recorded mature realizer. They are
-            # never upgraded from mutable deployment defaults.
-            return
         raise ValueError("execution plan lacks exact support identity")
 
     class_decision = ClassAdmissionDecision.model_validate(
@@ -1329,12 +1322,6 @@ async def _validate_plan_admission_authority(
     authority = persisted.payload.authority
     admission_authority = persisted.payload.admissionAuthority
     if authority is not None and admission_authority is None:
-        if persisted.payload.executionRealizerRef == "codex-profile-bound@1":
-            # Product plans persisted before admission-evidence authority was
-            # introduced keep their recorded Codex coordinator. They cannot be
-            # switched to the generic realizer, and new compilation always
-            # emits the evidence below.
-            return
         raise ValueError("execution plan lacks persisted admission evidence")
     if admission_authority is None:
         return
@@ -1798,284 +1785,6 @@ async def _project_runtime_binding_to_execution(
             }},
         )
         await db.commit()
-
-
-def _bounded_model_option_ids(payload: Mapping[str, Any]) -> list[str]:
-    """Extract only bounded model identities from an untrusted host response."""
-
-    candidates: list[Any] = []
-    for key in ("models", "modelOptions", "options", "data"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            candidates.extend(value[:256])
-        elif isinstance(value, Mapping):
-            candidates.extend(list(value.keys())[:256])
-    identities: list[str] = []
-    for candidate in candidates:
-        if isinstance(candidate, Mapping):
-            candidate = (
-                candidate.get("qualifiedId")
-                or candidate.get("id")
-                or candidate.get("model")
-                or candidate.get("name")
-            )
-        identity = str(candidate or "").strip()
-        if identity and len(identity) <= 255 and identity not in identities:
-            identities.append(identity)
-    return identities
-
-
-def _bounded_workspace_evidence(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, Mapping):
-        return {"status": "resolved"}
-    forbidden_fragments = ("path", "root", "volume", "socket", "token", "secret")
-    return {
-        str(key): value
-        for key, value in payload.items()
-        if not any(fragment in str(key).lower() for fragment in forbidden_fragments)
-        and isinstance(value, (str, int, float, bool, type(None)))
-        and len(str(value)) <= 512
-    }
-
-
-async def _persist_host_runtime_evidence(
-    *,
-    request: AgentExecutionRequest,
-    plan: Any,
-    preflight: Mapping[str, Any],
-    model_options: Mapping[str, Any],
-    host_lease_generation: int,
-) -> dict[str, str | list[str]]:
-    """Validate and persist exact-host evidence before binding advancement."""
-
-    from moonmind.omnigent.harness_platform.attestation import (
-        HostHarnessAttestation,
-        validate_exact_host_attestation,
-    )
-    from moonmind.omnigent.harness_platform.capabilities import (
-        ClassAdmissionDecision,
-        validate_exact_host_capabilities,
-    )
-    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-        HarnessPlatformFailure,
-    )
-    from moonmind.omnigent.harness_platform.skills import (
-        ResolvedSkillSet,
-        assert_skill_delivery_attestation,
-    )
-
-    support_identity = plan.payload.supportIdentity
-    registration = preflight.get("hostRegistrationEvidence")
-    if not isinstance(registration, Mapping):
-        raise HarnessPlatformError(
-            "exact host registration evidence is unavailable",
-            code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
-        )
-
-    def observed(*keys: str) -> Any:
-        for key in keys:
-            value = registration.get(key)
-            if value is not None:
-                return value
-        return None
-
-    host_id = str(preflight.get("hostId") or "").strip()
-    implementation_payload = observed(
-        "harnessImplementation", "harness_implementation"
-    )
-    if not isinstance(implementation_payload, Mapping):
-        raise HarnessPlatformError(
-            "exact host omitted harness implementation identity",
-            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-        )
-    implementation = HarnessImplementationIdentity.model_validate(
-        dict(implementation_payload)
-    )
-    if implementation.implementation_ref() != plan.payload.harnessImplementationRef:
-        raise HarnessPlatformError(
-            "exact host harness implementation conflicts with the plan",
-            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-        )
-    raw_capabilities = registration.get("capabilities")
-    capabilities = (
-        {
-            str(key): value
-            for key, value in raw_capabilities.items()
-            if isinstance(value, (str, int, float, bool, type(None)))
-        }
-        if isinstance(raw_capabilities, Mapping)
-        else {}
-    )
-    # Derived substrate attestations may augment the registered host's bounded
-    # capability projection, but only when the owning runtime reports that its
-    # checks completed.  Never invent positive capability evidence here.
-    if preflight.get("workspaceMountAttested") is True:
-        capabilities["workspace.bind"] = True
-    if preflight.get("restrictedEgressAttested") is True:
-        capabilities["restricted-egress"] = True
-    attestation = HostHarnessAttestation.model_validate(
-        {
-            "hostId": host_id,
-            "hostClassRef": plan.payload.hostClassRef,
-            "hostImageRef": observed("imageRef", "image_ref")
-            or (preflight.get("egressAttestation") or {}).get("hostImageRef"),
-            "omnigentVersion": observed(
-                "omnigentVersion", "omnigent_version"
-            ),
-            "omnigentBuildDigest": observed(
-                "omnigentBuildDigest", "omnigent_build_digest"
-            ),
-            "harnessId": plan.payload.harnessId,
-            "harnessImplementation": implementation.model_dump(
-                mode="json", by_alias=True
-            ),
-            "runtimeDependencies": observed(
-                "runtimeDependencies", "runtime_dependencies"
-            )
-            or [],
-            "configured": True,
-            "capabilities": capabilities,
-            "architecture": registration.get("architecture"),
-            "attestationGeneration": host_lease_generation,
-            "observedAt": datetime.now(UTC),
-        }
-    )
-    expected_vendor_runtimes: list[dict[str, str]] = []
-    if support_identity is not None:
-        for runtime_ref in support_identity.vendorRuntimeRefs:
-            identity, separator, digest = str(runtime_ref).rpartition("#")
-            name, version_separator, version = identity.rpartition("@")
-            if not separator or not version_separator:
-                raise HarnessPlatformError(
-                    "planned vendor runtime identity is malformed",
-                    code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-                )
-            expected_vendor_runtimes.append(
-                {"name": name, "version": version, "digest": digest}
-            )
-    required_capabilities = list(
-        plan.payload.classAdmissionDecision.get("requiredSatisfied") or []
-    )
-    validate_exact_host_attestation(
-        attestation,
-        expectedHostClassRef=plan.payload.hostClassRef,
-        expectedImageRef=(
-            plan.payload.hostImageRef or attestation.hostImageRef
-        ),
-        expectedOmnigentBuildDigest=(
-            plan.payload.omnigentHostBuildDigest
-            or attestation.omnigentBuildDigest
-        ),
-        expectedHarnessId=plan.payload.harnessId,
-        expectedImplementation=implementation.model_dump(
-            mode="json", by_alias=True
-        ),
-        expectedVendorRuntimes=expected_vendor_runtimes,
-        requiredCapabilities=required_capabilities,
-        expectedArchitecture=(
-            plan.payload.hostArchitecture
-            or attestation.architecture
-        ),
-        expectedHostId=host_id,
-        currentHostLeaseGeneration=host_lease_generation,
-    )
-    host_attestation_ref = await _write_json_artifact(
-        name="omnigent.host-harness-attestation.json",
-        artifact_type="omnigent.host_harness_attestation",
-        payload=attestation.model_dump(mode="json", by_alias=True),
-    )
-
-    model_ids = _bounded_model_option_ids(model_options)
-    selected_model = str(plan.payload.modelConfig.qualifiedId or "").strip()
-    if selected_model and selected_model not in model_ids:
-        raise HarnessPlatformError(
-            f"planned model {selected_model!r} is unavailable on the exact host",
-            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-        )
-    model_attestation_ref = await _write_json_artifact(
-        name="omnigent.model-option-attestation.json",
-        artifact_type="omnigent.model_option_attestation",
-        payload={
-            "schemaVersion": "moonmind.omnigent-model-option-attestation.v1",
-            "hostId": host_id,
-            "selectedModel": selected_model or None,
-            "availableModelIds": model_ids,
-            "modelConfigDigest": plan.payload.modelConfig.modelConfigDigest,
-            "observedAt": datetime.now(UTC).isoformat(),
-        },
-    )
-
-    planned_skills = ResolvedSkillSet.model_validate(plan.payload.resolvedSkills)
-    actual_skill_ref = str(preflight.get("resolvedSkillsetRef") or "").strip()
-    if planned_skills.resolvedSkillSetRef != f"artifact:{actual_skill_ref}":
-        raise HarnessPlatformError(
-            "exact host Skill projection conflicts with the execution plan",
-            code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
-        )
-    if preflight.get("skillDeliveryAttested") is not True:
-        raise HarnessPlatformError(
-            "exact host omitted Skill delivery attestation",
-            code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
-        )
-    assert_skill_delivery_attestation(
-        planned=planned_skills,
-        attested_delivery_ref=planned_skills.skillDeliveryRef,
-        attested_digest=planned_skills.resolvedSkillSetDigest,
-    )
-    skill_attestation_ref = await _write_json_artifact(
-        name="omnigent.skill-delivery-attestation.json",
-        artifact_type="omnigent.skill_delivery_attestation",
-        payload={
-            "schemaVersion": "moonmind.omnigent-skill-delivery-attestation.v1",
-            "hostId": host_id,
-            "resolvedSkillSetRef": planned_skills.resolvedSkillSetRef,
-            "resolvedSkillSetDigest": planned_skills.resolvedSkillSetDigest,
-            "skillDeliveryRef": planned_skills.skillDeliveryRef,
-        },
-    )
-    workspace_ref = await _write_json_artifact(
-        name="omnigent.workspace-resolution.json",
-        artifact_type="omnigent.workspace_resolution",
-        payload={
-            "schemaVersion": "moonmind.omnigent-workspace-resolution.v1",
-            "workspaceIntentRef": plan.payload.workspaceIntentRef,
-            "evidence": _bounded_workspace_evidence(
-                preflight.get("workspaceResolution")
-            ),
-        },
-    )
-    exact_decision = validate_exact_host_capabilities(
-        class_decision=ClassAdmissionDecision.model_validate(
-            plan.payload.classAdmissionDecision
-        ),
-        attestation_capabilities={
-            str(key): value is True for key, value in capabilities.items()
-        },
-        mount_attested=preflight.get("workspaceMountAttested") is True,
-        network_attested=preflight.get("restrictedEgressAttested") is True,
-        model_attested=(not selected_model or selected_model in model_ids),
-        required_capabilities=required_capabilities,
-    )
-    exact_decision_ref = await _write_json_artifact(
-        name="omnigent.exact-host-capability-decision.json",
-        artifact_type="omnigent.exact_host_capability_decision",
-        payload=exact_decision.model_dump(mode="json", by_alias=True),
-    )
-    cleanup_refs = [
-        str(value)
-        for value in (preflight.get("egressEvidenceRef"),)
-        if str(value or "").strip()
-    ]
-    return {
-        "host_harness_attestation_ref": host_attestation_ref,
-        "exact_host_capability_decision_ref": exact_decision_ref,
-        "workspace_resolution_ref": workspace_ref,
-        "model_option_attestation_ref": model_attestation_ref,
-        "skill_delivery_attestation_ref": skill_attestation_ref,
-        "cleanup_authority_refs": cleanup_refs,
-    }
 
 
 async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
@@ -3567,525 +3276,26 @@ async def _omnigent_client_context():
     return http_client, client
 
 
-async def _resolve_legacy_launch_policy_snapshot(
-    *, policy_service: Any, launch_policy_ref: str, resolve_default: bool
-) -> tuple[str, dict[str, Any]]:
-    """Resolve exact replay authority, following defaults only when unbound."""
+async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Refuse to launch a host for a retained profile-bound session.
 
-    if not resolve_default:
-        snapshot = await policy_service.resolve_runtime_snapshot(launch_policy_ref)
-        return launch_policy_ref, snapshot
-    policy_id, separator, _version = launch_policy_ref.rpartition("@")
-    if not separator:
-        raise ValueError("default launch policy reference is invalid")
-    snapshot = await policy_service.resolve_default_runtime_snapshot(policy_id)
-    return str(snapshot["policyRef"]), snapshot
-
-
-async def _bind_cached_host_launch(
-    hosts: Any,
-    binding: Any,
-    *,
-    profile_id: str,
-    execution_profile_ref: str,
-    launch_policy_ref: str,
-    effective_launch: dict[str, Any],
-    planned: bool,
-) -> tuple[Any, dict[str, Any]]:
-    """Return the binding and launch a host for this attempt starts from.
-
-    Without an admitted plan the binding's cached launch is authority. An
-    admitted plan's launch replaces an idle binding's cache (for example an
-    earlier attempt's launch from before newly installed images); a host
-    still leased under the cached launch keeps that binding until it ends.
-    A binding retained from static-connected hosts has no launch that can
-    still run: it moves to this on-demand launch, clearing its static host
-    id, and is refused (for a later retry) while a lease still holds it.
+    The supervisor host launch was the removed OAuth host runtime. Only sessions
+    admitted before its removal reach this activity; their failure handling
+    still stops whatever host they recorded and releases their leases.
     """
 
-    retained_static = not binding.host_launch_profile_ref
-    if not retained_static:
-        bound_effective_launch = dict(binding.effective_launch_snapshot)
-        if not planned or bound_effective_launch.get("snapshotRef") == (
-            effective_launch.get("snapshotRef")
-        ):
-            return binding, bound_effective_launch
-    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+    from temporalio.exceptions import ApplicationError
 
-    try:
-        binding = await hosts.create_or_update_static_binding(
-            profile_id=profile_id,
-            endpoint_ref=binding.endpoint_ref,
-            host_launch_profile_ref=binding.host_launch_profile_ref
-            or launch_policy_ref,
-            execution_profile_ref=execution_profile_ref,
-            launch_policy_ref=launch_policy_ref,
-            effective_launch_snapshot=effective_launch,
-            require_idle=True,
-            expected_binding=binding if retained_static else None,
-        )
-    except OmnigentOAuthHostError as exc:
-        if exc.code != "OMNIGENT_HOST_BINDING_LEASED" or retained_static:
-            raise
-        raise ValueError(
-            "durable host binding conflicts with planned launch authority"
-        ) from exc
-    return binding, effective_launch
+    from moonmind.omnigent.harness_platform.support import (
+        PROFILE_BOUND_RETIRED_MESSAGE,
+    )
 
-
-async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Materialize and bind one exact host without returning mutable paths."""
-
-    from api_service.db.base import async_session_maker
-    from api_service.services.omnigent_policies import OmnigentPolicyService
-    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-    from moonmind.omnigent.control_plane import FencingScope, OmnigentControlPlaneStore
-    from moonmind.omnigent.execution_profiles import (
-        PROFILES,
-        default_execution_profile_ref_for_runtime,
-        selection_from_request,
+    OmnigentSessionActivityRequest.model_validate(payload)
+    raise ApplicationError(
+        PROFILE_BOUND_RETIRED_MESSAGE,
+        type="OmnigentExecutionRealizerUnavailable",
+        non_retryable=True,
     )
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
-        _compile_persisted_effective_launch,
-        compile_follow_up_retrieval_policy,
-        enforce_required_follow_up_retrieval,
-        on_demand_binding_policy_ref,
-    )
-    from moonmind.omnigent.settings import resolved_server_url
-    from moonmind.omnigent.workspace_intent import compile_workspace_intent
-
-    request = OmnigentSessionActivityRequest.model_validate(payload)
-    command, should_execute = await _claim_command(request)
-    if not should_execute:
-        return {"commandId": request.command_id, "outcome": command.status}
-    agent_request = await bind_remediation_context_inputs(
-        await _load_intent_request(request)
-    )
-    agent_plan_binding = getattr(agent_request, "omnigent_execution_plan", None)
-    execution_plan = (
-        await _load_session_execution_plan(request, agent_plan_binding)
-        if agent_plan_binding is not None
-        else None
-    )
-    store = OmnigentControlPlaneStore(async_session_maker)
-    async with store.transaction() as repos:
-        session = await repos.sessions.get(request.session_id)
-    if session is None or not session.provider_profile_id:
-        raise ValueError("Provider Profile lease authority is missing")
-    if not session.host_lease_generation:
-        async with store.transaction() as repos:
-            session = await repos.sessions.acquire_fencing_generation(
-                request.session_id,
-                FencingScope.HOST_LEASE,
-                expected_revision=session.revision,
-            )
-    provider_lease_id = str(session.metadata.get("providerLeaseRef") or "")
-    if not provider_lease_id:
-        raise ValueError("Provider Profile lease reference is missing")
-
-    if (
-        execution_plan is not None
-        and execution_plan.payload.executionRealizerRef
-        == "generic-omnigent-host@1"
-    ):
-        raise ValueError(
-            "generic execution authority belongs to the AgentRun realizer, "
-            "not the legacy session supervisor"
-        )
-
-    hosts = OmnigentOAuthHostRepository(async_session_maker)
-    binding = await hosts.get_binding_for_profile(session.provider_profile_id)
-    # A binding retained from static-connected hosts keeps no runnable launch
-    # policy; it selects the on-demand default and migrates below once idle.
-    bound_policy_ref = (
-        on_demand_binding_policy_ref(binding) if binding is not None else None
-    )
-    runtime_id = str(session.metadata.get("providerRuntimeId") or "codex_cli")
-    runtime_execution_profile_ref = default_execution_profile_ref_for_runtime(
-        runtime_id
-    )
-    requested_target, requested_policy = selection_from_request(
-        agent_request.parameters
-    )
-    resolve_policy_default = False
-    if execution_plan is not None:
-        planned_registration = find_harness_registration(
-            execution_plan.payload.harnessId
-        )
-        if planned_registration is None:
-            raise ValueError("planned harness has no product execution profile")
-        execution_profile_ref = planned_registration.executionTargetRef
-        launch_policy_ref = execution_plan.payload.launchPolicyRef
-        if requested_target and requested_target != execution_profile_ref:
-            raise ValueError("authored host selection conflicts with execution plan")
-        if requested_policy and requested_policy != launch_policy_ref:
-            raise ValueError("authored launch policy conflicts with execution plan")
-        if binding is not None and (
-            binding.execution_profile_ref not in {None, execution_profile_ref}
-            or bound_policy_ref not in {None, launch_policy_ref}
-        ):
-            raise ValueError("durable host binding conflicts with execution plan")
-    elif binding is not None:
-        execution_profile_ref = str(
-            binding.execution_profile_ref
-            or runtime_execution_profile_ref
-        )
-        launch_policy_ref = str(
-            bound_policy_ref
-            or requested_policy
-            or PROFILES[execution_profile_ref].default_policy_ref
-        )
-        resolve_policy_default = not bound_policy_ref and not requested_policy
-        if requested_target and requested_target != execution_profile_ref:
-            raise ValueError("authored host selection conflicts with durable binding")
-    else:
-        execution_profile_ref = (
-            requested_target or runtime_execution_profile_ref
-        )
-        launch_policy_ref = (
-            requested_policy or PROFILES[execution_profile_ref].default_policy_ref
-        )
-        resolve_policy_default = not requested_policy
-
-    parameters = dict(agent_request.parameters or {})
-    if (
-        execution_plan is not None
-        and execution_plan.payload.effectiveLaunchSnapshotRef is not None
-    ):
-        effective_launch = await _read_json_artifact(
-            execution_plan.payload.effectiveLaunchSnapshotRef.removeprefix("artifact:"),
-            access=_session_artifact_access(request, session, agent_plan_binding),
-        )
-        if (
-            effective_launch.get("providerProfileId")
-            != session.provider_profile_id
-        ):
-            raise ValueError(
-                "effective launch conflicts with acquired Provider Profile"
-            )
-    else:
-        # Replay path for histories admitted before exact launch snapshots were
-        # stored with the plan. New product submissions never consult current
-        # policy state here.
-        async with async_session_maker() as db_session:
-            policy_service = OmnigentPolicyService(db_session)
-            launch_policy_ref, policy_snapshot = (
-                await _resolve_legacy_launch_policy_snapshot(
-                    policy_service=policy_service,
-                    launch_policy_ref=launch_policy_ref,
-                    resolve_default=resolve_policy_default,
-                )
-            )
-        authored_follow_up = (
-            parameters.get("followUpRetrieval")
-            if isinstance(parameters.get("followUpRetrieval"), Mapping)
-            else {}
-        )
-        follow_up = compile_follow_up_retrieval_policy()
-        enforce_required_follow_up_retrieval(authored_follow_up, follow_up)
-        effective_launch = _compile_persisted_effective_launch(
-            policy_snapshot,
-            provider_profile_id=session.provider_profile_id,
-            follow_up_retrieval=follow_up,
-        )
-    if effective_launch["executionProfileRef"] != execution_profile_ref:
-        raise ValueError("launch policy conflicts with selected execution profile")
-    if effective_launch.get("hostMode") != "on_demand_docker":
-        raise ValueError(
-            "static-connected Omnigent hosts were removed; the launch policy "
-            "must select an on-demand host"
-        )
-    if binding is None:
-        binding = await hosts.create_or_update_static_binding(
-            profile_id=session.provider_profile_id,
-            endpoint_ref=str(effective_launch.get("endpointRef") or resolved_server_url()),
-            host_launch_profile_ref=launch_policy_ref,
-            execution_profile_ref=execution_profile_ref,
-            launch_policy_ref=launch_policy_ref,
-            effective_launch_snapshot=effective_launch,
-        )
-    elif binding.host_launch_profile_ref and binding.effective_launch_snapshot is None:
-        binding = await hosts.create_or_update_static_binding(
-            profile_id=session.provider_profile_id,
-            endpoint_ref=binding.endpoint_ref,
-            host_launch_profile_ref=binding.host_launch_profile_ref,
-            execution_profile_ref=execution_profile_ref,
-            launch_policy_ref=launch_policy_ref,
-            effective_launch_snapshot=effective_launch,
-        )
-    else:
-        binding, effective_launch = await _bind_cached_host_launch(
-            hosts,
-            binding,
-            profile_id=session.provider_profile_id,
-            execution_profile_ref=execution_profile_ref,
-            launch_policy_ref=launch_policy_ref,
-            effective_launch=effective_launch,
-            planned=execution_plan is not None,
-        )
-
-    lease = await hosts.create_or_get_host_lease(
-        binding=binding,
-        provider_lease_id=provider_lease_id,
-        holder_workflow_id=request.session_id,
-        agent_run_id=session.moonmind_agent_run_id,
-        idempotency_key=request.session_id,
-        ttl_seconds=5400,
-    )
-    if lease.status in {"stopped", "failed"}:
-        lease = await hosts.restart_host_lease(lease.lease_id)
-    if lease.status == "allocating":
-        lease = await hosts.transition_host_lease(
-            lease.lease_id,
-            expected_status="allocating",
-            new_status="starting",
-        )
-
-    workflow_id = session.moonmind_workflow_id
-    step_execution_id = session.step_execution_id or request.session_id
-    if agent_request.remediation_workspace is not None:
-        workspace_locator = dict(
-            agent_request.remediation_workspace.get("destinationWorkspaceLocator")
-            or {}
-        )
-        repository_source = ""
-        restore_input_refs: tuple[str, ...] = ()
-        attachment_refs: tuple[str, ...] = ()
-    else:
-        workspace_intent = compile_workspace_intent(
-            agent_request,
-            workflow_id=workflow_id,
-            step_execution_id=step_execution_id,
-        )
-        workspace_locator = workspace_intent.workspace_locator_payload()
-        repository_source = workspace_intent.repository or ""
-        restore_input_refs = tuple(workspace_intent.restore_input_refs)
-        attachment_refs = (
-            OmnigentProfileBoundExecutionCoordinator._attachment_refs(
-                agent_request
-            )
-        )
-    github_token = await OmnigentProfileBoundExecutionCoordinator._github_token(
-        agent_request
-    )
-    bridge_store = OmnigentBridgeSessionStore(async_session_maker)
-    bridge = await bridge_store.bind_profile_authorization(
-        request=agent_request,
-        endpoint_ref=binding.endpoint_ref,
-        provider_profile_id=session.provider_profile_id,
-        provider_lease_id=provider_lease_id,
-        credential_generation=lease.credential_generation,
-        host_binding_ref=binding.binding_ref,
-        host_lease_ref=lease.lease_id,
-        omnigent_host_id=lease.omnigent_host_id,
-        effective_launch_snapshot=effective_launch,
-    )
-    http_client, client = await _omnigent_client_context()
-    try:
-        preflight = await OmnigentOAuthHostRuntime(client=client).prepare_host(
-            binding=binding,
-            host_lease=lease,
-            publication_git_identity=await publication_git_identity_projection(
-                agent_request.parameters
-            ),
-            workspace_key=f"{workflow_id}:{step_execution_id}",
-            workspace_locator=workspace_locator,
-            current_workflow_id=workflow_id,
-            current_step_execution_id=step_execution_id,
-            resolved_skillset_ref=agent_request.resolved_skillset_ref,
-            artifact_gateway=LocalOmnigentArtifactGateway(),
-            evidence_request=agent_request,
-            cleanup_authority_store=bridge_store,
-            target_repository=str(parameters.get("repository") or "").strip(),
-            required_capabilities=(
-                OmnigentProfileBoundExecutionCoordinator._required_capabilities(
-                    agent_request
-                )
-            ),
-            github_token=github_token,
-            github_mutation_required=(
-                OmnigentProfileBoundExecutionCoordinator._github_mutation_required(
-                    agent_request
-                )
-            ),
-            effective_launch=effective_launch,
-            repository_source=repository_source,
-            repository_provider=str(
-                (agent_request.workspace_spec or {}).get("provider") or ""
-            ).strip(),
-            repository_connection_ref=(
-                ""
-                if agent_request.remediation_workspace is not None
-                else str(workspace_intent.connection_ref or "").strip()
-            ),
-            repository_client_evidence=dict(
-                (agent_request.workspace_spec or {}).get("clientEvidence") or {}
-            ),
-            starting_branch=(
-                None
-                if agent_request.remediation_workspace is not None
-                else workspace_intent.starting_branch
-            ),
-            target_branch=(
-                None
-                if agent_request.remediation_workspace is not None
-                else workspace_intent.target_branch
-            ),
-            checkout_commit=(
-                None
-                if agent_request.remediation_workspace is not None
-                else workspace_intent.checkout_commit
-            ),
-            restore_input_refs=restore_input_refs,
-            workspace_checkpoint_restore_ref=str(
-                (agent_request.workspace_spec or {}).get(
-                    "workspaceCheckpointRestoreRef"
-                )
-                or ""
-            ).strip()
-            or None,
-            attachment_refs=attachment_refs,
-        )
-        preflight_host_id = str(preflight.get("hostId") or "").strip()
-        if not preflight_host_id:
-            raise ValueError("exact host preflight omitted host identity")
-        model_options = await client.get_host_model_options(preflight_host_id)
-        if not isinstance(model_options, Mapping):
-            raise ValueError("exact host model options have an unsupported shape")
-    finally:
-        await http_client.aclose()
-    host_id = str(preflight["hostId"])
-    bridge = await bridge_store.bind_profile_authorization(
-        request=agent_request,
-        endpoint_ref=binding.endpoint_ref,
-        provider_profile_id=session.provider_profile_id,
-        provider_lease_id=provider_lease_id,
-        credential_generation=lease.credential_generation,
-        host_binding_ref=binding.binding_ref,
-        host_lease_ref=lease.lease_id,
-        omnigent_host_id=host_id,
-        effective_launch_snapshot=effective_launch,
-        workspace=str(preflight.get("workspacePath") or "").strip() or None,
-    )
-    if lease.status == "starting":
-        lease = await hosts.transition_host_lease(
-            lease.lease_id,
-            expected_status="starting",
-            new_status="ready",
-            fields={"omnigent_host_id": host_id},
-        )
-    if lease.status == "ready":
-        lease = await hosts.transition_host_lease(
-            lease.lease_id,
-            expected_status="ready",
-            new_status="assigned",
-            fields={"bridge_session_id": bridge.bridge_session_id},
-        )
-    runtime_binding = None
-    runtime_binding_state = None
-    if execution_plan is not None:
-        runtime_evidence = await _persist_host_runtime_evidence(
-            request=agent_request,
-            plan=execution_plan,
-            preflight=preflight,
-            model_options=model_options,
-            host_lease_generation=int(session.host_lease_generation or 0),
-        )
-        current_runtime_ref = str(session.metadata.get("runtimeBindingRef") or "")
-        runtime_store, current_runtime_state = await _load_current_runtime_binding(
-            execution_plan_ref=execution_plan.planRef,
-            execution_scope_ref=str(session.moonmind_workflow_id or ""),
-            recorded_runtime_binding_ref=current_runtime_ref,
-        )
-        runtime_binding = await runtime_store.update_with_host(
-            current_runtime_state.binding.runtimeBindingRef,
-            host_binding_ref=binding.binding_ref,
-            host_lease_ref=lease.lease_id,
-            host_lease_generation=int(session.host_lease_generation or 0),
-            omnigent_host_id=host_id,
-            host_harness_attestation_ref=str(
-                runtime_evidence["host_harness_attestation_ref"]
-            ),
-            exact_host_capability_decision_ref=str(
-                runtime_evidence["exact_host_capability_decision_ref"]
-            ),
-            workspace_resolution_ref=str(
-                runtime_evidence["workspace_resolution_ref"]
-            ),
-            model_option_attestation_ref=str(
-                runtime_evidence["model_option_attestation_ref"]
-            ),
-            skill_delivery_attestation_ref=str(
-                runtime_evidence["skill_delivery_attestation_ref"]
-            ),
-            cleanup_authority_refs=list(
-                runtime_evidence["cleanup_authority_refs"]
-            ),
-            expected_revision=current_runtime_state.revision,
-            expected_fencing_generation=current_runtime_state.fencing_generation,
-        )
-        runtime_binding_state = await runtime_store.get_state(
-            runtime_binding.runtimeBindingRef
-        )
-        if runtime_binding_state is None:
-            raise RuntimeError("advanced runtime binding could not be reloaded")
-    async with store.transaction() as repos:
-        updated = await repos.sessions.bind_runtime_authority(
-            request.session_id,
-            expected_revision=session.revision,
-            expected_fencing_generation=request.fencing_generation,
-            host_binding_ref=binding.binding_ref,
-            host_lease_ref=lease.lease_id,
-            host_lease_generation=session.host_lease_generation,
-            credential_generation=lease.credential_generation,
-            execution_plan_ref=session.execution_plan_ref,
-            metadata_patch={
-                "omnigentHostRef": host_id,
-                "hostHarness": str(effective_launch["harness"]),
-                "endpointRef": binding.endpoint_ref,
-                "effectiveLaunchRef": str(effective_launch["snapshotRef"]),
-                "egressAttestation": preflight.get("egressAttestation"),
-                "egressEvidenceRef": preflight.get("egressEvidenceRef"),
-                **(
-                    {
-                        "runtimeBindingRef": runtime_binding.runtimeBindingRef,
-                        "runtimeBindingRevision": runtime_binding_state.revision,
-                        "runtimeBindingFencingGeneration": (
-                            runtime_binding_state.fencing_generation
-                        ),
-                        "runtimeBindingState": runtime_binding_state.state,
-                    }
-                    if runtime_binding is not None
-                    and runtime_binding_state is not None
-                    else {}
-                ),
-            },
-        )
-    if runtime_binding_state is not None:
-        await _project_runtime_binding_to_execution(
-            workflow_id=str(updated.moonmind_workflow_id or ""),
-            state=runtime_binding_state,
-        )
-    settled = await _settle_command(request)
-    settled.update(
-        {
-            "revision": updated.revision,
-            "hostLeaseGeneration": updated.host_lease_generation,
-            **(
-                {
-                    "runtimeBindingRef": runtime_binding.runtimeBindingRef,
-                    "runtimeBindingRevision": runtime_binding_state.revision,
-                }
-                if runtime_binding is not None and runtime_binding_state is not None
-                else {}
-            ),
-        }
-    )
-    return settled
 
 
 async def omnigent_ensure_provider_session_activity(
@@ -5486,6 +4696,71 @@ async def omnigent_harvest_evidence_activity(
     }
 
 
+def _workflow_workspace_root() -> Path:
+    return Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")).resolve()
+
+
+async def _repository_github_token(request: AgentExecutionRequest) -> str | None:
+    """Resolve the default repository connection's token for this request.
+
+    Only the default connection is admitted for these sessions, so ambient
+    worker tokens are never consulted. A selected credential that fails is the
+    result; it never downgrades to an anonymous publication.
+    """
+
+    from moonmind.auth.github_credentials import GitHubCredentialSource
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+    from moonmind.omnigent.repository_sources import (
+        RepositorySourceError,
+        normalize_repository_source,
+    )
+    from moonmind.omnigent.workspace_intent import (
+        WorkspaceIntentCompilationError,
+        authored_anonymous_source,
+        authored_github_operations,
+        authored_repository_source,
+        authored_required_capabilities,
+    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    repository = authored_repository_source(request)
+    gh_required = "gh" in authored_required_capabilities(request)
+    try:
+        _, kind = normalize_repository_source(repository) if repository else ("", "")
+    except RepositorySourceError:
+        kind = ""
+    if not gh_required and kind != "github_https":
+        return None
+    if authored_anonymous_source(request):
+        if gh_required:
+            raise OmnigentOAuthHostError(
+                "anonymous repository access cannot provide authenticated gh",
+                code="github_auth_unavailable",
+            )
+        return None
+    try:
+        required_operations = authored_github_operations(request)
+    except WorkspaceIntentCompilationError as exc:
+        raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+    resolved = await managed_api_key_resolve.resolve_default_github_connection_credential(
+        repo=repository or None, required_operations=required_operations
+    )
+    token = str(resolved.token or "").strip()
+    if token:
+        return token
+    if resolved.source != GitHubCredentialSource.MISSING:
+        raise OmnigentOAuthHostError(
+            f"selected GitHub credential is unavailable: {resolved.safe_summary}",
+            code="github_auth_unavailable",
+        )
+    if gh_required:
+        raise OmnigentOAuthHostError(
+            "GitHub credential is required for mounted gh readiness",
+            code="github_auth_unavailable",
+        )
+    return None
+
+
 async def omnigent_publish_workspace_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -5494,12 +4769,11 @@ async def omnigent_publish_workspace_activity(
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
     from moonmind.omnigent.execution_profiles import selection_from_request
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
-    )
     from moonmind.omnigent.workspace_intent import compile_workspace_intent
-    from moonmind.omnigent.workspace_publication import logical_publication_identity
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+        logical_publication_identity,
+    )
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     command, should_execute = await _claim_command(request)
@@ -5570,22 +4844,18 @@ async def omnigent_publish_workspace_activity(
                 apply_remediation_terminal_evaluation,
             )
 
-            http_client, client = await _omnigent_client_context()
-            try:
-                evaluation = await OmnigentOAuthHostRuntime(
-                    client=client
-                ).inspect_request_terminal(
-                    agent_request.model_copy(
-                        update={
-                            "workspace_spec": {
-                                **(agent_request.workspace_spec or {}),
-                                "workspaceLocator": workspace_locator,
-                            }
+            evaluation = await OmnigentWorkspacePublicationService(
+                _workflow_workspace_root()
+            ).inspect_request_terminal(
+                agent_request.model_copy(
+                    update={
+                        "workspace_spec": {
+                            **(agent_request.workspace_spec or {}),
+                            "workspaceLocator": workspace_locator,
                         }
-                    )
+                    }
                 )
-            finally:
-                await http_client.aclose()
+            )
             remediation_result = apply_remediation_terminal_evaluation(
                 AgentRunResult(
                     executionState="completed", objectiveOutcome="succeeded"
@@ -5636,35 +4906,26 @@ async def omnigent_publish_workspace_activity(
     elif publish_mode == "none":
         publication = {"status": "skipped", "publishMode": "none"}
     else:
-        github_token = await (
-            OmnigentProfileBoundExecutionCoordinator._github_token(
-                agent_request
-            )
+        publication = await OmnigentWorkspacePublicationService(
+            _workflow_workspace_root()
+        ).publish_workspace(
+            workspace_locator=workspace_locator,
+            current_workflow_id=workflow_id,
+            current_step_execution_id=step_execution_id,
+            publication_identity=logical_publication_identity(agent_request),
+            publish_mode=publish_mode,
+            base_branch=base_branch,
+            repository=str(
+                (agent_request.parameters or {}).get("repository") or ""
+            ).strip(),
+            github_token=await _repository_github_token(agent_request),
+            accepted_published_head=(agent_request.parameters or {}).get(
+                "acceptedPublishedHead"
+            ),
+            publication_git_identity=await publication_git_identity_projection(
+                agent_request.parameters or {}
+            ),
         )
-        http_client, client = await _omnigent_client_context()
-        try:
-            publication = await OmnigentOAuthHostRuntime(
-                client=client
-            ).publish_workspace(
-                workspace_locator=workspace_locator,
-                current_workflow_id=workflow_id,
-                current_step_execution_id=step_execution_id,
-                publication_identity=logical_publication_identity(agent_request),
-                publish_mode=publish_mode,
-                base_branch=base_branch,
-                repository=str(
-                    (agent_request.parameters or {}).get("repository") or ""
-                ).strip(),
-                github_token=github_token,
-                accepted_published_head=(agent_request.parameters or {}).get(
-                    "acceptedPublishedHead"
-                ),
-                publication_git_identity=await publication_git_identity_projection(
-                    agent_request.parameters or {}
-                ),
-            )
-        finally:
-            await http_client.aclose()
     publication_ref = str(session.metadata.get("publicationEvidenceRef") or "")
     if not publication_ref:
         publication_ref = await _write_json_artifact(
@@ -5949,9 +5210,13 @@ async def omnigent_stop_provider_session_activity(
 
 async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.host_services.legacy_host_containers import (
+        LegacyOmnigentHostContainerService,
+    )
+    from moonmind.omnigent.host_services.oauth_credential_validation import (
+        run_host_command,
+    )
     from moonmind.omnigent.oauth_hosts import (
         CLEANUP_CLAIMABLE_HOST_STATES,
         OmnigentOAuthHostRepository,
@@ -5969,7 +5234,6 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
         raise KeyError(request.session_id)
     if await _claim_canonical_cleanup(request.session_id) is None:
         return {"commandId": request.command_id, "outcome": "cleanup_not_owned"}
-    cleanup_evidence: Mapping[str, Any] = {}
     plan = (
         await _load_session_execution_plan(request, session=session)
         if request.omnigent_execution_plan is not None
@@ -5995,31 +5259,9 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
             lease = await _claim_host_cleanup_authority(hosts, lease.lease_id)
         if lease is not None:
             binding = await hosts.validate_binding(lease.binding_ref)
-            agent_request = await _load_intent_request(request)
-            http_client, client = await _omnigent_client_context()
-            try:
-                cleanup_evidence = await OmnigentOAuthHostRuntime(
-                    client=client
-                ).stop_host(
-                    binding=binding,
-                    host_lease=lease,
-                    effective_launch=binding.effective_launch_snapshot,
-                    egress_evidence=(
-                        dict(session.metadata["egressAttestation"])
-                        if isinstance(
-                            session.metadata.get("egressAttestation"), Mapping
-                        )
-                        else None
-                    ),
-                    launch_evidence_ref=str(
-                        session.metadata.get("egressEvidenceRef") or ""
-                    )
-                    or None,
-                    evidence_request=agent_request,
-                    artifact_gateway=LocalOmnigentArtifactGateway(),
-                )
-            finally:
-                await http_client.aclose()
+            await LegacyOmnigentHostContainerService(
+                run_command=run_host_command
+            ).stop_host(binding=binding, host_lease=lease)
             if lease.status != "stopped":
                 await hosts.mark_host_lease_stopped(lease.lease_id)
     async with store.transaction() as repos:
@@ -6031,14 +5273,6 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
                 expected_fencing_generation=current.fencing_generation,
                 cleanup_state="host_stopped",
             )
-            cleanup_ref = str((cleanup_evidence or {}).get("evidenceRef") or "")
-            if cleanup_ref:
-                updated = await repos.sessions.bind_runtime_authority(
-                    request.session_id,
-                    expected_revision=updated.revision,
-                    expected_fencing_generation=request.fencing_generation,
-                    metadata_patch={"egressTerminalEvidenceRef": cleanup_ref},
-                )
         else:
             updated = current
     settled = await _settle_command(request)

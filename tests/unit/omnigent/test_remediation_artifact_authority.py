@@ -7,26 +7,21 @@ Temporal server, PostgreSQL, Docker, or external provider is involved.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base, TemporalArtifactRedactionLevel
 from moonmind.config.settings import settings
 from moonmind.omnigent.remediation_workspace import (
     ArtifactRemediationHeadLoader,
-    RemediationWorkspaceBinding,
     RemediationWorkspaceError,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    omnigent_execute_activity,
-)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
@@ -241,53 +236,6 @@ async def test_remediation_consumers_require_admitted_step_scope(
                 request=_request("art_missing", with_step=False),
                 workspace_path=str(tmp_path),
             )
-
-
-@pytest.mark.asyncio
-async def test_production_omnigent_activity_binds_head_to_admitted_step(
-    artifacts, monkeypatch
-):
-    import api_service.db.base as db_base
-    from moonmind.omnigent import profile_bound_execution
-
-    artifact_id, _ = await _publish(artifacts, consumer="head")
-    binding = _binding(step="workflow-1:run-1:remediate:execution:2").model_copy(
-        update={"head_authority_ref": f"artifact://{artifact_id}"}
-    )
-    monkeypatch.setattr(db_base, "async_session_maker", artifacts)
-
-    class Coordinator:
-        def __init__(self, *, workspace_owner, **kwargs):
-            self.owner = workspace_owner
-
-        async def execute(self, request):
-            head = await self.owner._authoritative_head(
-                RemediationWorkspaceBinding.model_validate(
-                    request.remediation_workspace
-                )
-            )
-            assert head == _head()
-            return AgentRunResult(summary="head admitted")
-
-    monkeypatch.setattr(
-        profile_bound_execution, "OmnigentProfileBoundExecutionCoordinator", Coordinator
-    )
-    request = _request(artifact_id).model_copy(
-        update={
-            "agent_kind": "external",
-            "agent_id": "omnigent",
-            "execution_profile_ref": "codex",
-            "remediation_workspace": binding.model_dump(by_alias=True),
-        }
-    )
-    environment = ActivityEnvironment()
-    environment.info = replace(
-        environment.info,
-        workflow_id=request.step_execution.workflow_id,
-        workflow_run_id=request.step_execution.run_id,
-    )
-    result = await environment.run(omnigent_execute_activity, request)
-    assert result.summary == "head admitted"
 
 
 @pytest.mark.asyncio

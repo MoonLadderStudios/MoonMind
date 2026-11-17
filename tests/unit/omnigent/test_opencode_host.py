@@ -2,7 +2,7 @@
 
 Covers:
 - Digest-pinned shared host image expectations
-- Host Class omnigent-opencode@2 (fresh) / @1 (recorded) vs Codex preservation
+- Host Class omnigent-opencode@2 (the only OpenCode class) vs Codex preservation
 - opencode-auth-json@1 materializer filesystem, permissions, secret-free, generation fencing
 - Forbidden ambient env rejection
 - OMNIGENT_OPENCODE_HOST_IMAGE_REF fail-closed behavior
@@ -23,6 +23,7 @@ from moonmind.omnigent.harness_platform import (
     build_opencode_auth_json_bytes,
     get_host_class,
     get_opencode_host_image_ref,
+    get_shared_host_image_ref,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     HOST_CLASSES,
@@ -114,16 +115,23 @@ def _opencode_host_class(materializer_ref: str = "opencode-auth-json@1"):
     )
 
 
-def test_opencode_host_class_is_dedicated():
-    valid = _ensure_opencode_env()
+def _use_shared_opencode_image(monkeypatch) -> str:
+    """Install a bootstrap-qualified shared host image for OpenCode selection."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(store, "load_resolved_state", _shared_opencode_state)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _SHARED_HOST_REF)
+    return _SHARED_HOST_REF
+
+
+def test_opencode_host_class_is_dedicated(monkeypatch):
+    shared = _use_shared_opencode_image(monkeypatch)
     hc = _opencode_host_class()
-    assert hc.ref == "omnigent-opencode@1"
-    assert hc.imageRef.startswith(
-        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:"
-    )
-    # Must be the real digest-pinned REF, not fabricated c*64 placeholder
-    assert hc.imageRef == get_opencode_host_image_ref()
-    assert hc.imageRef == valid
+    assert hc.ref == "omnigent-opencode@2"
+    # Must be the real digest-pinned shared REF, not a fabricated placeholder
+    assert hc.imageRef == get_shared_host_image_ref()
+    assert hc.imageRef == shared
     # Only opencode-native, not codex
     harness_ids = {e.harnessId for e in hc.declaredHarnessImplementations}
     assert harness_ids == {"opencode-native"}
@@ -144,8 +152,8 @@ def test_opencode_host_class_is_dedicated():
     assert dep["version"] == OPENCODE_PINNED_VERSION
 
 
-def test_opencode_host_class_accepts_credentialless_zen():
-    _ensure_opencode_env()
+def test_opencode_host_class_accepts_credentialless_zen(monkeypatch):
+    _use_shared_opencode_image(monkeypatch)
 
     assert _opencode_host_class("none@1").supports_materializer("none@1")
     assert materializer_ref_for_provider("opencode", "opencode") == "none@1"
@@ -408,31 +416,42 @@ def test_distinct_shared_image_needs_its_own_opencode_verdict(monkeypatch):
     assert host_class.imageRef == _OTHER_SHARED_HOST_REF
 
 
-def test_recorded_opencode_v1_plans_still_resolve_their_host_class(monkeypatch):
-    """Retained @1 plans and retries rehydrate their recorded host identity."""
+@pytest.mark.parametrize("recorded_host", [False, True])
+def test_removed_opencode_v1_host_class_fails_closed(monkeypatch, recorded_host):
+    """A recorded or requested @1 is refused with guidance before image lookup."""
 
     from moonmind.omnigent.bootstrap import store
 
-    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: pytest.fail("a removed Host Class must not resolve images"),
+    )
     implementation = SimpleNamespace(
         implementation_ref=lambda: "omnigent-harness-implementation:sha256:" + "a" * 64
     )
     harness = SimpleNamespace(id="opencode-native", implementation=implementation)
-    recorded_host = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + (
-        "a" * 64
+    recorded = (
+        {
+            "host_image_ref": "ghcr.io/moonladderstudios/omnigent-host-opencode"
+            "@sha256:" + "a" * 64,
+            "omnigent_host_build_digest": "sha256:" + "b" * 64,
+        }
+        if recorded_host
+        else {}
     )
-    host_class = OmnigentHostClassSelector(environment={}).select(
-        harness=harness,
-        omnigent_version="1.0.0",
-        integration_mode="native-server",
-        materializer_refs=["opencode-auth-json@1"],
-        requested_host_class_ref="omnigent-opencode@1",
-        host_image_ref=recorded_host,
-        omnigent_host_build_digest="sha256:" + "b" * 64,
-    )
+    with pytest.raises(HarnessPlatformError) as exc:
+        OmnigentHostClassSelector(environment={}).select(
+            harness=harness,
+            omnigent_version="1.0.0",
+            integration_mode="native-server",
+            materializer_refs=["opencode-auth-json@1"],
+            requested_host_class_ref="omnigent-opencode@1",
+            **recorded,
+        )
 
-    assert host_class.ref == "omnigent-opencode@1"
-    assert host_class.imageRef == recorded_host
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE
+    assert "omnigent-opencode@1 was removed" in str(exc.value)
 
 
 @pytest.mark.parametrize(

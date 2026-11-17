@@ -24,12 +24,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from api_service.services.omnigent_policies import OmnigentPolicyService
-from moonmind.omnigent.checkpoints import CandidateWorkspaceAuthority
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
-from moonmind.omnigent.profile_bound_execution import (
-    OmnigentProfileBoundExecutionCoordinator,
-)
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchContinueModel,
     CheckpointBranchForkModel,
@@ -39,9 +34,6 @@ from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
 from moonmind.security.assessment_authorizations import (
     AssessmentAuthorizations,
     authorization_scope,
-)
-from moonmind.workflows.temporal.activities.omnigent_session_activities import (
-    bind_remediation_context_inputs,
 )
 from moonmind.workflows.temporal.remediation_verification import (
     verification_contract_for,
@@ -244,106 +236,6 @@ def _valid_source_checkpoint() -> tuple[bytes, bytes]:
         checkpoint.model_dump_json(by_alias=True, exclude_none=True).encode(),
         instruction,
     )
-
-
-@pytest.mark.asyncio
-async def test_canonical_coordinator_compiles_fresh_branch_restore_authority() -> None:
-    checkpoint_model = StepExecutionCheckpointModel.model_validate_json(
-        _valid_source_checkpoint()[0]
-    )
-    assert checkpoint_model.omnigent is not None
-    checkpoint = checkpoint_model.omnigent
-    coordinator = OmnigentProfileBoundExecutionCoordinator(
-        request_input_binder=bind_remediation_context_inputs,
-        session_factory=SimpleNamespace(),
-        lease_client=SimpleNamespace(),
-        host_repository=SimpleNamespace(),
-        host_runtime=SimpleNamespace(),
-        run_store=SimpleNamespace(),
-        execution_runner=AsyncMock(),
-        artifact_gateway=SimpleNamespace(),
-    )
-    coordinator.execute = AsyncMock(  # type: ignore[method-assign]
-        return_value=AgentRunResult(summary="branch completed")
-    )
-    request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="profile-1",
-        correlationId="branch-turn-1",
-        idempotencyKey="branch-message-1",
-        inputRefs=["artifact://branch-instruction"],
-        workspaceSpec={
-            "workspaceLocator": {
-                "kind": "sandbox",
-                "workspaceId": "branch-workspace-1",
-                "relativePath": "repo",
-            },
-            "repository": "MoonLadderStudios/MoonMind",
-            "startingBranch": "main",
-            "targetBranch": "mm/source/branch-1",
-        },
-    )
-    candidate = CandidateWorkspaceAuthority(
-        loopId="source-workflow:implement",
-        attemptOrdinal=1,
-        headRef=checkpoint.head_ref,
-        headDigest=checkpoint.head_digest,
-        checkpointRef=checkpoint.workspace_checkpoint_ref,
-        checkpointDigest=checkpoint.workspace_checkpoint_digest,
-    )
-
-    result = await coordinator.branch_from_checkpoint(
-        request=request,
-        checkpoint=checkpoint,
-        current_credential_generation=1,
-        candidate_workspace=candidate,
-    )
-
-    assert result.summary == "branch completed"
-    dispatched = coordinator.execute.await_args.args[0]
-    assert dispatched.idempotency_key == "branch-message-1"
-    assert dispatched.idempotency_key != checkpoint.idempotency_key
-    assert dispatched.parameters["checkpointRestore"]["mode"] == "branch"
-    assert dispatched.parameters["checkpointRestore"]["sourceBridgeSessionId"] == (
-        "source-bridge-1"
-    )
-    assert "source-provider-session-1" not in json.dumps(
-        dispatched.model_dump(by_alias=True, mode="json", exclude_none=True)
-    )
-    assert checkpoint.external_state_ref in dispatched.input_refs
-    assert candidate.head_ref in dispatched.input_refs
-    assert candidate.checkpoint_ref in dispatched.input_refs
-
-
-@pytest.mark.asyncio
-async def test_profile_bound_coordinator_rejects_unenforceable_usd_budget_before_mutation(
-) -> None:
-    run_store = SimpleNamespace(get_or_create=AsyncMock())
-    coordinator = OmnigentProfileBoundExecutionCoordinator(
-        request_input_binder=bind_remediation_context_inputs,
-        session_factory=SimpleNamespace(),
-        lease_client=SimpleNamespace(),
-        host_repository=SimpleNamespace(),
-        host_runtime=SimpleNamespace(),
-        run_store=run_store,
-        execution_runner=AsyncMock(),
-        artifact_gateway=SimpleNamespace(),
-    )
-    request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="profile-1",
-        correlationId="budgeted-turn",
-        idempotencyKey="budgeted-turn-1",
-        parameters={"maxBudgetUsd": 2.5},
-    )
-
-    result = await coordinator.execute(request)
-
-    assert result.failure_class == "user_error"
-    assert result.provider_error_code == "OMNIGENT_MAX_BUDGET_ENFORCEMENT_UNAVAILABLE"
-    run_store.get_or_create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

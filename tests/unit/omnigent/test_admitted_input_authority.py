@@ -38,7 +38,6 @@ from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_services.skills import OmnigentSkillDeliveryService
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
     WorkspaceArtifactProjector,
@@ -425,22 +424,6 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
     )
     assert [path.read_bytes() for path in delivered] == [skills.body]
 
-    # Codex host preparation through the realizer's gateway and through the
-    # direct coordinator's raw artifact service.
-    host = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), network="test-network", workspace_root=tmp_path
-    )
-    async with artifacts() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
-        for key, reader in (("gateway", gateway), ("service", service)):
-            projection = await host._prepare_skill_projection(
-                workspace_key=f"run-wf:{key}",
-                resolved_skillset_ref=skills.manifest_id,
-                artifact_gateway=reader,
-                request=request,
-            )
-            assert (projection / SKILL_NAME / "SKILL.md").read_bytes() == skills.body
-
     # Managed launcher: artifact service plus the Step Execution scope.
     admitted_access = await step_execution_artifact_access(request)
     assert admitted_access.execution_principal == "workflow:run-wf"
@@ -647,20 +630,6 @@ async def test_restore_inputs_and_checkpoint_use_the_admitted_execution(
     (restored,) = evidence["restoreInputs"]
     assert (workspace / restored["path"]).read_bytes() == restore
 
-    # The Codex host's own restore path carries the same execution scope.
-    codex_workspace = tmp_path / "codex-workspace"
-    codex_workspace.mkdir()
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), network="test-network", workspace_root=tmp_path
-    )
-    (codex_evidence,) = await runtime._materialize_restore_inputs(
-        codex_workspace,
-        restore_input_refs=(f"artifact://{restore_id}",),
-        artifact_gateway=TemporalOmnigentArtifactGateway(artifacts),
-        workflow_id="run-wf",
-    )
-    assert codex_evidence["bytes"] == len(restore)
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_mode", AUTHENTICATED_MODES)
@@ -686,16 +655,6 @@ async def test_restore_inputs_of_another_execution_stay_denied(
             runtime_gid=os.getgid(),
         )
     assert failure.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), network="test-network", workspace_root=tmp_path
-    )
-    with pytest.raises(TemporalArtifactAuthorizationError):
-        await runtime._materialize_restore_inputs(
-            workspace,
-            restore_input_refs=(f"artifact://{restore_id}",),
-            artifact_gateway=TemporalOmnigentArtifactGateway(artifacts),
-            workflow_id="run-wf",
-        )
 
 
 async def _admitted_launch(sessions, *, workflow_id: str):

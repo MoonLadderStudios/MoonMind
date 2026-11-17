@@ -383,20 +383,9 @@ class OmnigentHostContainerInventoryPort(Protocol):
 
 @runtime_checkable
 class OmnigentHostReleasePort(Protocol):
-    """Release one host's capacity and publish its terminal cleanup evidence."""
+    """Stop one ledger host and reclaim its owned resources."""
 
-    async def stop_host(
-        self,
-        *,
-        binding: Any,
-        host_lease: Any,
-        effective_launch: Mapping[str, Any] | None = None,
-        egress_evidence: Mapping[str, Any] | None = None,
-        launch_evidence_ref: str | None = None,
-        evidence_request: Any | None = None,
-        artifact_gateway: Any | None = None,
-        cleanup_authority_store: Any | None = None,
-    ) -> dict[str, Any]: ...
+    async def stop_host(self, *, binding: Any, host_lease: Any) -> dict[str, Any]: ...
 
 
 @runtime_checkable

@@ -32,10 +32,10 @@ missing evidence cannot borrow the catalog/server digest. `OMNIGENT_BUILD_DIGEST
 is an optional exact host-build pin. It is never a substitute for the server
 image digest, and publication does not overwrite it with a discovered digest.
 
-API admission uses the shared Host Class selector for on-demand Codex as well
-as the other harnesses. Both generic and retained profile-bound Codex plans
-record the selected host's observed build label separately from the catalog's
-server identity; worker rehydration preserves those admitted identities.
+API admission uses the shared Host Class selector for on-demand Codex as well as
+the other harnesses. Codex plans record the selected host's observed build label
+separately from the catalog's server identity; worker rehydration preserves
+those admitted identities.
 
 Execution plans obtain version evidence from the immutable `harnessCatalogRef`
 already in the v1 contract. New plans omit the redundant top-level
@@ -71,7 +71,7 @@ saved-work/finalization evidence remains authoritative during discovery gaps.
 
 **One sentence:** One neutral digest-pinned host image carries every approved vendor runtime, while trusted runtime-pack descriptors, separate Host Classes, profile-owned credential materialization, and a gated planner keep harness support, credentials, and lifecycle authority exact.
 
-**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's pinned version, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes both harnesses through `generic-omnigent-host@1` by default. Explicit Codex compatibility selection retains `codex-profile-bound@1`; a rollout stop fails closed unless an explicit supported restore control applies.
+**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's pinned version, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes both harnesses through `generic-omnigent-host@1` by default; a rollout stop fails closed unless an explicit supported restore control applies.
 
 The [seven product outcomes](./PrimaryRuntimeProviderStrategy.md#11-seven-required-product-outcomes) are the acceptance contract for this infrastructure. A shared image is not the product outcome by itself: each claimed harness must complete the on-demand launch, bound Workflow Detail interaction, recovery, durable-evidence, and cleanup journey. Runtime and one Profile remain the ordinary choices; the image, Host Class, runtime pack, materializer, and execution configuration resolve behind that selection.
 
@@ -178,12 +178,11 @@ omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-h
 omnigent-opencode@2  opencode-native  + opencode-native-pack@1  + opencode-auth-json@1, none@1
 ```
 
-(Fresh OpenCode work selects `omnigent-opencode@2`. It carries the same
-bootstrap server/host compatibility quarantine as the OpenCode image: Host
-Class selection requires a ready OpenCode verdict for the exact shared digest
-and server. `omnigent-opencode@1` resolves only plans that recorded it and
-explicit requests; see the `omnigent.legacy.opencode_host_image_alias`
-retirement row.)
+(`omnigent-opencode@2` is the only OpenCode Host Class. It carries the
+bootstrap server/host compatibility quarantine: Host Class selection requires a
+ready OpenCode verdict for the exact shared digest and server. Requests and
+recorded plans naming the removed `omnigent-opencode@1` fail closed with
+`OMNIGENT_HOST_CLASS_UNAVAILABLE`; start a new attempt.)
 
 Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest without conflating harness support. Each class declares only its own harness, runtime pack, and materializers, so a shared image never authorizes every installed runtime. One-harness admission is enforced at selection (the pack must own the harness, the materializers must be allowlisted) and again at planning (the Host Class must declare the plan's harness implementation).
 
@@ -208,7 +207,7 @@ An existing Codex or Claude Code OAuth Provider Profile remains the account and 
 
 The trusted planner selects the execution realizer through the existing rollout policy.
 
-- `codex-native` uses `generic-omnigent-host@1` without an opt-in. Explicit `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` and generic-admission stops block new work without restoring profile-bound admission.
+- `codex-native` uses `generic-omnigent-host@1` without an opt-in. Explicit `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` and generic-admission stops block new work; no other Codex realizer exists to fall back to.
 - `claude-native` routes to `generic-omnigent-host@1` by default. `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED` defaults to true; explicit false is an emergency stop under which planning a `claude-native` combination fails closed rather than advertising the target.
 - Those operator flags are inputs to the versioned runtime-provider rollout policy, which is the one authority that decides whether a combination is a default, an explicit-only choice, a labeled compatibility path, or unavailable. See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md).
 
@@ -221,4 +220,4 @@ Infrastructure implementation, support qualification, product-default promotion,
 - **Exact support evidence**: the versioned required-row catalog and deterministic validators live in `moonmind/omnigent/harness_platform/shared_host_conformance.py` (`moonmind.omnigent-shared-host-rows.v1`, covered by `tests/unit/omnigent/test_shared_host_conformance.py`). The catalog distinguishes Codex OAuth, Claude OAuth, keyed OpenCode, and credentialless OpenCode. Its required rows carry pending protected-live evidence until the provider-verification runner qualifies the exact combination. Installed binaries and pure validators do not qualify a deployed digest or prove credential isolation on a real host.
 - **Product-default migration**: the versioned rollout policy, shared selection/admission boundary, canary/rollback controls, and migration telemetry exist. Promotion remains specific to a qualified deployment combination and must preserve the selected Profile and configuration across every authoring and follow-up surface. Do not rebuild those mechanisms or add an independent Target selector in order to complete promotion.
 - **OAuth hosts**: Codex and Claude OAuth work runs on on-demand hosts from the installed shared image; an already admitted launch retains its recorded artifact. OAuth runner and login-check containers select the image in `moonmind/omnigent/harness_platform/shared_host_image.py`: `OMNIGENT_SHARED_HOST_IMAGE_REF`, then the `OMNIGENT_HOST_IMAGE_REF` alias, then the shared image/tag with `latest` as default. No manual digest pin is required. Image selection does not prove credential readiness, exclusive ownership, or consumer shutdown: those remain with the shared OAuth lifecycle. Readiness deadlines distinguish enrollment/projection waiting from failure; a transient resolution failure preserves an unchanged installed image selection, while an unresolved changed choice cannot inherit its old artifact. Preserve Profile-owned homes and drain the observed consumer before releasing capacity. A deployment that still enables static host profiles migrates as described in [Combined Stack Validation](CombinedStackValidationAndRollback.md#doc-req-014-migrating-from-static-hosts).
-- **Retirement**: the code-owned table in `moonmind/omnigent/legacy_retirement.py` classifies retained legacy admission paths and enforces class-based new-admission control. Removal deletes the code and its row while preserving replay, historical reads, cleanup, and credentials. `OMNIGENT_OPENCODE_HOST_IMAGE_REF` remains a compatibility setting for existing deployments and legacy Host Classes; its default is the shared image. The discontinued dedicated image is no longer built. See [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
+- **Retirement**: the code-owned table in `moonmind/omnigent/legacy_retirement.py` classifies retained legacy admission paths and enforces class-based new-admission control. Removal deletes the code and its row while preserving replay, historical reads, cleanup, and credentials. `OMNIGENT_OPENCODE_HOST_IMAGE_REF` (default: the shared image) is deprecated: a pin is still honored for bootstrap judgment and OpenCode credential validation but warns at startup; pin `OMNIGENT_SHARED_HOST_IMAGE_REF` instead. The discontinued dedicated image is no longer built. See [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).

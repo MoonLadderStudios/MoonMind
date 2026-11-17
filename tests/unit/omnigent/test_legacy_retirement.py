@@ -261,14 +261,6 @@ def test_two_rows_cannot_claim_the_same_surface() -> None:
 # ------------------------------------------------------------- new admission
 
 
-def test_profile_bound_admission_follows_the_code_owned_class() -> None:
-    record = get_retirement_record("omnigent.legacy.profile_bound_realizer")
-    assert record.retirement_class is RetirementClass.NEW_ADMISSION_DISABLED
-    decision = evaluate_new_admission(record)
-    assert decision.allowed is False
-    assert decision.reason_code == "new_admission_disabled:new_admission_disabled"
-
-
 def test_assert_new_admission_raises_with_a_stable_reason_code() -> None:
     closed = (_record(pathId="omnigent.legacy.closed"),)
     with pytest.raises(LegacyAdmissionRejected) as excinfo:

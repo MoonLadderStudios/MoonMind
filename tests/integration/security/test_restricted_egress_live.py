@@ -17,16 +17,12 @@ import shlex
 import socket
 import subprocess
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from moonmind.config.settings import settings
-from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-from moonmind.omnigent.execution_profiles import compile_effective_launch
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
@@ -42,13 +38,6 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
 from moonmind.security.outbound_scan import scan_outbound_text
-from moonmind.schemas.agent_runtime_models import (
-    AgentExecutionRequest,
-    AuthVolumeRef,
-    CredentialMountRef,
-    OmnigentHostLease,
-    OmnigentOAuthHostBinding,
-)
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
@@ -997,157 +986,6 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
     finally:
         _docker("rm", "--force", request.container_name)
         _docker("volume", "rm", "--force", volume_name)
-
-
-@pytest.mark.asyncio
-async def test_omnigent_on_demand_host_crosses_real_runtime_attestation_boundary(
-    tmp_path: Path,
-) -> None:
-    """Cross ``prepare_host`` while leaving launch and attachment owners real."""
-
-    for variable in ("OMNIGENT_IMAGE_REF", "OMNIGENT_HOST_IMAGE_REF"):
-        if not os.getenv(variable, "").strip():
-            pytest.fail(f"{variable} immutable image is required for live proof")
-    now = datetime.now(UTC)
-    host_mode = "on_demand_docker"
-    container_name = f"mm-host-egress-{uuid.uuid4().hex[:12]}"
-    binding = OmnigentOAuthHostBinding(
-        bindingRef="omnigent-oauth:egress-live",
-        providerProfileId="egress-live",
-        endpointRef="default",
-        harness="codex-native",
-        credentialMountRef=CredentialMountRef(
-            authVolumeRef=AuthVolumeRef(
-                providerProfileId="egress-live",
-                runtimeId="codex_cli",
-                providerId="openai",
-                volumeRef="codex_auth_volume",
-                credentialGeneration=1,
-                ownerUserId="egress-live",
-            ),
-            targetPath="/home/app/.codex",
-            runtimeUid=1000,
-            runtimeGid=1000,
-        ),
-        hostLaunchProfileRef="codex-oauth-v1",
-    )
-    lease = OmnigentHostLease(
-        leaseId=f"egress-live-{uuid.uuid4().hex}",
-        providerProfileId="egress-live",
-        providerLeaseId=f"provider-egress-live-{uuid.uuid4().hex}",
-        bindingRef=binding.binding_ref,
-        credentialGeneration=1,
-        containerName=container_name,
-        status="ready",
-        acquiredAt=now,
-        lastHeartbeatAt=now,
-        expiresAt=now + timedelta(minutes=5),
-    )
-    launch = compile_effective_launch(
-        profile_ref="omnigent-codex@1",
-        policy_ref="codex-on-demand@1",
-        provider_profile_id="egress-live",
-    )
-    workspace = tmp_path / "workspace"
-    skills = tmp_path / "skills"
-    workspace.mkdir()
-    skills.mkdir()
-    runtime = OmnigentOAuthHostRuntime(client=object(), workspace_root=tmp_path)
-    runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
-        return_value=skills
-    )
-    runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
-        return_value=workspace
-    )
-    runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
-    runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
-        return_value={"id": "egress-live-host", "harnesses": ["codex-native"]}
-    )
-    runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
-        return_value={"status": "not_required", "boundaries": []}
-    )
-    evidence_request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="omnigent-codex@1",
-        correlationId=f"egress-live:{host_mode}:normal",
-        idempotencyKey=f"egress-live:{uuid.uuid4().hex}",
-    )
-    artifact_gateway = LocalOmnigentArtifactGateway(
-        root=tmp_path / "protected-egress-evidence"
-    )
-    evidence: dict[str, object] | None = None
-    launch_evidence_ref: str | None = None
-    terminal_evidence_ref: str | None = None
-    attachment_identity = ""
-
-    try:
-        preflight = await runtime.prepare_host(
-            binding=binding,
-            host_lease=lease,
-            workspace_key=f"egress-live:{host_mode}",
-            workspace_locator={"kind": "sandbox", "workspaceId": "egress-live"},
-            current_workflow_id="egress-live",
-            current_step_execution_id=f"egress-live:{host_mode}",
-            effective_launch=launch,
-            artifact_gateway=artifact_gateway,
-            evidence_request=evidence_request,
-        )
-        evidence = preflight["egressAttestation"]
-        launch_evidence_ref = preflight["egressEvidenceRef"]
-        assert evidence["validationResult"] == "passed"
-        assert evidence["profileRef"] == OMNIGENT_EGRESS_PROFILE.ref
-        assert evidence["networkRef"] == OMNIGENT_EGRESS_PROFILE.network_ref
-        assert evidence["backendRef"] == "omnigent-host-runtime"
-        assert evidence["networkIdentity"]
-        assert evidence["endpointIdentity"]
-        assert evidence["workloadImageDigest"].startswith("sha256:")
-        assert evidence["architecture"] in {"amd64", "arm64"}
-        assert evidence["serverImageRefObserved"] == launch["serverImageRef"]
-        assert str(evidence["serverImageDigest"]).startswith("sha256:")
-        assert evidence["serverArchitecture"] in {"amd64", "arm64"}
-        identity = str(evidence["attachmentIdentity"])
-        attachment_identity = identity
-        _assert_running_container_policy(
-            identity, network_ref=OMNIGENT_EGRESS_PROFILE.network_ref
-        )
-
-    finally:
-        cleanup = await runtime.stop_host(
-            binding=binding,
-            host_lease=lease,
-            effective_launch=launch,
-            egress_evidence=evidence,
-            launch_evidence_ref=launch_evidence_ref,
-            evidence_request=evidence_request,
-            artifact_gateway=artifact_gateway,
-        )
-        terminal_evidence_ref = cleanup.get("evidenceRef")
-
-    assert evidence is not None
-    assert launch_evidence_ref is not None
-    launched = parse_and_verify_conformance_evidence(
-        await artifact_gateway.read_bytes(launch_evidence_ref),
-        location=f"omnigent-{host_mode}-launch",
-    )
-    expected_row = host_mode
-    assert launched["conformanceRow"] == expected_row
-    assert launched["state"] == "launched"
-    assert launched["cleanupResult"] == "pending"
-    assert launched["attachmentIdentity"] == attachment_identity
-    assert _docker("inspect", attachment_identity).returncode != 0
-    assert terminal_evidence_ref is not None
-    terminal = parse_and_verify_conformance_evidence(
-        await artifact_gateway.read_bytes(terminal_evidence_ref),
-        location=f"omnigent-{host_mode}-terminal",
-    )
-    assert terminal["conformanceRow"] == expected_row
-    assert terminal["state"] == "terminal"
-    assert terminal["launchEvidenceRef"] == launch_evidence_ref
-    assert terminal["cleanupResult"] == "succeeded"
-    assert terminal["reconciliationResult"] == "succeeded"
-    assert terminal["deniedConnectionCount"] > 0
-    assert terminal["denialDiagnostics"]
 
 
 @pytest.mark.asyncio

@@ -319,19 +319,16 @@ class HostClassTemplate:
         return f"{self.host_class_id}@{self.version}"
 
 
-DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
-    HostClassTemplate(
-        host_class_id="omnigent-opencode",
-        version=1,
-        harness_ids=("opencode-native",),
-        image_env=OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
-        integration_modes=("native-server",),
-        materializer_refs=("opencode-auth-json@1", "none@1"),
-        runtime_dependencies=(
-            {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
-        ),
-        requires_opencode_qualification=True,
+# Removed Host Classes that recorded plans or explicit requests may still name.
+# They fail closed with guidance instead of an unmatched-template error.
+RETIRED_HOST_CLASS_REFS: dict[str, str] = {
+    "omnigent-opencode@1": (
+        "Host Class omnigent-opencode@1 was removed; start a new attempt, "
+        "which runs omnigent-opencode@2 on the shared host image."
     ),
+}
+
+DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
     HostClassTemplate(
         host_class_id="omnigent-pi",
         version=1,
@@ -348,9 +345,8 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
     # OpenCode share one digest-pinned neutral image. Separate classes keep
     # harness support exact: each declares only its own harness, runtime pack,
     # and materializers, so a shared image never conflates installed CLIs with
-    # supported runtimes. Fresh OpenCode work selects omnigent-opencode@2;
-    # @1 resolves only plans that recorded it. Both carry the bootstrap
-    # server/host compatibility quarantine.
+    # supported runtimes. OpenCode keeps the bootstrap server/host
+    # compatibility quarantine.
     HostClassTemplate(
         host_class_id="omnigent-codex",
         version=1,
@@ -413,6 +409,25 @@ def installed_host_class_image_refs() -> tuple[str, ...]:
     return tuple(dict.fromkeys(refs))
 
 
+def qualified_template_image_ref(template: HostClassTemplate) -> str | None:
+    """Return the image ``template`` would launch now, or ``None`` when it cannot.
+
+    OpenCode templates also need the bootstrap server/host compatibility
+    verdict, so an incompatible pair is never advertised as launchable.
+    """
+
+    environment = _installed_environment()
+    try:
+        image_ref = _require_image_ref(environment, template.image_env)
+        if template.requires_opencode_qualification:
+            _require_opencode_host_compatibility(
+                environment, _resolved_state_or_none(), image_ref
+            )
+    except HarnessPlatformError:
+        return None
+    return image_ref
+
+
 class OmnigentHostClassSelector:
     """Select a Host Class from catalog identity and deployment data."""
 
@@ -454,6 +469,11 @@ class OmnigentHostClassSelector:
                 "execution plan lacks exact host image and build authority",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        retired = RETIRED_HOST_CLASS_REFS.get(str(requested_host_class_ref or ""))
+        if retired is not None:
+            raise HarnessPlatformError(
+                retired, code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE
+            )
         environment = (
             self._environment
             if self._environment is not None
@@ -471,10 +491,7 @@ class OmnigentHostClassSelector:
                     image_ref = host_image_ref
                 else:
                     image_ref = _require_image_ref(environment, template.image_env)
-                    if (
-                        template.requires_opencode_qualification
-                        and template.image_env != OMNIGENT_OPENCODE_HOST_IMAGE_ENV
-                    ):
+                    if template.requires_opencode_qualification:
                         _require_opencode_host_compatibility(
                             environment, _resolved_state_or_none(), image_ref
                         )

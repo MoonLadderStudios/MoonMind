@@ -4917,10 +4917,7 @@ class OmnigentRuntimeBindingRecord(Base):
 
 
 class OmnigentHostBindingRecordV2(Base):
-    """Generic host binding (post-OAuth): supports any HostClass + harness.
-
-    Preserves old OmnigentOAuthHostBindingRecord for codex-profile-bound@1.
-    """
+    """Generic host binding (post-OAuth): supports any HostClass + harness."""
 
     __tablename__ = "omnigent_host_bindings_v2"
     __table_args__ = (

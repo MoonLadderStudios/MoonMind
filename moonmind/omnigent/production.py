@@ -69,7 +69,6 @@ from moonmind.omnigent.host_services import (
 from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
 from moonmind.omnigent.provider_leases import OmnigentProviderLeaseCoordinator
 from moonmind.omnigent.transport import OmnigentTransportPool
-from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.registry import OmnigentExecutionRealizerRegistry
 from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
@@ -341,15 +340,6 @@ def build_generic_omnigent_execution_services(
         execution_state_notifier=notify_execution_state,
     )
     registry = OmnigentExecutionRealizerRegistry()
-    registry.register(
-        CodexProfileBoundRealizer(
-            session_factory=session_factory,
-            artifact_gateway=artifacts,
-            turn_command_service=CanonicalTurnCommandService(
-                OmnigentControlPlaneStore(session_factory)
-            ),
-        )
-    )
     registry.register(realizer)
 
     return GenericOmnigentExecutionServices(

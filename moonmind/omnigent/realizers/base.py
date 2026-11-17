@@ -1,6 +1,6 @@
 """Realizer protocol (Phase 1).
 
-A realizer has a versioned ref (`codex-profile-bound@1`, `generic-omnigent-host@1`)
+A realizer has a versioned ref (`generic-omnigent-host@1`)
 and owns side-effects for one execution plan. The Temporal activity selects the
 realizer via persisted plan's executionRealizerRef – no harness branches in
 the activity itself.

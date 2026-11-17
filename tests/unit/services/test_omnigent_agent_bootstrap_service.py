@@ -831,19 +831,18 @@ def _opencode_catalog_authority(monkeypatch: pytest.MonkeyPatch):
     )
 
     server_ref = "registry.test/server@sha256:" + "1" * 64
-    host_ref = "registry.test/opencode@sha256:" + "6" * 64
+    host_ref = "registry.test/shared-host@sha256:" + "6" * 64
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", server_ref)
-    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", host_ref)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", host_ref)
     monkeypatch.setattr(
         store,
         "load_resolved_state",
         lambda: SimpleNamespace(
             server_image_ref=server_ref,
-            opencode_host_image_ref=host_ref,
             details={
-                "opencodeHostCompatibility": {
+                "sharedHostOpencodeCompatibility": {
                     "status": "ready",
                     "failureCode": None,
                     "serverImageRef": server_ref,

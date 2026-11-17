@@ -517,27 +517,16 @@ async def test_claimed_command_retry_can_read_after_its_own_revision_advance(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("consumer", "error"),
-    [
-        (
-            activities.omnigent_ensure_provider_profile_lease_activity,
-            "Provider Profile does not exist",
-        ),
-        (
-            activities.omnigent_ensure_host_activity,
-            "Provider Profile lease authority is missing",
-        ),
-    ],
-)
 async def test_launch_consumers_read_inputs_before_enforcing_profile_prerequisites(
-    supervisor, consumer, error
+    supervisor,
 ):
     resolved = await _resolve(supervisor)
     request = await _command(supervisor, resolved)
     before = await _links(supervisor.sessions)
-    with pytest.raises(ValueError, match=error):
-        await consumer(request.model_dump(by_alias=True))
+    with pytest.raises(ValueError, match="Provider Profile does not exist"):
+        await activities.omnigent_ensure_provider_profile_lease_activity(
+            request.model_dump(by_alias=True)
+        )
     assert await _links(supervisor.sessions) == before
 
 

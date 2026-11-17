@@ -148,8 +148,9 @@ def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether generic Codex admission is enabled for this deployment.
 
     Ordinary Codex work uses the shared realizer without a rollout opt-in.
-    Explicit false stops new shared Codex admission; it cannot select the
-    retained profile-bound coordinator. Recorded plans keep their owner. Runtime, credential and optional strict evidence checks still apply.
+    Explicit false stops new shared Codex admission; no other Codex realizer
+    remains. Recorded plans keep their owner. Runtime, credential and optional
+    strict evidence checks still apply.
     """
 
     source = env if env is not None else os.environ
@@ -161,8 +162,7 @@ def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
 def generic_claude_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether generic Claude admission is enabled for this deployment.
 
-    ``claude-native`` has no retained profile-bound Omnigent realizer, so this
-    switch decides whether Claude Code is usable through Omnigent at all.
+    This switch decides whether Claude Code is usable through Omnigent at all.
     Default is enabled: a connected Anthropic OAuth Provider Profile works
     without a manual rollout toggle, while image, policy, inventory, provider
     readiness, and exact-host attestation still gate each launch

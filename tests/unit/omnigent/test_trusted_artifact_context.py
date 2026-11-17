@@ -370,36 +370,6 @@ async def test_signed_fanout_admission_is_parent_scoped_and_never_operator(artif
 
 
 @pytest.mark.asyncio
-async def test_oauth_checkpoint_callback_retains_typed_execution_context(
-    artifacts, tmp_path
-):
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from tests.unit.omnigent.test_admitted_input_authority import _archive
-
-    payload = _archive({"tracked.txt": b"restored bytes"})
-    artifact_id = await _put(
-        artifacts,
-        payload,
-        owner="system:agent_runtime",
-        workflow_id="restore-wf",
-        link_type="input.checkpoint",
-        content_type="application/gzip",
-    )
-    workspace = tmp_path / "restored"
-    workspace.mkdir()
-    runtime = object.__new__(OmnigentOAuthHostRuntime)
-    async with artifacts() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
-        await runtime._apply_workspace_checkpoint_restore(
-            workspace,
-            artifact_ref=f"artifact://{artifact_id}",
-            artifact_gateway=service,
-            access=ArtifactAccessContext.for_execution("restore-wf"),
-        )
-    assert (workspace / "tracked.txt").read_bytes() == b"restored bytes"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("representation", ["mapping", "model"])
 async def test_registered_read_accepts_structured_artifact_references(
     artifacts, monkeypatch, representation

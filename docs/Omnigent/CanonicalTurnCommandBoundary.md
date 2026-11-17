@@ -68,7 +68,7 @@ No producer names its own source as a literal. The source is derived from typed
 request authority at the boundary the producer already uses:
 
 - `moonmind/omnigent/realizers/turn_delivery.py` derives it with
-  `canonical_turn_source(request)` for both execution realizers. The source comes
+  `canonical_turn_source(request)` for every delivery path. The source comes
   from `stepExecution.canonicalTurnLineage`, the launching controller's typed
   attestation. `workflows/run.py` builds that block in
   `_record_canonical_turn_lineage` from workflow-owned remediation-loop state
@@ -83,10 +83,9 @@ request authority at the boundary the producer already uses:
 - `api_service/api/routers/omnigent_bridge.py` maps native Workflow Chat control
   types to `workflow_chat`, `approval_response`, or `steering` by exhaustive
   membership.
-- `moonmind/omnigent/profile_bound_execution.py` claims
-  `repository_continuation` for each repository-output continuation, and
-  `api_service/services/checkpoint_branch_turn_execution.py` claims
-  `checkpoint_resume`.
+- `api_service/services/checkpoint_branch_turn_execution.py` claims
+  `checkpoint_resume`. No current producer claims `repository_continuation`;
+  it remains readable on recorded turns.
 - `moonmind/omnigent/realizers/generic_host.py` claims
   `terminal_contract_continuation` for each bounded same-session continuation
   driven by the resolved Skill's incomplete terminal contract.
@@ -251,7 +250,7 @@ The race is therefore resolved in one direction:
   branches instead.
 
 An execution that exits with a still-active or ambiguous provider observation
-parks its canonical command as `delivery_unknown`. The profile-bound workflow
+parks its canonical command as `delivery_unknown`. The AgentRun remaining-budget
 retry owner preserves that original failure after the runtime's bounded
 same-session recovery; remaining execution time alone does not authorize another
 delivery of the parked command. Its existing reconciliation owner must establish
@@ -291,17 +290,14 @@ an instruction may request authority but never attests it.
 
 The canonical turn service contains no Codex-versus-OpenCode lifecycle branches.
 `moonmind/omnigent/realizers/turn_delivery.py` owns the shared claim → run →
-settle wrapper, and both `codex-profile-bound@1` and `generic-omnigent-host@1`
-use it; only the wrapped lifecycle differs. Immutable authority is projected
-from the recorded execution plan by
+settle wrapper that `generic-omnigent-host@1` and the unprofiled path use.
+Immutable authority is projected from the recorded execution plan by
 `moonmind/omnigent/turn_authority.py`, which reads plan payload fields rather
 than harness-specific state.
 
-Codex reaches the coordinator through two production entrypoints — the realizer
-registry and `integration.omnigent.execute` for profile-bound requests carrying
-no execution plan and no Agent Profile ref. Both construct
-`OmnigentProfileBoundExecutionCoordinator` with the canonical turn service, so
-neither has a repository continuation that submits outside the boundary.
+A recorded `codex-profile-bound@1` plan, or a profiled request without a plan,
+fails closed with `OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE` before any provider
+mutation.
 
 `integration.omnigent.execute` also serves the unprofiled path, for requests
 with no `executionProfileRef`. That path compiles no execution plan, so it

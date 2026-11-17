@@ -1024,7 +1024,7 @@ def default_runtime_provider_rollout_policy(
             },
             legacy_default_restorable=False,
             description=(
-                "Recorded profile-bound Codex plans, retries and cleanup only. "
+                "Recorded profile-bound Codex plans, which fail closed. "
                 "New plans use the shared lifecycle."
             ),
         ),
