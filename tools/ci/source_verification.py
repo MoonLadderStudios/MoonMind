@@ -132,7 +132,7 @@ def _github_api(path: str) -> bytes:
 
 def _admit_producer(
     api: Callable[[str], bytes],
-    run: dict,
+    run_id: str,
     *,
     repository: str,
     tree: Callable[[str], str],
@@ -141,9 +141,11 @@ def _admit_producer(
 ) -> tuple[dict, bytes]:
     """Return the identity and receipt bytes of one trusted complete run.
 
-    Identity comes from the Actions API; the receipt must agree with it.
+    Identity comes from the run's own Actions resource, which, unlike the run
+    listing, documents referenced workflows; the receipt must agree with it.
     """
-    run_id, attempt = str(run["id"]), str(run["run_attempt"])
+    run = json.loads(api(f"repos/{repository}/actions/runs/{run_id}"))
+    attempt = str(run["run_attempt"])
     if run.get("path") != REUSE_WORKFLOW or run.get("event") not in REUSE_EVENTS:
         raise ValueError(
             f"{run.get('event')} run of {run.get('path')} is not trusted "
@@ -283,7 +285,7 @@ def reuse_decision(
         try:
             producer, receipt = _admit_producer(
                 api,
-                run,
+                str(run["id"]),
                 repository=repository,
                 tree=tree,
                 release_tree=decision["consumer"]["tree"],

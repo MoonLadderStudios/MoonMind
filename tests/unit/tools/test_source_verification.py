@@ -275,6 +275,9 @@ def _producer_fixture(candidate: str) -> dict:
         else [{"merge_commit_sha": RELEASE, "merged_at": "x", "head": {"sha": HEAD}}]
     )
     runs = f"repos/{REPOSITORY}/actions/workflows/pytest-unit-tests.yml/runs"
+    # The documented run listing omits referenced_workflows; the run's own
+    # resource carries it and is the identity the decision trusts.
+    listed = {key: value for key, value in run.items() if key != "referenced_workflows"}
     return {
         # Nothing tested the squash or merge commit itself before it existed.
         f"{runs}?head_sha={RELEASE}&per_page=10": {"workflow_runs": []},
@@ -282,7 +285,8 @@ def _producer_fixture(candidate: str) -> dict:
         f"repos/{REPOSITORY}/git/commits/{HEAD}": {"tree": {"sha": TREE}},
         f"repos/{REPOSITORY}/git/commits/{WORKFLOW_COMMIT}": {"tree": {"sha": TREE}},
         f"repos/{REPOSITORY}/commits/{RELEASE}/pulls": pulls,
-        f"{runs}?head_sha={head}&per_page=10": {"workflow_runs": [run]},
+        f"{runs}?head_sha={head}&per_page=10": {"workflow_runs": [listed]},
+        f"repos/{REPOSITORY}/actions/runs/77": run,
         f"repos/{REPOSITORY}/actions/runs/77/artifacts"
         "?name=source-verification-77-2": {
             "artifacts": [
@@ -330,7 +334,9 @@ def _runs_key(responses: dict) -> str:
 
 
 def _run(responses: dict) -> dict:
-    return responses[_runs_key(responses)]["workflow_runs"][0]
+    """The run resource behind the first listed candidate."""
+    listed = responses[_runs_key(responses)]["workflow_runs"][0]
+    return responses[f"repos/{REPOSITORY}/actions/runs/{listed['id']}"]
 
 
 @pytest.mark.parametrize("candidate", ["squash", "merge", "merge queue"])
@@ -487,6 +493,7 @@ def test_one_rejected_candidate_does_not_hide_a_complete_one():
         "run_started_at": (NOW - timedelta(hours=1)).isoformat(),
     }
     responses[runs_key]["workflow_runs"].insert(0, newer)
+    responses[f"repos/{REPOSITORY}/actions/runs/78"] = newer
     decision, receipt = _decide(responses)
     assert decision["reused"] is True and receipt is not None
     assert decision["producer"]["runId"] == "77"
