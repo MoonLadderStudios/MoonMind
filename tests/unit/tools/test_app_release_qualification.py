@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,7 @@ def _evaluate(expression, context):
         translate,
         match[1] if match else expression,
     )
-    return eval(python, {"__builtins__": {}}, {"lookup": lookup})
+    return eval("(" + python + ")", {"__builtins__": {}}, {"lookup": lookup})
 
 
 def _job_runs(job, context):
@@ -122,6 +123,8 @@ def _qualification_context(
     recovery="success",
     migration="success",
     source_receipt="success",
+    source_reuse="success",
+    reused="false",
     qualified_image=CANDIDATE,
     qualified_phase=None,
 ):
@@ -147,6 +150,15 @@ def _qualification_context(
             context[name] = {"result": migration}
         elif name == "verify-source-receipt":
             context[name] = {"result": source_receipt}
+        elif name == "source-reuse":
+            context[name] = {
+                "result": source_reuse,
+                "outputs": {
+                    "reused": reused,
+                    "receipt_artifact": "source-verification-9-2" if reused else "",
+                    "receipt_digest": "sha256:" + "e" * 64 if reused else "",
+                },
+            }
         elif "image_ref" in job.get("outputs", {}):
             context[name] = {"result": assembly, "outputs": {"image_ref": CANDIDATE}}
         elif "image_name" in job.get("outputs", {}):
@@ -166,6 +178,8 @@ def _run_writer(
     recovery="success",
     migration="success",
     source_receipt="success",
+    source_reuse="success",
+    reused="false",
     ref="refs/heads/main",
     main_head="candidate-commit",
     candidate=CANDIDATE,
@@ -181,6 +195,8 @@ def _run_writer(
         recovery=recovery,
         migration=migration,
         source_receipt=source_receipt,
+        source_reuse=source_reuse,
+        reused=reused,
         qualified_image=candidate if qualified_image is None else qualified_image,
         qualified_phase=qualified_phase,
     )
@@ -226,6 +242,8 @@ def _run_writer(
         "MAIN_HEAD": main_head,
         "GITHUB_REF": ref,
         "GITHUB_SHA": "candidate-commit",
+        "GITHUB_RUN_ID": "500",
+        "GITHUB_RUN_ATTEMPT": "1",
         "GITHUB_REPOSITORY": "fixture/moonmind",
         "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
         "GITHUB_OUTPUT": str(tmp_path / "outputs"),
@@ -328,6 +346,180 @@ def test_publication_summary_keeps_source_and_image_provenance(tmp_path):
     summary = (tmp_path / "summary").read_text()
     for value in (CANDIDATE, "source-verification-1-1", "sha256:" + "d" * 64):
         assert value in summary
+
+
+REUSED = dict(source="skipped", source_receipt="skipped", reused="true")
+
+
+def test_validated_reuse_replaces_only_the_source_phase(tmp_path):
+    result, channel, commands = _run_writer(tmp_path, **REUSED)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert channel == CANDIDATE
+    summary = (tmp_path / "summary").read_text()
+    # The release names the producer's receipt and its own decision separately.
+    for value in (
+        "source-verification-9-2",
+        "sha256:" + "e" * 64,
+        "source-reuse-500-1",
+    ):
+        assert value in summary
+    assert "source-verification-1-1" not in summary
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"assembly": "failure"},
+        {"artifact": "failure"},
+        {"recovery": "failure"},
+        {"migration": "failure"},
+        {"qualified_image": PREVIOUS, "qualified_phase": "recovery"},
+        {"source_reuse": "failure"},
+        {"source_reuse": "cancelled"},
+        {"reused": "false"},
+        {"reused": ""},
+    ],
+)
+def test_reuse_never_publishes_without_image_qualification_or_a_validated_decision(
+    tmp_path, change
+):
+    result, channel, commands = _run_writer(tmp_path, **{**REUSED, **change})
+    assert result.returncode != 0
+    assert channel == PREVIOUS
+    assert not _channel_updates(commands)
+
+
+def test_reuse_requires_the_producer_receipt_identity(tmp_path):
+    jobs = _workflow("docker-publish.yml")["jobs"]
+    step = _writer()[2]
+    for output in ("receipt_artifact", "receipt_digest"):
+        reference = f"${{{{ needs.source-reuse.outputs.{output} }}}}"
+        assert reference in step["env"].values()
+        missing = {
+            **step,
+            "env": {
+                key: "" if value == reference else value
+                for key, value in step["env"].items()
+            },
+        }
+        (tmp_path / output).mkdir()
+        result, channel, _ = _run_writer(tmp_path / output, step=missing, **REUSED)
+        assert result.returncode != 0
+        assert channel == PREVIOUS
+    assert jobs["source-reuse"]["outputs"]["reused"]
+
+
+def _release_context(**kwargs):
+    return {"needs": _qualification_context(**kwargs)}
+
+
+@pytest.mark.parametrize(
+    ("decision", "reused", "runs"),
+    [
+        ("success", "true", False),
+        ("success", "false", True),
+        ("success", "", True),
+        ("failure", "true", True),
+        ("failure", "", True),
+        ("skipped", "", True),
+    ],
+)
+def test_rejected_or_failed_reuse_runs_the_source_phase(decision, reused, runs):
+    jobs = _workflow("docker-publish.yml")["jobs"]
+    context = _release_context(source_reuse=decision, reused=reused)
+    assert _job_runs(jobs["source-checks"], context) is runs
+
+
+@pytest.mark.parametrize("decision", ["success", "failure", "cancelled"])
+def test_completed_fallback_is_verified_whatever_the_decision_job_did(decision):
+    jobs = _workflow("docker-publish.yml")["jobs"]
+    context = _release_context(source_reuse=decision, reused="")
+    assert _job_runs(jobs["source-checks"], context)
+    verify = jobs["verify-source-receipt"]
+    # GitHub's implicit success() also sees the decision job as an ancestor.
+    assert re.search(r"\b(?:always|cancelled)\(\)", verify["if"])
+    assert _job_runs(verify, context)
+    context["needs"]["source-checks"]["result"] = "failure"
+    assert not _job_runs(verify, context)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "publishes"),
+    [
+        ({}, True),
+        (REUSED, True),
+        ({**REUSED, "source_reuse": "failure"}, False),
+        ({**REUSED, "reused": "false"}, False),
+        ({"source": "failure", "source_receipt": "skipped"}, False),
+        ({"source_receipt": "failure"}, False),
+        ({**REUSED, "artifact": "failure"}, False),
+        ({**REUSED, "recovery": "skipped"}, False),
+        ({**REUSED, "migration": "cancelled"}, False),
+        ({**REUSED, "assembly": "failure"}, False),
+    ],
+)
+def test_publication_job_waits_for_validated_source_and_every_image_owner(
+    kwargs, publishes
+):
+    writer_name, writer, _ = _writer()
+    assert bool(_job_runs(writer, _release_context(**kwargs))) is publishes
+
+
+def test_reuse_decision_is_the_only_new_reader_of_other_runs():
+    jobs = _workflow("docker-publish.yml")["jobs"]
+    decision = jobs["source-reuse"]
+    assert not decision.get("needs"), "The decision starts with the image builds"
+    assert decision["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "read",
+    }
+    assert all(
+        "actions" not in job.get("permissions", {})
+        for name, job in jobs.items()
+        if name != "source-reuse"
+    )
+    assert _ancestors(jobs, "source-checks") == {"source-reuse"}
+    assert "source-reuse" in _ancestors(jobs, _writer()[0])
+
+
+@pytest.mark.parametrize(
+    ("event", "phase", "selected", "writes"),
+    [
+        ("push", "source", "false", True),
+        ("pull_request", "", "true", True),
+        ("merge_group", "", "true", True),
+        ("pull_request", "", "false", False),
+        ("schedule", "", "true", False),
+        ("workflow_dispatch", "", "true", False),
+        ("push", "artifact", "true", False),
+    ],
+)
+def test_only_complete_pre_merge_runs_record_a_reusable_receipt(
+    event, phase, selected, writes
+):
+    job = _workflow("pytest-unit-tests.yml")["jobs"]["source-receipt"]
+    outputs = {
+        "full_backend": selected,
+        "full_frontend": "true",
+        "generated_contracts": "true",
+    }
+    context = {
+        "github": {"event_name": event},
+        "inputs": {"verification_phase": phase},
+        "needs": {
+            "ci-required": {"result": "success"},
+            "select-test-suites": {"result": "success", "outputs": outputs},
+        },
+    }
+    assert bool(_job_runs(job, context)) is writes
+    for gate in ("full_frontend", "generated_contracts"):
+        partial = deepcopy(context)
+        partial["needs"]["select-test-suites"]["outputs"][gate] = "false"
+        assert not (phase == "" and _job_runs(job, partial))
+    failed = deepcopy(context)
+    failed["needs"]["ci-required"]["result"] = "failure"
+    assert not _job_runs(job, failed)
 
 
 def test_default_writer_depends_on_existing_source_migration_and_image_owners():
@@ -742,7 +934,10 @@ def test_release_source_checks_start_before_assembly_and_only_once():
     assert "source-checks" not in _ancestors(config["jobs"], "qualify")
     # The receipt is verified as soon as the source phase hands it off, in
     # parallel with artifact qualification instead of after it.
-    assert _ancestors(config["jobs"], "verify-source-receipt") == {"source-checks"}
+    assert _ancestors(config["jobs"], "verify-source-receipt") == {
+        "source-checks",
+        "source-reuse",
+    }
     assert "verify-source-receipt" in _ancestors(config["jobs"], _writer()[0])
     test_events = _workflow("pytest-unit-tests.yml")
     events = test_events.get("on", test_events.get(True))

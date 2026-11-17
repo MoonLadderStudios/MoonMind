@@ -25,7 +25,42 @@ jobs:
           IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
+  source-reuse:
+    # Validated pull request or merge queue evidence for this exact tree
+    # replaces the source phase; every other case runs it below.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      reused: ${{ steps.decide.outputs.reused }}
+      receipt_artifact: ${{ steps.decide.outputs.receipt_artifact }}
+      receipt_digest: ${{ steps.decide.outputs.receipt_digest }}
+    steps:
+      - name: Check out the source verification owner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Decide whether trusted pre-merge evidence covers this tree
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/source_verification.py reuse artifacts/source-reuse \
+            --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Upload the reuse decision
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source-reuse-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/source-reuse
+          if-no-files-found: error
+          retention-days: 14
   source-checks:
+    needs: source-reuse
+    # A failed or unproven decision runs the source phase.
+    if: ${{ !cancelled() && !(needs.source-reuse.result == 'success' && needs.source-reuse.outputs.reused == 'true') }}
     permissions:
       contents: read
       packages: read
@@ -204,8 +239,10 @@ jobs:
 
   verify-source-receipt:
     # Verifies the source handoff as soon as it exists, in parallel with
-    # artifact qualification rather than on the publication tail.
+    # artifact qualification rather than on the publication tail. A crashed
+    # reuse decision must not block the fallback it started.
     needs: source-checks
+    if: ${{ !cancelled() && needs.source-checks.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -251,8 +288,17 @@ jobs:
       - qualify
       - qualify-recovery
       - qualify-migrations
+      - source-reuse
       - source-checks
       - verify-source-receipt
+    # Reused evidence skips the source phase, which the implicit success()
+    # gate would treat as a skipped requirement.
+    if: >-
+      ${{ !cancelled() && needs.assemble.result == 'success' &&
+          needs.qualify.result == 'success' && needs.qualify-recovery.result == 'success' &&
+          needs.qualify-migrations.result == 'success' &&
+          (needs.verify-source-receipt.result == 'success' ||
+           (needs.source-reuse.result == 'success' && needs.source-reuse.outputs.reused == 'true')) }}
     runs-on: ubuntu-latest
     # Preserve ordering when multiple qualified builds finish out of order.
     concurrency:
@@ -285,10 +331,25 @@ jobs:
           SOURCE_RECEIPT_RESULT: ${{ needs.verify-source-receipt.result }}
           SOURCE_RECEIPT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
           SOURCE_RECEIPT_DIGEST: ${{ needs.source-checks.outputs.source_receipt_digest }}
+          SOURCE_REUSE_RESULT: ${{ needs.source-reuse.result }}
+          SOURCE_REUSED: ${{ needs.source-reuse.outputs.reused }}
+          REUSED_RECEIPT: ${{ needs.source-reuse.outputs.receipt_artifact }}
+          REUSED_RECEIPT_DIGEST: ${{ needs.source-reuse.outputs.receipt_digest }}
         run: |
           set -euo pipefail
           # Job dependencies and the actual mutation boundary both fail closed.
-          for gate in ASSEMBLY_RESULT SOURCE_RESULT SOURCE_RECEIPT_RESULT QUALIFICATION_RESULT RECOVERY_RESULT MIGRATION_RESULT; do
+          source_gates="SOURCE_RESULT SOURCE_RECEIPT_RESULT"
+          source_evidence="Verified source receipt: \`${SOURCE_RECEIPT}\` (\`${SOURCE_RECEIPT_DIGEST}\`) for \`${GITHUB_SHA}\`"
+          # The same rule that skipped the source phase admits reused evidence.
+          if [[ "${SOURCE_REUSE_RESULT:-}" == "success" && "${SOURCE_REUSED:-}" == "true" ]]; then
+            if [[ -z "${REUSED_RECEIPT:-}" || ! "${REUSED_RECEIPT_DIGEST:-}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Reused source evidence lacks its producer receipt identity"
+              exit 1
+            fi
+            source_gates="SOURCE_REUSE_RESULT"
+            source_evidence="Reused pre-merge source receipt: \`${REUSED_RECEIPT}\` (\`${REUSED_RECEIPT_DIGEST}\`) for the tree of \`${GITHUB_SHA}\`; decision \`source-reuse-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\`"
+          fi
+          for gate in ASSEMBLY_RESULT $source_gates QUALIFICATION_RESULT RECOVERY_RESULT MIGRATION_RESULT; do
             if [[ "${!gate:-}" != "success" ]]; then
               echo "::error::Required release result $gate did not succeed"
               exit 1
@@ -314,7 +375,7 @@ jobs:
           echo "Runtime qualification: amd64; arm64 is build-only." >> "$GITHUB_STEP_SUMMARY"
           {
             echo "Qualified default image: \`${CANDIDATE_IMAGE}\`"
-            echo "Verified source receipt: \`${SOURCE_RECEIPT}\` (\`${SOURCE_RECEIPT_DIGEST}\`) for \`${GITHUB_SHA}\`"
+            echo "$source_evidence"
           } >> "$GITHUB_STEP_SUMMARY"
   ci-timings:
     # The one timing report for this run, including reusable-call jobs.

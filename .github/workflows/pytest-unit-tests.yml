@@ -2440,13 +2440,20 @@ jobs:
         run: npm run contracts:check
 
   source-receipt:
+    # The release source phase hands this receipt to publication. A pull
+    # request or merge queue run that selected every source owner records the
+    # same receipt so the release for an identical tree can reuse it.
     needs:
       - ci-required
       - select-test-suites
     if: >-
-      ${{ !cancelled() && inputs.verification_phase == 'source' &&
-          needs.ci-required.result == 'success' &&
-          needs.select-test-suites.result == 'success' }}
+      ${{ !cancelled() && needs.ci-required.result == 'success' &&
+          needs.select-test-suites.result == 'success' &&
+          (inputs.verification_phase == 'source' ||
+           ((github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+            needs.select-test-suites.outputs.full_backend == 'true' &&
+            needs.select-test-suites.outputs.full_frontend == 'true' &&
+            needs.select-test-suites.outputs.generated_contracts == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
