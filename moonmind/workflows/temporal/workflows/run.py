@@ -1245,6 +1245,10 @@ RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
 # the doc-reconciliation restore handling once no running or retained history
 # contains a doc-reconciliation Step.
 RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH = "run-retired-doc-reconciliation-skip-v1"
+# A step annotated ``requiresAssessmentVerdict`` runs only when the recorded
+# initial assessment has that verdict (the one verification pass an issue
+# assessed as already implemented gets when optional verification is off).
+RUN_ASSESSMENT_GATED_STEP_SKIP_PATCH = "run-assessment-gated-step-skip-v1"
 # An issue-implementation PR handoff may restore a candidate that was already
 # pushed by the implementation stage. ``no_commits`` at that later sandbox is
 # not authority to skip the PR: it only says the restored head needs no second
@@ -5746,6 +5750,38 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _issue_implement_handoff_role(self, node: Mapping[str, Any]) -> str:
         annotations = self._node_annotations_mapping(node)
         return str(annotations.get("issueImplementRole") or "").strip().lower()
+
+    def _assessment_gated_step_skip_reason(
+        self, node: Mapping[str, Any]
+    ) -> str | None:
+        required = (
+            str(
+                self._node_annotations_mapping(node).get("requiresAssessmentVerdict")
+                or ""
+            )
+            .strip()
+            .upper()
+        )
+        if not required:
+            return None
+        recorded = (
+            str(
+                self._assessment_context.get("assessmentVerdict")
+                or self._assessment_context.get("assessment_verdict")
+                or ""
+            )
+            .strip()
+            .upper()
+        )
+        if recorded == required:
+            return None
+        title = str(
+            self._node_inputs_mapping(node).get("title") or node.get("title") or "Step"
+        ).strip()
+        return (
+            f"Skipped {title}: it runs only when the initial assessment verdict is "
+            f"{required}, and the assessment recorded {recorded or 'no verdict'}."
+        )
 
     def _issue_implement_pr_required(self) -> bool:
         verdict = str(
@@ -13969,6 +14005,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "Skipped doc reconciliation step; the moonspec-doc-reconcile "
                     "pass was removed."
                 )
+                self._mark_step_terminal(
+                    node_id,
+                    status="skipped",
+                    updated_at=workflow.now(),
+                    summary=skip_reason,
+                    last_error=None,
+                )
+                self._summary = skip_reason
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                continue
+            skip_reason = self._assessment_gated_step_skip_reason(node)
+            # Only plans carrying the annotation consult the patch, so other
+            # histories record no marker.
+            if skip_reason and workflow.patched(RUN_ASSESSMENT_GATED_STEP_SKIP_PATCH):
                 self._mark_step_terminal(
                     node_id,
                     status="skipped",

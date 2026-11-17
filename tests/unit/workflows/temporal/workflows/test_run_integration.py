@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
     RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
     RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH,
+    RUN_ASSESSMENT_GATED_STEP_SKIP_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
@@ -628,6 +629,122 @@ async def test_run_execution_stage_skips_retired_doc_reconciliation_step(
     else:
         assert len(launched) == 2
         assert reconcile_row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("assessment_verdict", "gate_patch_enabled", "verify_runs"),
+    [
+        ("FULLY_IMPLEMENTED", True, True),
+        ("PARTIALLY_IMPLEMENTED", True, False),
+        ("NOT_IMPLEMENTED", True, False),
+        (None, True, False),
+        ("PARTIALLY_IMPLEMENTED", False, True),
+    ],
+    ids=[
+        "assessed-complete",
+        "partial",
+        "not-implemented",
+        "no-verdict",
+        "legacy-replay",
+    ],
+)
+async def test_run_execution_stage_gates_verify_step_on_initial_assessment(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    assessment_verdict: str | None,
+    gate_patch_enabled: bool,
+    verify_runs: bool,
+) -> None:
+    """With optional verification off, only an issue assessed as already
+    implemented gets its one verification pass: the assessment alone is not
+    acceptance evidence, and nothing else can close that issue."""
+
+    launched: list[str] = []
+    if assessment_verdict is not None:
+        mock_run_workflow._assessment_context = {
+            "assessmentVerdict": assessment_verdict,
+            "assessmentArtifactRef": "art_assessment",
+        }
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "verify",
+                    "tool": {"type": "agent_runtime", "name": "openclaw"},
+                    "inputs": {
+                        "title": "Verify implementation",
+                        "instructions": "Verify the candidate.",
+                        "annotations": {
+                            "requiresAssessmentVerdict": "FULLY_IMPLEMENTED"
+                        },
+                    },
+                },
+                {
+                    "id": "final-status",
+                    "tool": {"type": "agent_runtime", "name": "openclaw"},
+                    "inputs": {"instructions": "Finalize status."},
+                },
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _request: Any,
+        **kwargs: Any,
+    ) -> Any:
+        launched.append(str(kwargs.get("id") or ""))
+        return {
+            "summary": "Step completed.",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    async def noop_step_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            gate_patch_enabled and patch_id == RUN_ASSESSMENT_GATED_STEP_SKIP_PATCH
+        ),
+    )
+    monkeypatch.setattr(
+        mock_run_workflow, "_record_step_execution_manifest", noop_step_manifest
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    verify_row = mock_run_workflow._step_ledger_row_for("verify")
+    assert mock_run_workflow._step_ledger_row_for("final-status")["status"] == (
+        "completed"
+    )
+    if verify_runs:
+        assert len(launched) == 2
+        assert verify_row["status"] == "completed"
+    else:
+        assert len(launched) == 1
+        assert verify_row["status"] == "skipped"
+        assert "FULLY_IMPLEMENTED" in verify_row["summary"]
+        assert (assessment_verdict or "no verdict") in verify_row["summary"]
 
 
 @pytest.mark.asyncio

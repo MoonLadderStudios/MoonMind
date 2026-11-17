@@ -3366,7 +3366,14 @@ async def test_search_implement_verification_is_opt_in(
         is False
     )
     titles = [step["title"] for step in expanded["steps"]]
-    assert ("Verify implementation" in titles) is expected_verification
+    verify = next(
+        step for step in expanded["steps"] if step["title"] == "Verify implementation"
+    )
+    # Opting out drops the remediation pass, not the one verification that an
+    # issue assessed as already implemented needs before it can close.
+    assert (verify.get("annotations") or {}).get("requiresAssessmentVerdict") == (
+        "" if expected_verification else "FULLY_IMPLEMENTED"
+    )
     assert ("Remediation loop controller" in titles) is expected_verification
     assert "Implement the issue" in titles
     assert "Create pull request" in titles
@@ -3526,16 +3533,24 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "code-review-handoff"
     )
     no_verify_titles = [step["title"] for step in no_verify["steps"]]
+    # Opting out drops remediation; an issue assessed as already implemented
+    # still gets its one verification before it can close.
     assert no_verify_titles == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
         "Check GitHub issue blockers before implementation",
         "Mark GitHub issue In Progress",
         "Implement the issue",
+        "Verify implementation",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
-    assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
+    assert no_verify["steps"][5]["annotations"]["requiresAssessmentVerdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert "The verification and remediation pass is off" in (
+        no_verify["steps"][-2]["instructions"]
+    )
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
