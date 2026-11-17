@@ -374,14 +374,22 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
 
 @pytest.mark.parametrize(
     "activity_type",
-    ["artifact.create", "artifact.write_complete", "workspace.capture_checkpoint"],
+    [
+        "artifact.create",
+        "artifact.write_complete",
+        "workspace.capture_checkpoint",
+        "step_checkpoint.create",
+        "step_checkpoint.create_v2",
+    ],
 )
 def test_artifact_writes_wait_out_a_full_store_until_the_next_cleanup(activity_type):
     """A full artifact store frees space only at the next hourly cleanup.
 
-    The parent workflow used to fail within a minute of storage filling up.
-    The retry schedule it actually builds must keep the write alive past one
-    whole cleanup cycle while staying bounded.
+    The parent workflow used to fail within a minute of storage filling up,
+    and a checkpoint write after completed steps failed a run when a host disk
+    stall froze the artifacts worker for two and a half minutes. The retry
+    schedule it actually builds must keep the write alive past one whole
+    cleanup cycle while staying bounded.
     """
 
     from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
