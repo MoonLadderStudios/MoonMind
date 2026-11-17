@@ -21,8 +21,8 @@ Execution-time drain enforcement (MoonLadderStudios/MoonMind#4191 MR4):
 (``require_registry_drop_approval``) before dropping. An empty ``manifest``
 table (fresh install) proceeds without approval; a populated or unreadable
 table requires ``MOONMIND_MANIFEST_REGISTRY_DRAIN_APPROVED=1`` bound to
-``MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT=<verified count>`` after the
-protected export verifies and the drain gate reports ``may_apply_destructive``.
+``MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT=<verified count>`` after a
+protected ``pg_dump`` snapshot restores and its row count is verified.
 The gate module is stdlib-only: this migration never imports removed Manifest
 runtime modules.
 

@@ -523,10 +523,8 @@ async def test_update_and_unpause_retired_schedule_rejected(tmp_path: Path) -> N
             adapter.update_schedule.assert_not_awaited()
 
 
-def test_migration_carries_export_notice_and_retires_manifest_run() -> None:
-    """Migration 376 documents protected export; manifest_run never converts."""
-    import re
-
+def test_migration_carries_export_notice() -> None:
+    """Migration 376 tells operators to export retained rows before upgrading."""
     migration = (
         REPO_ROOT
         / "api_service"
@@ -536,24 +534,6 @@ def test_migration_carries_export_notice_and_retires_manifest_run() -> None:
     ).read_text(encoding="utf-8")
     assert "export" in migration.lower()
     assert "before upgrading" in migration.lower() or "before upgrade" in migration.lower()
-
-    # Exec only the pure target-mapping section (see
-    # tests/unit/scripts/test_migrate_to_temporal_schedules_4188.py): the
-    # module imports runtime dependencies unavailable to a bare interpreter.
-    script_source = (REPO_ROOT / "scripts" / "migrate_to_temporal_schedules.py").read_text(
-        encoding="utf-8"
-    )
-    match = re.search(
-        r"(?ms)^class RetiredManifestTargetError.*?(?=^async def migrate_definitions)",
-        script_source,
-    )
-    assert match is not None, "retired-target mapping block missing from script"
-    namespace: dict = {}
-    exec(compile(match.group(0), "migrate_to_temporal_schedules.py", "exec"), namespace)
-    with pytest.raises(namespace["RetiredManifestTargetError"], match="retired"):
-        namespace["_workflow_type_for_target"]({"kind": "manifest_run"})
-    # Ordinary definitions still convert.
-    assert namespace["_workflow_type_for_target"]({"kind": "queue_task"}) == "MoonMind.UserWorkflow"
 
 
 # ---------------------------------------------------------------------------

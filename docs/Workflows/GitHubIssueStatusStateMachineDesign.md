@@ -106,7 +106,7 @@ The comment carries only the information required to interpret and continue the 
 | Lineage | Predecessor attempt/comment when continuing previous work |
 | Activity | Preparing, active, awaiting review, releasing, released, or attention, with last reported activity |
 | Claim lease | Version 2 declares `leaseRenewedAt` and `leaseExpiresAt` as timezone-aware UTC timestamps, at most 30 minutes apart; version 1 has no lease |
-| Reservation status | Derived, never stored: live, expired, released, operator hold, legacy awaiting migration, legacy retired, or unreadable |
+| Reservation status | Derived, never stored: live, expired, released, operator hold, unleased (version 1, recent or stale), or unreadable (recent or stale) |
 | Stop evidence | Whether all associated writers have stopped and publication requests have a known outcome |
 | Preserved work | PR identity, exact verified head/base, and any GitHub-accessible saved branch/commit |
 | Result | Failure or completion category, met/unmet requirements, and a concise verification summary |
@@ -166,17 +166,17 @@ When a fresh GitHub read proves that a cached attempt's reservation has ended, o
 
 ### 5.1 Candidate eligibility
 
-An eligible issue is open, in authorized repository/query/author scope, unblocked by prerequisites, Available or Recovery needed, and free of live/legacy reservations, holds, unreadable evidence, unknown prior work, or exhausted restrictions. Expiry permits assessment only: inspect retained attempts and PRs before editing.
+An eligible issue is open, in authorized repository/query/author scope, unblocked by prerequisites, Available or Recovery needed, and free of live or recent unleased reservations, holds, unreadable evidence, unknown prior work, or exhausted restrictions. Expiry permits assessment only: inspect retained attempts and PRs before editing.
 
 Search, explicit loading, continuation, publication checks, and maintenance use one ownership interpreter. Reassess advisory in-progress labels through fresh reads rather than skipping all of them. A confirmed managed label with no supporting attempt can be reconciled as leftover bookkeeping; manual labels are not age-cleared. Review/recovery/attention statuses are never age-cleared.
 
-Report live deadline, expired/legacy reservation, hold, prerequisite blocker, continuation-required PR, and unavailable evidence distinctly. Recovery stays within requested scope and receives bounded preference. Code review enters PR follow-up only when requested. Reconciliation leaves external review work and existing operator holds unchanged when no interrupted MoonMind transition is known; missing MoonMind metadata does not establish an unresponsive owner. Attention escalation rechecks issue and comment evidence before writing, deferring changed or unreadable observations. Incomplete pagination/read budgets never mean no competitor.
+Report live deadline, expired/unleased reservation, hold, prerequisite blocker, continuation-required PR, and unavailable evidence distinctly. Recovery stays within requested scope and receives bounded preference. Code review enters PR follow-up only when requested. Reconciliation leaves external review work and existing operator holds unchanged when no interrupted MoonMind transition is known; missing MoonMind metadata does not establish an unresponsive owner. Attention escalation rechecks issue and comment evidence before writing, deferring changed or unreadable observations. Incomplete pagination/read budgets never mean no competitor.
 
 ### 5.2 Advisory claim
 
 Persist the durable claim receipt, announce one attempt comment, then apply in-progress before expensive assessment/editing. Re-read issue/comments before launch, retaining the exact selected issue through recovery. A later start resolves the receipt from its execution owner and authenticates the live comment; a bare attempt ID, trusted-looking brief, or label is insufficient.
 
-Live active contenders and legacy reservations block shared effects. Simultaneously preparing contenders use GitHub comment-ID order: the earliest confirmed announcement proceeds; later preparing attempts quiesce. Active contenders block regardless of order. Losers stop their writers and preserve independent output where authorized, without clearing another owner's status. Only conclusively settled abandonment permits moving to another candidate. Extra labels or settling delays do not create exclusive locks.
+Live active contenders and recent unleased reservations block shared effects. Simultaneously preparing contenders use GitHub comment-ID order: the earliest confirmed announcement proceeds; later preparing attempts quiesce. Active contenders block regardless of order. Losers stop their writers and preserve independent output where authorized, without clearing another owner's status. Only conclusively settled abandonment permits moving to another candidate. Extra labels or settling delays do not create exclusive locks.
 
 ### 5.3 Shared retry history
 
@@ -216,15 +216,7 @@ A missing local workflow record on device B says nothing about device A's execut
 
 For version-2 claims, authenticated GitHub issue/comment reads check deadlines, scope, provenance, conflicting copies, owners, and holds. If all leases expired and no status blocks admission, reconciliation rereads before removing only `status: in-progress`, then verifies the result. An observed successor prevents reclamation. Explicit failed-step retry may reacquire its expired, unreleased claim only without a later attempt or blocking issue status, restoring and confirming `status: in-progress` before reset. Live claims retain normal contender ordering; automatic renewal cannot revive expiry. Expiry never means `released`, stopped processes, or discarded work. Saved PR/branch references and retry history remain assessment inputs. Other statuses and explicit holds are never age-cleared.
 
-Version-1 writers never agreed to expiry. `MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT` is the operator's declaration that they are stopped/upgraded; until set, report `legacy_reservation_awaiting_migration`. Only comments GitHub timestamps before that instant lose authority. Stop/upgrade old writers first because they cannot honor new supersession rules.
-
-Run [legacy-claim recovery](../../tools/recover_legacy_issue_claims.py) from a checkout with `tools/` (the command is absent from production images):
-
-```sh
-python tools/recover_legacy_issue_claims.py --repository owner/name --cutover-at <ISO-8601-instant> --report /tmp/claim-recovery.json
-```
-
-Review its inventory before `--apply`. It rechecks scope/provenance, copies, holds, and intervening claims before each write; refuses live claims/holds; never deletes comments/labels or rewrites untrusted/successor records. Retirement stamps an expired lease at cutover and recovery disposition while preserving all lineage, retry/work refs, and the fact writers were not confirmed stopped. Saved work uses `preserve_for_continuation`. Exact body readback reconciles lost acknowledgments; incomplete reads/unapplied writes report nonzero. Ordinary selection still evaluates all other gates.
+Version-1 comments predate leases, so like unreadable attempt evidence they hold only until GitHub's own comment timestamp is one lease old. Until then one is reported as `unleased_reservation` and blocks admission; afterwards it is history (`unleased_reservation_stale`): its own attempt loses shared-write authority, and its saved PR/branch references remain assessment inputs. Version-1 holds and released records keep their meaning.
 
 See [Legacy Cutover](GitHubIssueLegacyCutover.md) for reconciliation and mixed-deployment compatibility. No foreign database or new coordination container is required.
 

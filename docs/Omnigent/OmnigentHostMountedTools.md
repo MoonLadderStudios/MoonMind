@@ -53,10 +53,8 @@ This design preserves the upstream image lineage, keeps portable Skills on their
 > `moonmind-omnigent-tools-*`) because initialization and launch configuration
 > could disagree, re-running initialization mutated shared state in place, and
 > routine upgrades required operators to synchronize volume names, tool
-> versions, manifests, and initializer-image settings. Leftover volumes of that
-> kind are removed by the bounded maintenance cleanup
-> (`tools/cleanup-legacy-omnigent-tools-volumes.sh`), never by Compose and
-> never automatically during updates.
+> versions, manifests, and initializer-image settings. A leftover volume of that
+> kind is inert: nothing mounts it, and neither Compose nor updates delete it.
 
 ---
 

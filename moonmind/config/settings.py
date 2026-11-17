@@ -1387,13 +1387,6 @@ class GitHubSettings(BaseSettings):
     github_trusted_api_hosts: Optional[str] = Field(
         None, alias="GITHUB_TRUSTED_API_HOSTS"
     )  # Deployment-owned, comma-delimited Enterprise API host allowlist.
-    # Operator declaration that every version-1 issue-claim writer is upgraded
-    # or stopped. Version-1 attempt comments GitHub timestamps before this
-    # instant stop reserving their issue; newer ones are untouched. Unset means
-    # legacy reservations still block and are reported as awaiting migration.
-    issue_claim_legacy_cutover_at: Optional[str] = Field(
-        None, alias="MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT"
-    )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 

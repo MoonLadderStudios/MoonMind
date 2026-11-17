@@ -3,8 +3,8 @@
 These exercise the production tools and helpers rather than nearby doubles:
 an announced reservation that never starts lapses in minutes, withdrawing one
 never waits for contention to clear, ending ownership never waits for
-bookkeeping, and a version-1 backlog is retired by one explicit operator
-cutover instead of blocking forever.
+bookkeeping, and a version-1 reservation without a lease stops reserving once
+GitHub's own timestamp shows it is older than one lease.
 """
 
 # ruff: noqa: F811 -- imported pytest fixture
@@ -29,18 +29,12 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
     render_attempt_comment,
 )
-from moonmind.workflows.temporal.github_issue_claim_migration import (
-    ACTION_OPERATOR_HOLD,
-    ACTION_PRESERVE,
-    ACTION_RETAIN_LIVE,
-    ACTION_RETIRE,
-    apply_issue_recovery,
-    plan_issue_recovery,
-)
 from moonmind.workflows.temporal.issue_claim_store import (
     ActiveIssueClaimConflict,
+    ClaimReceipt,
     IssueClaimStore,
     publish_claim_comment,
+    verify_claim,
 )
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
@@ -49,7 +43,6 @@ assert _JOURNEY_FIXTURE is journey
 
 REPOSITORY = "example/repo"
 ISSUE = 3970
-CUTOVER = datetime(2026, 9, 14, tzinfo=UTC)
 
 
 def _legacy_comment(**overrides):
@@ -511,7 +504,9 @@ async def test_withdrawal_succeeds_under_contention_but_other_updates_do_not(jou
     receipt = await store.get(owner)
     contender = _legacy_comment(attemptId="att-successor", activity="active")
     contender["id"] = 99
-    contender["created_at"] = "2026-09-20T00:00:00Z"
+    contender["body"] = render_attempt_comment(
+        leases.with_lease(parse_attempt_comment(contender["body"]).handoff)
+    )
     state["comments"].append(contender)
     own = parse_attempt_comment(receipt.comment_body).handoff
 
@@ -600,118 +595,93 @@ async def test_failed_label_bookkeeping_still_ends_ownership(
     assert successor.owner == "other/successor"
 
 
-# -- Version-1 backlog migration -------------------------------------------
+# -- Version-1 reservations without a lease --------------------------------
 
 
-def test_legacy_reservation_blocks_until_the_operator_declares_a_cutover():
-    parsed = parse_attempt_comment(_legacy_comment()["body"])
+def test_unleased_reservation_blocks_only_within_its_announcement_grace():
     comment = _legacy_comment()
-    now = CUTOVER + timedelta(days=1)
-    assert (
-        leases.reservation_status(parsed, comment, now=now, legacy_cutover=None)
-        == leases.RESERVATION_LEGACY_PENDING
+    parsed = parse_attempt_comment(comment["body"])
+    announced = leases.parse_time(comment["created_at"])
+    recent = leases.reservation_status(
+        parsed, comment, now=announced + timedelta(minutes=10)
     )
+    assert recent == leases.RESERVATION_UNLEASED
+    assert leases.blocks_new_work(recent)
+    stale = leases.reservation_status(
+        parsed, comment, now=announced + leases.LEASE_DURATION + timedelta(seconds=1)
+    )
+    assert stale == leases.RESERVATION_UNLEASED_STALE
+    assert not leases.blocks_new_work(stale)
+    # Without GitHub's own timestamp nothing bounds the claim, so it blocks.
+    undated = {key: value for key, value in comment.items() if key != "created_at"}
     assert leases.blocks_new_work(
-        leases.reservation_status(parsed, comment, now=now, legacy_cutover=None)
+        leases.reservation_status(parsed, undated, now=announced + timedelta(days=60))
+    )
+
+
+def test_unleased_holds_and_releases_keep_their_meaning():
+    held = _legacy_comment(operatorHold=True)
+    released = _legacy_comment(activity="released", writersStopped=True)
+    now = leases.parse_time(held["created_at"]) + timedelta(days=60)
+    assert (
+        leases.reservation_status(parse_attempt_comment(held["body"]), held, now=now)
+        == leases.RESERVATION_OPERATOR_HOLD
     )
     assert (
-        leases.reservation_status(parsed, comment, now=now, legacy_cutover=CUTOVER)
-        == leases.RESERVATION_LEGACY_RETIRED
-    )
-    # A claim announced after the cutover is not covered by it.
-    fresh = {**comment, "created_at": "2026-09-15T00:00:00Z"}
-    assert (
-        leases.reservation_status(parsed, fresh, now=now, legacy_cutover=CUTOVER)
-        == leases.RESERVATION_LEGACY_PENDING
+        leases.reservation_status(
+            parse_attempt_comment(released["body"]), released, now=now
+        )
+        == leases.RESERVATION_RELEASED
     )
 
 
 @pytest.mark.asyncio
-async def test_migrated_legacy_comment_stops_reserving_but_stays_history(journey, monkeypatch):
+async def test_unleased_owner_loses_shared_writes_once_admission_reclaims_it():
+    """The owner and a contender read the same comment the same way."""
+    comment = _legacy_comment()
+
+    class Comments:
+        async def list_issue_comments(self, *, repo, issue_number):
+            return {"ok": True, "comments": [comment]}
+
+    receipt = ClaimReceipt(
+        owner="default/legacy-owner",
+        repository=REPOSITORY,
+        issue_number=ISSUE,
+        attempt_id="att-stranded-legacy",
+        actor_id="123",
+        comment_body=comment["body"],
+        comment_id="91",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    assert not leases.blocks_new_work(
+        leases.reservation_status(parse_attempt_comment(comment["body"]), comment)
+    )
+    with pytest.raises(ValueError, match="claim_lease_expired"):
+        await verify_claim(receipt, Comments())
+
+    comment["created_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    assert await verify_claim(receipt, Comments())
+
+
+@pytest.mark.asyncio
+async def test_stale_unleased_comment_stops_reserving_but_stays_history(journey):
+    """A deployment that never migrated its version-1 claims recovers on its own."""
     state, service, sessions = journey
-    state["comments"] = [_legacy_comment()]
-    original_body = state["comments"][0]["body"]
-    issue = {"number": ISSUE, "labels": [{"name": "status: in-progress"}], "title": "t"}
-    plan = plan_issue_recovery(
-        repository=REPOSITORY,
-        issue=issue,
-        comments=state["comments"],
-        cutover=CUTOVER,
-        actor_id="123",
-        now=CUTOVER + timedelta(days=1),
-    )
-    assert [item["action"] for item in plan["attempts"]] == [ACTION_RETIRE]
-    assert plan["plannedWrites"] == 1
-    outcome = await apply_issue_recovery(service=service, plan=plan, cutover=CUTOVER)
-    assert outcome["applied"] == 1
+    comment = _legacy_comment(prUrl="https://github.com/example/repo/pull/7")
+    state["comments"] = [comment]
+    state["labels"] = ["status: in-progress"]
+    original_body = comment["body"]
 
-    migrated = state["comments"][0]
-    parsed = parse_attempt_comment(migrated["body"])
-    # History is preserved: same attempt, same workflow, same lineage.
-    assert parsed.attempt_id == "att-stranded-legacy"
-    assert parsed.handoff.workflow_id.startswith("default/mm:")
-    # No writer, completion, or no-work claim is invented.
-    assert parsed.handoff.writers_stopped is False
-    assert parsed.handoff.outcome == "in_progress"
-    assert "operator-declared" in migrated["body"]
-    assert original_body != migrated["body"]
-    # And it no longer reserves the issue for anyone.
-    assert (
-        leases.reservation_status(
-            parsed, migrated, now=CUTOVER + timedelta(days=1), legacy_cutover=CUTOVER
-        )
-        == leases.RESERVATION_EXPIRED
+    result = await leases.reconcile_expired_issue(
+        service=service, repository=REPOSITORY, issue_number=ISSUE
     )
 
-
-def test_migration_preserves_work_and_never_touches_live_or_held_reservations():
-    now = CUTOVER + timedelta(days=1)
-    live = _legacy_comment(attemptId="att-live")
-    live["id"] = 92
-    live["body"] = render_attempt_comment(
-        leases.with_lease(
-            parse_attempt_comment(live["body"]).handoff, now=now
-        )
-    )
-    held = _legacy_comment(attemptId="att-held", operatorHold=True)
-    held["id"] = 93
-    with_work = _legacy_comment(
-        attemptId="att-partial", prUrl="https://github.com/example/repo/pull/7"
-    )
-    with_work["id"] = 94
-    issue = {"number": ISSUE, "labels": [], "title": "t"}
-
-    held_plan = plan_issue_recovery(
-        repository=REPOSITORY,
-        issue=issue,
-        comments=[held, with_work],
-        cutover=CUTOVER,
-        actor_id="123",
-        now=now,
-    )
-    # An explicit hold suppresses every write on that issue.
-    assert held_plan["plannedWrites"] == 0
-    assert held_plan["attempts"][0]["action"] == ACTION_OPERATOR_HOLD
-
-    live_plan = plan_issue_recovery(
-        repository=REPOSITORY,
-        issue=issue,
-        comments=[live, with_work],
-        cutover=CUTOVER,
-        actor_id="123",
-        now=now,
-    )
-    assert live_plan["plannedWrites"] == 0
-    assert live_plan["attempts"][0]["action"] == ACTION_RETAIN_LIVE
-
-    alone = plan_issue_recovery(
-        repository=REPOSITORY,
-        issue=issue,
-        comments=[with_work],
-        cutover=CUTOVER,
-        actor_id="123",
-        now=now,
-    )
-    assert alone["attempts"][0]["action"] == ACTION_PRESERVE
-    assert alone["nextAction"] == "continuation"
-    assert alone["attempts"][0]["prUrl"].endswith("/pull/7")
+    assert result["reclaimed"] is True
+    assert result["expiredAttempts"] == ["att-stranded-legacy"]
+    assert state["labels"] == []
+    # The comment, its saved work, and its lineage stay as written.
+    assert state["comments"][0]["body"] == original_body
+    assert parse_attempt_comment(original_body).handoff.pr_url.endswith("/pull/7")

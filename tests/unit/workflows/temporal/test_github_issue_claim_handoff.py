@@ -326,11 +326,11 @@ async def test_search_reports_unresolved_attempt_instead_of_empty_backlog(journe
     assert result.status == "COMPLETED", result.outputs
     assert result.completion_disposition == "idle"
     evidence = result.outputs["searchEvidence"]
-    # A version-1 comment carries no lease, so it keeps reserving the issue
-    # until the operator declares the migration cutover -- and it says so.
+    # A version-1 comment carries no lease. Until GitHub's own timestamp shows
+    # it is older than one lease it keeps reserving the issue, and says so.
     assert evidence["rejectionCounts"] == {
         "lifecycle_ineligible": 1,
-        "legacy_reservation_awaiting_migration": 1,
+        "unleased_reservation": 1,
     }
     rejected = evidence["rejectedCandidates"][-1]
     assert rejected["issueNumber"] == 4271
@@ -338,10 +338,10 @@ async def test_search_reports_unresolved_attempt_instead_of_empty_backlog(journe
     assert rejected["claimEvidence"]["attempts"][0]["commentId"] == "123"
     assert (
         rejected["claimEvidence"]["attempts"][0]["reservationStatus"]
-        == "legacy_reservation_awaiting_migration"
+        == "unleased_reservation"
     )
     assert "reserved by another attempt" in result.outputs["summary"]
-    assert "migration cutover" in result.outputs["summary"]
+    assert "without a lease" in result.outputs["summary"]
     assert "#4271" in result.outputs["summary"]
     assert "selectedIssueAuthor" not in evidence
     assert state["receipt"] is None
@@ -349,10 +349,8 @@ async def test_search_reports_unresolved_attempt_instead_of_empty_backlog(journe
 
 
 @pytest.mark.asyncio
-async def test_declared_cutover_retires_the_stranded_legacy_reservation(journey, monkeypatch):
-    """The operator cutover unblocks the version-1 backlog without deleting it."""
-    from moonmind.config.settings import settings
-
+async def test_stale_unleased_reservation_no_longer_blocks_selection(journey):
+    """An unmigrated version-1 backlog unblocks on its own without deleting it."""
     state, issue, invoke, _, _ = journey
     handoff = AttemptHandoff.from_dict({
         "formatVersion": 1, "attemptId": "att-stranded-selection",
@@ -365,9 +363,6 @@ async def test_declared_cutover_retires_the_stranded_legacy_reservation(journey,
         "id": 123, "body": render_attempt_comment(handoff), "user": issue["user"],
         "created_at": "2026-09-13T00:00:00Z",
     })
-    monkeypatch.setattr(
-        settings.github, "issue_claim_legacy_cutover_at", "2026-09-14T00:00:00Z"
-    )
     result = await invoke(tools.GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
                           {"repository": REPO, "issueSearch": ""})
     assert result.status == "COMPLETED", result.outputs

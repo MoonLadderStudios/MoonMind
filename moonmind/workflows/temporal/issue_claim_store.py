@@ -401,7 +401,7 @@ def inspect_claim_comments(
             continue
         status = reservation_status(parsed, comment)
         if status is None or not blocks_new_work(status):
-            # Released, expired, retired-legacy, and stale-unreadable comments
+            # Released, expired, stale-unleased, and stale-unreadable comments
             # are history. They never create permanent ownership.
             continue
         contender = {
@@ -464,13 +464,13 @@ def inspect_claim_comments(
 def _contender_reason_code(contenders: list[dict[str, Any]]) -> str:
     """Report the most actionable distinction, not one undifferentiated veto."""
     from moonmind.workflows.temporal.github_issue_claim_lease import (
-        RESERVATION_LEGACY_PENDING,
         RESERVATION_LIVE,
         RESERVATION_OPERATOR_HOLD,
+        RESERVATION_UNLEASED,
     )
 
     observed = {item.get("reservationStatus") for item in contenders}
-    for status in (RESERVATION_OPERATOR_HOLD, RESERVATION_LIVE, RESERVATION_LEGACY_PENDING):
+    for status in (RESERVATION_OPERATOR_HOLD, RESERVATION_LIVE, RESERVATION_UNLEASED):
         if status in observed:
             return status
     return "active_attempt_conflict"
@@ -480,7 +480,7 @@ async def verify_claim(receipt: ClaimReceipt, service) -> bool:
     """Confirm this attempt may still perform shared work on the issue."""
     from moonmind.workflows.temporal.github_issue_claim_lease import (
         RESERVATION_EXPIRED,
-        RESERVATION_LEGACY_RETIRED,
+        RESERVATION_UNLEASED_STALE,
         reservation_status,
     )
 
@@ -489,14 +489,25 @@ async def verify_claim(receipt: ClaimReceipt, service) -> bool:
             "claim_lease_expired: this attempt already retired its reservation"
         )
     status = reservation_status(parse_attempt_comment(receipt.comment_body))
-    if status in {RESERVATION_EXPIRED, RESERVATION_LEGACY_RETIRED}:
+    if status == RESERVATION_EXPIRED:
         raise ValueError("claim_lease_expired: the old attempt cannot resume shared writes")
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
     )
     if not listed.get("ok") or not isinstance(listed.get("comments"), list):
         raise ValueError("read_failure: complete claim comment evidence is unavailable")
-    return bool(inspect_claim_comments(receipt, listed["comments"]))
+    comment_id = inspect_claim_comments(receipt, listed["comments"])
+    # Judge our own comment by GitHub's timestamps, as admission does, so an
+    # owner never keeps write authority another deployment may have reclaimed.
+    own = next(
+        (item for item in listed["comments"] if str(item.get("id")) == comment_id),
+        None,
+    )
+    if own is not None and reservation_status(
+        parse_attempt_comment(own.get("body")), own
+    ) in {RESERVATION_EXPIRED, RESERVATION_UNLEASED_STALE}:
+        raise ValueError("claim_lease_expired: the old attempt cannot resume shared writes")
+    return bool(comment_id)
 
 
 def is_withdrawal(body: str) -> bool:

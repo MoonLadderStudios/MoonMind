@@ -17,6 +17,9 @@ from moonmind.workflows.temporal.github_issue_admission import (
     admit_for_entrypoint,
     recandidate_after_abandon,
 )
+from moonmind.workflows.temporal.github_issue_claim_lease import (
+    UNREADABLE_RESERVATION_GRACE,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     ELIGIBLE_SETTLED_STATES,
     SETTLED_RECOVERY_NEEDED,
@@ -703,7 +706,7 @@ CLAIM_EVIDENCE_EXCLUSIONS = frozenset(
     {
         "active_attempt_conflict",
         "live_reservation",
-        "legacy_reservation_awaiting_migration",
+        "unleased_reservation",
         "operator_hold",
         "conflicting_attempt_copies",
     }
@@ -720,7 +723,7 @@ RESERVATION_EXCLUSIONS = frozenset(
         "active_attempt_conflict",
         "live_reservation",
         "live_or_legacy_reservation",
-        "legacy_reservation_awaiting_migration",
+        "unleased_reservation",
         "operator_hold",
         "reservation_changed",
         "stale_status_label_unreconciled",
@@ -778,6 +781,7 @@ def _exclusion_summary(counts: Mapping[str, Any]) -> str:
         )
     conflicts = sum(reasons.get(reason, 0) for reason in RESERVATION_EXCLUSIONS)
     if conflicts:
+        grace_minutes = int(UNREADABLE_RESERVATION_GRACE.total_seconds() // 60)
         samples = counts.get("rejectedCandidates", [])
         examples = [
             f"#{item['issueNumber']}"
@@ -794,9 +798,10 @@ def _exclusion_summary(counts: Mapping[str, Any]) -> str:
             summary += " (" + ", ".join(examples) + ")"
         summary += (
             ". Inspect searchEvidence.rejectedCandidates for the recorded owner "
-            "and reservation status. A live reservation expires on its own; a "
-            "legacy (version 1) reservation is retired by the operator-declared "
-            "migration cutover, not by removing a status label."
+            "and reservation status. A live reservation expires on its own, and a "
+            f"version-1 reservation without a lease stops reserving {grace_minutes} "
+            "minutes after GitHub recorded it; removing a status label changes "
+            "neither."
         )
     return summary
 

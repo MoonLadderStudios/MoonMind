@@ -6,9 +6,8 @@ independently create permanent ownership, and losing ownership never authorizes
 discarding work or overwriting another contributor's changes.
 
 Version 2 carries the explicit cooperative write-authority deadline. Version 1
-predates that agreement, so its reservations end at an operator-declared
-migration cutover (``MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT``) rather than at an
-invented deadline its writers never accepted.
+predates that agreement, so a version-1 comment without a lease proves no more
+than unreadable evidence does: GitHub's own timestamp bounds its veto.
 """
 
 from __future__ import annotations
@@ -25,8 +24,9 @@ RENEW_INTERVAL = timedelta(minutes=5)
 # running lease and its renew interval. One knob keeps the two phases
 # consistent: shortening the running lease shortens the announcement too.
 PREPARING_LEASE_DIVISOR = 6
-# A marked but unreadable comment cannot prove ownership. Bound its veto by
-# GitHub's own timestamps instead of letting it veto the issue forever.
+# A marked but unreadable or lease-less comment cannot prove ownership. Bound
+# its veto by GitHub's own timestamps instead of letting it veto the issue
+# forever.
 UNREADABLE_RESERVATION_GRACE = LEASE_DURATION
 
 RENEWABLE_ACTIVITIES = frozenset({"preparing", "active", "awaiting-review"})
@@ -37,8 +37,8 @@ RESERVATION_LIVE = "live_reservation"
 RESERVATION_EXPIRED = "expired_reservation"
 RESERVATION_RELEASED = "released_reservation"
 RESERVATION_OPERATOR_HOLD = "operator_hold"
-RESERVATION_LEGACY_PENDING = "legacy_reservation_awaiting_migration"
-RESERVATION_LEGACY_RETIRED = "legacy_reservation_retired"
+RESERVATION_UNLEASED = "unleased_reservation"
+RESERVATION_UNLEASED_STALE = "unleased_reservation_stale"
 RESERVATION_UNREADABLE = "unreadable_reservation"
 RESERVATION_UNREADABLE_STALE = "unreadable_reservation_stale"
 
@@ -47,12 +47,10 @@ BLOCKING_RESERVATIONS = frozenset(
     {
         RESERVATION_LIVE,
         RESERVATION_OPERATOR_HOLD,
-        RESERVATION_LEGACY_PENDING,
+        RESERVATION_UNLEASED,
         RESERVATION_UNREADABLE,
     }
 )
-
-_UNSET = object()
 
 
 def utc_now():
@@ -105,28 +103,6 @@ def with_lease(handoff, *, now=None):
     )
 
 
-def legacy_cutover_at():
-    """Operator declaration that every version-1 writer is upgraded or stopped.
-
-    Read at the Activity boundary only; deterministic workflow code passes the
-    resolved instant instead of importing deployment configuration.
-    """
-    from moonmind.config.settings import settings
-
-    raw = getattr(settings.github, "issue_claim_legacy_cutover_at", None) or ""
-    if isinstance(raw, str):
-        raw = raw.strip()
-    if not raw:
-        return None
-    parsed = parse_time(raw)
-    if parsed is None:
-        raise ValueError(
-            "issue_claim_legacy_cutover_invalid: MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT "
-            "must be an ISO-8601 timestamp with an explicit UTC offset"
-        )
-    return parsed
-
-
 def _announced_at(comment):
     """GitHub's own timestamps, never a locally invented announcement time."""
     if not comment:
@@ -136,7 +112,7 @@ def _announced_at(comment):
     )
 
 
-def reservation_status(parsed, comment=None, *, now=None, legacy_cutover=_UNSET):
+def reservation_status(parsed, comment=None, *, now=None):
     """The one interpretation of what an attempt comment means for ownership.
 
     Search, explicit issue loading, continuation, publication checks, and
@@ -147,14 +123,11 @@ def reservation_status(parsed, comment=None, *, now=None, legacy_cutover=_UNSET)
     if parsed.status == "no_marker":
         return None
     now = now or utc_now()
-    if legacy_cutover is _UNSET:
-        legacy_cutover = legacy_cutover_at()
     handoff = parsed.handoff
+    announced = _announced_at(comment)
+    stale = announced is not None and now - announced > UNREADABLE_RESERVATION_GRACE
     if handoff is None:
-        announced = _announced_at(comment)
-        if announced is not None and now - announced > UNREADABLE_RESERVATION_GRACE:
-            return RESERVATION_UNREADABLE_STALE
-        return RESERVATION_UNREADABLE
+        return RESERVATION_UNREADABLE_STALE if stale else RESERVATION_UNREADABLE
     if handoff.activity == "released":
         return RESERVATION_RELEASED
     if handoff.operator_hold or handoff.activity == "attention":
@@ -165,26 +138,17 @@ def reservation_status(parsed, comment=None, *, now=None, legacy_cutover=_UNSET)
             if now >= parse_time(handoff.lease_expires_at)
             else RESERVATION_LIVE
         )
-    # Version 1 never agreed to a deadline. Only an explicit operator cutover,
-    # applied to claims GitHub itself timestamps before that instant, ends one.
-    announced = _announced_at(comment)
-    if (
-        legacy_cutover is not None
-        and announced is not None
-        and announced < legacy_cutover
-        and now >= legacy_cutover
-    ):
-        return RESERVATION_LEGACY_RETIRED
-    return RESERVATION_LEGACY_PENDING
+    # Version 1 never agreed to a deadline, so it holds no longer than one
+    # lease after GitHub recorded it; afterwards it is history like an
+    # expired lease, and its saved work stays available for continuation.
+    return RESERVATION_UNLEASED_STALE if stale else RESERVATION_UNLEASED
 
 
 def blocks_new_work(status):
     return status in BLOCKING_RESERVATIONS
 
 
-def classified_attempts(
-    comments, *, repository, issue_number, now=None, legacy_cutover=_UNSET
-):
+def classified_attempts(comments, *, repository, issue_number, now=None):
     """Complete comment evidence -> blocking and ended identities, with holds.
 
     The third element reports whether any attempt evidence exists at all, so a
@@ -199,9 +163,7 @@ def classified_attempts(
     seen = 0
     for comment in comments:
         parsed = parse_attempt_comment(comment.get("body"))
-        status = reservation_status(
-            parsed, comment, now=now, legacy_cutover=legacy_cutover
-        )
+        status = reservation_status(parsed, comment, now=now)
         if status is None:
             # The superseded singular marker is still attempt evidence. It has
             # no reservation semantics here, but its presence means the issue
@@ -237,9 +199,7 @@ def classified_attempts(
     return active, ended, seen
 
 
-async def reconcile_expired_issue(
-    *, service, repository, issue_number, now=None, legacy_cutover=_UNSET
-):
+async def reconcile_expired_issue(*, service, repository, issue_number, now=None):
     """Retire an expired advisory status without rewriting another owner.
 
     All decision inputs are issue labels and comments. Existing PR/branch
@@ -278,7 +238,6 @@ async def reconcile_expired_issue(
             repository=repository,
             issue_number=issue_number,
             now=now,
-            legacy_cutover=legacy_cutover,
         )
         for comment, _ in ended:
             user = comment.get("user") or {}
