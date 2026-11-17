@@ -112,17 +112,20 @@ cannot authorize removal. The single deployment-owned retirement cutoff
 `MOONMIND_CODEX_DIRECT_RETIRED_AT`
 (`moonmind.omnigent.codex_cutover_drain`) closes the direct lane to new work
 once its instant passes, regardless of phase; unset preserves the usable path
-until its qualified replacement is available. The bounded drain procedure in
-the same module inventories schedules, queued starts, open parent/child
-workflows, retries, pending interventions, serialized launch inputs, resource
-leases, and publication/cleanup work with clean/active/unknown/blocked
-reporting, and records the explicit retained-history disposition per branch
-with its consumer and removal condition. Operators inject live Temporal
-visibility, schedule, lease, publication, and cleanup queries through
-`run_live_codex_drain`/`operator_drain_sources`, which normalize
-heterogeneous rows to the same four states (raising sources become
-`unknown`); the report itself never terminates workflows, erases evidence,
-or deletes credential volumes. The API's `cutover` projection publishes desired/deployed/effective phase,
+until its qualified replacement is available. The same module owns the
+drain report: clean/active/unknown/blocked per item (a raising source is
+`unknown`) and the retained-history disposition per branch with its consumer
+and removal condition; it never terminates workflows, erases evidence, or
+deletes credential volumes. `moonmind drain-inventory` runs it once over
+PostgreSQL (one read-only transaction) and Temporal visibility for recorded
+`codex-profile-bound@1` plans, queued starts and retries, recorded
+`omnigent-opencode@1` plans and explicit Host Class requests, and open
+workflows on the legacy `TEMPORAL_WORKFLOW_TASK_QUEUE`, and exits 1 unless
+every item is clean. An enabled schedule keeps its recorded plan active,
+because each refresh and occurrence loads that plan. A read that waits past
+its statement timeout, for example behind a migration lock, reports its
+categories as `unknown`. Open `MoonMind.AgentSession` children are listed for
+information only, since that path is still supported. The API's `cutover` projection publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in
 `/api/omnigent/codex-catalog-readiness`. Current Create/schedule defaults follow

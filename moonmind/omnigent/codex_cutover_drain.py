@@ -44,6 +44,7 @@ from moonmind.omnigent.settings import (
     OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV as GENERIC_CODEX_QUALIFIED_ENV,
     generic_codex_qualified,
 )
+from moonmind.utils.logging import redact_sensitive_text
 
 #: The single deployment-owned cutoff. ISO-8601 instant after which no new
 #: work may enter the retired direct-Codex lane. Unset means the lane is not
@@ -511,14 +512,17 @@ def generic_codex_promotion_permitted(
 
 def collect_drain_inventory(
     sources: Mapping[str, Any] | None,
+    *,
+    categories: Sequence[str] = DRAIN_INVENTORY_CATEGORIES,
 ) -> dict[str, list[dict[str, Any]]]:
     """Collect one drain inventory from injectable per-category sources.
 
     Each category maps to either a ready item list or a zero-argument callable
-    returning one. A raising source becomes a single ``unknown`` item: unknown
-    visibility is reported, never treated as permission to delete. Categories
-    with no source are left missing so :func:`build_drain_report` fails closed
-    with ``drain_inventory_category_missing``. Live Temporal visibility,
+    returning one. A raising source becomes a single ``unknown`` item that
+    keeps the original error: unknown visibility is reported, never treated
+    as permission to delete. Categories with no source are left missing so
+    :func:`build_drain_report` fails closed with
+    ``drain_inventory_category_missing``. Live Temporal visibility,
     schedule, lease, publication, and cleanup queries are injected here by the
     operator's drain procedure; this collector owns the failure semantics, not
     the live clients.
@@ -526,18 +530,21 @@ def collect_drain_inventory(
 
     data = dict(sources or {})
     inventory: dict[str, list[dict[str, Any]]] = {}
-    for category in DRAIN_INVENTORY_CATEGORIES:
+    for category in categories:
         if category not in data:
             continue
         source = data[category]
         if callable(source):
             try:
                 items = source()
-            except Exception:
+            except Exception as exc:
                 inventory[category] = [
                     {
                         "id": f"{category}-unreachable",
                         "state": "unknown",
+                        "error": redact_sensitive_text(
+                            f"{type(exc).__name__}: {exc}"
+                        )[:500],
                     }
                 ]
                 continue
@@ -842,11 +849,18 @@ def cutover_authorities() -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class DrainReport:
-    """Bounded four-state drain report. Pure evidence; authorizes nothing."""
+    """Bounded four-state drain report. Pure evidence; authorizes nothing.
+
+    ``informational`` categories are reported with their items and states but
+    never decide whether the drain is clean.
+    """
 
     states: dict[str, int] = field(default_factory=dict)
     blockers: tuple[str, ...] = ()
     categories: tuple[str, ...] = DRAIN_INVENTORY_CATEGORIES
+    informational: tuple[str, ...] = ()
+    informational_states: dict[str, int] = field(default_factory=dict)
+    items: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     @property
     def deletable(self) -> bool:
@@ -862,6 +876,16 @@ class DrainReport:
         return {
             "categories": list(self.categories),
             "states": states,
+            "informational": list(self.informational),
+            "informationalStates": {
+                state: int(self.informational_states.get(state, 0))
+                for state in RESOURCE_STATES
+            },
+            "items": {
+                category: [dict(item) for item in self.items.get(category, ())]
+                for category in self.categories
+                if category in self.items
+            },
             "blockers": list(self.blockers),
             # The report is evidence for an operator decision. It never
             # performs termination, erases evidence, or deletes
@@ -880,39 +904,66 @@ class DrainReport:
 
 def build_drain_report(
     inventory: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+    *,
+    categories: Sequence[str] = DRAIN_INVENTORY_CATEGORIES,
+    informational: Sequence[str] = (),
 ) -> DrainReport:
     """Build a bounded drain report over durable and resource authority.
 
-    Every category in :data:`DRAIN_INVENTORY_CATEGORIES` must be present; a
-    missing category fails closed as unknown. Item states must be one of the
-    four resource states. The report performs no termination or deletion.
+    Every category in ``categories`` (by default
+    :data:`DRAIN_INVENTORY_CATEGORIES`) must be present; a missing category
+    fails closed as unknown. Item states must be one of the four resource
+    states. Items in ``informational`` categories are counted separately and
+    never make the drain unclean. The report performs no termination or
+    deletion.
     """
 
     data = dict(inventory or {})
+    informational_set = frozenset(informational)
     blockers: list[str] = []
     counts = {state: 0 for state in RESOURCE_STATES}
-    for category in DRAIN_INVENTORY_CATEGORIES:
+    informational_counts = {state: 0 for state in RESOURCE_STATES}
+    items: dict[str, list[dict[str, Any]]] = {}
+    for category in categories:
         if category not in data:
             blockers.append(f"drain_inventory_category_missing:{category}")
             continue
-        items = data[category]
-        if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        category_items = data[category]
+        if not isinstance(category_items, Sequence) or isinstance(
+            category_items, (str, bytes)
+        ):
             blockers.append(f"drain_inventory_category_invalid:{category}")
             continue
-        for item in items:
+        target = informational_counts if category in informational_set else counts
+        items[category] = [
+            dict(item) for item in category_items if isinstance(item, Mapping)
+        ]
+        for item in category_items:
             state = str(item.get("state") if isinstance(item, Mapping) else "").strip().lower()
             if state not in RESOURCE_STATES:
-                blockers.append(f"drain_inventory_state_invalid:{category}:{state!r}")
+                if category not in informational_set:
+                    blockers.append(
+                        f"drain_inventory_state_invalid:{category}:{state!r}"
+                    )
                 continue
-            counts[state] += 1
+            target[state] += 1
     return DrainReport(
         states=counts,
         blockers=tuple(dict.fromkeys(blockers)),
+        categories=tuple(categories),
+        informational=tuple(
+            category for category in categories if category in informational_set
+        ),
+        informational_states=informational_counts,
+        items=items,
     )
 
 
 def run_codex_drain_procedure(
     sources: Mapping[str, Any] | None,
+    *,
+    categories: Sequence[str] = DRAIN_INVENTORY_CATEGORIES,
+    informational: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Run one bounded drain procedure from injectable per-category sources.
 
@@ -923,9 +974,15 @@ def run_codex_drain_procedure(
     report payload. Raising sources become ``unknown`` via the collector;
     missing categories fail closed via the report. Pure evidence only: never
     terminates workflows, erases evidence, or deletes credential volumes.
+    ``moonmind drain-inventory`` runs this procedure over the retired-path
+    categories in :mod:`moonmind.omnigent.retired_path_inventory`.
     """
 
-    return build_drain_report(collect_drain_inventory(sources)).as_dict()
+    return build_drain_report(
+        collect_drain_inventory(sources, categories=categories),
+        categories=categories,
+        informational=informational,
+    ).as_dict()
 
 
 __all__ = [
