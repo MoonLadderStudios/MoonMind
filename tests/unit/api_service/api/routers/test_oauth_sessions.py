@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -2158,6 +2159,145 @@ async def test_oauth_terminal_websocket_rejects_connection_established_after_att
 
     assert websocket.closed == [4403]
     assert websocket.accepted is False
+
+
+class _RunningLoginPtyAdapter(InMemoryPtyAdapter):
+    """A provider login process that keeps running until the test ends it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pending_output: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    def emit(self, chunk: bytes | None) -> None:
+        self._pending_output.put_nowait(chunk)
+
+    async def output_chunks(self):
+        while (chunk := await self._pending_output.get()) is not None:
+            yield chunk
+
+
+class _BrowserWebSocket(_FakeWebSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+    async def accept(self) -> None:
+        return None
+
+    async def receive(self) -> dict[str, object]:
+        return await self.incoming.get()
+
+
+async def _wait_for_terminal_text(websocket: _BrowserWebSocket, expected: str) -> None:
+    for _ in range(200):
+        if expected in "".join(websocket.sent_text):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"terminal output never contained {expected!r}")
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_terminal_reconnect_reaches_the_running_login(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A phone that drops the socket while signing in keeps its pending login.
+
+    The returned code only works for the ``claude auth login`` process that
+    printed the URL, so reconnecting must not start another login process.
+    """
+    session_id = "oas_claudewsreconnect1"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_ws_reconnect",
+                status=OAuthSessionStatus.AWAITING_USER,
+                session_transport="moonmind_pty_ws",
+                requested_by_user_id=TEST_PRINCIPAL_ID,
+                terminal_session_id=f"term_{session_id}",
+                terminal_bridge_id=f"br_{session_id}",
+                container_name=f"moonmind_auth_{session_id}",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    created: list[_RunningLoginPtyAdapter] = []
+
+    def _create_login_pty(**_kwargs) -> _RunningLoginPtyAdapter:
+        adapter = _RunningLoginPtyAdapter()
+        created.append(adapter)
+        return adapter
+
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._oauth_terminal_pty_adapter_factory",
+        _create_login_pty,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.terminal_bridge._retained_login_ptys", {}
+    )
+
+    async def _attach_token() -> str:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+            )
+        assert response.status_code == 200
+        return response.json()["attach_token"]
+
+    login_prompt = (
+        "visit: https://claude.com/cai/oauth/authorize?state=first\r\n"
+        "Paste code here if prompted > "
+    )
+    first_browser = _BrowserWebSocket()
+    first_connection = asyncio.create_task(
+        oauth_terminal_websocket(first_browser, session_id, await _attach_token())
+    )
+    try:
+        for _ in range(200):
+            if created:
+                break
+            await asyncio.sleep(0.01)
+        assert len(created) == 1
+        login = created[0]
+        login.emit(login_prompt.encode("utf-8"))
+        await _wait_for_terminal_text(first_browser, "Paste code here")
+
+        # The phone leaves for the sign-in tab and its socket drops.
+        first_browser.incoming.put_nowait({"type": "websocket.disconnect"})
+        await asyncio.wait_for(first_connection, timeout=5)
+        assert login.closed is False
+
+        second_browser = _BrowserWebSocket()
+        second_connection = asyncio.create_task(
+            oauth_terminal_websocket(second_browser, session_id, await _attach_token())
+        )
+        await _wait_for_terminal_text(second_browser, "Paste code here")
+        second_browser.incoming.put_nowait(
+            {
+                "type": "websocket.receive",
+                "text": '{"type":"input","data":"code#first\\r"}',
+            }
+        )
+        for _ in range(200):
+            if login.written:
+                break
+            await asyncio.sleep(0.01)
+
+        assert len(created) == 1
+        assert login.written == [b"code#first\r"]
+        assert "".join(second_browser.sent_text) == login_prompt
+
+        second_browser.incoming.put_nowait({"type": "websocket.disconnect"})
+        await asyncio.wait_for(second_connection, timeout=5)
+    finally:
+        for adapter in created:
+            adapter.emit(None)
+        await asyncio.sleep(0.05)
+        first_connection.cancel()
 
 
 @pytest.mark.asyncio

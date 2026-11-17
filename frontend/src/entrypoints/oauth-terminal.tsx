@@ -83,6 +83,11 @@ const TERMINAL_FINALIZE_STATUSES: readonly OAuthSessionStatus[] = [
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
 const PROVIDERS_SECRETS_SETTINGS_PATH = '/settings/providers-secrets';
 const TERMINAL_STATUS_POLL_MS = 1000;
+const TERMINAL_RECONNECT_INITIAL_MS = 1000;
+const TERMINAL_RECONNECT_MAX_MS = 8000;
+// The server closed the terminal on purpose (normal close, PTY failure, bad
+// frame, or a rejected attach); reconnecting would only repeat that outcome.
+const TERMINAL_SERVER_CLOSE_CODES: readonly number[] = [1000, 1011, 4400, 4403];
 
 function copyTextWithLegacyCommand(text: string): void {
   if (typeof document === 'undefined' || !document.body) {
@@ -253,6 +258,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTerminalRef = useRef<(() => void) | null>(null);
   const showAuthenticationPasteBox = Boolean(session && isTerminalAttachable(session));
   // Finalize saves the profile and hands host credential validation to the
   // OAuth workflow, which owns the move to succeeded or failed.
@@ -308,7 +314,10 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       return;
     }
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
-      setActionError('Terminal is not connected. Your code has been kept; reconnect before sending.');
+      reconnectTerminalRef.current?.();
+      setActionError(
+        'Terminal is not connected. Your code has been kept; send it again once the terminal shows Connected.',
+      );
       pastedInputRef.current?.focus();
       return;
     }
@@ -561,6 +570,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     }
 
     let closed = false;
+    let connecting = false;
+    let reconnecting = false;
+    let attachedBefore = false;
+    let reconnectTimer: number | null = null;
+    let reconnectDelayMs = TERMINAL_RECONNECT_INITIAL_MS;
     const inputDisposable = terminal.onData((data) => {
       sendTerminalInput(data);
     });
@@ -587,7 +601,40 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       terminal.write(rawData);
     };
 
+    const scheduleReconnect = () => {
+      if (closed || reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        void attach();
+      }, reconnectDelayMs);
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, TERMINAL_RECONNECT_MAX_MS);
+    };
+
+    // Phones drop the socket while the operator signs in on another tab. The
+    // server keeps the provider login running, so reattach as soon as the
+    // page is back instead of waiting out the backoff.
+    const reconnectNow = () => {
+      if (!reconnecting || document.visibilityState === 'hidden') {
+        return;
+      }
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      void attach();
+    };
+    reconnectTerminalRef.current = reconnectNow;
+    document.addEventListener('visibilitychange', reconnectNow);
+    window.addEventListener('pageshow', reconnectNow);
+    window.addEventListener('online', reconnectNow);
+
     async function attach() {
+      if (closed || connecting || socketRef.current !== null) {
+        return;
+      }
+      connecting = true;
       try {
         const sessionEndpoint = `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}`;
         const waitForTerminalReadiness = async (): Promise<boolean> => {
@@ -623,11 +670,17 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
 
         const isReadyToAttach = await waitForTerminalReadiness();
         if (closed || !isReadyToAttach) {
+          reconnecting = false;
           return;
         }
-        setStatus('Connecting terminal');
+        setStatus(reconnecting ? 'Reconnecting terminal' : 'Connecting terminal');
         const response = await fetch(`${sessionEndpoint}/terminal/attach`, { method: 'POST' });
         if (!response.ok) {
+          // A dropped connection stays registered until the server notices it.
+          if (reconnecting && response.status === 409) {
+            scheduleReconnect();
+            return;
+          }
           const detail = await readErrorDetail(response, `Attach failed: ${response.status}`);
           throw new Error(detail);
         }
@@ -638,25 +691,62 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         const socket = new WebSocket(websocketUrlFromAttach(attachPayload.websocket_url));
         socketRef.current = socket;
         socket.onopen = () => {
+          if (attachedBefore) {
+            // Every attach replays the login's recent output from the start.
+            terminal.reset();
+          }
+          attachedBefore = true;
+          reconnecting = false;
+          reconnectDelayMs = TERMINAL_RECONNECT_INITIAL_MS;
           setStatus('Connected');
           socket.send(JSON.stringify({ type: 'heartbeat' }));
           sendResize();
         };
         socket.onmessage = writeSocketMessage;
-        socket.onclose = () => {
-          setStatus('Closed');
+        socket.onclose = (event: CloseEvent) => {
+          if (socketRef.current === socket) {
+            socketRef.current = null;
+          }
+          if (closed) {
+            return;
+          }
+          // A first socket that never opened is a failed handshake, which
+          // browsers also report as an abnormal close; show it as closed.
+          if (!attachedBefore || TERMINAL_SERVER_CLOSE_CODES.includes(event.code)) {
+            reconnecting = false;
+            setStatus('Closed');
+            return;
+          }
+          reconnecting = true;
+          setStatus('Reconnecting terminal');
+          scheduleReconnect();
         };
         socket.onerror = () => {
           setStatus('Terminal connection failed');
         };
       } catch (error) {
+        // fetch rejects with TypeError while a waking phone has no network yet.
+        if (reconnecting && error instanceof TypeError) {
+          scheduleReconnect();
+          return;
+        }
+        reconnecting = false;
         setStatus(error instanceof Error ? error.message : 'Terminal attach failed');
+      } finally {
+        connecting = false;
       }
     }
 
     void attach();
     return () => {
       closed = true;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
+      reconnectTerminalRef.current = null;
+      document.removeEventListener('visibilitychange', reconnectNow);
+      window.removeEventListener('pageshow', reconnectNow);
+      window.removeEventListener('online', reconnectNow);
       window.removeEventListener('resize', resizeListener);
       terminalElement.removeEventListener('copy', copySelectionListener);
       terminalElement.removeEventListener('paste', pasteListener, true);

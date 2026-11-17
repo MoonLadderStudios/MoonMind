@@ -3,6 +3,7 @@
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import inspect
 import logging
 import os
@@ -16,6 +17,7 @@ from moonmind.utils.logging import redact_sensitive_text
 logger = logging.getLogger(__name__)
 _MAX_RECORDED_TERMINAL_EVENTS = 256
 _MAX_STARTUP_ERROR_OUTPUT_CHARS = 600
+_MAX_RETAINED_OUTPUT_BYTES = 64 * 1024
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|secret|api[_-]?key)=\S+"
 )
@@ -233,6 +235,144 @@ def create_docker_exec_pty_adapter(
     *, container_name: str, runtime_id: str
 ) -> DockerExecPtyAdapter:
     return DockerExecPtyAdapter(container_name=container_name, runtime_id=runtime_id)
+
+
+class RetainedLoginPty:
+    """One provider login PTY that outlives individual browser connections.
+
+    Phones drop the terminal WebSocket while the operator signs in on another
+    tab, and a Claude sign-in code is accepted only by the ``claude auth login``
+    process that printed its URL, because that process holds the PKCE
+    verifier. The login therefore keeps running and draining output between
+    connections, and each connection first receives the recent output so the
+    login URL and prompt reappear. Output is held in API memory only.
+    """
+
+    def __init__(
+        self,
+        adapter: PtyAdapter,
+        *,
+        expires_at: datetime | None,
+        max_output_bytes: int = _MAX_RETAINED_OUTPUT_BYTES,
+    ) -> None:
+        self._adapter = adapter
+        self.expires_at = expires_at
+        self._max_output_bytes = max_output_bytes
+        self._output = bytearray()
+        self._output_start = 0
+        self._changed = asyncio.Event()
+        self._pump_task: asyncio.Task[None] | None = None
+        self.ended = False
+
+    async def start(self) -> None:
+        try:
+            await self._adapter.connect()
+        except Exception:
+            try:
+                await self._adapter.close()
+            except Exception:
+                logger.debug("OAuth login PTY close failed", exc_info=True)
+            raise
+        self._pump_task = asyncio.create_task(self._pump())
+
+    async def _pump(self) -> None:
+        try:
+            async for chunk in self._adapter.output_chunks():
+                self._retain(chunk)
+                self._notify()
+        except Exception:
+            logger.info("OAuth login PTY output ended with an error", exc_info=True)
+        finally:
+            self.ended = True
+            self._notify()
+            try:
+                await self._adapter.close()
+            except Exception:
+                logger.debug("OAuth login PTY close failed", exc_info=True)
+
+    def _retain(self, chunk: bytes) -> None:
+        self._output.extend(chunk)
+        excess = len(self._output) - self._max_output_bytes
+        if excess <= 0:
+            return
+        # Trim whole lines so a replay does not start inside a URL or escape.
+        line_end = self._output.find(b"\n", excess)
+        drop = excess if line_end < 0 else line_end + 1
+        del self._output[:drop]
+        self._output_start += drop
+
+    def _notify(self) -> None:
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+    async def output_chunks(self) -> AsyncIterator[bytes]:
+        """Yield the retained output, then new output until the login ends."""
+        position = self._output_start
+        while True:
+            changed = self._changed
+            offset = max(position, self._output_start) - self._output_start
+            chunk = bytes(self._output[offset:])
+            position = self._output_start + len(self._output)
+            if chunk:
+                yield chunk
+            elif self.ended:
+                return
+            else:
+                await changed.wait()
+
+    async def write_bytes(self, data: bytes) -> None:
+        if self.ended:
+            raise BrokenPipeError("provider login command has exited")
+        await self._adapter.write_bytes(data)
+
+    async def resize(self, cols: int, rows: int) -> None:
+        if not self.ended:
+            await self._adapter.resize(cols, rows)
+
+    async def close(self) -> None:
+        """Stop the login; the output pump closes the adapter as it ends."""
+        if self._pump_task is None or self._pump_task.done():
+            return
+        self._pump_task.cancel()
+        await asyncio.gather(self._pump_task, return_exceptions=True)
+
+
+_retained_login_ptys: dict[str, RetainedLoginPty] = {}
+
+
+async def attach_login_pty(
+    session_id: str,
+    *,
+    expires_at: datetime | None,
+    create_adapter: Callable[[], PtyAdapter],
+) -> RetainedLoginPty:
+    """Return the OAuth session's login PTY, starting it on the first attach.
+
+    A session runs its provider login once. A finished login stays available
+    for replay until the session expires; trying again uses a new session.
+    """
+    now = datetime.now(timezone.utc)
+    for retained_id, retained in list(_retained_login_ptys.items()):
+        if retained.expires_at is None:
+            released = retained.ended
+        else:
+            released = _as_aware_utc(retained.expires_at) <= now
+        if released:
+            del _retained_login_ptys[retained_id]
+            await retained.close()
+    pty = _retained_login_ptys.get(session_id)
+    if pty is None:
+        pty = RetainedLoginPty(create_adapter(), expires_at=expires_at)
+        await pty.start()
+        _retained_login_ptys[session_id] = pty
+    return pty
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
 
 @dataclass
 class TerminalBridgeConnection:
