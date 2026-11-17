@@ -906,6 +906,33 @@ async def test_generic_dispatch_keeps_generic_code_for_untyped_cause() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_names_a_cause_whose_message_is_empty() -> None:
+    """``TimeoutError()`` has no text; the projection must still say what failed.
+
+    Production recorded ``dispatchError: ""`` and a summary ending in ``: ``,
+    which left nothing to triage from.
+    """
+
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+    result = await _try_generic_realizer_dispatch(
+        _explicit_plan_request(plan, explicit_binding=True, key="empty-cause"),
+        plan_store=SimpleNamespace(load=AsyncMock(return_value=plan)),
+        realizer_registry=SimpleNamespace(
+            require=lambda _ref: SimpleNamespace(
+                execute=AsyncMock(side_effect=TimeoutError())
+            )
+        ),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_GENERIC_DISPATCH_FAILED"
+    assert result.summary.endswith("dispatch failed: TimeoutError")
+    assert result.metadata["dispatchError"] == "TimeoutError"
+
+
+@pytest.mark.asyncio
 async def test_generic_dispatch_keeps_raising_ambiguous_terminal_for_retry() -> None:
     from moonmind.omnigent.execute import OmnigentSessionStillRunningError
     from tests.unit.omnigent.test_generic_platform_production_services import _plan

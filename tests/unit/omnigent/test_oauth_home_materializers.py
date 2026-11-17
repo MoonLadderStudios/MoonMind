@@ -478,3 +478,19 @@ def test_reset_run_cannot_reuse_previous_credential_lifecycle(materializer):
     reset = credential_runtime_identity(acquired, materializer)
     assert reset != original
     assert credential_runtime_identity(acquired, materializer) == reset
+
+
+@pytest.mark.asyncio
+async def test_local_docker_backend_timeout_names_the_command():
+    """A stalled command reports which step and bound expired, as a TimeoutError.
+
+    ``run_runtime_command`` re-raises a message-less ``TimeoutError()``; callers
+    that classify timeouts (the writer-image pull) still catch the same type.
+    """
+
+    from moonmind.omnigent.credential_materializers import LocalDockerCommandBackend
+
+    with pytest.raises(TimeoutError) as raised:
+        await LocalDockerCommandBackend().run(["sleep", "5"], timeout_seconds=0.2)
+
+    assert str(raised.value) == "sleep 5 did not finish within 0.2s"

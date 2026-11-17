@@ -178,3 +178,110 @@ async def test_mixed_plan_provisions_only_model_credentials(
             assert row.cleanup_state == "cleaned"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_materializer_is_a_typed_retryable_failure(tmp_path):
+    """A stalled Docker step must not reach dispatch as a bare TimeoutError.
+
+    A host I/O stall made Claude OAuth-home staging exceed its 60s Docker bound;
+    the untyped ``TimeoutError()`` became an empty ``OMNIGENT_GENERIC_DISPATCH_FAILED``
+    with ``contact_administrator``, so the workflow failed instead of retrying
+    the step that had not started an agent session yet.
+    """
+
+    from moonmind.omnigent.credential_materializers import (
+        CredentialMaterializerImplementationRegistry,
+        NoopCredentialMaterializer,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/credentials.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    class StalledMaterializer(NoopCredentialMaterializer):
+        async def materialize(self, context):
+            context.secrets.clear()
+            raise TimeoutError("docker run --rm did not finish within 60s")
+
+    class RejectSecretLookup:
+        async def resolve(self, _ref):
+            raise AssertionError("Credentialless model must not read a secret")
+
+    try:
+        async with sessions() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="model-profile",
+                    runtime_id="opencode",
+                    provider_id="opencode",
+                    credential_generation=1,
+                )
+            )
+            await session.commit()
+        plan = SimpleNamespace(
+            payload=SimpleNamespace(
+                credentialBindings={
+                    "primary-model": ModelAuthorityBinding(
+                        authorityKind="provider_profile",
+                        providerProfileRef="model-profile",
+                        materializerRef="none@1",
+                    )
+                },
+                modelConfig=SimpleNamespace(
+                    qualifiedId="opencode/example", routeRef="opencode"
+                ),
+            )
+        )
+        acquired = AcquiredProviderLease(
+            slot="primary-model",
+            provider_profile_ref="model-profile",
+            capacity_scope_ref="provider-profile:model-profile",
+            provider_lease_ref="provider-profile-lease:model-lease",
+            credential_generation=1,
+            lease=CredentialLease(
+                profile_id="model-profile",
+                runtime_id="opencode",
+                lease_id="model-lease",
+                owner_id="workflow",
+                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+            ),
+        )
+        service = OmnigentCredentialProvisioningService(
+            session_factory=sessions,
+            secret_resolution_service=OmnigentSecretResolutionService(
+                session_factory=sessions, resolver=RejectSecretLookup()
+            ),
+            registry=CredentialMaterializerImplementationRegistry(
+                [StalledMaterializer("none@1")]
+            ),
+            artifact_gateway=SimpleNamespace(),
+        )
+
+        with pytest.raises(HarnessPlatformError) as raised:
+            await service.materialize_all(
+                request=AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId="credential-timeout",
+                    idempotencyKey="credential-timeout",
+                ),
+                plan=plan,
+                acquired_leases=(acquired,),
+                writer_image_ref="unused",
+            )
+
+        assert raised.value.code == "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
+        assert raised.value.transient is True
+        assert "none@1" in str(raised.value)
+        assert "docker run --rm did not finish within 60s" in str(raised.value)
+        async with sessions() as session:
+            rows = (
+                (await session.execute(select(OmnigentCredentialRuntimeRecord)))
+                .scalars()
+                .all()
+            )
+            assert [row.cleanup_state for row in rows] == ["cleaned"]
+    finally:
+        await engine.dispose()

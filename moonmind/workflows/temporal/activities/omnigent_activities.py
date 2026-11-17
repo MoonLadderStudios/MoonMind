@@ -878,16 +878,18 @@ async def _try_generic_realizer_dispatch(
                 storage = _artifact_storage_failure_result(exc)
                 if storage is not None:
                     return storage
+            # Some causes (TimeoutError()) carry no text; name the type instead.
+            detail = str(exc).strip() or type(exc).__name__
             return AgentRunResult(
                 summary=(
                     "Admitted Omnigent execution-plan dispatch failed: "
-                    f"{str(exc)[:400]}"
+                    f"{detail[:400]}"
                 ),
                 failureClass="integration_error",
                 providerErrorCode=provider_error_code,
                 retryRecommendation=remediation_for(provider_error_code),
                 metadata={
-                    "dispatchError": str(exc)[:1000],
+                    "dispatchError": detail[:1000],
                     **_capacity_cleanup_receipt(exc),
                 },
             )

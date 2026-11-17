@@ -151,12 +151,19 @@ class LocalDockerCommandBackend:
         output_limit_bytes: int | None = None,
     ) -> tuple[int, bytes, bytes]:
         limit = 16_384 if output_limit_bytes is None else output_limit_bytes + 1
-        result = await run_runtime_command(
-            argv,
-            input_bytes=input_bytes,
-            timeout_seconds=timeout_seconds,
-            output_limit_bytes=limit,
-        )
+        try:
+            result = await run_runtime_command(
+                argv,
+                input_bytes=input_bytes,
+                timeout_seconds=timeout_seconds,
+                output_limit_bytes=limit,
+            )
+        except TimeoutError as exc:
+            # The runner's TimeoutError has no text. Name the step (argv may
+            # carry scripts later, so only its leading words) and the bound.
+            raise TimeoutError(
+                f"{' '.join(argv[:3])} did not finish within {timeout_seconds:g}s"
+            ) from exc
         if output_limit_bytes is not None and any(
             len(payload) > output_limit_bytes for payload in result[1:]
         ):
@@ -1739,6 +1746,18 @@ class OmnigentCredentialProvisioningService:
                                 ),
                             )
                         )
+                    except TimeoutError as exc:
+                        # Its Docker steps take under a second on a healthy
+                        # host; a timeout is host contention, and no agent
+                        # session exists yet. Type it so the step's bounded
+                        # retry (retry_materialization) owns recovery.
+                        detail = str(exc) or "a Docker step timed out"
+                        raise HarnessPlatformError(
+                            f"{binding.materializerRef} credential "
+                            f"materialization timed out: {detail}",
+                            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                            transient=True,
+                        ) from exc
                     finally:
                         secrets.clear()
                     if (
