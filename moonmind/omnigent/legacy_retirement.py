@@ -358,18 +358,21 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "resolve_shared_host_image_ref"
         ),
         consumer=(
-            "Existing deployment configuration that pins a host image "
-            "through the pre-shared-image variables."
+            "Existing deployment configuration that still pins a host image "
+            "through the pre-shared-image variables; .env-template no longer "
+            "sets them and the API Compose environment forwards only a "
+            "supplied value, with no default."
         ),
         removalCondition=(
-            "Each alias completes its obsolete-configuration deprecation "
-            "window in ``OBSOLETE_CONFIGURATION``."
+            "One release after the variables' 2026-11-17 deprecation in "
+            "``OBSOLETE_CONFIGURATION``: remove ``LEGACY_HOST_IMAGE_ENV``, "
+            "the nested ``OMNIGENT_HOST_IMAGE_REF`` fallbacks and this row."
         ),
         sharedOperation=("The canonical shared-image variable."),
         missingOutcome=(
             "Nothing functional; deployments still supplying the old "
-            "variables keep their pinned image until the deprecation "
-            "window ends."
+            "variables keep their pinned image, with a startup warning, "
+            "until the deprecation window ends."
         ),
     ),
     LegacyPathRecord(
@@ -474,6 +477,10 @@ class ObsoleteConfiguration(BaseModel):
     deprecated: bool = False
     removed: bool = False
     guidance: str = ""
+    # The value .env-template and Compose shipped. It selects exactly what
+    # omitting the variable selects, so an untouched .env neither warns nor
+    # fails startup, during the window or after removal.
+    shipped_default: str = Field("", alias="shippedDefault")
 
     @model_validator(mode="after")
     def _validate(self) -> "ObsoleteConfiguration":
@@ -489,25 +496,39 @@ class ObsoleteConfiguration(BaseModel):
         return self
 
 
+_HOST_IMAGE_ALIAS_GUIDANCE = (
+    "Choose the host image through OMNIGENT_SHARED_HOST_IMAGE_REF (or "
+    "OMNIGENT_SHARED_HOST_IMAGE and OMNIGENT_SHARED_HOST_IMAGE_TAG) and remove "
+    "this variable from the deployment's .env. The alias is still honored "
+    "until it is removed one release after its 2026-11-17 deprecation."
+)
+
 # Every legacy configuration identity that produces an actionable startup
-# warning during its deprecation window and a failure once removed. The generic
-# and Pi aliases are not deprecated yet: they remain a supported way to pin a
-# prior host image.
+# warning during its deprecation window and a failure once removed. The Pi
+# alias is not deprecated yet: it remains a supported way to pin a prior image.
 OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE_REF",
         retirementPathId="omnigent.legacy.host_image_variable_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
+        deprecated=True,
+        guidance=_HOST_IMAGE_ALIAS_GUIDANCE,
     ),
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE",
         retirementPathId="omnigent.legacy.host_image_variable_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE",
+        deprecated=True,
+        guidance=_HOST_IMAGE_ALIAS_GUIDANCE,
+        shippedDefault="ghcr.io/omnigent-ai/omnigent-host",
     ),
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE_TAG",
         retirementPathId="omnigent.legacy.host_image_variable_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE_TAG",
+        deprecated=True,
+        guidance=_HOST_IMAGE_ALIAS_GUIDANCE,
+        shippedDefault="latest",
     ),
     ObsoleteConfiguration(
         variable="OMNIGENT_OPENCODE_HOST_IMAGE_REF",
@@ -764,7 +785,8 @@ def assert_obsolete_configuration(
 
     During the deprecation window a supplied variable produces an actionable
     operator warning naming its replacement. After removal the same variable is
-    rejected outright instead of being silently ignored.
+    rejected outright instead of being silently ignored. A blank value or the
+    shipped default is treated as omitted.
     """
 
     if configuration is None:
@@ -773,7 +795,7 @@ def assert_obsolete_configuration(
     rejected: list[str] = []
     for entry in configuration:
         value = str(env.get(entry.variable, "") or "").strip()
-        if not value:
+        if not value or value == entry.shipped_default:
             continue
         message = (
             f"{entry.variable} is obsolete; set {entry.replacement} instead "

@@ -1,12 +1,13 @@
 """Legacy retirement admission table + guard tests.
 
 Source issues: MoonLadderStudios/MoonMind#3712, MoonLadderStudios/MoonMind#3835,
-MoonLadderStudios/MoonMind#3932.
+MoonLadderStudios/MoonMind#3932, MoonLadderStudios/MoonMind#5342.
 """
 
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -335,10 +336,77 @@ def test_runtime_selection_consults_the_retirement_class(monkeypatch) -> None:
 # --------------------------------------------------- obsolete configuration
 
 
-def test_current_configuration_is_accepted() -> None:
-    assert (
-        assert_obsolete_configuration({"OMNIGENT_HOST_IMAGE_REF": "img@sha256:a"}) == ()
+def test_generic_host_image_aliases_are_in_their_deprecation_window() -> None:
+    rows = {
+        entry.variable: entry
+        for entry in OBSOLETE_CONFIGURATION
+        if entry.retirement_path_id == "omnigent.legacy.host_image_variable_alias"
+    }
+    assert set(rows) == {
+        "OMNIGENT_HOST_IMAGE_REF",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
+    }
+    for variable, entry in rows.items():
+        # Still honored: a pin warns at startup but never fails it.
+        warnings = assert_obsolete_configuration({variable: "registry.test/pin:1"})
+        assert len(warnings) == 1, variable
+        assert "OMNIGENT_SHARED_HOST_IMAGE_REF" in warnings[0], variable
+        assert not entry.removed, variable
+
+
+def test_a_shipped_default_is_equivalent_to_omitting_the_variable() -> None:
+    removed = (
+        ObsoleteConfiguration(
+            variable="OMNIGENT_HOST_IMAGE_TAG",
+            retirementPathId="omnigent.legacy.host_image_variable_alias",
+            replacement="OMNIGENT_SHARED_HOST_IMAGE_TAG",
+            deprecated=True,
+            removed=True,
+            guidance="Pin OMNIGENT_SHARED_HOST_IMAGE_REF instead.",
+            shippedDefault="latest",
+        ),
     )
+    assert (
+        assert_obsolete_configuration(
+            {"OMNIGENT_HOST_IMAGE_TAG": " latest "}, configuration=removed
+        )
+        == ()
+    )
+    with pytest.raises(ObsoleteConfigurationError, match="OMNIGENT_HOST_IMAGE_TAG"):
+        assert_obsolete_configuration(
+            {"OMNIGENT_HOST_IMAGE_TAG": "2026.11.1"}, configuration=removed
+        )
+
+
+def test_compose_injected_defaults_never_count_as_obsolete_configuration() -> None:
+    """Compose injects these defaults into processes that never chose them.
+
+    Even after every row is removed, a default Compose still supplies must not
+    fail startup, or the default deployment could not start.
+    """
+
+    compose = (
+        pathlib.Path(__file__).resolve().parents[3] / "docker-compose.yaml"
+    ).read_text(encoding="utf-8")
+    variables = {entry.variable for entry in OBSOLETE_CONFIGURATION}
+    injected = {
+        (match.group(1), match.group(2))
+        for match in re.finditer(r"\$\{([A-Z0-9_]+):-([^}$]*)\}", compose)
+        if match.group(1) in variables
+    }
+    assert ("OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host") in injected
+    removed = tuple(
+        entry.model_copy(
+            update={"deprecated": True, "removed": True, "guidance": "fixture"}
+        )
+        for entry in OBSOLETE_CONFIGURATION
+    )
+    for variable, default in sorted(injected):
+        assert (
+            assert_obsolete_configuration({variable: default}, configuration=removed)
+            == ()
+        ), variable
 
 
 def test_obsolete_configuration_fails_with_an_actionable_message() -> None:

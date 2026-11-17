@@ -114,9 +114,12 @@ services:
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
       - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      # Deprecated generic host image aliases: forward only a value the
+      # deployment supplies (shell or the controller's env file), so a pin
+      # stays honored with a startup warning. Never inject the old default.
       - OMNIGENT_HOST_IMAGE_REF=${OMNIGENT_HOST_IMAGE_REF:-}
-      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
-      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-latest}

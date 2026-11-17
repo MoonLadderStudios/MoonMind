@@ -115,9 +115,9 @@ the policy identity's current persisted default, then carry that exact version;
 already-bound runs continue using their recorded version.
 Transient acquisition failures are retried by the API's capped reconciliation
 loop; a failed first pull does not strand the deployment until restart.
-`OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` may be removed after all
-supported installations have durable defaults and report no fallback for one
-release.
+`OMNIGENT_IMAGE_REF` may be removed after all supported installations have
+durable defaults and report no fallback for one release. The deprecated
+`OMNIGENT_HOST_IMAGE_REF` alias is removed one release after its deprecation.
 
 Related: [settings](../Security/SettingsSystem.md), [Provider Profiles](../Security/ProviderProfiles.md),
 [adapter](OmnigentAdapter.md), [workspaces](../Workflows/WorkspaceLocators.md),

@@ -290,7 +290,7 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
 | `ManagedRuntimeLauncher` for the direct strategies | `omnigent.legacy.managed_runtime_launcher` | `active_product_path` |
 | Direct Codex `MoonMind.AgentSession`, session runtime and Docker controller | `omnigent.legacy.direct_agent_session` | `active_product_path` |
-| Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
+| Deprecated generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
 | Deprecated OpenCode image variable | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
