@@ -1003,11 +1003,26 @@ def _authored_plan_github_operations(
         candidates = [block.get("skill")]
         if isinstance(tool, Mapping) and tool.get("type") == "skill":
             candidates.append(tool)
+        invocation_inputs = None
+        for source in (block, tool, block.get("skill")):
+            if not isinstance(source, Mapping):
+                continue
+            inputs = source.get("inputs")
+            if inputs is None or inputs == {}:
+                inputs = source.get("args")
+            if inputs is not None and inputs != {}:
+                invocation_inputs = inputs
+                break
         for raw in candidates:
             if isinstance(raw, str):
                 raw = {"name": raw}
             if isinstance(raw, Mapping):
-                invocations.append(dict(raw))
+                invocation = dict(raw)
+                # These are projections of one authored invocation. A bare
+                # tool selector must retain its Skill's non-merge inputs.
+                if invocation_inputs is not None:
+                    invocation.setdefault("inputs", invocation_inputs)
+                invocations.append(invocation)
     resolved = {
         skill.skill_name: skill
         for skill in (resolved_skills.skills if resolved_skills else ())
