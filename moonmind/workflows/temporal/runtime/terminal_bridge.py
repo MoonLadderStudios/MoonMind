@@ -352,14 +352,19 @@ async def attach_login_pty(
     for replay until the session expires; trying again uses a new session.
     """
     now = datetime.now(timezone.utc)
-    for retained_id, retained in list(_retained_login_ptys.items()):
-        if retained.expires_at is None:
-            released = retained.ended
-        else:
-            released = _as_aware_utc(retained.expires_at) <= now
-        if released:
-            del _retained_login_ptys[retained_id]
-            await retained.close()
+    # Remove every released login before awaiting cleanup, so a concurrent
+    # attach cannot try to release the same entry.
+    released = [
+        _retained_login_ptys.pop(retained_id)
+        for retained_id, retained in list(_retained_login_ptys.items())
+        if (
+            retained.ended
+            if retained.expires_at is None
+            else _as_aware_utc(retained.expires_at) <= now
+        )
+    ]
+    for retained in released:
+        await retained.close()
     pty = _retained_login_ptys.get(session_id)
     if pty is None:
         pty = RetainedLoginPty(create_adapter(), expires_at=expires_at)

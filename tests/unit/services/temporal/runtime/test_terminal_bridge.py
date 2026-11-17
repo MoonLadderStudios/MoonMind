@@ -266,6 +266,38 @@ async def test_expired_login_is_released_on_the_next_attach(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_attaches_release_each_expired_login_once(
+    _login_ptys: dict[str, RetainedLoginPty],
+) -> None:
+    class _RunningAdapter(InMemoryPtyAdapter):
+        async def output_chunks(self):
+            await asyncio.Event().wait()
+            yield b""
+
+    expired_adapters = [_RunningAdapter(), _RunningAdapter()]
+    for index, adapter in enumerate(expired_adapters):
+        expired = RetainedLoginPty(
+            adapter, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+        await expired.start()
+        _login_ptys[f"oas_expired_{index}"] = expired
+    await asyncio.sleep(0)
+
+    live_expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
+    await asyncio.gather(
+        attach_login_pty(
+            "oas_live_a", expires_at=live_expiry, create_adapter=InMemoryPtyAdapter
+        ),
+        attach_login_pty(
+            "oas_live_b", expires_at=live_expiry, create_adapter=InMemoryPtyAdapter
+        ),
+    )
+
+    assert all(adapter.closed for adapter in expired_adapters)
+    assert set(_login_ptys) == {"oas_live_a", "oas_live_b"}
+
+
+@pytest.mark.asyncio
 async def test_failed_login_connect_closes_adapter_and_allows_a_new_attach(
     _login_ptys: dict[str, RetainedLoginPty],
 ) -> None:
