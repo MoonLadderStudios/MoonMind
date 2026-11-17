@@ -180,7 +180,7 @@ def test_login_runs_cli_in_one_off_shared_host_container(
             DEFAULT_HOST_IMAGE,
             "-lc",
             "unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; "
-            'mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude auth login',
+            + 'mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude auth login',
         ]
     assert calls[2:] == [expected]
 
