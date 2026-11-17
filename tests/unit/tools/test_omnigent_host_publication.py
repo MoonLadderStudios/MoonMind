@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -194,17 +195,11 @@ def test_invalid_build_overrides_fail_before_publication(
 
 
 def test_compose_host_default_uses_published_latest_channel_everywhere():
-    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
-    services = compose["services"]
-    shared_images = [
-        service["image"]
-        for service in services.values()
-        if "OMNIGENT_SHARED_HOST_IMAGE_TAG" in service.get("image", "")
-    ]
-    assert shared_images
-    assert all(
-        "OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest" in image for image in shared_images
-    )
+    rendered = COMPOSE.read_text(encoding="utf-8")
+    services = yaml.safe_load(rendered)["services"]
+    defaults = re.findall(r"\$\{OMNIGENT_SHARED_HOST_IMAGE_TAG:-([^}]*)\}", rendered)
+    assert defaults
+    assert set(defaults) == {"latest"}
     for name in ("api", "temporal-worker-agent-runtime"):
         env = services[name]["environment"]
         assert (

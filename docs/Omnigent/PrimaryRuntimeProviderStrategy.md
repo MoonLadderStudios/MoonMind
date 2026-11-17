@@ -25,7 +25,7 @@ Retirement of remaining alternatives is class-based new-admission control with o
 | Outcome | Required behavior |
 | --- | --- |
 | Shared execution host | The Omnigent host runs admitted agent work, without absorbing the API, Temporal, artifact service, or privileged deployment controller. |
-| On-demand Codex, Claude Code, and OpenCode | Supported harnesses use the shared attempt-owned lifecycle. Ordinary use does not need one permanent vendor host. Explicit static operation is optional and supported only where its own behavior is established. |
+| On-demand Codex, Claude Code, and OpenCode | Supported harnesses use the shared attempt-owned lifecycle on on-demand hosts; no permanent vendor host is provided. |
 | Workflow Detail interactions | Native chat exposes the bound session's supported turns, events, tools, approvals, terminals, and resources through existing authorization. Loading HTML is not readiness. Failures and durable results remain accessible without a second composer or host-management dashboard. |
 | Retry, checkpoint, and artifact parity | Existing recovery and preservation owners handle interruption, continuation, restore, and saved output. Where the original host is unavailable, recovery uses actual durable evidence rather than restarting completed work. |
 | Shared implementation | One owner handles each launch, session/turn mutation, capture, publication, and cleanup responsibility. Persistent records support those owners instead of becoming parallel orchestrators. |
@@ -82,7 +82,7 @@ The materializer owns the selected credential format and lifecycle. Run-owned ma
 
 ### 5.6 MoonMind owns OAuth enrollment
 
-Settings/Profile enrollment supplies the admitted account. Omnigent execution reuses it without a second login or new Profile type. Codex and Claude Profiles retain their underlying `codex_cli` and `claude_code` identities. Concurrent direct, static, and on-demand consumers cannot write the same mutable OAuth home without its exclusive authority.
+Settings/Profile enrollment supplies the admitted account. Omnigent execution reuses it without a second login or new Profile type. Codex and Claude Profiles retain their underlying `codex_cli` and `claude_code` identities. Concurrent direct and on-demand consumers cannot write the same mutable OAuth home without its exclusive authority.
 
 ### 5.7 Credential isolation is stricter than image isolation
 

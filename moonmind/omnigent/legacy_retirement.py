@@ -353,7 +353,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "CodexProfileBoundRealizer",
             "realizer:codex-profile-bound@1",
         ),
-        consumer="Recorded ``codex-profile-bound@1`` plans, queued starts, retries, cancellation and recovery. New plans use the shared realizer, including static-connected hosts.",
+        consumer="Recorded ``codex-profile-bound@1`` plans, queued starts, retries, cancellation and recovery. New plans use the shared realizer.",
         removalCondition="No open plan or retained history can execute or retry ``codex-profile-bound@1``; historical evidence remains independently readable.",
     ),
     LegacyPathRecord(
@@ -379,104 +379,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         surfaces=(
             "python:moonmind.omnigent.oauth_host_runtime:OmnigentOAuthHostRuntime",
         ),
-        consumer="Recorded profile-bound OAuth host launches and their maintenance, draining, attestation and cleanup; the shared static allocation adapter uses the same physical host ledger without this launcher.",
+        consumer="Recorded profile-bound OAuth host launches and their maintenance, draining, attestation and cleanup.",
         removalCondition="Retained profile-bound hosts and retries are gone and credential maintenance no longer needs their adapter.",
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.codex_static_host_startup",
-        owner="omnigent-deployment",
-        description=(
-            "Codex host start wrapper retained for OAuth runtime launches, "
-            "with the dedicated Compose host and initializer."
-        ),
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
-        surfaces=(
-            "script:start-codex-oauth-host.sh",
-            "compose-service:omnigent-host-codex",
-            "compose-service:omnigent-host-codex-init",
-            "compose-profile:omnigent-host-codex",
-        ),
-        newAdmissionSource="docker-compose.yaml:omnigent-host-codex",
-        consumer=(
-            "Operators who enable the ``omnigent-host-codex`` Compose "
-            "profile for static-connected Codex execution "
-            "(``codex-static@1``) and the OAuth host launches that share "
-            "its wrapper."
-        ),
-        removalCondition=(
-            "Static-connected Codex runs on the shared host image without "
-            "this wrapper and no deployment enables the Compose profile."
-        ),
-        sharedOperation=("The shared host image with a static Host Class."),
-        missingOutcome=(
-            "Nothing for shared executions: attach, drain and no-remove are "
-            "implemented. The retained Compose profile still initializes the "
-            "physical service and registered host state before an admitted "
-            "shared launch projects its execution configuration."
-        ),
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.claude_static_host_startup",
-        owner="omnigent-deployment",
-        description=(
-            "Claude host start wrapper retained for OAuth runtime launches, "
-            "with the dedicated Compose host and initializer."
-        ),
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
-        surfaces=(
-            "script:start-claude-oauth-host.sh",
-            "compose-service:omnigent-host-claude",
-            "compose-service:omnigent-host-claude-init",
-            "compose-profile:omnigent-host-claude",
-        ),
-        newAdmissionSource="docker-compose.yaml:omnigent-host-claude",
-        consumer=(
-            "Operators who enable the ``omnigent-host-claude`` Compose "
-            "profile for static-connected Claude execution "
-            "(``claude-static@1``) and the OAuth host launches that share "
-            "its wrapper."
-        ),
-        removalCondition=(
-            "Static-connected Claude runs on the shared host image without "
-            "this wrapper and no deployment enables the Compose profile."
-        ),
-        sharedOperation=("The shared host image with a static Host Class."),
-        missingOutcome=(
-            "Nothing for shared executions: attach, drain and no-remove are "
-            "implemented. The retained Compose profile still initializes the "
-            "physical service and registered host state before an admitted "
-            "shared launch projects its execution configuration."
-        ),
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.projection_host_startup",
-        owner="omnigent-deployment",
-        description=(
-            "Pre-consolidation ``omnigent-host`` Compose service, its "
-            "runner-projection entrypoint, and health script. Still resolves the "
-            "legacy image variable rather than the shared-image expression."
-        ),
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
-        surfaces=(
-            "script:start-host-with-projections.sh",
-            "script:check-runner-projections.sh",
-            "compose-service:omnigent-host",
-            "compose-profile:omnigent-host",
-        ),
-        newAdmissionSource="docker-compose.yaml:omnigent-host",
-        consumer=(
-            "Deployments that enable the ``omnigent-host`` Compose profile "
-            "for runner-projection hosts."
-        ),
-        removalCondition=(
-            "Runner projections start from the shared host image and no "
-            "deployment enables the ``omnigent-host`` profile."
-        ),
-        sharedOperation=("The shared host image expression."),
-        missingOutcome=(
-            "A runner-projection start path on the shared image; this "
-            "service still resolves the legacy image variable."
-        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.host_image_variable_alias",
@@ -487,15 +391,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         surfaces=(
-            "python:moonmind.omnigent.harness_platform.static_hosts:"
+            "python:moonmind.omnigent.harness_platform.shared_host_image:"
             "LEGACY_HOST_IMAGE_ENV",
             "env:OMNIGENT_HOST_IMAGE_REF",
-            "env:OMNIGENT_HOST_IMAGE",
-            "env:OMNIGENT_HOST_IMAGE_TAG",
         ),
         newAdmissionSource=(
-            "moonmind.omnigent.harness_platform.static_hosts:"
-            "resolve_static_host_image_ref"
+            "moonmind.omnigent.harness_platform.shared_host_image:"
+            "resolve_shared_host_image_ref"
         ),
         consumer=(
             "Existing deployment configuration that pins a host image "

@@ -39,7 +39,7 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge resolves its persisted default runtime authority under one runtime
 # id. Which runtime backs the bridge is composition, not a route decision.
-BRIDGE_POLICY_RUNTIME_ID = "omnigent-codex"
+BRIDGE_POLICY_RUNTIME_ID = "codex-on-demand"
 
 
 class OmnigentBridgeModeUnsupportedError(RuntimeError):

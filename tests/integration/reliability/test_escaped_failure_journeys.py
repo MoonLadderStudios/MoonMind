@@ -5286,12 +5286,23 @@ async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None
         (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     )
 
+    from moonmind.omnigent.execution_profiles import POLICIES
+
+    def default_name(network: dict) -> str:
+        name = str(network.get("name") or "")
+        return name.split(":-", 1)[1].rstrip("}") if ":-" in name else name
+
+    # On-demand hosts join the network their launch policy names.
+    policy_networks = {policy.network_ref for policy in POLICIES.values()}
+    host_networks = {
+        key
+        for key, network in compose["networks"].items()
+        if default_name(network) in policy_networks
+    }
     assert set(compose["services"]["omnigent"]["networks"]) == set(
         expected["serverNetworks"]
     )
-    assert set(
-        compose["services"]["omnigent-host-codex"]["networks"]
-    ) == set(expected["hostNetworks"])
+    assert host_networks == set(expected["hostNetworks"])
     assert compose["networks"]["omnigent-egress-network"]["internal"] is True
 
 

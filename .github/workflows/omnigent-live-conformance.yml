@@ -36,7 +36,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [browser, product, cumulative, stock, static, ondemand, failures, workflow_chat]
+        mode: [browser, product, cumulative, stock, ondemand, failures, workflow_chat]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -222,8 +222,8 @@ jobs:
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 8:
-              raise SystemExit(f"expected eight passing reports, found {len(reports)}")
+          if len(reports) != 7:
+              raise SystemExit(f"expected seven passing reports, found {len(reports)}")
           report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
           for path, report in zip(reports, report_payloads):
               if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
@@ -245,7 +245,6 @@ jobs:
           if browser.get("issue") != "MoonLadderStudios/MoonMind#3508":
               raise SystemExit("browser evidence is not bound to issue #3508")
           required_rows = {
-              "static_profile_bound", "static_restart_replay",
               "on_demand_policy_selected", "repository_read_analysis",
               "repository_mutation_publication",
               "failed_credential_readiness_admission",
@@ -541,7 +540,7 @@ jobs:
               "cleanupAndRelease": acceptance["cleanupAndRelease"],
               "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
               "noFallback": product["assertions"]["no_fallback"],
-              "modes": ["browser", "product", "cumulative", "stock", "static", "ondemand", "failures", "workflow_chat"],
+              "modes": ["browser", "product", "cumulative", "stock", "ondemand", "failures", "workflow_chat"],
               "status": "passed",
               "generatedAt": datetime.now(timezone.utc).isoformat(),
               "expiresAt": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
@@ -566,7 +565,7 @@ jobs:
             echo "### Omnigent credentialed conformance matrix"
             echo ""
             echo "- Issues: \`MoonLadderStudios/MoonMind#3508\` (parent \`#3448\`) and native Workflow Chat \`#3642\` (parent \`#3632\`)"
-            echo "- Result: browser, product-create, cumulative remediation, stock, static, on-demand, failure, and native Workflow Chat cases passed"
+            echo "- Result: browser, product-create, cumulative remediation, stock, on-demand, failure, and native Workflow Chat cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Link passing acceptance report from owning issues
@@ -582,9 +581,9 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`, \`workflow_chat\`"
+            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`ondemand\`, \`failures\`, \`workflow_chat\`"
             echo "- Durable artifact: \`${artifact}\`"
-            echo "- Evidence refs and immutable image digests: the eight \`report.json\` trees in \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the seven \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
           gh issue comment 3508 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"

@@ -581,7 +581,9 @@ async def test_durable_receipt_fences_janitor_until_current_terminal_save(
             await session.commit()
         repository = OmnigentOAuthHostRepository(factory)
         binding = await repository.create_or_update_static_binding(
-            profile_id="codex", endpoint_ref="default", static_host_id="host-1"
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@1",
         )
         lease = await repository.create_or_get_host_lease(
             binding=binding,

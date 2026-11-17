@@ -209,11 +209,6 @@ const admissionFailureRows = new Set([
   "failed_credential_readiness_admission",
   "failed_host_registration_readiness",
 ]);
-const staticRows = new Set([
-  "static_profile_bound",
-  "static_restart_replay",
-  "remediation.host.static-lifecycle",
-]);
 
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -281,8 +276,7 @@ try {
   let selectedPolicy = "";
   if (!admissionFailureRows.has(row)) {
     selectedTarget = await executionTarget.inputValue();
-    if (staticRows.has(row)) await launchPolicy.selectOption({ label: "Static Compose" });
-    else await launchPolicy.selectOption({ label: "On-demand Docker" });
+    await launchPolicy.selectOption({ label: "On-demand Docker" });
     selectedPolicy = await launchPolicy.inputValue();
     if (!selectedTarget || !selectedPolicy) throw new Error("readiness did not expose the required target and policy");
   }
@@ -345,7 +339,7 @@ try {
     const pageText = await page.locator("body").innerText();
     const expectedFailure = row === "failed_credential_readiness_admission"
       ? /credential|oauth|profile.*(reconnect|validation|required)/i
-      : /host.*(registration|readiness|ready)|static host/i;
+      : /host.*(registration|readiness|ready)/i;
     if (!expectedFailure.test(pageText)) {
       throw new Error(`failed-admission row did not expose its distinct readiness cause: ${row}`);
     }
@@ -475,7 +469,7 @@ try {
       agentProfileId: isRemediation ? remediationAgentProfileId : null,
       executionTargetRef: selectedTarget,
       launchPolicyRef: selectedPolicy,
-      hostMode: staticRows.has(row) ? "static_compose" : "on_demand_docker",
+      hostMode: "on_demand_docker",
       model: isRemediation ? remediationModel : null,
       authorityMode: isRemediation ? remediationAuthority : null,
       branch,

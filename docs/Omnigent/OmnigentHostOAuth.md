@@ -72,7 +72,7 @@ This document governs:
 - profile-owned credential attachments and cleanup behavior
 - runtime-pack-specific authentication and version probes
 - Host Class and launch-policy compatibility
-- static-connected and on-demand host modes
+- on-demand hosts and retained static-connected bindings
 - exact-host registration, harness, image, credential, model, and capability evidence
 - generation drain, stale-host fencing, retry, cancellation, and janitor behavior
 - bridge, Workflow Chat, checkpoint, remediation, publication, and historical-read integration
@@ -90,10 +90,9 @@ It does not define a token broker, raw-token export, workflow-authored mounts, s
 6. **One acquired generation governs one consumer.** A stale host cannot continue after credential replacement or reconnect advances the generation.
 7. **Host registration credentials are separate.** Provider OAuth never authenticates the host to the Omnigent server.
 8. **Only bounded references cross durable boundaries.** Plans, runtime bindings, Temporal history, artifacts, checkpoints, and diagnostics contain ids, refs, generations, digests, and bounded status only.
-9. **Static and on-demand modes share one contract.** Host mode changes realization, not credential or lifecycle semantics.
-10. **One shared image does not share credentials.** A host gets only the selected runtime's credential bundle.
-11. **Generic lifecycle, specific adapter.** Runtime-specific code is limited to credential materialization, bounded runtime probes, and capability normalization.
-12. **Policy fails closed.** Missing capacity, wrong runtime, stale generation, invalid credential state, unsupported Host Class, failed auth probe, or incomplete cleanup never falls back to another runtime or credential.
+9. **One shared image does not share credentials.** A host gets only the selected runtime's credential bundle.
+10. **Generic lifecycle, specific adapter.** Runtime-specific code is limited to credential materialization, bounded runtime probes, and capability normalization.
+11. **Policy fails closed.** Missing capacity, wrong runtime, stale generation, invalid credential state, unsupported Host Class, failed auth probe, or incomplete cleanup never falls back to another runtime or credential.
 
 ## 4. Runtime-owned Provider Profiles
 
@@ -128,12 +127,6 @@ authState: connected
 ```
 
 The Omnigent Agent Profile declares compatible Provider Profile runtime, provider, authentication model, materializer, Host Class, and launch policy requirements. Authoring surfaces show only compatible profiles. The backend revalidates compatibility before plan persistence.
-
-For static Compose hosts, the selected binding supplies the Codex or Claude
-volume name. Before running the projection/readiness probe, the runtime inspects
-the observed container and verifies that its writable OAuth-home volume matches
-that binding, with no nested credential mount. A mismatch stops this launch
-through the existing cleanup path; a staged generation alone is not mount proof.
 
 Provider Profile readiness remains authoritative. A host image, Host Class, or existing container cannot make a disconnected or incompatible profile launchable.
 
@@ -390,21 +383,18 @@ Every OAuth-backed generic launch follows this order:
 
 Failure at any point reconciles the same plan and runtime binding. It does not create a second unfenced owner.
 
-## 14. Static-connected hosts
+## 14. Retired static-connected hosts
 
-Static-connected mode remains valid for local and controlled deployments during migration.
-
-A static host:
-
-- uses the same shared image and runtime pack as on-demand mode
-- receives only one selected OAuth profile generation
-- registers one exact host identity
-- remains subject to Provider Profile capacity and host leasing
-- cannot act as an unrestricted multi-profile credential host
-- cannot accept another session while the profile capacity contract forbids it
-- must drain or stop its credential consumer before capacity releases
-
-Static Compose service names may remain runtime-specific during migration. Their implementation should converge on one common host template and generic startup entrypoint.
+New plans and policy authoring refuse the `static-connected` and `static_compose`
+host modes; stored policies, plans, and snapshots that name them stay readable.
+A recorded static plan or binding fails closed (`OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE`
+or `OMNIGENT_STATIC_HOST_RETIRED`) instead of running on another host, because
+its Compose service no longer exists. A retained OAuth host binding without an
+on-demand policy moves to its runtime's on-demand default (`codex-on-demand` or
+`claude-on-demand`) the next time its Provider Profile is idle, keeping the same
+enrollment volume; a busy profile keeps its binding until then. Operators
+migrate deployments as described in
+[Combined Stack Validation](CombinedStackValidationAndRollback.md#doc-req-014-migrating-from-static-hosts).
 
 ## 15. On-demand hosts
 
@@ -644,7 +634,7 @@ The transition occurs without changing the meaning of existing plans.
 
 ### Image reuse first
 
-Codex and Claude static or legacy hosts may point to the same shared image digest before their execution realizer changes. This proves image reuse independently from lifecycle migration.
+Codex and Claude legacy hosts may point to the same shared image digest before their execution realizer changes. This proves image reuse independently from lifecycle migration.
 
 ### Generic materialization second
 
@@ -713,7 +703,6 @@ A failure never silently selects another credential source, generation, runtime,
 - `claude-oauth-home@1` binds every required acquired writable Claude credential path through the generic realizer.
 - The shared image receives credentials only for the selected runtime.
 - Exact-host probes validate runtime version and authentication without printing credential bodies.
-- Static and on-demand modes consume the same plan, materializer, runtime-pack, generation, evidence, and cleanup rules.
 - Rotation fences old hosts and retries.
 - Run cleanup preserves profile-owned OAuth backing state.
 - Provider Profile release occurs after every credential consumer stops and cleanup authority is recorded.
@@ -733,7 +722,7 @@ This contract does not permit:
 - starting interactive OAuth inside a workflow host
 - using `runtime_id=omnigent` as credential ownership
 - selecting arbitrary credential mount paths from workflow input
-- one multi-profile static host with all provider credentials
+- one multi-profile host with all provider credentials
 - deleting OAuth backing state during run cleanup
 - treating a shared image as shared credential or support authority
 - creating separate permanent Codex and Claude lifecycle coordinators

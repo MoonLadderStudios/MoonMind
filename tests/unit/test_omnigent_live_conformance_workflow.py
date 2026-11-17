@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from moonmind.omnigent.live_verification_health import REQUIRED_LIVE_MATRIX_MODES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/omnigent-live-conformance.yml"
@@ -40,11 +41,12 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
         "product",
         "cumulative",
         "stock",
-        "static",
         "ondemand",
         "failures",
         "workflow_chat",
     ]
+    # Readiness waits for every mode it requires, so the matrix must run them.
+    assert tuple(job["strategy"]["matrix"]["mode"]) == REQUIRED_LIVE_MATRIX_MODES
     run_step = next(
         step
         for step in job["steps"]
@@ -114,7 +116,7 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Write publication manifest"
     )
-    assert "expected eight passing reports" in manifest["run"]
+    assert "expected seven passing reports" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3508" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3480" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3471" in manifest["run"]

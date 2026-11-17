@@ -82,34 +82,6 @@ class _BootstrapPolicyDefinition:
 
 _BOOTSTRAP_POLICY_DEFINITIONS = (
     _BootstrapPolicyDefinition(
-        policy_id="claude-static",
-        name="Claude static host",
-        host_mode="static_compose",
-        profile_ref="omnigent-claude@1",
-        harness="claude-native",
-        agent_identities=(CLAUDE_STOCK_AGENT_NAME,),
-        compatible_providers=("anthropic",),
-        requires_claude=True,
-    ),
-    _BootstrapPolicyDefinition(
-        policy_id="omnigent-codex",
-        name="Omnigent Codex execution",
-        host_mode="static_compose",
-        profile_ref="omnigent-codex@1",
-        harness="codex-native",
-        agent_identities=(CODEX_STOCK_AGENT_NAME,),
-        compatible_providers=("codex",),
-    ),
-    _BootstrapPolicyDefinition(
-        policy_id="codex-static",
-        name="Codex static host",
-        host_mode="static_compose",
-        profile_ref="omnigent-codex@1",
-        harness="codex-native",
-        agent_identities=(CODEX_STOCK_AGENT_NAME,),
-        compatible_providers=("codex",),
-    ),
-    _BootstrapPolicyDefinition(
         policy_id="codex-on-demand",
         name="Codex on-demand host",
         host_mode="on_demand_docker",
@@ -249,10 +221,8 @@ def validate_policy(
     except ContainerBackendConfigError:
         container_backend_enabled = False
     deployment_capabilities = {
-        "hostModes": {"static_compose"}
-        | ({"on_demand_docker"} if container_backend_enabled else set()),
-        "backends": {"compose"}
-        | ({"container-backend"} if container_backend_enabled else set()),
+        "hostModes": {"on_demand_docker"} if container_backend_enabled else set(),
+        "backends": {"container-backend"} if container_backend_enabled else set(),
         "architectures": {architecture},
         "providers": {"codex", "anthropic"}
         | ({"opencode-go", "opencode"} if opencode_support_enabled() else set()),

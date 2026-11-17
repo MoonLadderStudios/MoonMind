@@ -193,20 +193,6 @@ POLICIES = {
     p.ref: p
     for p in (
         OmnigentLaunchPolicy(
-            policyId="codex-static",
-            version=1,
-            hostMode="static_compose",
-            cleanup={"mode": "drain", "janitor": True},
-            **_COMMON,
-        ),
-        OmnigentLaunchPolicy(
-            policyId="claude-static",
-            version=1,
-            hostMode="static_compose",
-            cleanup={"mode": "drain", "janitor": True},
-            **_COMMON,
-        ),
-        OmnigentLaunchPolicy(
             policyId="claude-on-demand",
             version=1,
             hostMode="on_demand_docker",
@@ -225,13 +211,6 @@ POLICIES = {
             version=1,
             hostMode="on_demand_docker",
             cleanup={"mode": "remove", "janitor": True},
-            **_COMMON,
-        ),
-        OmnigentLaunchPolicy(
-            policyId="opencode-static",
-            version=1,
-            hostMode="static_compose",
-            cleanup={"mode": "drain", "janitor": True},
             **_COMMON,
         ),
     )

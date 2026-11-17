@@ -152,7 +152,7 @@ const tierCapabilities = {
 const POLICIES_ENDPOINT = '/api/omnigent/api/policies';
 const POLICY_ID = 'synthetic-policy-with-a-very-long-unbroken-identifier-that-must-wrap-0123456789';
 const POLICY_DOCUMENT = {
-  host: { mode: 'static_compose', profileRef: `host-profile-${LONG_ID}` },
+  host: { mode: 'on_demand_docker', profileRef: `host-profile-${LONG_ID}` },
   network: { egress: 'restricted', allowedHosts: ['registry.example.test', 'packages.example.test'] },
   retention: { artifactsDays: 30, summary: LONG_TEXT },
 };

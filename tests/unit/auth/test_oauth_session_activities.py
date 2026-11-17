@@ -481,13 +481,11 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_id", ["codex_cli", "claude_code"])
-@pytest.mark.parametrize("host_mode", ["static", "on-demand"])
 @pytest.mark.parametrize("corrupt_snapshot", [False, True])
 async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
     _oauth_activity_session_factory,
     monkeypatch: pytest.MonkeyPatch,
     runtime_id: str,
-    host_mode: str,
     corrupt_snapshot: bool,
 ) -> None:
     from moonmind.omnigent.execution_profiles import (
@@ -509,7 +507,7 @@ async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", old_server)
     launch = compile_effective_launch(
         profile_ref=f"omnigent-{provider}@1",
-        policy_ref=f"{provider}-{host_mode}@1",
+        policy_ref=f"{provider}-on-demand@1",
         provider_profile_id=profile_id,
     )
     if corrupt_snapshot:
@@ -532,10 +530,7 @@ async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
     binding = await repository.create_or_update_static_binding(
         profile_id=profile_id,
         endpoint_ref=launch["endpointRef"],
-        static_host_id="selected-static-host" if host_mode == "static" else None,
-        host_launch_profile_ref=(
-            launch["launchPolicyRef"] if host_mode == "on-demand" else None
-        ),
+        host_launch_profile_ref=launch["launchPolicyRef"],
         execution_profile_ref=launch["executionProfileRef"],
         launch_policy_ref=launch["launchPolicyRef"],
         effective_launch_snapshot=launch,
@@ -614,6 +609,131 @@ async def test_revalidate_saved_binding_uses_installed_images_for_new_leases(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("busy", [False, True])
+async def test_revalidate_migrates_retained_static_binding_only_while_idle(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    busy: bool,
+) -> None:
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.policies import compile_policy_snapshot
+    from tests.unit.omnigent.test_policy_authority import policy_document
+
+    profile_id = "codex-oauth"
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/shared-host@sha256:" + "a" * 64,
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF", "ghcr.io/example/server@sha256:" + "1" * 64
+    )
+    async with _oauth_activity_session_factory() as db:
+        db.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                credential_generation=7,
+            )
+        )
+        await db.commit()
+    repository = OmnigentOAuthHostRepository(_oauth_activity_session_factory)
+    retained = await repository.create_or_update_static_binding(
+        profile_id=profile_id,
+        endpoint_ref="default",
+        static_host_id="retained-static-host",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-static@1",
+        effective_launch_snapshot={"hostMode": "static_compose"},
+    )
+    if busy:
+        await repository.create_or_get_host_lease(
+            binding=retained,
+            provider_lease_id="provider-lease-running",
+            holder_workflow_id="workflow-running",
+            agent_run_id="step-running",
+            idempotency_key="idem-running",
+        )
+    resolved: list[str] = []
+
+    class PolicyService:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def resolve_runtime_snapshot(self, policy_ref: str):
+            raise AssertionError(f"retained static policy was resolved: {policy_ref}")
+
+        async def resolve_default_runtime_snapshot(self, policy_id: str):
+            resolved.append(policy_id)
+            document = policy_document()
+            document["host"]["mode"] = "on_demand_docker"
+            document["host"]["backendRef"] = "container-backend"
+            document["session"]["cleanup"] = "remove"
+            return compile_policy_snapshot(
+                policy_id=policy_id,
+                version=1,
+                document=document,
+                validation={"valid": True, "diagnostics": []},
+            )
+
+    probes = []
+
+    class Runtime:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def validate_credential_mount(self, **kwargs):
+            probes.append(kwargs)
+            return {"validationMode": "credential_only"}
+
+        async def stop_host(self, **_kwargs):
+            return {"cleanupResult": "succeeded"}
+
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _oauth_activity_session_factory
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+    )
+
+    result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": "oas-retained-static",
+            "profile_id": profile_id,
+            "provider_lease_id": "provider-lease-retained-static",
+        }
+    )
+
+    saved = await repository.get_binding_for_profile(profile_id)
+    assert resolved == ["codex-on-demand"]
+    if busy:
+        # A leased binding keeps its launch until it is idle.
+        assert result["status"] == "validation_unavailable"
+        assert probes == []
+        assert saved == retained
+        return
+    assert result["status"] == "ready"
+    assert saved.static_host_id is None
+    assert saved.host_launch_profile_ref == "codex-on-demand@1"
+    assert saved.launch_policy_ref == "codex-on-demand@1"
+    assert saved.effective_launch_snapshot["hostMode"] == "on_demand_docker"
+    assert probes[0]["binding"] == saved
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("binding_shape", "host_mode"),
     [
@@ -635,17 +755,41 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
     policy_available: bool,
 ) -> None:
     provider = "claude" if runtime_id == "claude_code" else "codex"
-    mode = "static" if host_mode == "static_compose" else "on-demand"
-    policy_id = f"{provider}-{mode}"
+    # ``host_mode`` is the stored binding's mode. A binding retained from
+    # static-connected hosts resolves its provider's on-demand default rather
+    # than its saved static policy, and migrates only while idle.
+    stored_mode = "static" if host_mode == "static_compose" else "on-demand"
+    stored_policy_ref = f"{provider}-{stored_mode}@15"
+    saved_policy_selected = (
+        binding_shape == "saved_policy" and host_mode == "on_demand_docker"
+    )
+    policy_id = f"{provider}-on-demand"
     policy_ref = f"{policy_id}@15"
     execution_profile_ref = f"omnigent-{provider}@1"
     legacy_binding = binding_shape != "new"
+    migrating = legacy_binding and host_mode == "static_compose"
     endpoint_ref = "chosen-endpoint" if legacy_binding else "default"
     monkeypatch.setenv("OAUTH_TEST_SECRET", "private-environment-value")
-    launch = seal_effective_launch_snapshot({"hostMode": host_mode})
+    launch = seal_effective_launch_snapshot({"hostMode": "on_demand_docker"})
     binding = SimpleNamespace(
         host_launch_profile_ref="codex-on-demand@1",
         effective_launch_snapshot=launch,
+    )
+    stored_binding = SimpleNamespace(
+        effective_launch_snapshot=None,
+        execution_profile_ref=(
+            execution_profile_ref if binding_shape == "saved_policy" else None
+        ),
+        launch_policy_ref=(
+            stored_policy_ref if binding_shape == "saved_policy" else None
+        ),
+        host_launch_profile_ref=(
+            "bootstrap-substrate" if host_mode == "on_demand_docker" else None
+        ),
+        endpoint_ref=endpoint_ref,
+        static_host_id=(
+            "chosen-static-host" if host_mode == "static_compose" else None
+        ),
     )
     lease = SimpleNamespace(
         lease_id="ohl-first-enrollment",
@@ -660,28 +804,7 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
             pass
 
         async def refresh_binding_generation(self, _profile_id: str):
-            if legacy_binding:
-                return SimpleNamespace(
-                    effective_launch_snapshot=None,
-                    execution_profile_ref=(
-                        execution_profile_ref
-                        if binding_shape == "saved_policy"
-                        else None
-                    ),
-                    launch_policy_ref=(
-                        policy_ref if binding_shape == "saved_policy" else None
-                    ),
-                    host_launch_profile_ref=(
-                        "bootstrap-substrate"
-                        if host_mode == "on_demand_docker"
-                        else None
-                    ),
-                    endpoint_ref=endpoint_ref,
-                    static_host_id=(
-                        "chosen-static-host" if host_mode == "static_compose" else None
-                    ),
-                )
-            return None
+            return stored_binding if legacy_binding else None
 
         async def create_or_update_static_binding(self, **kwargs):
             observed["binding"] = kwargs
@@ -705,7 +828,7 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
             pass
 
         async def resolve_runtime_snapshot(self, selected_policy_ref: str):
-            assert binding_shape == "saved_policy"
+            assert saved_policy_selected
             assert selected_policy_ref == policy_ref
             if not policy_available:
                 raise ValueError(
@@ -714,7 +837,7 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
             return {"policyRef": selected_policy_ref}
 
         async def resolve_default_runtime_snapshot(self, selected_policy_id: str):
-            assert binding_shape != "saved_policy"
+            assert not saved_policy_selected
             assert selected_policy_id == policy_id
             if not policy_available:
                 raise ValueError(
@@ -791,30 +914,25 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         assert "private-environment-value" not in caplog.text
         return
     assert result["status"] == "ready"
+    # The binding is written on-demand with no static host id; a retained
+    # static binding is rewritten only under the idle lock it was read with.
     assert observed["binding"] == {
         "profile_id": "codex_openai_oauth",
         "endpoint_ref": endpoint_ref,
-        "static_host_id": (
-            "chosen-static-host"
-            if legacy_binding and host_mode == "static_compose"
-            else None
-        ),
-        "host_launch_profile_ref": (
-            policy_ref if host_mode == "on_demand_docker" else None
-        ),
+        "host_launch_profile_ref": policy_ref,
         "execution_profile_ref": execution_profile_ref,
         "launch_policy_ref": policy_ref,
         "effective_launch_snapshot": launch,
+        "require_idle": migrating,
+        "expected_binding": stored_binding if migrating else None,
     }
     assert observed["probe"]["binding"] is binding
     assert lease.status == "stopped"
 
     if legacy_binding:
-        # Even a saved/default policy must not silently change the bound mode.
+        # A resolved policy that would launch a static host is refused.
         observed.clear()
-        launch["hostMode"] = (
-            "static_compose" if host_mode == "on_demand_docker" else "on_demand_docker"
-        )
+        launch["hostMode"] = "static_compose"
         result = await oauth_session_activities.oauth_session_revalidate_bound_host(
             {
                 "session_id": "oas-first-enrollment",
@@ -825,7 +943,8 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         assert result["status"] == "validation_unavailable"
         assert observed == {}
         assert (
-            f"OAuth policy {policy_ref} conflicts with bound host mode" in caplog.text
+            f"OAuth policy {policy_ref} does not launch an on-demand host"
+            in caplog.text
         )
 
 

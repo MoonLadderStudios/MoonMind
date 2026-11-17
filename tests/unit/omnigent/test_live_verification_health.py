@@ -235,7 +235,7 @@ def test_safe_failure_diagnostics_bounds_log_tail() -> None:
 
 def test_safe_failure_diagnostics_truncates_long_lines() -> None:
     diagnostics = build_safe_failure_diagnostics(
-        mode="static",
+        mode="ondemand",
         outcome="failure",
         setup_stage="setup",
         failure_summary="x" * 2000,

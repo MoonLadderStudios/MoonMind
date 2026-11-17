@@ -3598,28 +3598,34 @@ async def _bind_cached_host_launch(
     admitted plan's launch replaces an idle binding's cache (for example an
     earlier attempt's launch from before newly installed images); a host
     still leased under the cached launch keeps that binding until it ends.
+    A binding retained from static-connected hosts has no launch that can
+    still run: it moves to this on-demand launch, clearing its static host
+    id, and is refused (for a later retry) while a lease still holds it.
     """
 
-    bound_effective_launch = dict(binding.effective_launch_snapshot)
-    if not planned or bound_effective_launch.get("snapshotRef") == (
-        effective_launch.get("snapshotRef")
-    ):
-        return binding, bound_effective_launch
+    retained_static = not binding.host_launch_profile_ref
+    if not retained_static:
+        bound_effective_launch = dict(binding.effective_launch_snapshot)
+        if not planned or bound_effective_launch.get("snapshotRef") == (
+            effective_launch.get("snapshotRef")
+        ):
+            return binding, bound_effective_launch
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 
     try:
         binding = await hosts.create_or_update_static_binding(
             profile_id=profile_id,
             endpoint_ref=binding.endpoint_ref,
-            static_host_id=binding.static_host_id,
-            host_launch_profile_ref=binding.host_launch_profile_ref,
+            host_launch_profile_ref=binding.host_launch_profile_ref
+            or launch_policy_ref,
             execution_profile_ref=execution_profile_ref,
             launch_policy_ref=launch_policy_ref,
             effective_launch_snapshot=effective_launch,
             require_idle=True,
+            expected_binding=binding if retained_static else None,
         )
     except OmnigentOAuthHostError as exc:
-        if exc.code != "OMNIGENT_HOST_BINDING_LEASED":
+        if exc.code != "OMNIGENT_HOST_BINDING_LEASED" or retained_static:
             raise
         raise ValueError(
             "durable host binding conflicts with planned launch authority"
@@ -3647,6 +3653,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         _compile_persisted_effective_launch,
         compile_follow_up_retrieval_policy,
         enforce_required_follow_up_retrieval,
+        on_demand_binding_policy_ref,
     )
     from moonmind.omnigent.settings import resolved_server_url
     from moonmind.omnigent.workspace_intent import compile_workspace_intent
@@ -3692,6 +3699,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
 
     hosts = OmnigentOAuthHostRepository(async_session_maker)
     binding = await hosts.get_binding_for_profile(session.provider_profile_id)
+    # A binding retained from static-connected hosts keeps no runnable launch
+    # policy; it selects the on-demand default and migrates below once idle.
+    bound_policy_ref = (
+        on_demand_binding_policy_ref(binding) if binding is not None else None
+    )
     runtime_id = str(session.metadata.get("providerRuntimeId") or "codex_cli")
     runtime_execution_profile_ref = default_execution_profile_ref_for_runtime(
         runtime_id
@@ -3714,7 +3726,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             raise ValueError("authored launch policy conflicts with execution plan")
         if binding is not None and (
             binding.execution_profile_ref not in {None, execution_profile_ref}
-            or binding.launch_policy_ref not in {None, launch_policy_ref}
+            or bound_policy_ref not in {None, launch_policy_ref}
         ):
             raise ValueError("durable host binding conflicts with execution plan")
     elif binding is not None:
@@ -3723,11 +3735,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             or runtime_execution_profile_ref
         )
         launch_policy_ref = str(
-            binding.launch_policy_ref
+            bound_policy_ref
             or requested_policy
             or PROFILES[execution_profile_ref].default_policy_ref
         )
-        resolve_policy_default = not binding.launch_policy_ref and not requested_policy
+        resolve_policy_default = not bound_policy_ref and not requested_policy
         if requested_target and requested_target != execution_profile_ref:
             raise ValueError("authored host selection conflicts with durable binding")
     else:
@@ -3782,24 +3794,24 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         )
     if effective_launch["executionProfileRef"] != execution_profile_ref:
         raise ValueError("launch policy conflicts with selected execution profile")
+    if effective_launch.get("hostMode") != "on_demand_docker":
+        raise ValueError(
+            "static-connected Omnigent hosts were removed; the launch policy "
+            "must select an on-demand host"
+        )
     if binding is None:
         binding = await hosts.create_or_update_static_binding(
             profile_id=session.provider_profile_id,
             endpoint_ref=str(effective_launch.get("endpointRef") or resolved_server_url()),
-            host_launch_profile_ref=(
-                launch_policy_ref
-                if effective_launch.get("hostMode") == "on_demand_docker"
-                else None
-            ),
+            host_launch_profile_ref=launch_policy_ref,
             execution_profile_ref=execution_profile_ref,
             launch_policy_ref=launch_policy_ref,
             effective_launch_snapshot=effective_launch,
         )
-    elif binding.effective_launch_snapshot is None:
+    elif binding.host_launch_profile_ref and binding.effective_launch_snapshot is None:
         binding = await hosts.create_or_update_static_binding(
             profile_id=session.provider_profile_id,
             endpoint_ref=binding.endpoint_ref,
-            static_host_id=binding.static_host_id,
             host_launch_profile_ref=binding.host_launch_profile_ref,
             execution_profile_ref=execution_profile_ref,
             launch_policy_ref=launch_policy_ref,

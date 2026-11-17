@@ -54,25 +54,52 @@ def test_compose_is_isolated_and_cleanup_preserves_volumes(tmp_path, monkeypatch
     assert "down" in command
     assert "--volumes" not in command
     assert "-v" not in command
+    assert "--profile" not in command
 
 
-def test_static_restart_precedes_replay_and_cleanup_is_explicit(tmp_path, monkeypatch):
+def test_stock_starts_only_the_server_that_launches_on_demand_hosts(
+    tmp_path, monkeypatch
+):
     module = _module()
-    names = []
+    commands = []
     runner = module.LiveRunner(output_dir=tmp_path, env={})
-    monkeypatch.setattr(runner, "run", lambda name, command: names.append(name))
-    monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: names.append(f"{mode}-{phase}"))
-    monkeypatch.setattr(runner, "write_evidence", lambda mode, payload: None)
-    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: {
-        "ok": True, "workflowId": "w", "agentRunId": "a", "sessionId": "s",
-        "one_first_message": True, "live_events": True, "final_snapshot": True,
-        "resources": True, "workflow_detail": True, "secret_free": True,
-        "durable_replay": True,
-        "evidenceRefs": ["artifact://observed"],
-    })
-    runner.static()
-    runner.cleanup("static")
-    assert names == ["static-up", "static-execute", "static-restart", "static-replay", "static-cleanup"]
+    monkeypatch.setattr(
+        runner, "run", lambda name, command: commands.append((name, command))
+    )
+    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: {"ok": True})
+    monkeypatch.setattr(runner, "scenario", lambda mode: None)
+    runner.stock({"server": "s@sha256:x", "host": "h@sha256:y"})
+    # Static-connected host services are removed; the stock host is launched on
+    # demand by the omnigent server, so no host profile is activated.
+    assert commands == [
+        (
+            "stock-up",
+            [
+                "docker", "compose", "--project-name", module.PROJECT,
+                "up", "-d", "--wait", "omnigent",
+            ],
+        )
+    ]
+
+
+def test_removed_static_host_mode_is_not_offered(monkeypatch, capsys):
+    module = _module()
+    assert "static" not in module.LIVE_CASES
+    assert not any(row.startswith("static_") for row in module.BROWSER_ROWS)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            "run_omnigent_live_conformance.py",
+            "--mode", "static",
+            "--server-image", "example/server@sha256:" + "1" * 64,
+            "--host-image", "example/host@sha256:" + "2" * 64,
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert exc.value.code == 2
+    assert "invalid choice: 'static'" in capsys.readouterr().err
 
 
 def test_stock_executes_every_route_and_derives_evidence(tmp_path, monkeypatch):
@@ -262,13 +289,6 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
                 "https://github.example/pull/1"
                 if name == "repository_mutation_publication" else None
             ),
-            "staticHostRestarted": name == "static_restart_replay",
-            "hostIdentityBeforeRestart": (
-                "static-before" if name == "static_restart_replay" else None
-            ),
-            "hostIdentityAfterRestart": (
-                "static-after" if name == "static_restart_replay" else None
-            ),
             "_sourceRecords": [
                 {"type": record_type, "_resolved": row_authority}
                 for record_type in module.BROWSER_RECORD_ORDER
@@ -328,8 +348,9 @@ def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypat
         raise AssertionError("incomplete browser acceptance evidence was accepted")
 
 
+@pytest.mark.parametrize("browser_host_mode", ["on_demand_docker", "static_compose"])
 def test_remediation_derives_every_catalog_row_from_observed_records(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, browser_host_mode
 ):
     module = _module()
     fixtures = _matrix_fixtures()
@@ -345,7 +366,6 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
         "server": "example/server@sha256:" + "1" * 64,
         "host": "example/host@sha256:" + "2" * 64,
     }
-    row_by_id = {row.row_id: row for row in module.REMEDIATION_ROW_CATALOG}
 
     def action(scenario, name, **inputs):
         if scenario == "browser-setup":
@@ -386,19 +406,12 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
         }
 
     def browser(row_id, **kwargs):
-        row = row_by_id[row_id]
         identity = fixtures._identity(row_id)
         denied = row_id == "remediation.autonomous.rollout-gate-closed"
         return {
             "schemaVersion": "moonmind.operator-remediation-browser-observation/v1",
             "row": row_id,
-            "selected": {
-                "hostMode": (
-                    "static_compose"
-                    if row.host_modes[0] == "static"
-                    else "on_demand_docker"
-                )
-            },
+            "selected": {"hostMode": browser_host_mode},
             "workflowId": None if denied else identity["remediationWorkflowId"],
             "targetWorkflowId": identity["targetWorkflowId"],
             "targetRunId": identity["targetRunId"],
@@ -449,6 +462,15 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
     monkeypatch.setattr(runner, "scan", scan)
     monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
 
+    if browser_host_mode != "on_demand_docker":
+        # A browser that still selects the removed static host mode cannot
+        # qualify a row its on-demand host evidence describes.
+        with pytest.raises(
+            module.ConformanceContractError,
+            match="browser and host evidence disagree",
+        ):
+            runner.remediation(images)
+        return
     runner.remediation(images)
 
     summary = json.loads((tmp_path / "remediation-evidence.json").read_text())
@@ -585,7 +607,7 @@ def test_each_mode_selects_a_distinct_provider_node():
     assert len(set(module.SCENARIOS.values())) == len(module.SCENARIOS)
 
 
-def test_static_replay_is_not_pytest_collection_placeholder():
+def test_scenarios_are_not_pytest_collection_placeholders():
     module = _module()
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "--collect-only" not in source
@@ -719,7 +741,12 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
         channel: {"status": "passed", "evidenceRef": f"scan-{channel}.json"}
         for channel in module.EVIDENCE_ENV
     }
-    monkeypatch.setattr(runner, "run", lambda name, command: events.append(("run", name)))
+    commands = []
+    monkeypatch.setattr(
+        runner,
+        "run",
+        lambda name, command: events.append(("run", name)) or commands.append(command),
+    )
     monkeypatch.setattr(runner, "action", action)
     monkeypatch.setattr(runner, "scan", lambda: scans)
     monkeypatch.setattr(module, "validate_workflow_chat_source_records", validate_sources)
@@ -759,6 +786,14 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     ] == [combination_id for combination_id in claimed for _ in module.WORKFLOW_CHAT_ACTIONS]
     assert events[-2] == ("validate", tuple(module.workflow_chat_combinations()))
     assert events[-1] == ("provider", "workflow_chat")
+    # Every combination launches its host on demand from the server alone.
+    assert commands == [
+        [
+            "docker", "compose", "--project-name", module.PROJECT,
+            "up", "-d", "--wait", "omnigent",
+        ]
+        for _ in claimed
+    ]
     matrix = json.loads(
         (tmp_path / "workflow-chat-matrix.json").read_text(encoding="utf-8")
     )
@@ -1085,19 +1120,19 @@ def _action_evidence(tmp_path, scenario, action, identifiers=None, source_record
 
 def test_action_resolves_and_validates_evidence_content(tmp_path, monkeypatch):
     module = _module()
-    ref = _action_evidence(tmp_path, "static", "execute", {"workflowId": "w"})
+    ref = _action_evidence(tmp_path, "ondemand", "execute", {"workflowId": "w"})
     runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
     class Result:
         returncode = 0
         stdout = json.dumps({"ok": True, "workflowId": "w", "evidenceRefs": [ref]})
         stderr = ""
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
-    assert runner.action("static", "execute")["workflowId"] == "w"
+    assert runner.action("ondemand", "execute")["workflowId"] == "w"
 
 
 def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch):
     module = _module()
-    bad_ref = _action_evidence(tmp_path, "static", "replay", {"workflowId": "other"})
+    bad_ref = _action_evidence(tmp_path, "ondemand", "replay", {"workflowId": "other"})
     responses = [
         {"ok": True, "workflowId": "w", "evidenceRefs": [bad_ref]},
         {"ok": True, "evidenceRefs": [(tmp_path / "missing.json").as_uri()]},
@@ -1112,7 +1147,7 @@ def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
     for action in ("execute", "replay"):
         try:
-            runner.action("static", action)
+            runner.action("ondemand", action)
         except module.ConformanceContractError as exc:
             if action == "execute":
                 assert "evidence did not describe the observed action" in str(exc)
@@ -1342,7 +1377,7 @@ def test_action_keeps_one_log_per_caller(tmp_path, monkeypatch):
         output_dir=tmp_path,
         env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"},
     )
-    ref = _action_evidence(tmp_path, "static", "execute", {"workflowId": "w"})
+    ref = _action_evidence(tmp_path, "ondemand", "execute", {"workflowId": "w"})
 
     class Result:
         returncode = 0
@@ -1350,12 +1385,12 @@ def test_action_keeps_one_log_per_caller(tmp_path, monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: Result())
-    runner.action("static", "execute", log_id="combination-a")
-    runner.action("static", "execute", log_id="combination-b")
+    runner.action("ondemand", "execute", log_id="combination-a")
+    runner.action("ondemand", "execute", log_id="combination-b")
 
     # Without a per-caller log identity the second run would overwrite the
     # first caller's diagnostics.
     assert {path.name for path in runner.logs} == {
-        "static-execute-combination-a.log",
-        "static-execute-combination-b.log",
+        "ondemand-execute-combination-a.log",
+        "ondemand-execute-combination-b.log",
     }

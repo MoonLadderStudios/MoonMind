@@ -45,7 +45,6 @@ REQUIRED_LIVE_MATRIX_MODES = (
     "product",
     "cumulative",
     "stock",
-    "static",
     "ondemand",
     "failures",
     "workflow_chat",

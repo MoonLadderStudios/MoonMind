@@ -158,7 +158,7 @@ async def test_codex_consumes_the_admitted_lease_by_inspection(
     [
         ("none", True),
         ("session_create", True),
-        ("host_stop", False),
+        ("host_remove", False),
         ("container_start", False),
     ],
 )

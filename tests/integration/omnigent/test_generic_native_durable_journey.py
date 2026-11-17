@@ -75,9 +75,9 @@ from tests.integration.omnigent import test_codex_durable_skill_journey as codex
 from tests.integration.omnigent.test_codex_durable_skill_journey import (
     HOST_IMAGE,
     SERVER_IMAGE,
+    CodexDocker,
     HermeticProviderLeases,
     RecordingArtifactGateway,
-    StaticCodexDocker,
 )
 from tests.integration.reliability.test_scratch_saved_work_journey import (
     _serialize_finalization_on_sqlite,
@@ -135,7 +135,6 @@ class NativeTurnServer(FakeOmnigentServer):
         self.hidden_native_default = False
         self.host_alive = False
         self.stopped_sessions = set()
-        self.foreign_consumers = []
         self.on_first_message = None
         self.status = "idle"
         self.items = []
@@ -204,8 +203,7 @@ class NativeTurnServer(FakeOmnigentServer):
                         "runner_online": session not in self.stopped_sessions,
                     }
                     for session in self.session_ids
-                ]
-                + self.foreign_consumers,
+                ],
                 "has_more": False,
             }
         )
@@ -606,7 +604,7 @@ def _mounts(argv):
     }
 
 
-class NativeDocker(StaticCodexDocker):
+class NativeDocker(CodexDocker):
     """Stateful daemon transport using the legacy journey's egress responses.
 
     No production host, credential, registration or attestation owner is
@@ -947,136 +945,12 @@ class AdmittedManager(HermeticProviderLeases):
         return Handle()
 
 
-class StaticNativeDocker(NativeDocker):
-    state_volume = "moonmind-test-static-persistent-state"
-    retained_identity = "12" * 16
-
-    async def _command(self, argv, *, input_bytes=None):
-        if argv[:2] == ["docker", "compose"]:
-            self.commands.append(tuple(argv))
-            service = "omnigent-host-" + self.server.harness.removesuffix("-native")
-            if "config" in argv:
-                return (
-                    0,
-                    json.dumps(
-                        {
-                            "services": {
-                                service: {
-                                    "volumes": [
-                                        {
-                                            "type": "volume",
-                                            "source": "state",
-                                            "target": "/home/app/.omnigent",
-                                        }
-                                    ]
-                                }
-                            },
-                            "volumes": {"state": {"name": self.state_volume}},
-                        }
-                    ),
-                    "",
-                )
-            if "ps" in argv:
-                return 0, self.host_container_id if self.server.host_alive else "", ""
-            assert "up" in argv and "--no-deps" in argv
-            # Compose consumes the dollar escapes before creating the host.
-            model = json.loads(input_bytes.replace(b"$$", b"$"))
-            definition = model["services"][service]
-            assert definition["read_only"] is True
-            assert (
-                definition["environment"]["OMNIGENT_HOST_ID"] == self.retained_identity
-            )
-            command = ["docker", "create"]
-            for key, flag in (
-                ("container_name", "--name"),
-                ("hostname", "--hostname"),
-                ("user", "--user"),
-            ):
-                command.extend([flag, definition[key]])
-            for key, value in definition["labels"].items():
-                command.extend(["--label", f"{key}={value}"])
-            for key, value in definition["environment"].items():
-                command.extend(["--env", f"{key}={value}"])
-            for mount in definition["volumes"]:
-                rendered = (
-                    f"type={mount['type']},src={mount['source']},dst={mount['target']}"
-                )
-                if mount["read_only"]:
-                    rendered += ",readonly"
-                if mount.get("volume", {}).get("subpath"):
-                    rendered += ",volume-subpath=" + mount["volume"]["subpath"]
-                    assert mount["volume"]["nocopy"] is True
-                    rendered += ",volume-nocopy"
-                command.extend(["--mount", rendered])
-            command.extend(
-                [
-                    "--network",
-                    definition["networks"][0],
-                    "--entrypoint",
-                    definition["entrypoint"],
-                    definition["image"],
-                    *definition["command"],
-                ]
-            )
-            result = await super()._command(command)
-            await super()._command(["docker", "start", definition["container_name"]])
-            return result
-        if argv[:2] == ["docker", "inspect"] and len(argv) == 3:
-            return (
-                0,
-                json.dumps(
-                    [
-                        {
-                            "Id": self.host_container_id,
-                            "Name": "/" + self.container_name,
-                            "Config": {
-                                "Env": [
-                                    f"{key}={value}"
-                                    for key, value in self.launch_env.items()
-                                ]
-                            },
-                            "Mounts": [
-                                {"Name": item["src"], "Destination": target}
-                                for target, item in self.mounts.items()
-                                if item["type"] == "volume"
-                            ],
-                        }
-                    ]
-                ),
-                "",
-            )
-        if (
-            argv[:3] == ["docker", "volume", "inspect"]
-            and argv[-1] == self.state_volume
-        ):
-            self.commands.append(tuple(argv))
-            self.volumes.setdefault(self.state_volume, {})
-            return 0, self.state_volume, ""
-        if argv[:2] == [
-            "docker",
-            "run",
-        ] and "load_host_identity_if_present" in " ".join(argv):
-            self.commands.append(tuple(argv))
-            return (
-                0,
-                json.dumps(
-                    {"id": self.retained_identity, "name": "operator-static-host"}
-                ),
-                "",
-            )
-        if argv[:2] == ["docker", "inspect"] and "{{.Image}}" in argv:
-            self.commands.append(tuple(argv))
-            return 0, HOST_IMAGE, ""
-        return await super()._command(argv, input_bytes=input_bytes)
-
-
 async def _compile_plan(
     session_factory,
     harness,
     workflow_id,
     *,
     api_key=False,
-    static_mode=False,
     env_bundle=False,
     codex_config=False,
     session_settings=None,
@@ -1275,7 +1149,7 @@ async def _compile_plan(
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         snapshot = _snapshot(
             harness=harness,
-            policy=f"{profile_name}-{'static' if static_mode else 'on-demand'}@1",
+            policy=f"{profile_name}-on-demand@1",
             provider_id=PROFILE,
         )
         snapshot["document"]["skills"] = [_DURABLE_SKILL_NAME]
@@ -1340,7 +1214,6 @@ async def native_journey(
         request.param if isinstance(request.param, dict) else {"harness": request.param}
     )
     selected_harness = selection["harness"]
-    static_mode = bool(selection.get("static"))
     env_bundle = selected_harness.endswith("-env-bundle")
     codex_config = selected_harness.endswith("-file-config")
     api_key = selected_harness.endswith("-api-key") or env_bundle or codex_config
@@ -1421,7 +1294,6 @@ async def native_journey(
                 harness,
                 workflow_id,
                 api_key=api_key,
-                static_mode=static_mode,
                 env_bundle=env_bundle,
                 codex_config=codex_config,
                 session_settings=selection.get("sessionSettings"),
@@ -1542,17 +1414,7 @@ async def native_journey(
             session.add(provider_lease)
             await session.commit()
         monkeypatch.setattr(production, "TemporalClientAdapter", lambda: manager)
-        docker = (StaticNativeDocker if static_mode else NativeDocker)(
-            server=server, events=events, workflow_id=workflow_id
-        )
-        if static_mode:
-            monkeypatch.setenv(
-                "MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test-static"
-            )
-            monkeypatch.setenv(
-                "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR",
-                str(Path(__file__).resolve().parents[3]),
-            )
+        docker = NativeDocker(server=server, events=events, workflow_id=workflow_id)
         monkeypatch.setattr(docker_backend, "run_runtime_command", docker.command)
         monkeypatch.setattr(
             credential_materializers, "run_runtime_command", docker.command
@@ -1608,7 +1470,6 @@ async def native_journey(
             worker_root=worker_root,
             harness=harness,
             api_key=api_key,
-            static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
             legacy_configuration=bool(selection.get("legacyProviderConfiguration")),
@@ -1902,7 +1763,7 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
 
 
 @pytest.mark.parametrize(("native_journey", "private_reference"), [({
-    "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
+    "harness": "codex-native", "oauthPrivateConfiguration": True,
     "privateConfigurationHome": configuration_home,
     "declareConfigurationHome": declare_home,
     "sessionSettings": {
@@ -1921,7 +1782,7 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
            if configuration_home.startswith("{{runtime_support_dir}}/") else {}),
     },
 }, configuration_home.startswith("{{runtime_support_dir}}/"))
-for static in (False, True) for configuration_home, declare_home in (
+for configuration_home, declare_home in (
     ("{{runtime_support_dir}}/codex-home", True),
     ("/home/app/.codex", True),
     ("/home/app/.codex", False),
@@ -1936,14 +1797,7 @@ async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(nat
             profile.home_path_overrides = {"CODEX_HOME": "/later-home"}
             profile.env_template = {"PROJECT_CONFIG_FILE": "/later-reference"}
             await session.commit()
-    if journey.static_mode:
-        from tests.integration.omnigent.test_generic_static_host_journey import (
-            assert_static_native_turn_saved_and_retained,
-        )
-
-        await assert_static_native_turn_saved_and_retained(journey)
-    else:
-        await assert_native_turn_saved_and_cleaned(journey)
+    await assert_native_turn_saved_and_cleaned(journey)
     configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
     assert configuration["document"] == {
         "developer_instructions": "Keep the admitted OAuth preferences.",
@@ -1987,13 +1841,12 @@ async def test_admitted_claude_oauth_tuning_reaches_the_shared_runner(
 
 
 @pytest.mark.parametrize("native_journey", [
-    {"harness": harness, "static": static, "oauthTuning": {
+    {"harness": harness, "oauthTuning": {
         "PROJECT_REPORT_ROOT": "{{workspace_path}}/reports",
         "PROJECT_SUPPORT_ROOT": "{{runtime_support_dir}}",
         "PROJECT_RUNTIME_STYLE": "literal $(not-executed)",
     }}
     for harness in ("codex-native", "claude-native")
-    for static in (False, True)
 ], indirect=True)
 async def test_admitted_oauth_environment_templates_use_the_attempt_context(native_journey):
     journey = native_journey
@@ -2001,14 +1854,7 @@ async def test_admitted_oauth_environment_templates_use_the_attempt_context(nati
         profile = await session.get(ManagedAgentProviderProfile, PROFILE)
         profile.env_template = {"PROJECT_REPORT_ROOT": "later Profile edit"}
         await session.commit()
-    if journey.static_mode:
-        from tests.integration.omnigent.test_generic_static_host_journey import (
-            assert_static_native_turn_saved_and_retained,
-        )
-
-        await assert_static_native_turn_saved_and_retained(journey)
-    else:
-        await assert_native_turn_saved_and_cleaned(journey)
+    await assert_native_turn_saved_and_cleaned(journey)
     assert journey.docker.launch_env["PROJECT_REPORT_ROOT"] == "/workspaces/run/reports"
     assert journey.docker.launch_env["PROJECT_SUPPORT_ROOT"] == "/home/app/.omnigent/moonmind/runtime-context"
     assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "literal $(not-executed)"
@@ -2302,14 +2148,6 @@ async def assert_native_turn_saved_and_cleaned(
     journey, terminal_status="idle", *, expected_messages=1
 ):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
-    if journey.static_mode:
-        from tests.integration.omnigent.test_generic_static_host_journey import (
-            assert_static_native_turn_saved_and_retained,
-        )
-
-        return await assert_static_native_turn_saved_and_retained(
-            journey, terminal_status
-        )
     from moonmind.omnigent.realizers.turn_delivery import admission_epoch
     request, plan, services = journey.request, journey.plan, journey.services
     realizer, server, docker = journey.realizer, journey.server, journey.docker
@@ -2865,10 +2703,7 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
 
 @pytest.mark.parametrize(
     "native_journey",
-    [
-        {"harness": "claude-native", "static": static, "claudeOauthFiles": True}
-        for static in (False, True)
-    ],
+    [{"harness": "claude-native", "claudeOauthFiles": True}],
     indirect=True,
 )
 @pytest.mark.parametrize("edit_after_admission", [False, True])
@@ -2903,22 +2738,13 @@ async def test_claude_oauth_files_are_frozen_readonly_overlays(
         assert "readonly" in mount and mount["src"] != "journey_oauth"
         assert mount["volume-subpath"] == "files/" + name
     assert "/home/app/.claude/.credentials.json" not in journey.docker.mounts
-    if journey.static_mode:
-        assert (
-            journey.docker.mounts["/run/moonmind-claude-preferences"]["src"]
-            in journey.docker.volumes
-        )
-    else:
-        assert journey.docker.volumes == {"journey_oauth": {}}
-        assert any(kind == "volume_remove" for kind, _ in journey.events)
+    assert journey.docker.volumes == {"journey_oauth": {}}
+    assert any(kind == "volume_remove" for kind, _ in journey.events)
 
 
 @pytest.mark.parametrize(
     "native_journey",
-    [
-        {"harness": "claude-native", "static": static, "claudeOauthFiles": True}
-        for static in (False, True)
-    ],
+    [{"harness": "claude-native", "claudeOauthFiles": True}],
     indirect=True,
 )
 async def test_claude_oauth_files_cancellation_preserves_enrollment_without_successor(
@@ -2940,18 +2766,12 @@ async def test_claude_oauth_files_cancellation_preserves_enrollment_without_succ
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(execution, 30)
     assert journey.docker.create_count == 1 and len(journey.server.session_ids) == 1
-    assert journey.server.host_alive == journey.static_mode
+    assert journey.server.host_alive is False
     assert journey.docker.claude_preferences["CLAUDE.md"].startswith(
         "Admitted instructions"
     )
-    if journey.static_mode:
-        assert (
-            journey.docker.mounts["/run/moonmind-claude-preferences"]["src"]
-            in journey.docker.volumes
-        )
-    else:
-        assert journey.docker.volumes == {"journey_oauth": {}}
-        assert any(kind == "volume_remove" for kind, _ in journey.events)
+    assert journey.docker.volumes == {"journey_oauth": {}}
+    assert any(kind == "volume_remove" for kind, _ in journey.events)
     binding = await journey.services.runtime_binding_store.get(
         stable_binding_id(
             execution_plan_ref=journey.plan.planRef,
@@ -2959,35 +2779,3 @@ async def test_claude_oauth_files_cancellation_preserves_enrollment_without_succ
         )
     )
     assert binding.state is RuntimeBindingState.cleaned
-
-
-@pytest.mark.parametrize(
-    "native_journey",
-    [
-        {"harness": "claude-native", "static": True, "claudeOauthFiles": True},
-    ],
-    indirect=True,
-)
-async def test_static_claude_oauth_successor_reclaims_only_retired_preferences(
-    native_journey, monkeypatch
-):
-    from tests.integration.omnigent.test_generic_static_host_journey import (
-        test_static_successor_restores_saved_work_and_retains_old_allocation,
-    )
-
-    journey = native_journey
-    await test_static_successor_restores_saved_work_and_retains_old_allocation(
-        journey, monkeypatch
-    )
-    projections = [
-        argv[-1]
-        for argv in journey.docker.commands
-        if argv[:3] == ("docker", "volume", "create")
-        and "moonmind.owner=generic-omnigent-claude-preferences" in argv
-    ]
-    assert len(set(projections)) == 2
-    first, current = dict.fromkeys(projections)
-    assert first not in journey.docker.volumes
-    assert current in journey.docker.volumes
-    assert "journey_oauth" in journey.docker.volumes
-    assert journey.server.host_alive

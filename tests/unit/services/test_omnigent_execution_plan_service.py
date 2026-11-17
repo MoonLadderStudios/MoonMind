@@ -1637,6 +1637,61 @@ async def test_codex_admission_rejects_a_foreign_host_family_before_persistence(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("host_mode", ["static_compose", "static-connected"])
+async def test_admission_rejects_a_removed_static_host_mode_before_persistence(
+    monkeypatch, host_mode
+) -> None:
+    from moonmind.omnigent import execution_profiles
+
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-static@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    # A policy version stored before static-connected hosts were removed still
+    # compiles to its recorded host mode; admission must refuse it.
+    compile_launch = execution_profiles.compile_persisted_effective_launch
+    monkeypatch.setattr(
+        execution_profiles,
+        "compile_persisted_effective_launch",
+        lambda *args, **kwargs: {
+            **compile_launch(*args, **kwargs),
+            "hostMode": host_mode,
+        },
+    )
+    artifacts = _ArtifactService()
+    with pytest.raises(ValueError, match=f"removed {host_mode} host mode"):
+        await service.compile_and_persist_execution_plan(
+            session_factory=object(),
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:codex-static-policy",
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy="codex-static@1", provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "workflow": {"instructions": "Use the admitted host."},
+            },
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            execution_plan_store=_PlanStore(object()),
+            access=access_for_test("user-1"),
+        )
+    assert artifacts.payloads == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["factory", "session"])
 @pytest.mark.parametrize("failure", ["missing", "database_error"])
 async def test_catalog_authority_failure_cannot_select_fixture_or_latest(

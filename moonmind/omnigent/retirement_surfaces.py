@@ -29,7 +29,7 @@ Discovery is deliberately derived from authorities that already exist:
 * ``services/omnigent/scripts`` — provider-specific startup/health scripts.
 * ``docker-compose.yaml`` — services that duplicate host startup per runtime or
   still resolve a legacy image variable, plus the profiles that select them.
-* ``harness_platform.host_classes`` / ``static_hosts`` — declared image
+* ``harness_platform.host_classes`` / ``shared_host_image`` — declared image
   environment identities that are not the canonical shared-image variable.
 """
 
@@ -154,10 +154,10 @@ def direct_runtime_slugs() -> frozenset[str]:
 def declared_image_environment_variables() -> frozenset[str]:
     """Non-canonical image environment identities declared in Host Class code."""
 
-    from moonmind.omnigent.harness_platform import host_classes, static_hosts
+    from moonmind.omnigent.harness_platform import host_classes, shared_host_image
 
     declared: set[str] = set()
-    for module in (host_classes, static_hosts):
+    for module in (host_classes, shared_host_image):
         for name in dir(module):
             if not name.endswith("_IMAGE_ENV"):
                 continue
@@ -178,12 +178,7 @@ def _provider_specific_scripts() -> frozenset[str]:
     slugs = direct_runtime_slugs()
     found: set[str] = set()
     for path in sorted(script_dir.glob("*.sh")):
-        stem_tokens = set(path.stem.split("-"))
-        if stem_tokens & slugs:
-            found.add(path.name)
-        elif "projections" in stem_tokens:
-            # The pre-consolidation generic entrypoint, kept only for the
-            # duplicate ``omnigent-host`` Compose service.
+        if set(path.stem.split("-")) & slugs:
             found.add(path.name)
     return frozenset(found)
 

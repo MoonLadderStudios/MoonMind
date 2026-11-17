@@ -38,8 +38,14 @@ from moonmind.omnigent.policies import PolicyDocument, PolicyState, document_dig
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from tests.unit.omnigent.test_policy_authority import (
     historical_retrieval_policy_document,
-    policy_document,
+    on_demand_policy_document as policy_document,
 )
+
+
+@pytest.fixture(autouse=True)
+def _on_demand_backend(monkeypatch):
+    # Policies validate only host modes the deployment can launch.
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
 
 
 @pytest.fixture(autouse=True)
@@ -639,11 +645,8 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
         )
 
         assert set(seeded) == {
-            "omnigent-codex",
-            "codex-static",
             "codex-on-demand",
             "claude-on-demand",
-            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -658,7 +661,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             .scalars()
             .all()
         )
-        assert len(versions) == 7
+        assert len(versions) == 4
         assert all(version.state == "active" for version in versions)
         assert all(version.validation_json["valid"] is True for version in versions)
         assert all(
@@ -666,11 +669,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             for version in versions
         )
         by_policy = {version.policy_id: version for version in versions}
-        for policy_id in {
-            "omnigent-codex",
-            "codex-static",
-            "codex-on-demand",
-        }:
+        for policy_id in {"codex-on-demand"}:
             assert by_policy[policy_id].document_json["execution"] == {
                 "profileRef": "omnigent-codex@1",
                 "harness": "codex-native",
@@ -810,7 +809,7 @@ async def test_codex_bootstrap_policies_launch_the_shared_tool_owning_host_image
     async def live_server(_image_ref: str) -> str:
         return server_digest
 
-    codex_policies = {"omnigent-codex", "codex-static", "codex-on-demand"}
+    codex_policies = {"codex-on-demand"}
     async with policy_db(tmp_path) as sessions, sessions() as session:
         service = OmnigentPolicyService(session)
         # An existing deployment bootstrapped codex-on-demand on the upstream host.
@@ -949,11 +948,8 @@ async def test_opencode_policies_launch_the_shared_image_without_the_opencode_va
         seeded = await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
 
         assert set(seeded) == {
-            "omnigent-codex",
-            "codex-static",
             "codex-on-demand",
             "claude-on-demand",
-            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -992,11 +988,7 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
             image_resolver=resolver,
         )
 
-        assert set(seeded) == {
-            "omnigent-codex",
-            "codex-static",
-            "codex-on-demand",
-        }
+        assert set(seeded) == {"codex-on-demand"}
         assert len(resolution_calls) == 1
         assert await bootstrap_policies_ready(session) is True
 
@@ -1076,7 +1068,7 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             versions = list(
                 (await session.execute(select(OmnigentPolicyVersion))).scalars()
             )
-            assert len(versions) == 7
+            assert len(versions) == 4
             assert all(
                 row.document_json["host"]["serverImageRef"] == first_server
                 and row.document_json["host"]["hostImageRef"] == first_host
@@ -1094,11 +1086,8 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             assert "bootstrap_authority_cutover" not in event_types
             return
         assert set(reconciled) == {
-            "omnigent-codex",
-            "codex-static",
             "codex-on-demand",
             "claude-on-demand",
-            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -1115,7 +1104,7 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             .scalars()
             .all()
         )
-        assert len(defaults) == 7
+        assert len(defaults) == 4
         assert all(
             row.document_json["host"]["serverImageRef"] == next_server
             for row in defaults
@@ -1435,6 +1424,10 @@ def test_policy_api_rejects_new_documents_carrying_retired_retrieval():
 
 @pytest.mark.asyncio
 async def test_historical_retrieval_version_stays_readable_and_executable(tmp_path):
+    # An on-demand version recorded before retrieval was retired.
+    historical = historical_retrieval_policy_document()
+    historical["host"] = policy_document()["host"]
+    historical["session"] = policy_document()["session"]
     async with policy_db(tmp_path) as sessions, sessions() as session:
         service = OmnigentPolicyService(session)
         row = await service.create(
@@ -1442,9 +1435,7 @@ async def test_historical_retrieval_version_stays_readable_and_executable(tmp_pa
             name="historical name",
             owner_user_id=None,
             visibility="deployment",
-            document=PolicyDocument.model_validate(
-                historical_retrieval_policy_document()
-            ),
+            document=PolicyDocument.model_validate(historical),
             actor="operator",
         )
         await service.transition(
@@ -1457,7 +1448,7 @@ async def test_historical_retrieval_version_stays_readable_and_executable(tmp_pa
 
         snapshot = await service.resolve_runtime_snapshot("historical@1")
 
-        assert row.digest == document_digest(historical_retrieval_policy_document())
+        assert row.digest == document_digest(historical)
         assert snapshot["policyDigest"] == row.digest
         assert snapshot["boundaries"]["rag"]["collectionRefs"] == ["default"]
 
@@ -1606,11 +1597,7 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
             (await session.execute(select(OmnigentPolicyVersion))).scalars().all()
         )
         for version in versions:
-            if version.policy_id not in {
-                "omnigent-codex",
-                "codex-static",
-                "codex-on-demand",
-            }:
+            if version.policy_id != "codex-on-demand":
                 continue
             legacy = deepcopy(version.document_json)
             legacy["execution"]["agentIdentities"] = ["codex"]
@@ -1679,21 +1666,12 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
             image_resolver=resolver,
         )
 
-        assert set(seeded) == {
-            "omnigent-codex",
-            "codex-static",
-            "codex-on-demand",
-        }
+        assert set(seeded) == {"codex-on-demand"}
         assert seeded_after_drain == ["codex-on-demand"]
         policies = list((await session.execute(select(OmnigentPolicy))).scalars())
         assert all(
             policy.default_version
-            == (
-                2
-                if policy.policy_id
-                in {"omnigent-codex", "codex-static", "codex-on-demand"}
-                else 1
-            )
+            == (2 if policy.policy_id == "codex-on-demand" else 1)
             for policy in policies
         )
         migrated_versions = list(
@@ -1708,13 +1686,9 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
             .scalars()
             .all()
         )
-        assert len(migrated_versions) == 8
+        assert len(migrated_versions) == 4
         for version in migrated_versions:
-            if version.policy_id in {
-                "omnigent-codex",
-                "codex-static",
-                "codex-on-demand",
-            }:
+            if version.policy_id == "codex-on-demand":
                 expected_identity = (
                     ["codex"] if version.version == 1 else ["codex-native-ui"]
                 )

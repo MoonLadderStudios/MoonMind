@@ -216,11 +216,7 @@ async def test_sessionless_continuation_retains_completed_context_for_retry(
 
 @pytest.mark.parametrize(
     "native_journey",
-    [
-        "codex-native",
-        "codex-native-api-key",
-        {"harness": "codex-native", "static": True},
-    ],
+    ["codex-native", "codex-native-api-key"],
     indirect=True,
 )
 @pytest.mark.parametrize("source_status", ["idle", "failed"])
@@ -228,23 +224,7 @@ async def test_same_epoch_context_survives_host_and_worker_cleanup(
     native_journey, source_status
 ):
     journey = native_journey
-    if journey.static_mode:
-        journey.server.terminal_status = source_status
-        first = await journey.realizer.execute(journey.request, journey.plan)
-        assert (first.failure_class is None) is (source_status == "idle")
-        assert journey.server.host_alive
-        saved = first.metadata["savedWorkspaceCheckpoint"]
-        assert (
-            "sha256:"
-            + hashlib.sha256(
-                await journey.gateway.read_bytes(saved["archiveRef"])
-            ).hexdigest()
-            == saved["archiveDigest"]
-        )
-    else:
-        first = await native.assert_native_turn_saved_and_cleaned(
-            journey, source_status
-        )
+    first = await native.assert_native_turn_saved_and_cleaned(journey, source_status)
     source_id = journey.server.session_ids[0]
     original_items = copy.deepcopy(journey.server.frozen[source_id]["items"])
     source_ref = first.metadata["runtimeSessionContext"]["runtimeBindingRef"]
@@ -254,8 +234,7 @@ async def test_same_epoch_context_survives_host_and_worker_cleanup(
     await journey.gateway.admit_execution_plan_inputs(
         request=successor, plan=journey.plan
     )
-    if not journey.static_mode:
-        assert not journey.server.workspace.exists()
+    assert not journey.server.workspace.exists()
     if journey.worker_root.exists():
         shutil.rmtree(journey.worker_root)
     assert not journey.worker_root.exists()
@@ -282,7 +261,7 @@ async def test_same_epoch_context_survives_host_and_worker_cleanup(
     )
     assert journey.docker.launch_env["MOONMIND_CODEX_REQUIRE_CONTEXT"] == "1"
     assert journey.docker.create_count == 2
-    assert journey.server.host_alive is journey.static_mode
+    assert journey.server.host_alive is False
     assert await journey.services.runtime_binding_store.get(source_ref) == source
     target_ref = result.metadata["runtimeSessionContext"]["runtimeBindingRef"]
     target = await journey.services.runtime_binding_store.get(target_ref)

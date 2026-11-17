@@ -482,11 +482,11 @@ async def resolve_omnigent_images(
         str(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF") or "").strip()
         or str(source.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
     )
-    from moonmind.omnigent.harness_platform.static_hosts import (
-        classify_effective_static_host_image,
+    from moonmind.omnigent.harness_platform.shared_host_image import (
+        classify_effective_shared_host_image,
     )
 
-    selected_image, supported, _ = classify_effective_static_host_image(source)
+    selected_image, supported, _ = classify_effective_shared_host_image(source)
     if not supported:
         shared_source = {}
     elif explicit_shared:
@@ -853,8 +853,8 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
 
     configuration = operator_image_configuration()
     state = await resolve_omnigent_images(configuration)
-    # Optional static hosts do not gate publication for independent runtimes.
-    # Their admission owner checks readiness and credentials before use.
+    # An unresolved shared host image does not gate publication for runtimes
+    # that do not use it; host admission checks the image before use.
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,

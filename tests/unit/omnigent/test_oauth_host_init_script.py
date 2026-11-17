@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "services/omnigent/scripts/init-oauth-host.sh"
@@ -250,17 +249,3 @@ def test_command_failures_stop_initialization(
     assert f"{command} failed" in result.stderr
     assert sandbox.commands()[-1][0] == command
     assert snapshot(sandbox.path(sandbox.home)) == before
-
-
-@pytest.mark.parametrize("runtime", ("codex", "claude"))
-def test_compose_initializers_select_the_generic_script_and_matching_home(
-    runtime: str,
-) -> None:
-    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
-    service = compose["services"][f"omnigent-host-{runtime}-init"]
-    assert service["entrypoint"] == ["/opt/moonmind/init-oauth-host.sh"]
-    assert service["environment"] == {
-        "OMNIGENT_STATE_PATH": "/home/app/.omnigent",
-        "OAUTH_HOME": f"/home/app/.{runtime}",
-    }
-    assert f"{runtime}_auth_volume:/home/app/.{runtime}" in service["volumes"]

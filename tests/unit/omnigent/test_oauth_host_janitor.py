@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
+from moonmind.omnigent.oauth_hosts import RETIRED_STATIC_LEASE_PURPOSE
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
 from moonmind.omnigent.harness_platform.runtime_binding import (
@@ -89,7 +90,6 @@ class _Runtime:
         self.removed: list[str] = []
         self.order = order if order is not None else []
         self.stop_kwargs: list[dict] = []
-        self.static_stops = 0
         self.managed_containers: list[str] = []
         self.container_lease_refs: dict[str, str | None] = {}
 
@@ -115,9 +115,6 @@ class _Runtime:
 
     async def managed_container_host_lease_ref(self, name):
         return self.container_lease_refs.get(name)
-
-    async def stop_static_host(self, **_kwargs):
-        self.static_stops += 1
 
     async def remove_container(self, name):
         self.removed.append(name)
@@ -1116,33 +1113,57 @@ async def test_credential_validator_with_bridge_session_requires_cleanup_authori
 
 
 @pytest.mark.asyncio
-async def test_forced_profile_drain_stops_idle_static_host_without_lease() -> None:
-    repository = _Repository(_lease())
-
-    async def no_leases(*, failures=None):
-        return []
-
-    binding = SimpleNamespace(
-        binding_ref="binding-static",
-        host_launch_profile_ref=None,
-    )
-    repository.list_active_host_leases = no_leases
-
-    async def get_binding(_profile_id):
-        return binding
-
-    repository.get_binding_for_profile = get_binding
+async def test_janitor_leaves_retired_static_lease_rows_alone() -> None:
+    # Rows recorded by removed static-connected hosts name no lease-owned
+    # container, so even a stale one is neither stopped by name nor released.
+    lease = _lease(heartbeat_age=121)
+    lease.lease_purpose = RETIRED_STATIC_LEASE_PURPOSE
+    repository = _Repository(lease)
     runtime = _Runtime()
+    lease_client = _LeaseClient()
 
     result = await OmnigentOAuthHostJanitor(
         repository=repository,
         runtime=runtime,
         client=_Client(),
+        lease_client=lease_client,
+        heartbeat_timeout_seconds=90,
     ).run(profile_id="profile-1", force=True)
 
-    assert runtime.static_stops == 1
+    assert result["actions"] == []
+    assert runtime.stopped == 0
+    assert repository.cleanup_claims == []
+    assert repository.stopped == []
+    assert lease_client.released == []
+
+
+@pytest.mark.asyncio
+async def test_janitor_settles_retired_static_lease_rows_before_its_sweep() -> None:
+    # An open row from a removed static-connected host would otherwise hold
+    # its Provider Profile forever; the sweep settles the record first.
+    repository = _Repository(_lease())
+    calls: list[str] = []
+
+    async def retire_static_host_leases():
+        calls.append("retire")
+        return ["static-lease-1"]
+
+    async def list_active_host_leases(*, failures=None):
+        calls.append("list")
+        return []
+
+    repository.retire_static_host_leases = retire_static_host_leases
+    repository.list_active_host_leases = list_active_host_leases
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=_Runtime(),
+        client=_Client(),
+    ).run()
+
+    assert calls == ["retire", "list"]
     assert result["actions"] == [
-        {"hostBindingRef": "binding-static", "action": "static_host_stopped"}
+        {"leaseId": "static-lease-1", "action": "retired_static_lease_settled"}
     ]
 
 

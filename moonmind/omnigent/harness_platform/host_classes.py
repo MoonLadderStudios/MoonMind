@@ -365,12 +365,6 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "none@1",
         ),
         runtime_pack_ref="codex-native-pack@1",
-        host_modes=(
-            "on-demand",
-            "on_demand_docker",
-            "static-connected",
-            "static_compose",
-        ),
     ),
     HostClassTemplate(
         host_class_id="omnigent-claude",
@@ -386,12 +380,6 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "none@1",
         ),
         runtime_pack_ref="claude-native-pack@1",
-        host_modes=(
-            "on-demand",
-            "on_demand_docker",
-            "static-connected",
-            "static_compose",
-        ),
     ),
     HostClassTemplate(
         host_class_id="omnigent-opencode",
@@ -629,7 +617,7 @@ class OmnigentHostClassSelector:
         return candidates[0]
 
 
-# Available only for isolated contract tests and explicitly registered static
+# Available only for isolated contract tests and explicitly registered
 # classes. Production planning uses OmnigentHostClassSelector.
 HOST_CLASSES: dict[str, HostClass] = {}
 
@@ -738,7 +726,6 @@ def register_launch_policy(data: dict[str, Any]) -> LaunchPolicy:
 
 def _register_policy(
     policy_id: str,
-    host_mode: Literal["on-demand", "static-connected"],
     required_features: list[str],
     version: int = 1,
 ) -> None:
@@ -746,9 +733,9 @@ def _register_policy(
         {
             "policyId": policy_id,
             "version": version,
-            "hostMode": host_mode,
+            "hostMode": "on-demand",
             "hostClassSelector": {"requiredFeatures": required_features},
-            "isolation": {"runDedicated": host_mode == "on-demand"},
+            "isolation": {"runDedicated": True},
             "limits": {
                 "cpuMillis": 2000,
                 "memoryMiB": 4096,
@@ -758,10 +745,7 @@ def _register_policy(
             },
             "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
             "capture": {"required": True, "retentionDays": 30},
-            "cleanup": {
-                "mode": "remove" if host_mode == "on-demand" else "drain",
-                "janitor": True,
-            },
+            "cleanup": {"mode": "remove", "janitor": True},
             "controlCapabilities": ["interrupt", "terminate", "clear_context"],
         }
     )
@@ -769,39 +753,30 @@ def _register_policy(
 
 _register_policy(
     "omnigent-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
 _register_policy(
     "omnigent-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
     version=2,
 )
 _register_policy(
     "opencode-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
 _register_policy(
     "opencode-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
     version=2,
 )
-_register_policy("opencode-static", "static-connected", ["workspaceBind"])
 _register_policy(
     "codex-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
-_register_policy("codex-static", "static-connected", ["workspaceBind"])
 _register_policy(
     "claude-on-demand",
-    "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
-_register_policy("claude-static", "static-connected", ["workspaceBind"])
 
 
 def get_launch_policy(ref: str) -> LaunchPolicy:

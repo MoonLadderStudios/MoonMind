@@ -1067,6 +1067,128 @@ def selected_image(operation: dict) -> str:
     return operation.get("resolvedImage") or operation["desired"]["image"]
 
 
+# Compose silently ignores a profile no service declares, and retired-service
+# cleanup stops a removed service's container mid-work. A release that drops a
+# profile therefore refuses while it is still configured or running. Each entry
+# names the profile's services and the operator's migration guidance.
+_STATIC_HOST_RETIREMENT = (
+    "Static-connected Omnigent hosts were removed; Codex and Claude Code OAuth "
+    "run on on-demand hosts. Credential volumes (codex_auth_volume, "
+    "claude_auth_volume) and all other volumes are kept; nothing is deleted. "
+    "Let active static-connected runs finish (or cancel them) first."
+)
+RETIRED_COMPOSE_PROFILES = {
+    "omnigent-host": (("omnigent-host",), _STATIC_HOST_RETIREMENT),
+    "omnigent-host-codex": (
+        ("omnigent-host-codex", "omnigent-host-codex-init"),
+        _STATIC_HOST_RETIREMENT,
+    ),
+    "omnigent-host-claude": (
+        ("omnigent-host-claude", "omnigent-host-claude-init"),
+        _STATIC_HOST_RETIREMENT,
+    ),
+}
+RETIRED_CONTAINER_FORMAT = (
+    '{"service":{{json (.Label "com.docker.compose.service")}},'
+    '"name":{{json .Names}}}'
+)
+
+
+def require_retired_profiles_migrated(exported, *, runner, project, env_files):
+    """Refuse a release dropping a profile that is still configured or running.
+
+    COMPOSE_PROFILES follows Compose precedence: the controller environment,
+    else the last env file setting it. A release that still declares a profile
+    (such as a rollback) keeps it. Stopped containers do not block: ordinary
+    retired-service cleanup removes them and keeps their volumes.
+    """
+    services = exported["services"]
+    declared = {
+        str(profile)
+        for definition in services.values()
+        if isinstance(definition, dict)
+        for profile in definition.get("profiles") or ()
+    }
+    retired = {
+        profile: entry
+        for profile, entry in RETIRED_COMPOSE_PROFILES.items()
+        if profile not in declared
+    }
+    if not retired:
+        return
+    source, value = "the controller environment", os.environ.get("COMPOSE_PROFILES")
+    if value is None:
+        value = ""
+        for path in env_files:
+            if "COMPOSE_PROFILES" in (values := read_env_file(path)):
+                source, value = path, values["COMPOSE_PROFILES"]
+    configured = [
+        name
+        for name in dict.fromkeys(part.strip() for part in value.split(","))
+        if name in retired
+    ]
+    owners = {
+        service: profile
+        for profile, (names, _) in retired.items()
+        for service in names
+        if service not in services
+    }
+    result = engine.run_command(
+        runner,
+        (
+            "docker",
+            "ps",
+            "--no-trunc",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            RETIRED_CONTAINER_FORMAT,
+        ),
+        timeout_seconds=60,
+    )
+    if int(result.get("exit", 0)):
+        raise engine.StageError(
+            "release-configuration",
+            int(result["exit"]),
+            str(result.get("output") or "Cannot inspect running project containers"),
+        )
+    rows = engine.command_stdout(result).splitlines()
+    running = [
+        (row["service"], row["name"])
+        for row in (json.loads(line) for line in rows if line.strip())
+        if row.get("service") in owners
+    ]
+    if not configured and not running:
+        return
+    problems, steps = [], []
+    if configured:
+        names = ", ".join(configured)
+        plural = "s" if len(configured) > 1 else ""
+        problems.append(
+            f"COMPOSE_PROFILES in {source} enables retired profile{plural} "
+            f"{names}, which this release no longer provides."
+        )
+        steps.append(f"remove {names} from COMPOSE_PROFILES in {source}")
+    if running:
+        problems.extend(
+            f"Retired service {service} is still running (container {name})."
+            for service, name in running
+        )
+        containers = [name for _, name in running]
+        steps.append(
+            f"stop {', '.join(containers)} (docker stop {' '.join(containers)})"
+        )
+    guidance = dict.fromkeys(
+        retired[profile][1]
+        for profile in (*configured, *(owners[service] for service, _ in running))
+    )
+    *steps, last = [*steps, "retry the update"]
+    then = f"Then {', '.join(steps)}{',' if len(steps) > 1 else ''} and {last}."
+    raise engine.StageError(
+        "release-configuration", 1, " ".join([*problems, *guidance, then])
+    )
+
+
 def application_services(target: dict) -> tuple:
     """The services an application apply recreates and verifies.
 
@@ -1096,6 +1218,20 @@ def prepare_release_configuration(store, operation, *, runner, overlay):
             raise engine.StageError(
                 "release-configuration", 1, "Saved release configuration is missing"
             )
+        # A controller predating the gate may have bound this configuration
+        # before handing off, so check again before anything is applied.
+        try:
+            exported = json.loads(retained.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise engine.StageError(
+                "release-configuration", 1, "Saved release configuration is unreadable"
+            ) from exc
+        require_retired_profiles_migrated(
+            exported,
+            runner=runner,
+            project=operation["target"].get("project", operation["stack"]),
+            env_files=_env_files_for_apply(operation["target"], overlay),
+        )
         return operation
     target = operation.get("target") or {}
     files = target.get("composeFiles") or []
@@ -1151,6 +1287,12 @@ def prepare_release_configuration(store, operation, *, runner, overlay):
             exported.get("services"), dict
         ):
             raise ValueError("Selected release has no valid base Compose configuration")
+        require_retired_profiles_migrated(
+            exported,
+            runner=runner,
+            project=target.get("project", operation["stack"]),
+            env_files=_env_files_for_apply(target, overlay),
+        )
         path = (
             store.state_dir
             / "image-overlays"

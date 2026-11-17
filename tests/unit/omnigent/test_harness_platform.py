@@ -817,10 +817,13 @@ def test_launch_policy_generic():
             else ["codex-oauth-home@1"]
         ),
     )
-    # Policy mismatch blocks before lease acquisition
-    strict_policy = get_launch_policy("codex-static@1")
-    # codex-static requires static-connected, still works but different isolation
-    assert strict_policy.hostMode == "static-connected"
+    # Static-connected policies were removed and are no longer resolvable.
+    for retired_ref in ("codex-static@1", "claude-static@1", "opencode-static@1"):
+        with pytest.raises(HarnessPlatformError) as exc:
+            get_launch_policy(retired_ref)
+        assert exc.value.code == (
+            HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE
+        )
 
 
 # AC 17: Every run persists one canonical secret-free plan payload and non-self-referential envelope ref

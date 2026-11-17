@@ -165,7 +165,6 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
     assert diagnostics["rollbackRecommendation"] is None
     assert [row["hostMode"] for row in diagnostics["supportMatrix"]] == [
-        "static_compose",
         "on_demand_docker",
     ]
     assert diagnostics["policyAuthority"] == {

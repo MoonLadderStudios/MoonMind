@@ -118,7 +118,6 @@ async def test_dispatch_selected_native_default_preserves_authored_model_provena
     [
         {
             "harness": harness,
-            "static": static,
             "codexNativeDefault": True,
             **(
                 {"privateProfileConfiguration": True}
@@ -126,9 +125,7 @@ async def test_dispatch_selected_native_default_preserves_authored_model_provena
                 else {}
             ),
         }
-        for static in (False, True)
         for harness in ("codex-native", "codex-native-api-key")
-        if not (static and harness.endswith("api-key"))
     ]
     + [
         {
@@ -141,7 +138,6 @@ async def test_dispatch_selected_native_default_preserves_authored_model_provena
     ids=[
         "oauth-on-demand",
         "key-preferences-on-demand",
-        "oauth-static",
         "oauth-hidden-default",
     ],
 )
@@ -156,14 +152,7 @@ async def test_frozen_native_default_runs_and_saves_through_the_shared_lifecycle
         provider.command_behavior = {"suppress_default_model_flag": False}
         provider.default_model = "later-profile-default"
         await session.commit()
-    if journey.static_mode:
-        from tests.integration.omnigent.test_generic_static_host_journey import (
-            assert_static_native_turn_saved_and_retained,
-        )
-
-        await assert_static_native_turn_saved_and_retained(journey)
-    else:
-        await native_fixture.assert_native_turn_saved_and_cleaned(journey)
+    await native_fixture.assert_native_turn_saved_and_cleaned(journey)
     assert (
         journey.plan.payload.modelConfig.normalizedOptions.get("codexNativeDefault")
         is True

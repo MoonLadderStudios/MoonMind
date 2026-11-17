@@ -648,20 +648,6 @@ class GenericOmnigentHostRealizer:
             request = await self._bind_request_inputs(request)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan, request=request)
-            static_selection = host_class.runtime.get("staticHostSelection")
-            if static_selection is not None:
-                binding = await self._update_binding(
-                    binding,
-                    updates={
-                        "phaseResults": {
-                            **(binding.phaseResults or {}),
-                            "staticHostSelection": {
-                                "hostClassRef": host_class.ref,
-                                "selection": static_selection,
-                            },
-                        }
-                    },
-                )
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,
@@ -758,18 +744,6 @@ class GenericOmnigentHostRealizer:
                 # selections.
                 resource_limits=launch_policy.limits,
                 ttl_seconds=int(launch_policy.limits["timeoutSeconds"]) + 900,
-                **(
-                    {
-                        "static_selection": static_selection,
-                        "effective_launch_snapshot": host_class.runtime[
-                            "effectiveLaunchSnapshot"
-                        ],
-                        "provider_leases": acquired,
-                        "request": request,
-                    }
-                    if static_selection is not None
-                    else {}
-                ),
             )
             binding = await self._update_binding(
                 binding,

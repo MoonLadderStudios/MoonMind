@@ -265,7 +265,6 @@ async def test_live_browser_release_matrix(bridge_store) -> None:
     rows = evidence.get("rows")
     assert isinstance(rows, dict)
     assert set(rows) == {
-        "static_profile_bound", "static_restart_replay",
         "on_demand_policy_selected", "repository_read_analysis",
         "repository_mutation_publication",
         "failed_credential_readiness_admission",
@@ -452,22 +451,6 @@ async def test_live_operator_remediation_release_matrix(bridge_store) -> None:
         assert kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
         observed_rows.update(artifact_rows)
     assert observed_rows == {row.row_id for row in REMEDIATION_ROW_CATALOG}
-
-
-async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:
-    _require_mode("static")
-    evidence = _scenario_evidence("MOONMIND_OMNIGENT_STATIC_EVIDENCE")
-    phase = os.environ.get("MOONMIND_OMNIGENT_STATIC_PHASE")
-    assert phase in {"execute", "replay"}
-    _assert_passed(evidence, {
-        "one_first_message", "live_events", "final_snapshot", "resources",
-        "workflow_detail", "secret_free",
-    })
-    assert evidence.get("workflowId") and evidence.get("agentRunId") and evidence.get("sessionId")
-    if phase == "execute":
-        _assert_passed(evidence, {"workflow_created_through_static_profile"})
-    else:
-        _assert_passed(evidence, {"services_restarted", "same_identifiers_reloaded", "durable_replay"})
 
 
 async def test_live_ondemand_oauth_lifecycle_and_cleanup(bridge_store) -> None:

@@ -902,7 +902,6 @@ def _profile_bound_host_ports():
             "inspect_session_completion",
         ),
         (host_ports.OmnigentHostReleasePort, "stop_host"),
-        (host_ports.OmnigentStaticHostReleasePort, "stop_static_host"),
     )
 
 
@@ -971,7 +970,6 @@ def test_legacy_host_runtime_satisfies_every_narrow_host_port() -> None:
         execution_ports.OmnigentProviderSessionInspectionPort,
         execution_ports.ProfileBoundHostPorts,
         host_ports.OmnigentHostReleasePort,
-        host_ports.OmnigentStaticHostReleasePort,
         host_ports.OmnigentHostContainerInventoryPort,
         host_ports.OmnigentHostReclamationPorts,
     ):
@@ -993,7 +991,6 @@ def test_dependency_set_protocols_add_no_capability_of_their_own() -> None:
         host_ports.OmnigentHostReclamationPorts: (
             host_ports.OmnigentHostContainerInventoryPort,
             host_ports.OmnigentHostReleasePort,
-            host_ports.OmnigentStaticHostReleasePort,
         ),
     }
     for port, members in composed.items():

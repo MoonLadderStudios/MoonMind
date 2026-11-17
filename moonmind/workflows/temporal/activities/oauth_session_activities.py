@@ -44,7 +44,11 @@ logger = logging.getLogger(__name__)
 async def _create_oauth_validation_binding(
     repository: Any, profile_id: str, binding: Any = None
 ) -> Any:
-    """Resolve missing launch metadata from persisted policy, preserving choices."""
+    """Resolve missing launch metadata from persisted policy, preserving choices.
+
+    A binding retained from static-connected hosts moves to its provider's
+    on-demand default; it is rewritten only while its profile is idle.
+    """
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
@@ -53,6 +57,9 @@ async def _create_oauth_validation_binding(
     from moonmind.omnigent.host_image_drift import bind_installed_shared_host_launch
     from moonmind.omnigent.execution_profiles import (
         compile_persisted_effective_launch,
+    )
+    from moonmind.omnigent.profile_bound_execution import (
+        on_demand_binding_policy_ref,
     )
 
     async with async_session_maker() as db:
@@ -69,18 +76,17 @@ async def _create_oauth_validation_binding(
         ) or f"omnigent-{provider_slug}@1"
         execution_profile = PROFILES[execution_profile_ref]
         policies = OmnigentPolicyService(db)
-        if binding and binding.launch_policy_ref:
-            policy_snapshot = await policies.resolve_runtime_snapshot(
-                binding.launch_policy_ref
-            )
+        bound_policy_ref = on_demand_binding_policy_ref(binding) if binding else None
+        if bound_policy_ref:
+            policy_snapshot = await policies.resolve_runtime_snapshot(bound_policy_ref)
         else:
             # Pre-snapshot bindings used host_launch_profile_ref as a substrate
-            # selector, not a policy ref. Only its presence determines host mode.
-            if binding:
-                mode = "on-demand" if binding.host_launch_profile_ref else "static"
-                policy_id = f"{provider_slug}-{mode}"
-            else:
-                policy_id = execution_profile.default_policy_ref.rsplit("@", 1)[0]
+            # selector, not a policy ref.
+            policy_id = (
+                f"{provider_slug}-on-demand"
+                if binding
+                else execution_profile.default_policy_ref.rsplit("@", 1)[0]
+            )
             policy_snapshot = await policies.resolve_default_runtime_snapshot(policy_id)
         policy_ref = policy_snapshot["policyRef"]
         effective_launch = bind_installed_shared_host_launch(
@@ -88,33 +94,23 @@ async def _create_oauth_validation_binding(
                 policy_snapshot, provider_profile_id=profile_id
             )
         )
-        if binding:
-            expected_mode = (
-                "on_demand_docker"
-                if binding.host_launch_profile_ref
-                else "static_compose"
+        if effective_launch["hostMode"] != "on_demand_docker":
+            raise ValueError(
+                f"OAuth policy {policy_ref} does not launch an on-demand host"
             )
-            if effective_launch["hostMode"] != expected_mode:
-                raise ValueError(
-                    f"OAuth policy {policy_ref} conflicts with bound host mode {expected_mode}"
-                )
 
+    migrating = binding is not None and not binding.host_launch_profile_ref
     return await repository.create_or_update_static_binding(
         profile_id=profile_id,
         endpoint_ref=(
             binding.endpoint_ref if binding else execution_profile.endpoint_ref
         ),
-        static_host_id=(
-            binding.static_host_id
-            if binding and effective_launch["hostMode"] == "static_compose"
-            else None
-        ),
-        host_launch_profile_ref=(
-            policy_ref if effective_launch["hostMode"] == "on_demand_docker" else None
-        ),
+        host_launch_profile_ref=policy_ref,
         execution_profile_ref=execution_profile_ref,
         launch_policy_ref=policy_ref,
         effective_launch_snapshot=effective_launch,
+        require_idle=migrating,
+        expected_binding=binding if migrating else None,
     )
 
 
@@ -161,11 +157,6 @@ async def oauth_session_prepare_credential_maintenance(
             lore_repository_adapter=build_lore_repository_adapter_from_environment(),
         )
         drained = 0
-        if not binding.host_launch_profile_ref:
-            # The static host can remain intentionally idle after its prior
-            # lease is released. Stop it before the OAuth runner mounts the
-            # same mutable home even when there is no active host lease row.
-            await runtime.stop_static_host(binding=binding)
         for host_lease in leases:
             if host_lease.omnigent_session_id:
                 try:
@@ -176,8 +167,7 @@ async def oauth_session_prepare_credential_maintenance(
                         "Failed to stop stale Omnigent session before credential maintenance",
                         exc_info=True,
                     )
-            if binding.host_launch_profile_ref:
-                await runtime.stop_host(binding=binding, host_lease=host_lease)
+            await runtime.stop_host(binding=binding, host_lease=host_lease)
             await repository.mark_host_lease_stopped(host_lease.lease_id)
             drained += 1
     return {"profile_id": profile_id, "drained": drained + generic_drained}
@@ -247,7 +237,11 @@ async def oauth_session_revalidate_bound_host(
         raise ValueError("profile_id, provider_lease_id, and session_id are required")
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.refresh_binding_generation(profile_id)
-    if binding is None or not binding.effective_launch_snapshot:
+    if (
+        binding is None
+        or not binding.effective_launch_snapshot
+        or not binding.host_launch_profile_ref
+    ):
         try:
             binding = await _create_oauth_validation_binding(
                 repository, profile_id, binding
@@ -361,10 +355,7 @@ async def oauth_session_revalidate_bound_host(
             cleanup_error: BaseException | None = None
             try:
                 cleanup = await runtime.stop_host(binding=binding, host_lease=lease)
-                if cleanup.get("cleanupResult") not in {
-                    "succeeded",
-                    "drained_owned_static_host",
-                }:
+                if cleanup.get("cleanupResult") != "succeeded":
                     raise OmnigentOAuthHostError(
                         "OAuth credential validator cleanup was not proven",
                         code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",

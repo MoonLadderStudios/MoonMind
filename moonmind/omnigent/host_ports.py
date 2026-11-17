@@ -249,8 +249,6 @@ class OmnigentHostLauncherPort(Protocol):
 
     server_url: str
 
-    async def resolve_launch_spec(self, spec: HostLaunchSpec) -> HostLaunchSpec: ...
-
     async def launch(
         self,
         *,
@@ -309,7 +307,6 @@ class OmnigentHostRegistrationPort(Protocol):
         harness_id: str,
         credentialless: bool = False,
         expected_host_id: str | None = None,
-        expected_host_name: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -353,9 +350,6 @@ class OmnigentHostCleanupPort(Protocol):
         host_lease_generation: int,
         state_volume_ref: str,
         control_volume_ref: str | None,
-        static_host_id: str | None = None,
-        static_host_image_ref: str | None = None,
-        static_previous_container_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -406,22 +400,9 @@ class OmnigentHostReleasePort(Protocol):
 
 
 @runtime_checkable
-class OmnigentStaticHostReleasePort(Protocol):
-    """Stop the static credential consumer when no host lease is active.
-
-    Separate from :class:`OmnigentHostReleasePort`: releasing a leased host and
-    stopping the deployment's static credential consumer are different
-    authorities with different preconditions.
-    """
-
-    async def stop_static_host(self, *, binding: Any | None = None) -> None: ...
-
-
-@runtime_checkable
 class OmnigentHostReclamationPorts(
     OmnigentHostContainerInventoryPort,
     OmnigentHostReleasePort,
-    OmnigentStaticHostReleasePort,
     Protocol,
 ):
     """The two capabilities a janitor needs: observe orphans, release capacity.
@@ -442,7 +423,6 @@ __all__ = [
     "OmnigentHostContainerInventoryPort",
     "OmnigentHostReclamationPorts",
     "OmnigentHostReleasePort",
-    "OmnigentStaticHostReleasePort",
     "OmnigentHostLauncherPort",
     "OmnigentHostRegistrationPort",
     "OmnigentMountedToolPort",

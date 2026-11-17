@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -746,7 +747,6 @@ def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
 
     assert {
         "codex-on-demand-through-omnigent",
-        "codex-static-connected-through-omnigent",
         "opencode-through-generic-omnigent-host",
     } <= set(inventory)
     opencode = inventory["opencode-through-generic-omnigent-host"]
@@ -756,20 +756,29 @@ def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
     # earned on the shared host digest, not a dedicated OpenCode image.
     assert opencode.host_class_ref == "omnigent-opencode@2"
     assert opencode.host_image_key == "host"
-    host_modes = {
-        combination.host_mode
-        for combination in inventory.values()
-        if combination.native_chat_claimed
-    }
-    assert {"on-demand", "static-connected"} <= host_modes
-    # A materially different cleanup mode must yield a different capability
-    # contract rather than reusing one constant row set.
-    on_demand = inventory["codex-on-demand-through-omnigent"].advertised_capabilities
-    static = inventory[
-        "codex-static-connected-through-omnigent"
-    ].advertised_capabilities
-    assert on_demand != static
-    assert "cleanupSession" in on_demand and "cleanupSession" not in static
+    on_demand = inventory["codex-on-demand-through-omnigent"]
+    assert "cleanupSession" in on_demand.advertised_capabilities
+
+
+def test_claimed_combinations_run_only_on_demand_hosts() -> None:
+    # Static-connected hosts and their Compose services are removed: every
+    # combination launches its host on demand from the omnigent server alone.
+    for combination in workflow_chat_combinations().values():
+        assert combination.host_mode == "on-demand"
+        assert combination.cleanup_mode == "remove"
+        assert combination.required_cleanup_steps[0] == "live_host_stopped"
+        assert combination.live_resources_removed_expected is True
+        assert combination.compose_services == ("omnigent",)
+        declared = json.dumps(dataclasses.asdict(combination))
+        assert not any(
+            removed in declared
+            for removed in (
+                "omnigent-host-codex",
+                "omnigent-host-claude",
+                "codex-static",
+                "claude-static",
+            )
+        )
 
 
 def test_missing_claimed_combination_fails_closed(tmp_path: Path) -> None:
@@ -794,7 +803,6 @@ def test_unclaimed_combination_needs_its_stable_reason(
         host_class_ref="omnigent-opencode@1",
         launch_policy_ref="omnigent-on-demand@1",
         execution_realizer_ref="generic-omnigent-host@1",
-        compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
         native_chat_claimed=False,
         unsupported_reason="native_chat_not_advertised",
@@ -1656,7 +1664,6 @@ def test_cleanup_outcome_must_match_the_typed_cleanup_receipt(tmp_path: Path) ->
         )
 
 
-STATIC_COMBINATION = "codex-static-connected-through-omnigent"
 OPENCODE_COMBINATION = "opencode-through-generic-omnigent-host"
 
 
@@ -1826,44 +1833,6 @@ def test_cleanup_step_order_is_enforced(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConformanceContractError, match="release-last cleanup"):
-        _validate(manifest, tmp_path)
-
-
-def test_static_connected_cleanup_is_a_drain_not_a_stop() -> None:
-    inventory = workflow_chat_combinations()
-    static = inventory[STATIC_COMBINATION]
-    on_demand = inventory[PRIMARY_COMBINATION]
-
-    assert static.required_cleanup_steps[0] == "live_host_drained"
-    assert static.live_resources_removed_expected is False
-    assert on_demand.required_cleanup_steps[0] == "live_host_stopped"
-    assert on_demand.live_resources_removed_expected is True
-
-
-def test_static_connected_host_may_not_claim_a_stopped_host(
-    tmp_path: Path,
-) -> None:
-    source = _matrix(tmp_path)
-
-    def claim_a_stopped_host(payload: dict) -> None:
-        payload["data"]["steps"][0]["kind"] = "live_host_stopped"
-        payload["data"]["liveResourcesRemoved"] = True
-
-    _rewrite_source(
-        tmp_path,
-        row_name="terminal-evidence-and-continuation",
-        record_type="cleanupReceipt",
-        update=claim_a_stopped_host,
-        combination_id=STATIC_COMBINATION,
-    )
-    source["combinations"][STATIC_COMBINATION]["cleanupOutcome"][
-        "liveResourcesRemoved"
-    ] = True
-    manifest = build_workflow_chat_acceptance_manifest(
-        source, evidence_root=tmp_path
-    )
-
-    with pytest.raises(ConformanceContractError, match="cleanup outcome"):
         _validate(manifest, tmp_path)
 
 

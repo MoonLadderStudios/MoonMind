@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+from pathlib import Path
 from typing import Any
 
 from moonmind.omnigent.harness_platform.failures import (
@@ -103,4 +106,49 @@ class DockerCommandBackend:
         return result
 
 
-__all__ = ["DockerCommandBackend"]
+def _unavailable(message):
+    raise HarnessPlatformError(
+        message, code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED
+    )
+
+
+def deployment_compose_command() -> tuple[str, ...]:
+    local_root = Path(
+        os.getenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "") or Path.cwd()
+    ).expanduser()
+    host_root = os.getenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", "").strip()
+    configured = Path(
+        os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
+        or "docker-compose.yaml"
+    ).expanduser()
+    if configured.is_absolute() and not configured.exists():
+        try:
+            relative = (
+                configured.relative_to(Path(host_root).expanduser())
+                if host_root
+                else configured.name
+            )
+        except ValueError:
+            relative = configured.name
+        configured = local_root / relative
+    elif not configured.is_absolute():
+        configured = local_root / configured
+    project = (
+        os.getenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind").strip() or "moonmind"
+    )
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", project)
+        or not configured.is_file()
+    ):
+        _unavailable("deployment Compose identity or file is unavailable")
+    return (
+        "docker",
+        "compose",
+        "--project-name",
+        project,
+        "-f",
+        str(configured.resolve()),
+    )
+
+
+__all__ = ["DockerCommandBackend", "deployment_compose_command"]

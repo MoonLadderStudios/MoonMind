@@ -18,13 +18,13 @@ phase stays available without rewriting those immutable per-run snapshots.
 **Updated:** 2026-07-18  
 **Audience:** Local and self-hosted MoonMind operators  
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack  
-**Owning Surface:** Canonical `docker-compose.yaml`, its supported profiles, and workflow-requested profile-bound Codex hosts  
+**Owning Surface:** Canonical `docker-compose.yaml`, its supported profiles, and workflow-requested on-demand hosts  
 **Related Docs:** [MoonMind Architecture](../MoonMindArchitecture.md), [Omnigent Adapter](OmnigentAdapter.md), [Omnigent Host OAuth](OmnigentHostOAuth.md), [Omnigent Conformance](ConformanceAndLiveSmoke.md), [Authentication Contracts](../Security/AuthenticationContracts.md) (authoritative MoonMind user-auth modes, identity, session, and error semantics; runtime-server `OMNIGENT_AUTH_*` variables never select MoonMind auth)
 
 > [!NOTE]
 > MoonMind application login (`AUTH_PROVIDER`: `accounts` | `oidc` | `header` |
-> explicitly restricted local `disabled`) is independent of the credentials in
-> the host-class table below. Model Provider Profile OAuth, GitHub/runtime/worker
+> explicitly restricted local `disabled`) is independent of the host
+> credentials described below. Model Provider Profile OAuth, GitHub/runtime/worker
 > credentials, and Omnigent host-auth lifecycles are not application-login
 > cleanup targets and are never repurposed as user credentials. Retired
 > selectors (`keycloak`, `default`, `google`, `local`) fail at startup with migration
@@ -34,29 +34,12 @@ phase stays available without rewriting those immutable per-run snapshots.
 
 This guide defines the normal operator path for starting, checking, troubleshooting, and rolling back the combined MoonMind plus Omnigent stack without unexpectedly deleting existing MoonMind, Omnigent, OAuth, or workflow data.
 
-Three host classes are intentionally distinct:
-
-| Host class | Startup owner | Credential model | Intended use |
-| --- | --- | --- | --- |
-| Generic `omnigent-host` | Operator / Compose profile | Configured provider API keys | General upstream host validation; never receives MoonMind OAuth homes |
-| Dedicated static OAuth host | Operator / canonical Compose profile | One matching MoonMind OAuth volume | Local/bootstrap Codex or Claude host |
-| Workflow-requested on-demand Codex host | MoonMind worker after durable lease acquisition | One selected Codex OAuth profile | Run-dedicated managed product path |
-
-All three use stock compatible Omnigent server/host behavior. They do not share credential authority or cleanup semantics.
-
-The optional generic host receives only the explicit environment keys in its
-Compose service, not the complete deployment `.env`. Its existing state volume
-preserves ordinary host login and identity. Optional host identity, state/config,
-provider credentials, Databricks profile/PAT/OAuth, and host logging selectors
-use null passthrough so omitted keys retain upstream defaults. Explicit host ID
-and name must be configured together; empty IDs remain invalid.
-
-Custom provider configurations that refer to additional environment variables,
-or additional Databricks SDK federation chains, must expose only their required
-keys through a normal Compose override. Do not forward database, application
-signing, server-account signing, or unrelated integration secrets. This list is
-based on the supported host inputs, not a claim that arbitrary variables in a
-custom `.env` remain available to agent execution.
+Codex and Claude Code OAuth work runs only on workflow-requested on-demand
+hosts: the MoonMind worker launches one after durable lease acquisition, with one
+selected OAuth Provider Profile, and removes it during cleanup. These hosts use
+stock compatible Omnigent server/host behavior; no Compose service hosts agent
+execution. Deployments that still enable static host profiles migrate as
+described in `DOC-REQ-014`.
 
 ## DOC-REQ-001 Host Access
 
@@ -86,7 +69,7 @@ docker compose up -d
 
 This is the default path for local and self-hosted operators. It starts MoonMind, Omnigent, and required local dependencies using the repository `docker-compose.yaml`. The bundled Omnigent server runs in its single-user posture (`OMNIGENT_AUTH_ENABLED=0`): it serves every request as its local user, so MoonMind needs no Omnigent credential. Anyone who can reach the server, including its published `OMNIGENT_PORT`, has full control of it.
 
-Optional services are selected through `COMPOSE_PROFILES` or an explicit `--profile` flag. Do not set `COMPOSE_FILE` to retired OAuth-host overlays; the canonical single Compose file owns supported static host definitions.
+Optional services are selected through `COMPOSE_PROFILES` or an explicit `--profile` flag, for example `docker compose --profile temporal-ui up -d temporal-ui` for the Temporal web UI. Do not set `COMPOSE_FILE` to retired OAuth-host overlays.
 
 Production and credentialed conformance may set complete immutable references:
 
@@ -95,11 +78,10 @@ OMNIGENT_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-server@sha256:<digest>
 OMNIGENT_HOST_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
 ```
 
-These `*_IMAGE_REF` values pin the images used by Compose services and take
-precedence over the bootstrap-compatible image/tag pairs. Workflow-requested
-Codex and Claude on-demand hosts do not read `OMNIGENT_HOST_IMAGE_REF`; they
-launch the shared host image that owns the MoonMind tools. Pin those launches
-with the shared host digest:
+These `*_IMAGE_REF` values take precedence over the bootstrap-compatible
+image/tag pairs. Workflow-requested Codex and Claude on-demand hosts do not read
+`OMNIGENT_HOST_IMAGE_REF`; they launch the shared host image that owns the
+MoonMind tools. Pin those launches with the shared host digest:
 
 ```dotenv
 OMNIGENT_SHARED_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
@@ -123,25 +105,10 @@ This sequence keeps database startup, Omnigent database initialization, and appl
 
 ## DOC-REQ-004 Logs
 
-Use these commands to inspect the Omnigent service and the optional generic host-profile service:
-
-```bash
-docker compose logs omnigent
-docker compose logs omnigent-host
-```
-
-Add `--tail 200` or `-f` for a bounded recent view or live stream:
+Inspect the Omnigent service with `docker compose logs omnigent`. Add `--tail 200` or `-f` for a bounded recent view or live stream:
 
 ```bash
 docker compose logs --tail 200 omnigent
-docker compose logs -f omnigent-host
-```
-
-Dedicated static OAuth hosts have separate service names:
-
-```bash
-docker compose logs --tail 200 omnigent-host-codex
-docker compose logs --tail 200 omnigent-host-claude
 ```
 
 On-demand hosts are not Compose services. Their operator-facing lifecycle belongs in Workflow Detail and bridge diagnostics. Docker logs are a bounded troubleshooting fallback for the exact deterministic container, not the durable evidence source.
@@ -174,25 +141,7 @@ docker compose logs omnigent
 
 The account state persists in PostgreSQL and Omnigent's local account artifacts persist in the `omnigent-data` volume. Restarting or recreating containers should not reset the first-admin flow while those volumes are retained. If sign-in state looks inconsistent, inspect the retained database and `omnigent-data` volume before deleting data.
 
-## DOC-REQ-007 Generic Host Profile
-
-Start the optional generic Omnigent host-profile service with:
-
-```bash
-docker compose --profile omnigent-host up -d omnigent-host
-```
-
-The expected behavior is that `omnigent-host` connects to the Omnigent server and registers a general local host. Confirm progress with:
-
-```bash
-docker compose logs omnigent-host
-```
-
-If registration does not appear in the Omnigent UI, troubleshoot the service logs, host token, network, image, and config mounts before recreating volumes or changing authentication mode.
-
-The generic host is not a Codex OAuth host. It is never a fallback when a selected profile-bound host fails.
-
-## DOC-REQ-008 Manual Validation
+## DOC-REQ-007 Manual Validation
 
 After startup, validate the combined stack in this order:
 
@@ -201,12 +150,10 @@ After startup, validate the combined stack in this order:
 3. Open Omnigent at `http://localhost:8000` and create or sign in as the first admin account.
 4. Run `curl -fsS http://localhost:8000/health`.
 5. Run `docker compose logs omnigent` and confirm there are no repeating startup failures.
-6. If validating the generic host, run `docker compose --profile omnigent-host up -d omnigent-host`, inspect `docker compose logs omnigent-host`, and confirm the host appears in Omnigent.
-7. If validating a static OAuth host, use the matching canonical profile and run the exact credential/readiness check in `DOC-REQ-012`.
-8. If validating an on-demand Codex host, launch it through a MoonMind workflow and verify the lifecycle and cleanup evidence in `DOC-REQ-013`; do not create an equivalent container manually.
-9. If producing credentialed release evidence, run the versioned live matrix in `DOC-REQ-016` with immutable images and an operator-provisioned action adapter.
+6. If validating an on-demand host, launch it through a MoonMind workflow and verify the lifecycle and cleanup evidence in `DOC-REQ-011`; do not create an equivalent container manually.
+7. If producing credentialed release evidence, run the versioned live matrix in `DOC-REQ-015` with immutable images and an operator-provisioned action adapter.
 
-## DOC-REQ-009 Normal Rollback
+## DOC-REQ-008 Normal Rollback
 
 Normal rollback should restore the operator's intended MoonMind-only or reduced-stack topology without deleting data:
 
@@ -238,16 +185,15 @@ supervisor rollback mode is the one control for restoring a prior default; a
 legacy path's retirement class only says whether it still admits new work. See
 `moonmind/omnigent/session_supervisor_rollback.py` and [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
 
-Legacy Compose profiles (`omnigent-host-codex`, `omnigent-host-claude`,
-`omnigent-host`) and the legacy image variables (`OMNIGENT_HOST_IMAGE_REF`,
-`OMNIGENT_HOST_IMAGE`, `OMNIGENT_HOST_IMAGE_TAG`,
-`OMNIGENT_OPENCODE_HOST_IMAGE_REF`, `OMNIGENT_PI_HOST_IMAGE_REF`) each carry a
-retirement row and remain supported while their rollback window is open. Once a
-variable enters its deprecation window, supplying it produces an actionable
-startup warning naming the replacement; after removal, startup is rejected rather
-than silently ignoring the value.
+The legacy image variables (`OMNIGENT_HOST_IMAGE_REF`, `OMNIGENT_HOST_IMAGE`,
+`OMNIGENT_HOST_IMAGE_TAG`, `OMNIGENT_OPENCODE_HOST_IMAGE_REF`,
+`OMNIGENT_PI_HOST_IMAGE_REF`) each carry a retirement row and remain supported
+while their rollback window is open. Once a variable enters its deprecation
+window, supplying it produces an actionable startup warning naming the
+replacement; after removal, startup is rejected rather than silently ignoring
+the value.
 
-## DOC-REQ-010 Optional Destructive Cleanup
+## DOC-REQ-009 Optional Destructive Cleanup
 
 Database and volume cleanup is optional, destructive, and separate from normal rollback. Perform it only when the operator has confirmed the data is disposable or has a tested backup.
 
@@ -263,7 +209,7 @@ These commands can permanently delete MoonMind workflow state, Omnigent account 
 
 The on-demand host janitor removes only deterministic lease-owned containers and their Omnigent state volumes. It never treats the canonical OAuth volume, PostgreSQL, `omnigent-data`, or unrelated Docker resources as disposable run state.
 
-## DOC-REQ-011 Troubleshooting
+## DOC-REQ-010 Troubleshooting
 
 ### GHCR Authentication
 
@@ -296,18 +242,6 @@ On Linux and macOS, `lsof -i :7000` or `lsof -i :8000` can identify a conflictin
 
 If Omnigent chat or upload actions report a forbidden origin, confirm that the browser URL exactly matches `OMNIGENT_ACCOUNTS_BASE_URL` or one of the comma-separated origins in `OMNIGENT_WS_ALLOWED_ORIGINS`. Restart the Omnigent service after changing those settings.
 
-### Host Config Mount Conflicts
-
-If `omnigent-host` fails immediately, inspect its logs and verify that host configuration mount points exist, have the expected file-or-directory type, and are readable by Docker:
-
-```bash
-docker compose logs omnigent-host
-```
-
-A file mounted where a directory is expected, or a directory mounted where a file is expected, should be fixed in the operator override rather than worked around by deleting application data volumes.
-
-For a dedicated or on-demand OAuth host, also verify that the selected Provider Profile resolves the canonical credential mount and generation. Do not manually replace the volume name in workflow JSON or Docker arguments.
-
 ### Omnigent Login: Single-User, Accounts, and OIDC
 
 The combined local stack defaults to Omnigent's single-user posture with no Omnigent login. To require a login, set `OMNIGENT_AUTH_ENABLED=1`: Omnigent then uses built-in accounts (create the first admin in the Omnigent web UI) or, when `OMNIGENT_OIDC_ISSUER` is set, an external OIDC provider. With login enabled, MoonMind reaches the server only with a configured `OMNIGENT_API_TOKEN`; without one, MoonMind cannot create the default Omnigent Agent Profile.
@@ -320,7 +254,7 @@ A Codex host can wait even when Docker and Omnigent are healthy because the sele
 
 ### Credential Preflight Failures
 
-For `CODEX_OAUTH_*` failures, verify the profile is connected and launch-ready through MoonMind Settings. Reconnect through the OAuth Session flow after active consumers are drained. Do not inspect, copy, or archive credential files as troubleshooting evidence.
+For `CODEX_OAUTH_*` failures, verify the profile is connected and launch-ready through MoonMind Settings and resolves the canonical credential mount and generation. Reconnect through the OAuth Session flow after active consumers are drained. Do not inspect, copy, or archive credential files as troubleshooting evidence, or replace the volume name in workflow JSON or Docker arguments.
 
 ### Host Registration or Harness Failures
 
@@ -330,70 +264,7 @@ An expected host must register exactly once and advertise `codex-native`. Check 
 
 A failed cleanup should appear as `host_cleanup=failed`, `leaseReleased=false`, and `janitorRequired=true`. Run the supported janitor/reconciliation operation for the exact profile or lease. Manual Docker removal may eliminate the container but does not repair durable host/provider lease state.
 
-## DOC-REQ-012 Omnigent Host Workspace and Credentials
-
-The optional `omnigent-host` service is a generic Omnigent host. It preserves configured provider API keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GOOGLE_API_KEY` for runners that need them. It does not mount MoonMind's Codex OAuth volume or set `CODEX_HOME` globally, because the host may serve non-Codex runners and more than one Omnigent user.
-
-The generic host exposes `/workspaces` through the operator-managed `./omnigent_workspaces` directory. The MoonMind workspace entry is mounted read-only from `OMNIGENT_MOONMIND_WORKSPACE`, defaulting to `./omnigent_workspaces/MoonMind`:
-
-```bash
-${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
-```
-
-Do not point `OMNIGENT_MOONMIND_WORKSPACE` at a checkout that contains local deployment secrets such as `.env`, provider credentials, private keys, or unreviewed state. Use a sanitized checkout, export, or worktree containing only files that Omnigent sessions should inspect.
-
-Generic-host operator flow:
-
-1. Prepare the sanitized path referenced by `OMNIGENT_MOONMIND_WORKSPACE`.
-2. Start or recreate the host:
-
-   ```bash
-   docker compose --profile omnigent-host up -d --force-recreate omnigent-host
-   ```
-
-3. Confirm the read-only workspace:
-
-   ```bash
-   docker compose --profile omnigent-host exec omnigent-host sh -lc 'ls -la /workspaces/MoonMind; test ! -w /workspaces/MoonMind && echo "workspace is read-only"'
-   ```
-
-Subscription OAuth remains owned by MoonMind Settings and Provider Profiles. The generic host deliberately never receives `claude_auth_volume` or `codex_auth_volume`; use the matching dedicated host or the workflow-requested Codex path.
-
-### Dedicated OAuth Hosts
-
-The canonical `docker-compose.yaml` defines separate Claude-only and Codex-only hosts behind `omnigent-host-claude` and `omnigent-host-codex` profiles. Complete OAuth through MoonMind first. Each dedicated host runs as UID/GID `1000:1000` from `/home/app`, mounts only its matching OAuth home read/write, clears competing provider credentials, and keeps Omnigent identity in a separate state volume.
-
-To make one or both profiles part of normal startup, set profiles in `.env` without setting `COMPOSE_FILE`:
-
-```dotenv
-COMPOSE_PROFILES="omnigent-host-claude,omnigent-host-codex"
-```
-
-Then use the platform-neutral command:
-
-```bash
-docker compose up -d
-```
-
-For a one-time launch:
-
-```bash
-docker compose --profile omnigent-host-claude up -d omnigent-host-claude
-docker compose --profile omnigent-host-codex up -d omnigent-host-codex
-```
-
-Validate canonical configuration, host state, and credential preflight with:
-
-```bash
-docker compose config --quiet
-docker compose ps omnigent-host-claude omnigent-host-codex
-docker compose exec omnigent-host-claude sh -lc 'test -d /home/app/.claude && test -w /home/app/.claude'
-docker compose exec omnigent-host-codex /opt/moonmind/check-omnigent-host.sh
-```
-
-The dedicated hosts retain the sanitized `/workspaces` and read-only MoonMind workspace policy for operator-provided static content. Do not add provider API keys to these services or mount either OAuth volume into the generic host. One OAuth profile remains limited to one active runtime consumer across direct MoonMind and Omnigent execution.
-
-## DOC-REQ-013 Workflow-Requested On-Demand Codex Hosts
+## DOC-REQ-011 Workflow-Requested On-Demand Hosts
 
 An on-demand host is created by the MoonMind worker after `executionProfileRef` is validated and the shared Provider Profile lease and durable host lease are acquired. It is not declared as a per-run Compose service and must not be pre-created by an operator.
 
@@ -401,7 +272,7 @@ The production contract uses:
 
 - a deterministic `mm-omnigent-host-*` container name;
 - labels for profile, provider lease, host lease, credential generation, and expiry;
-- the selected Codex OAuth volume at `/home/app/.codex`;
+- the selected OAuth volume at its runtime home (`/home/app/.codex` or `/home/app/.claude`);
 - a separate lease-owned Omnigent state volume at `/home/app/.omnigent`;
 - a policy-resolved workflow workspace at `/workspaces/run`;
 - read-only Skill and tool projections;
@@ -410,9 +281,9 @@ The production contract uses:
 
 Validate an on-demand run through durable product evidence:
 
-1. Select an enabled, connected Codex OAuth Provider Profile in MoonMind.
+1. Select an enabled, connected Codex or Claude OAuth Provider Profile in MoonMind.
 2. Start an Omnigent-backed workflow that requires the on-demand host mode.
-3. In Workflow Detail, verify profile resolution, profile lease, host binding, host lease, container start, credential preflight, exact host registration, `codex-native` readiness, bridge authentication, session creation, event/resource harvest, host cleanup, and Provider Profile release.
+3. In Workflow Detail, verify profile resolution, profile lease, host binding, host lease, container start, credential preflight, exact host registration, harness readiness, bridge authentication, session creation, event/resource harvest, host cleanup, and Provider Profile release.
 4. After terminal cleanup, verify replay remains available even though the host is gone.
 5. Confirm that only the lease-owned container and Omnigent state volume were removed and that the OAuth volume remains.
 
@@ -425,7 +296,7 @@ docker volume ls
 
 Do not treat a manually launched lookalike container as valid. It lacks durable binding, profile authorization, host-lease identity, and cleanup ownership.
 
-## DOC-REQ-014 Capacity, Workspace, and Policy Validation
+## DOC-REQ-012 Capacity, Workspace, and Policy Validation
 
 Before enabling on-demand hosts in a deployment, validate:
 
@@ -439,23 +310,49 @@ Before enabling on-demand hosts in a deployment, validate:
 - required Skill/tool projections and optional GitHub capabilities pass their preflight;
 - logs, diagnostics, output manifests, artifact handoff, and cleanup evidence remain bounded and redacted.
 
-A deployment that cannot realize the selected policy must fail before host assignment. It must not fall back to the generic host, a different credential, a broader network, a writable root, or an arbitrary workspace path.
+A deployment that cannot realize the selected policy must fail before host assignment. It must not fall back to another host, a different credential, a broader network, a writable root, or an arbitrary workspace path.
 
-## DOC-REQ-015 Rollback by Host Mode
+## DOC-REQ-013 Rollback by Host Mode
 
 Use the rollback matching the active host mode:
 
 | Mode | Non-destructive rollback |
 | --- | --- |
-| Generic host | Remove `omnigent-host` from active profiles and run `docker compose down` / `up` as appropriate |
-| Static Codex host | Drain active profile/session authority, remove `omnigent-host-codex` from `COMPOSE_PROFILES`, and stop that service |
-| Static Claude host | Drain active use, remove `omnigent-host-claude` from `COMPOSE_PROFILES`, and stop that service |
-| On-demand Codex | Disable selection through the controlling policy/profile gate, drain active leases, and run supported janitor reconciliation |
+| On-demand host | Disable selection through the controlling policy/profile gate, drain active leases, and run supported janitor reconciliation |
 | Direct Codex compatibility path | Use its feature gate only after in-flight compatibility runs are drained |
 
 Rollback never requires deleting the OAuth volume, PostgreSQL, `omnigent-data`, or artifact data. Restore a mode only after its profile, image, network, workspace, and cleanup preconditions are again valid.
 
-## DOC-REQ-016 Credentialed Live Conformance
+## DOC-REQ-014 Migrating From Static Hosts
+
+Releases no longer provide the static-connected host profiles `omnigent-host`,
+`omnigent-host-codex`, and `omnigent-host-claude`. Compose silently ignores an
+unknown profile, and removing a service stops its container mid-work, so the
+deployment controller refuses the update at `release-configuration` while
+`COMPOSE_PROFILES` (controller environment, else the deployment env file) names
+one of them or a container of a retired static service is still running. Its
+message names the profile, source, and container. To migrate:
+
+1. Let active static-connected runs finish, or cancel them. They cannot resume
+   on an on-demand host, and a recorded static plan fails closed
+   (`OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE` or `OMNIGENT_STATIC_HOST_RETIRED`)
+   rather than executing elsewhere.
+2. Remove the three names from `COMPOSE_PROFILES`, stop any static host
+   container that is still running, and run the update again.
+3. Switch Agent Profiles or saved selections that pin
+   `codex-static@1`, `claude-static@1`, or `opencode-static@1` to the matching
+   on-demand policy, such as `codex-on-demand@1` or `claude-on-demand@1`. New
+   admission refuses static policies instead of substituting one.
+
+Nothing else is manual. `codex_auth_volume` and `claude_auth_volume` stay in
+use: on-demand hosts mount the same enrolled credentials, so no new login is
+needed. A retained OAuth host binding moves to its runtime's on-demand policy
+the next time its Provider Profile is idle; a busy profile keeps its binding
+until then. The old static state, artifact, and cache volumes (for example
+`omnigent-host-state`) stay on the host until the operator deletes them
+deliberately under `DOC-REQ-009`.
+
+## DOC-REQ-015 Credentialed Live Conformance
 
 The embedded transport is removed and cannot be enabled or used as a rollback
 path. Its retained history and diagnostic URLs are described in
@@ -487,8 +384,7 @@ The runner uses the isolated `moonmind-test-omnigent-live` Compose project. It a
 `--mode browser` is the controlling release journey. It opens
 `/workflows/new` in a headless browser, submits through the normal frontend
 request path, and follows Workflow Detail through terminal harvest, cleanup,
-and replay for every required release row. `--mode static` covers restart and
-durable Workflow Detail replay. Published stock-image proxy compatibility,
+and replay for every required release row. Published stock-image proxy compatibility,
 on-demand lifecycle, and failure-path scenarios can be gated independently in
 provider environments. A passed release matrix records exact images,
 architecture, advertised capabilities, workflow/session/lease identities,

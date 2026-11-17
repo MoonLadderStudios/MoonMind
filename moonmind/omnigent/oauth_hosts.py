@@ -37,12 +37,12 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.harness_platform.static_hosts import (
-    GENERIC_STATIC_LEASE_PURPOSE,
-    static_host_scope_ref,
-)
 from moonmind.utils.logging import redact_sensitive_text
 
+# Static-connected Compose hosts were removed. Leases they recorded keep this
+# purpose; readers must leave those rows alone rather than launch, restart, or
+# reclaim them as on-demand containers.
+RETIRED_STATIC_LEASE_PURPOSE = "execution_generic_static"
 
 ACTIVE_HOST_STATES = frozenset(
     {"allocating", "starting", "ready", "assigned", "draining"}
@@ -77,15 +77,8 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-def deterministic_host_lease_id(
-    provider_lease_id: str, allocation_key: str | None = None
-) -> str:
-    identity = (
-        provider_lease_id
-        if allocation_key is None
-        else f"{provider_lease_id}\0{allocation_key}"
-    )
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+def deterministic_host_lease_id(provider_lease_id: str) -> str:
+    digest = hashlib.sha256(provider_lease_id.encode("utf-8")).hexdigest()[:32]
     return f"ohl_{digest}"
 
 
@@ -398,19 +391,11 @@ class OmnigentOAuthHostRepository:
         idempotency_key: str,
         lease_purpose: str = "execution_omnigent",
         ttl_seconds: int = 5400,
-        capacity_admission: Any | None = None,
         effective_launch_snapshot: Mapping[str, Any] | None = None,
     ) -> OmnigentHostLease:
         now = datetime.now(UTC)
-        lease_id = deterministic_host_lease_id(
-            provider_lease_id,
-            idempotency_key if lease_purpose == GENERIC_STATIC_LEASE_PURPOSE else None,
-        )
+        lease_id = deterministic_host_lease_id(provider_lease_id)
         async with self._session_factory() as session:
-            if not binding.host_launch_profile_ref:
-                from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
-
-                await GenericHostCapacityAdmission.lock_for_admission(session)
             locked_row = (
                 await session.execute(
                     select(
@@ -461,19 +446,7 @@ class OmnigentOAuthHostRepository:
                         "endpointRef": locked_binding.endpoint_ref,
                     }.items()
                 ):
-                    raise OmnigentOAuthHostError(
-                        "static allocation launch authority changed"
-                    )
-            static_scope = (
-                static_host_scope_ref(
-                    harness=locked_binding.harness,
-                    endpoint_ref=locked_binding.endpoint_ref,
-                    host_id=locked_binding.static_host_id,
-                )
-                if not locked_binding.host_launch_profile_ref
-                and lease_purpose != "credential_validation"
-                else None
-            )
+                    raise OmnigentOAuthHostError("host lease launch authority changed")
             existing = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if existing is None:
                 existing = (
@@ -500,73 +473,10 @@ class OmnigentOAuthHostRepository:
                         code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
                     )
                 return self._lease_model(existing)
-            if static_scope is not None:
-                # Old rows intentionally retain NULL scope metadata. Read their
-                # configured binding rather than interpreting a missing column
-                # value as a free physical host during the transition.
-                retained = (
-                    await session.execute(
-                        select(
-                            OmnigentOAuthHostLeaseRecord, OmnigentOAuthHostBindingRecord
-                        )
-                        .join(
-                            OmnigentOAuthHostBindingRecord,
-                            OmnigentOAuthHostBindingRecord.binding_ref
-                            == OmnigentOAuthHostLeaseRecord.binding_ref,
-                        )
-                        .where(
-                            or_(
-                                OmnigentOAuthHostLeaseRecord.status.in_(
-                                    ACTIVE_HOST_STATES
-                                ),
-                                (OmnigentOAuthHostLeaseRecord.status == "failed")
-                                & OmnigentOAuthHostLeaseRecord.cleanup_completed_at.is_(
-                                    None
-                                ),
-                            ),
-                            or_(
-                                OmnigentOAuthHostLeaseRecord.static_scope_ref
-                                == static_scope,
-                                OmnigentOAuthHostLeaseRecord.static_scope_ref.is_(None),
-                            ),
-                        )
-                    )
-                ).all()
-                for active, configured in retained:
-                    if (
-                        active.lease_purpose == "credential_validation"
-                        or configured.host_launch_profile_ref
-                    ):
-                        continue
-                    observed_scope = active.static_scope_ref or static_host_scope_ref(
-                        harness=configured.harness,
-                        endpoint_ref=configured.endpoint_ref,
-                        host_id=configured.static_host_id,
-                    )
-                    if observed_scope == static_scope:
-                        raise OmnigentOAuthHostError(
-                            "another lease for the selected static host is still active",
-                            code=HOST_PROFILE_BUSY_ERROR_CODE,
-                        )
-            if capacity_admission is not None:
-                decision = await capacity_admission.evaluate_within(
-                    session, already_allocated=False
-                )
-                if not decision.admitted:
-                    from moonmind.omnigent.harness_platform.failures import (
-                        HarnessPlatformError,
-                        HarnessPlatformFailure,
-                    )
-
-                    raise HarnessPlatformError(
-                        decision.waiting_reason,
-                        code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
-                    )
             record = OmnigentOAuthHostLeaseRecord(
                 lease_id=lease_id,
                 provider_profile_id=locked_binding.provider_profile_id,
                 provider_lease_id=provider_lease_id,
-                static_scope_ref=static_scope,
                 binding_ref=locked_binding.binding_ref,
                 credential_generation=mount.auth_volume_ref.credential_generation,
                 holder_workflow_id=holder_workflow_id,
@@ -602,17 +512,8 @@ class OmnigentOAuthHostRepository:
                     active_profile_lease = (
                         await session.execute(
                             select(OmnigentOAuthHostLeaseRecord).where(
-                                (
-                                    OmnigentOAuthHostLeaseRecord.provider_profile_id
-                                    == locked_binding.provider_profile_id
-                                    if static_scope is None
-                                    else or_(
-                                        OmnigentOAuthHostLeaseRecord.provider_profile_id
-                                        == locked_binding.provider_profile_id,
-                                        OmnigentOAuthHostLeaseRecord.static_scope_ref
-                                        == static_scope,
-                                    )
-                                ),
+                                OmnigentOAuthHostLeaseRecord.provider_profile_id
+                                == locked_binding.provider_profile_id,
                                 OmnigentOAuthHostLeaseRecord.status.in_(
                                     ACTIVE_HOST_STATES
                                 ),
@@ -655,11 +556,6 @@ class OmnigentOAuthHostRepository:
             omnigentSessionId=record.omnigent_session_id,
             bridgeSessionId=record.bridge_session_id,
             effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
-            runtimeBindingId=(
-                record.idempotency_key
-                if record.lease_purpose == GENERIC_STATIC_LEASE_PURPOSE
-                else None
-            ),
             status=record.status,
             acquiredAt=utc(record.acquired_at),
             lastHeartbeatAt=utc(record.last_heartbeat_at),
@@ -816,9 +712,9 @@ class OmnigentOAuthHostRepository:
             record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if record is None or record.status not in TERMINAL_HOST_STATES:
                 raise OmnigentOAuthHostError("terminal host lease does not exist")
-            if record.lease_purpose == GENERIC_STATIC_LEASE_PURPOSE:
+            if record.lease_purpose == RETIRED_STATIC_LEASE_PURPOSE:
                 raise OmnigentOAuthHostError(
-                    "a completed generic static allocation requires a new admission",
+                    "a retired static-connected allocation cannot be restarted",
                     code="OMNIGENT_HOST_CLEANUP_CLAIMED",
                 )
             record.status = "starting"
@@ -1035,6 +931,46 @@ class OmnigentOAuthHostRepository:
             await session.commit()
             return [row.lease_id for row in rows]
 
+    async def retire_static_host_leases(self) -> list[str]:
+        """Settle leases left by removed static-connected hosts.
+
+        No step can resume on a removed Compose service, but its open lease
+        row would keep the Provider Profile's on-demand lease and idle binding
+        migration blocked forever. Only the record settles: no container or
+        volume is touched, and provider capacity stays with its own owner.
+        """
+
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(OmnigentOAuthHostLeaseRecord)
+                        .where(
+                            OmnigentOAuthHostLeaseRecord.lease_purpose
+                            == RETIRED_STATIC_LEASE_PURPOSE,
+                            OmnigentOAuthHostLeaseRecord.cleanup_completed_at.is_(None),
+                            or_(
+                                OmnigentOAuthHostLeaseRecord.status.in_(
+                                    ACTIVE_HOST_STATES
+                                ),
+                                OmnigentOAuthHostLeaseRecord.status == "failed",
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                ).scalars()
+            )
+            for row in rows:
+                if row.status in ACTIVE_HOST_STATES:
+                    row.status = "stopped"
+                    row.stopped_at = now
+                    row.error_code = "OMNIGENT_STATIC_HOST_RETIRED"
+                    row.error_summary = "static-connected hosts were removed"
+                row.cleanup_completed_at = now
+            await session.commit()
+            return [row.lease_id for row in rows]
+
 
 def validate_preflight_result(
     *,
@@ -1074,7 +1010,7 @@ def validate_preflight_result(
                 code=code,
             )
     host_id = str(result.get("hostId") or "").strip()
-    expected_host_id = binding.static_host_id or host_lease.omnigent_host_id
+    expected_host_id = host_lease.omnigent_host_id
     if not host_id or (expected_host_id and host_id != expected_host_id):
         raise OmnigentOAuthHostError(
             "registered host ID did not match binding",
@@ -1097,6 +1033,7 @@ __all__ = [
     "HostPreflightFailure",
     "OmnigentOAuthHostError",
     "OmnigentOAuthHostRepository",
+    "RETIRED_STATIC_LEASE_PURPOSE",
     "deterministic_host_container_name",
     "deterministic_host_lease_id",
     "validate_preflight_result",

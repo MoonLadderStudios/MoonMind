@@ -11,10 +11,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -97,10 +95,6 @@ from moonmind.provider_profiles.lease_client import (
     ProviderProfileLeaseClient,
     deterministic_lease_owner_id,
 )
-from moonmind.repositories.lore_adapter import (
-    LORE_UNSUPPORTED_RUNTIME_LANE,
-    LoreWorkspaceError,
-)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -117,7 +111,6 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
 from moonmind.schemas.workspace_locator_models import (
-    SandboxWorkspaceLocator,
     WorkspaceLocatorResolutionError,
 )
 from moonmind.security.container_job_capabilities import (
@@ -367,8 +360,10 @@ def test_runtime_scripts_are_snapshotted_under_worker_workspace(tmp_path, monkey
     for name in (
         "init-oauth-host.sh",
         "moonmind-tools.sh",
-        "start-codex-oauth-host.sh",
-        "start-claude-oauth-host.sh",
+        "start-omnigent-host.sh",
+        "check-omnigent-host.sh",
+        "check-runner-projections.sh",
+        "clear-stale-host-daemons.sh",
     ):
         script = scripts / name
         script.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1000,87 +995,44 @@ async def test_credential_mount_preflight_separates_login_failure_from_docker_fa
 
 
 @pytest.mark.asyncio
-async def test_static_host_cleanup_removes_lease_owned_credential_validator() -> None:
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._container_present = AsyncMock(side_effect=[True, False])
+async def test_retained_static_lease_cleanup_removes_only_lease_owned_resources(
+    tmp_path,
+) -> None:
+    # A lease recorded under a retired static binding is released through the
+    # one lease-owned cleanup path; no Compose service is stopped by name.
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    present = {"mm-omnigent-host-host-lease-1"}
+
+    async def container_present(name: str) -> bool:
+        return name in present
+
+    async def run(*args, **_kwargs):
+        if args[:3] == ("docker", "rm", "-f"):
+            present.discard(args[-1])
+        if args[:3] == ("docker", "volume", "inspect"):
+            return 1, "", "absent"
+        return 0, "", ""
+
+    runtime._container_present = container_present
     runtime.assert_container_owned = AsyncMock()
-    runtime._run = AsyncMock(return_value=(0, "", ""))
-    runtime.stop_static_host = AsyncMock()
+    runtime._containers.remove_initializer = AsyncMock()
+    runtime._run = AsyncMock(side_effect=run)
 
     lease = _host_lease().model_copy(
         update={"container_name": "mm-omnigent-host-host-lease-1"}
     )
     result = await runtime.stop_host(binding=_binding(), host_lease=lease)
 
-    assert result["cleanupResult"] == "drained_owned_static_host"
+    assert result["cleanupResult"] == "succeeded"
+    assert result["resourceCleanup"]["mode"] == "on_demand_remove"
     runtime.assert_container_owned.assert_awaited_once_with(
         container_name="mm-omnigent-host-host-lease-1", lease_id="host-lease-1"
     )
-    runtime._run.assert_awaited_once_with(
-        "docker",
-        "rm",
-        "-f",
-        "mm-omnigent-host-host-lease-1",
-        check=False,
-    )
-    runtime.stop_static_host.assert_awaited_once_with(binding=_binding())
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["replaced", "same", "removed-during-stop"])
-async def test_static_host_cleanup_stops_only_its_observed_container(
-    scenario: str,
-) -> None:
-    """A late cleanup cannot stop a successor's recreated static host."""
-
-    launched = "a" * 64
-    successor = "b" * 64
-    # Compose recreation removed the launched container and started a successor
-    # for the same service; otherwise the launched container still runs. It may
-    # also remove the launched container between observation and the stop.
-    service_replaced = scenario == "replaced"
-    running = {successor} if service_replaced else {launched}
-    commands: list[tuple[str, ...]] = []
-
-    async def fake_run(
-        *args: str, check: bool = True, **_kwargs: object
-    ) -> tuple[int, str, str]:
-        commands.append(args)
-        if args[:2] == ("docker", "stop"):
-            if scenario == "removed-during-stop":
-                running.discard(args[-1])
-                if check:
-                    raise RuntimeError(f"No such container: {args[-1]}")
-                return 1, "", f"No such container: {args[-1]}"
-            running.discard(args[-1])
-        return 0, "", ""
-
-    async def fake_container_exists(container: str) -> bool:
-        return container in running
-
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._container_present = AsyncMock(return_value=False)
-    runtime.container_exists = fake_container_exists
-    runtime._attestation_from_workload_evidence = MagicMock(return_value=None)
-    runtime._attest_launched_workload_egress = AsyncMock(return_value={})
-    runtime._run = fake_run
-    runtime.stop_static_host = AsyncMock()
-
-    result = await runtime.stop_host(
-        binding=_binding(),
-        host_lease=_host_lease(),
-        egress_evidence={"attachmentIdentity": launched},
-    )
-
-    assert result["cleanupResult"] == "drained_owned_static_host"
-    assert result["resourceCleanup"]["containerRunning"] is False
-    runtime.stop_static_host.assert_not_awaited()
-    assert successor in running or not service_replaced
-    stopped = [args for args in commands if args[:2] == ("docker", "stop")]
-    if service_replaced:
-        assert stopped == []
-    else:
-        assert stopped == [("docker", "stop", "--time", "20", launched)]
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert ("docker", "rm", "-f", "mm-omnigent-host-host-lease-1") in commands
+    assert not any("compose" in command for command in commands)
 
 
 def test_claude_profile_materializes_exact_oauth_home_without_secret_data() -> None:
@@ -1891,7 +1843,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         workspace_root=tmp_path / "workspaces",
     )
     runtime._prepare_workspace = AsyncMock(return_value=workspace)  # type: ignore[method-assign]
-    runtime._resolve_daemon_workspace_root = AsyncMock(return_value=tmp_path)  # type: ignore[method-assign]
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
     runtime._prepare_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=tmp_path / "runtime-scripts"
@@ -1906,10 +1857,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="mm-host-lease-1"
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
-        lambda path, **_kwargs: Path(path),
     )
 
     state = {
@@ -2410,74 +2357,10 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
 
 
 @pytest.mark.asyncio
-async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
-    monkeypatch.setenv("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces")
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock(
-        return_value=(
-            0,
-            "/mnt/data/docker/volumes/agent_workspaces/_data\n",
-            "",
-        )
-    )
-
-    resolved = await runtime._resolve_daemon_workspace_root()
-
-    assert resolved == Path(
-        "/mnt/data/docker/volumes/agent_workspaces/_data"
-    )
-    runtime._run.assert_awaited_once_with(
-        "docker",
-        "volume",
-        "inspect",
-        "--format",
-        "{{.Mountpoint}}",
-        "agent_workspaces",
-        check=False,
-    )
-
-
-@pytest.mark.asyncio
-async def test_static_host_rejects_execution_fanout_before_materialization(
-    tmp_path,
-) -> None:
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
-    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
-    runtime._attest_egress = AsyncMock()  # type: ignore[method-assign]
-    launch = compile_effective_launch(
-        profile_ref="omnigent-codex@1",
-        policy_ref="codex-static@1",
-        provider_profile_id="codex",
-    )
-
-    with pytest.raises(OmnigentOAuthHostError) as exc_info:
-        await runtime.prepare_host(
-            binding=_binding(),
-            host_lease=_host_lease(),
-            workspace_key="workspace-1",
-            workspace_locator={"kind": "sandbox", "workspaceId": "sandbox-1"},
-            current_workflow_id="workflow-1",
-            current_step_execution_id="step-1",
-            required_capabilities=("execution.fanout",),
-            effective_launch=launch,
-        )
-
-    assert exc_info.value.code == "OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED"
-    runtime._prepare_skill_projection.assert_not_awaited()
-    runtime._attest_egress.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_server_image_attestation_records_live_digest_and_architecture() -> None:
     launch = compile_effective_launch(
         profile_ref="omnigent-codex@1",
-        policy_ref="codex-static@1",
+        policy_ref="codex-on-demand@1",
         provider_profile_id="codex",
     )
     declared_ref = launch["serverImageRef"]
@@ -2515,7 +2398,7 @@ async def test_server_image_attestation_records_live_digest_and_architecture() -
 async def test_server_image_attestation_rejects_declared_digest_mismatch() -> None:
     launch = compile_effective_launch(
         profile_ref="omnigent-codex@1",
-        policy_ref="codex-static@1",
+        policy_ref="codex-on-demand@1",
         provider_profile_id="codex",
     )
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
@@ -2547,7 +2430,7 @@ async def test_server_image_attestation_rejects_declared_digest_mismatch() -> No
 async def test_server_image_attestation_rejects_unreleased_architecture() -> None:
     launch = compile_effective_launch(
         profile_ref="omnigent-codex@1",
-        policy_ref="codex-static@1",
+        policy_ref="codex-on-demand@1",
         provider_profile_id="codex",
     )
     launch["architectures"] = ["arm64"]
@@ -2577,48 +2460,12 @@ async def test_server_image_attestation_rejects_unreleased_architecture() -> Non
     assert exc_info.value.code == "OMNIGENT_SERVER_ARCHITECTURE_MISMATCH"
 
 
-@pytest.mark.asyncio
-async def test_daemon_workspace_root_fails_when_volume_inspect_is_unavailable(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock(return_value=(1, "", "volume not found"))
-
-    with pytest.raises(OmnigentOAuthHostError) as raised:
-        await runtime._resolve_daemon_workspace_root()
-
-    assert raised.value.code == "OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE"
-
-
-@pytest.mark.asyncio
-async def test_daemon_workspace_root_skips_inspection_for_local_daemon(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock()
-
-    assert await runtime._resolve_daemon_workspace_root() is None
-    runtime._run.assert_not_awaited()
-
-
-def _assert_shared_entrypoint_accepts_launch_credentials(command, tmp_path):
+def _assert_shared_entrypoint_accepts_launch_credentials(command):
+    # The launch invokes the shared entrypoint directly; its trusted runtime
+    # pack selection must arrive through the launch's own environment.
+    assert command[-1] == "/opt/moonmind/start-omnigent-host.sh"
     scripts = Path(__file__).resolve().parents[3] / "services/omnigent/scripts"
-    wrapper = scripts / Path(command[-1]).name
-    projected_wrapper = tmp_path / "start-host.sh"
-    projected_wrapper.write_text(
-        wrapper.read_text().replace(
-            "exec /opt/moonmind/start-omnigent-host.sh",
-            f'exec "{scripts / "start-omnigent-host.sh"}"',
-        )
-    )
+    entrypoint = scripts / Path(command[-1]).name
     env = {"PATH": "/usr/bin:/bin"}
     for index, argument in enumerate(command[:-1]):
         if argument == "--env" and "=" in command[index + 1]:
@@ -2629,7 +2476,7 @@ def _assert_shared_entrypoint_accepts_launch_credentials(command, tmp_path):
     env.pop("CODEX_CREDENTIAL_GENERATION", None)
     env.pop("CLAUDE_CREDENTIAL_GENERATION", None)
     result = subprocess.run(
-        ["/bin/sh", str(projected_wrapper)],
+        ["/bin/sh", str(entrypoint)],
         env=env,
         capture_output=True,
         text=True,
@@ -2717,7 +2564,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     host = next(
         command for command in commands if command[:3] == ("docker", "run", "-d")
     )
-    _assert_shared_entrypoint_accepts_launch_credentials(host, tmp_path)
+    _assert_shared_entrypoint_accepts_launch_credentials(host)
     assert host[host.index("--cpus") + 1] == "2.0"
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-oauth-host.sh" in initializer
@@ -2752,7 +2599,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "-u",
         "OPENAI_API_KEY",
     )
-    assert host[-1] == "/opt/moonmind/start-codex-oauth-host.sh"
+    assert "MOONMIND_OMNIGENT_RUNTIME_PACK_REF=codex-native-pack@1" in host
     assert environment_image not in initializer
     assert environment_image not in host
     assert initializer[initializer.index("--user") + 1] == "0:0"
@@ -3076,7 +2923,7 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     launch_command = next(
         command for command in commands if command[:3] == ("docker", "run", "-d")
     )
-    _assert_shared_entrypoint_accepts_launch_credentials(launch_command, tmp_path)
+    _assert_shared_entrypoint_accepts_launch_credentials(launch_command)
     assert "type=volume,src=claude_auth_volume,dst=/home/app/.claude" in init_command
     assert "/opt/moonmind/init-oauth-host.sh" in init_command
     assert "OAUTH_HOME=/home/app/.claude" in init_command
@@ -3091,7 +2938,7 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     ) in launch_command
     assert "NO_PROXY=localhost,127.0.0.1" in launch_command
     assert "no_proxy=localhost,127.0.0.1" in launch_command
-    assert launch_command[-1] == "/opt/moonmind/start-claude-oauth-host.sh"
+    assert "MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1" in launch_command
     configured_env = [
         launch_command[index + 1]
         for index, value in enumerate(launch_command[:-1])
@@ -3787,107 +3634,6 @@ async def test_tools_check_uses_host_login_shell_and_manifest(tmp_path) -> None:
     assert "gh --version" in command[-1]
 
 
-@pytest.mark.asyncio
-async def test_static_host_runtime_uses_only_canonical_compose_file(
-    tmp_path, monkeypatch
-) -> None:
-    deployment_root = tmp_path / "deployment"
-    deployment_root.mkdir()
-    compose_path = deployment_root / "docker-compose.yaml"
-    compose_path.write_text("services: {}\n", encoding="utf-8")
-    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(deployment_root))
-    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-live")
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock(return_value=(0, "", ""))
-
-    launch = compile_effective_launch(
-        profile_ref="omnigent-codex@1",
-        policy_ref="codex-static@1",
-        provider_profile_id="codex",
-    )
-    workspace = tmp_path / "authorized-workspace"
-    skills = tmp_path / "authorized-skills"
-    compose_env = await runtime._compose_static_check(
-        workspace_source=workspace,
-        skill_projection=skills,
-        effective_launch=launch,
-        egress_attestation=_egress_attestation(),
-    )
-    await runtime._compose_static_exec_check(env=compose_env)
-    await runtime.stop_static_host()
-
-    commands = [call.args for call in runtime._run.await_args_list]
-    assert commands == [
-        (
-            "docker",
-            "compose",
-            "--project-name",
-            "moonmind-live",
-            "-f",
-            str(compose_path),
-            "--profile",
-            "omnigent-host-codex",
-            "up",
-            "-d",
-            "omnigent-host-codex",
-        ),
-        (
-            "docker",
-            "compose",
-            "--project-name",
-            "moonmind-live",
-            "-f",
-            str(compose_path),
-            "--profile",
-            "omnigent-host-codex",
-            "exec",
-            "-T",
-            "omnigent-host-codex",
-            "/opt/moonmind/check-runner-projections.sh",
-        ),
-        (
-            "docker",
-            "compose",
-            "--project-name",
-            "moonmind-live",
-            "-f",
-            str(compose_path),
-            "--profile",
-            "omnigent-host-codex",
-            "stop",
-            "omnigent-host-codex",
-        ),
-    ]
-    assert all("docker-compose.codex-host.yaml" not in command for command in commands)
-    start_env = runtime._run.await_args_list[0].kwargs["env"]
-    assert start_env["OMNIGENT_RUN_WORKSPACE"] == str(workspace)
-    assert start_env["OMNIGENT_ACTIVE_SKILLS_DIR"] == str(skills)
-
-
-def test_static_codex_compose_separates_authorized_mount_classes() -> None:
-    compose = (Path(__file__).resolve().parents[3] / "docker-compose.yaml").read_text(
-        encoding="utf-8"
-    )
-    service = compose.split("  omnigent-host-codex:", 1)[1].split(
-        "  omnigent-host-claude:", 1
-    )[0]
-
-    assert "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run" in service
-    assert "${OMNIGENT_ACTIVE_SKILLS_DIR" in service
-    # MoonLadderStudios/MoonMind#4558: the selected image owns its tools; no
-    # tools-volume mount overlay may hide them (PATH still leads with the
-    # image-owned tools directory).
-    assert "omnigent-tools:/opt/moonmind-tools:ro" not in service
-    assert "moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh" not in service
-    assert "PATH: /opt/moonmind-tools/bin:" in service
-    assert "omnigent-host-artifacts:/artifacts" in service
-    assert "omnigent-host-cache:/home/app/.cache" in service
-
-
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
     result = {
         "providerProfileId": "codex",
@@ -3920,34 +3666,12 @@ async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
 
     with pytest.raises(OmnigentOAuthHostError) as exc_info:
         await runtime.prepare_host(
-            binding=_binding(),
-            host_lease=_host_lease(),
-            workspace_key="run-1",
-            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
-            current_workflow_id="workflow-1",
-            current_step_execution_id="step-1",
-            effective_launch=compile_effective_launch(
-                profile_ref="omnigent-codex@1",
-                policy_ref="codex-static@1",
-                provider_profile_id="codex",
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-on-demand@1",
+                }
             ),
-        )
-
-    assert exc_info.value.code == "OMNIGENT_SKILL_PROJECTION_UNAVAILABLE"
-    runtime._prepare_workspace.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) -> None:
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
-    )
-    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
-    runtime._prepare_workspace = AsyncMock()  # type: ignore[method-assign]
-
-    with pytest.raises(OmnigentOAuthHostError) as exc_info:
-        await runtime.prepare_host(
-            binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
             workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
@@ -3960,67 +3684,70 @@ async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) ->
             ),
         )
 
-    assert exc_info.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
-    runtime._prepare_skill_projection.assert_not_awaited()
+    assert exc_info.value.code == "OMNIGENT_SKILL_PROJECTION_UNAVAILABLE"
     runtime._prepare_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_static_host_rejects_lore_workspace_before_host_mutation(tmp_path) -> None:
-    workflow_id, step_id = "workflow-1", "step-1"
-    workspace_id = hashlib.sha256(
-        f"{workflow_id}:{step_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    locator = {
-        "kind": "sandbox",
-        "workspaceId": workspace_id,
-        "relativePath": "repo",
-    }
-    authority = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
-    authority_locator = SandboxWorkspaceLocator.model_validate(locator)
-    prepared = SimpleNamespace(
-        authority_locator=authority_locator, authority_path=authority
-    )
-    lore_adapter = MagicMock()
-    lore_adapter.load_prepared_workspace.return_value = prepared
-
-    def bind_workspace(_prepared, *, omnigent_isolation_verified, **_kwargs):
-        if not omnigent_isolation_verified:
-            raise LoreWorkspaceError(
-                LORE_UNSUPPORTED_RUNTIME_LANE,
-                "Lore workspace isolation is not verified for this runtime lane",
-            )
-        return SimpleNamespace(authority_locator=authority_locator)
-
-    lore_adapter.bind_workspace.side_effect = bind_workspace
+@pytest.mark.parametrize(
+    "case,expected_code",
+    [
+        # A binding retained from removed static-connected hosts has no host
+        # to run on until it is repaired to on-demand.
+        ("retained_static_binding", "OMNIGENT_STATIC_HOST_RETIRED"),
+        # A recorded static launch cannot run on an on-demand binding.
+        ("recorded_static_launch", "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"),
+    ],
+)
+async def test_static_launch_authority_fails_closed_before_host_mutation(
+    tmp_path, case, expected_code
+) -> None:
     runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        workspace_root=tmp_path / "workspaces",
-        lore_repository_adapter=lore_adapter,
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
     )
-    runtime._prepare_skill_projection = AsyncMock(return_value=tmp_path / "skills")
-    runtime._attest_egress = AsyncMock()
-    runtime._compose_static_check = AsyncMock(
-        side_effect=AssertionError("host mutation must not be reached")
-    )
+    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
+    runtime._prepare_workspace = AsyncMock()  # type: ignore[method-assign]
+    runtime._run = AsyncMock()  # type: ignore[method-assign]
+    if case == "retained_static_binding":
+        binding = _binding()
+        launch = compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex",
+        )
+    else:
+        binding = _binding().model_copy(
+            update={
+                "static_host_id": None,
+                "host_launch_profile_ref": "codex-on-demand@1",
+            }
+        )
+        launch = _compile_persisted_effective_launch(
+            compile_policy_snapshot(
+                policy_id="codex-static",
+                version=1,
+                document=policy_document(),
+                validation={"valid": True, "diagnostics": []},
+            ),
+            provider_profile_id="codex",
+        )
+        assert launch["hostMode"] == "static_compose"
 
-    with pytest.raises(LoreWorkspaceError, match=LORE_UNSUPPORTED_RUNTIME_LANE):
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
         await runtime.prepare_host(
-            binding=_binding(),
+            binding=binding,
             host_lease=_host_lease(),
             workspace_key="run-1",
-            workspace_locator=locator,
-            current_workflow_id=workflow_id,
-            current_step_execution_id=step_id,
-            repository_provider="lore",
-            effective_launch=compile_effective_launch(
-                profile_ref="omnigent-codex@1",
-                policy_ref="codex-static@1",
-                provider_profile_id="codex",
-            ),
+            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            effective_launch=launch,
         )
 
-    runtime._compose_static_check.assert_not_awaited()
+    assert exc_info.value.code == expected_code
+    runtime._prepare_skill_projection.assert_not_awaited()
+    runtime._prepare_workspace.assert_not_awaited()
+    runtime._run.assert_not_awaited()
 
 
 def test_image_owned_tools_layout_contract() -> None:
@@ -4069,28 +3796,14 @@ def test_stale_host_daemon_cleanup_removes_only_runtime_markers(tmp_path) -> Non
 def test_host_launchers_wait_for_projection_and_clear_stale_state_before_starting() -> None:
     scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
 
-    # The generic static entrypoint owns the shared lifecycle
-    # (MoonLadderStudios/MoonMind#3834); runtime wrappers only select a
-    # trusted pack ref and delegate without duplicating it.
-    for script_name in (
-        "start-omnigent-host.sh",
-        "start-host-with-projections.sh",
-    ):
-        source = (scripts / script_name).read_text(encoding="utf-8")
-        assert "until /opt/moonmind/check-runner-projections.sh; do" in source
-        assert "waiting for a resolved Skill projection" in source
-        assert source.index("/opt/moonmind/clear-stale-host-daemons.sh") < source.index(
-            "exec omnigent host"
-        )
-    for wrapper_name, pack_ref in (
-        ("start-codex-oauth-host.sh", "codex-native-pack@1"),
-        ("start-claude-oauth-host.sh", "claude-native-pack@1"),
-    ):
-        wrapper = (scripts / wrapper_name).read_text(encoding="utf-8")
-        assert f"MOONMIND_OMNIGENT_RUNTIME_PACK_REF={pack_ref}" in wrapper
-        assert "exec /opt/moonmind/start-omnigent-host.sh" in wrapper
-        assert "check-runner-projections" not in wrapper
-        assert "clear-stale-host-daemons" not in wrapper
+    # One shared entrypoint owns the host lifecycle; the launcher selects the
+    # trusted runtime pack through its environment.
+    source = (scripts / "start-omnigent-host.sh").read_text(encoding="utf-8")
+    assert "until /opt/moonmind/check-runner-projections.sh; do" in source
+    assert "waiting for a resolved Skill projection" in source
+    assert source.index("/opt/moonmind/clear-stale-host-daemons.sh") < source.index(
+        "exec omnigent host"
+    )
 
 
 def test_omnigent_projects_portable_pr_resolver_semantics_without_copying_them() -> None:
@@ -4522,7 +4235,7 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
         binding = await repository.create_or_update_static_binding(
             profile_id="codex",
             endpoint_ref="default",
-            static_host_id="host-1",
+            host_launch_profile_ref="codex-on-demand@1",
         )
         first = await repository.create_or_get_host_lease(
             binding=binding,
@@ -4711,7 +4424,9 @@ async def test_unconfirmed_host_stop_fences_successor_until_janitor_confirms(
             await session.commit()
         repository = OmnigentOAuthHostRepository(factory)
         binding = await repository.create_or_update_static_binding(
-            profile_id="codex", endpoint_ref="default", static_host_id="host-1"
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@1",
         )
 
         async def admit(attempt: int):
@@ -4798,9 +4513,9 @@ async def test_host_lease_rejects_binding_changed_before_serialized_acquisition(
         stale_binding = await repository.create_or_update_static_binding(
             profile_id="codex",
             endpoint_ref="default",
-            static_host_id="host-1",
+            host_launch_profile_ref="codex-on-demand@1",
             execution_profile_ref="omnigent-codex@1",
-            launch_policy_ref="codex-static@1",
+            launch_policy_ref="codex-on-demand@1",
             effective_launch_snapshot={"snapshotRef": "old"},
         )
         async with factory() as session:
@@ -4808,7 +4523,7 @@ async def test_host_lease_rejects_binding_changed_before_serialized_acquisition(
                 OmnigentOAuthHostBindingRecord,
                 stale_binding.binding_ref,
             )
-            record.launch_policy_ref = "codex-static@2"
+            record.launch_policy_ref = "codex-on-demand@2"
             record.effective_launch_snapshot_json = None
             await session.commit()
 
@@ -6821,12 +6536,6 @@ async def _run_coordinator_failure_case(
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
     )
     error = injected_error or _injected_launch_error(code)
-    request_uses_on_demand_policy = bool(
-        request is not None
-        and isinstance(request.parameters.get("omnigent"), dict)
-        and request.parameters["omnigent"].get("launchPolicyRef")
-        == "codex-on-demand@1"
-    )
 
     class FailureOwners:
         """Deterministic fakes for the concrete launch/cleanup owners.
@@ -6843,18 +6552,6 @@ async def _run_coordinator_failure_case(
             self.calls.append(owner)
             if fail_at == owner:
                 raise error
-
-        async def stop_static_host(self) -> None:
-            self.calls.append("host_stop")
-            if fail_at == "host_stop":
-                raise error
-            actions.append("host_stopped")
-
-        async def remove_on_demand_host(self) -> None:
-            self.calls.append("host_remove")
-            if fail_at == "host_remove":
-                raise error
-            actions.append("host_removed")
 
     owners = FailureOwners()
 
@@ -6890,18 +6587,9 @@ async def _run_coordinator_failure_case(
         async def get_binding_for_profile(self, _profile_id):
             if fail_at == "binding":
                 raise error
-            if request_uses_on_demand_policy or fail_at in {
-                "container_start", "image_pull", "network_start",
-                "credential_volume_missing", "credential_volume_owner",
-                "credential_generation", "credential_login",
-                "host_registration", "host_registration_timeout",
-                "host_capability", "harness_readiness",
-                "bridge_authentication", "server_endpoint",
-            }:
-                return _binding().model_copy(
-                    update={"static_host_id": None, "host_launch_profile_ref": "codex"}
-                )
-            return _binding()
+            return _binding().model_copy(
+                update={"static_host_id": None, "host_launch_profile_ref": "codex"}
+            )
 
         async def create_or_update_static_binding(self, **kwargs):
             binding = await self.get_binding_for_profile(kwargs["profile_id"])
@@ -6958,9 +6646,6 @@ async def _run_coordinator_failure_case(
     runtime._prepare_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=Path("/tmp/runtime-scripts")
     )
-    runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
-        return_value=None
-    )
     runtime._initialize_required_tools = AsyncMock()  # type: ignore[method-assign]
     runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
     # Egress attestation is an orthogonal trusted-backend gate; this matrix
@@ -7016,34 +6701,13 @@ async def _run_coordinator_failure_case(
 
         owner_mock.side_effect = fail_from_production_runtime
 
-    # The static service's launched container runs until cleanup stops that
-    # exact container; on-demand hosts are removed by their lease name.
-    static_running = {"container-1"}
-
+    # On-demand hosts are removed by their lease-owned name.
     async def run_cleanup_command(*args, **_kwargs):
-        if (
-            args[:3] == ("docker", "inspect", "--format")
-            and args[-1] == "container-1"
-            and args[3].startswith("{{range .Mounts}}")
-        ):
-            return 0, "valid", ""
         if args[:4] == ("docker", "inspect", "--format", "{{.State.Running}}"):
-            return 0, "true" if args[-1] in static_running else "false", ""
-        command = tuple(args[:3])
-        if command[:2] == ("docker", "stop") and args[-1] == "container-1":
-            owners.calls.append("host_stop")
-            if fail_at == "host_stop":
-                raise error
-            static_running.discard("container-1")
-            actions.append("host_stopped")
-        elif command[:2] == ("docker", "stop"):
+            return 0, "true" if args[-1] == "container-1" else "false", ""
+        if args[:2] == ("docker", "stop"):
             owners.calls.append("host_remove")
             if fail_at == "host_remove":
-                raise error
-            actions.append("host_stopped")
-        elif args[:2] == ("docker", "compose") and "stop" in args:
-            owners.calls.append("host_stop")
-            if fail_at == "host_stop":
                 raise error
             actions.append("host_stopped")
         return 0, "", ""
@@ -7156,19 +6820,12 @@ async def _run_coordinator_failure_case(
                 },
             },
         )
-    if fail_at == "host_remove":
-        coordinator._hosts.get_binding_for_profile = AsyncMock(  # type: ignore[attr-defined]
-            return_value=_binding().model_copy(
-                update={"static_host_id": None, "host_launch_profile_ref": "codex"}
-            )
-        )
-
     if setup is not None:
         await setup(runtime, coordinator)
     if isinstance(error, asyncio.CancelledError):
         with pytest.raises(asyncio.CancelledError):
             await coordinator.execute(request)
-    elif fail_at in {"none", "host_stop", "host_remove", "release"}:
+    elif fail_at in {"none", "host_remove", "release"}:
         await coordinator.execute(request)
     else:
         with pytest.raises(type(error)) as captured:
@@ -7177,6 +6834,176 @@ async def _run_coordinator_failure_case(
             assert captured.value.code == code
     artifact_directory.cleanup()
     return events, actions, owners.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy", [False, True])
+async def test_retained_static_binding_moves_to_on_demand_only_while_idle(
+    monkeypatch, busy
+) -> None:
+    retained = _binding().model_copy(
+        update={
+            "execution_profile_ref": "omnigent-codex@1",
+            "launch_policy_ref": "codex-static@1",
+            "effective_launch_snapshot": {"hostMode": "static_compose"},
+        }
+    )
+    leased = OmnigentOAuthHostError(
+        "host binding is leased and keeps its launch",
+        code="OMNIGENT_HOST_BINDING_LEASED",
+    )
+    writes: list[dict] = []
+    prepared: list[OmnigentOAuthHostBinding] = []
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_WAIT_SECONDS",
+        0.0,
+    )
+
+    async def setup(runtime, coordinator):
+        async def get_binding_for_profile(_profile_id):
+            return retained
+
+        async def create_or_update_static_binding(**kwargs):
+            # Mirrors the repository: an idle-only write is refused while a
+            # host lease still holds the binding's launch.
+            if busy and kwargs.get("require_idle"):
+                raise leased
+            writes.append(kwargs)
+            return retained.model_copy(
+                update={
+                    "static_host_id": kwargs.get("static_host_id"),
+                    "host_launch_profile_ref": kwargs["host_launch_profile_ref"],
+                    "execution_profile_ref": kwargs["execution_profile_ref"],
+                    "launch_policy_ref": kwargs["launch_policy_ref"],
+                    "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+                }
+            )
+
+        coordinator._hosts.get_binding_for_profile = get_binding_for_profile
+        coordinator._hosts.create_or_update_static_binding = (
+            create_or_update_static_binding
+        )
+        prepare_host = runtime.prepare_host
+
+        async def capture_prepare_host(**kwargs):
+            prepared.append(kwargs["binding"])
+            return await prepare_host(**kwargs)
+
+        runtime.prepare_host = capture_prepare_host
+
+    await _run_coordinator_failure_case(
+        fail_at="binding_busy" if busy else "none",
+        code="OMNIGENT_HOST_BINDING_LEASED",
+        injected_error=leased if busy else None,
+        setup=setup,
+    )
+
+    if busy:
+        assert writes == []
+        assert prepared == []
+        return
+    assert len(writes) == 1
+    assert "static_host_id" not in writes[0]
+    assert writes[0]["host_launch_profile_ref"] == "codex-on-demand@1"
+    assert writes[0]["launch_policy_ref"] == "codex-on-demand@1"
+    assert writes[0]["require_idle"] is True
+    assert writes[0]["expected_binding"] == retained
+    assert prepared[0].static_host_id is None
+    assert prepared[0].host_launch_profile_ref == "codex-on-demand@1"
+
+
+@pytest.mark.parametrize(
+    ("update", "expected"),
+    [
+        ({"host_launch_profile_ref": "codex-on-demand@3"}, "codex-on-demand@3"),
+        (
+            {"effective_launch_snapshot": {"hostMode": "on_demand_docker"}},
+            "codex-on-demand@3",
+        ),
+        # Bootstrap cutover clears an idle binding's snapshot; its own
+        # on-demand version still wins over the provider default.
+        ({"effective_launch_snapshot": None}, "codex-on-demand@3"),
+        ({"effective_launch_snapshot": {"hostMode": "static_compose"}}, None),
+        (
+            {"launch_policy_ref": "codex-static@2", "effective_launch_snapshot": None},
+            None,
+        ),
+        (
+            {"launch_policy_ref": "omnigent-codex@1", "effective_launch_snapshot": None},
+            None,
+        ),
+        ({"launch_policy_ref": None}, None),
+    ],
+)
+def test_binding_keeps_only_a_policy_that_can_still_launch(update, expected) -> None:
+    from moonmind.omnigent.profile_bound_execution import (
+        on_demand_binding_policy_ref,
+    )
+
+    binding = _binding().model_copy(
+        update={
+            "static_host_id": None,
+            "host_launch_profile_ref": None,
+            "launch_policy_ref": "codex-on-demand@3",
+            **update,
+        }
+    )
+
+    assert on_demand_binding_policy_ref(binding) == expected
+
+
+@pytest.mark.asyncio
+async def test_stored_static_policy_never_launches_or_marks_a_binding() -> None:
+    # Stored static policy versions still resolve for history, but selecting
+    # one fails closed before any lease or binding write.
+    writes: list[dict] = []
+    retired = _injected_launch_error("OMNIGENT_STATIC_HOST_RETIRED")
+
+    async def setup(runtime, coordinator):
+        async def get_binding_for_profile(_profile_id):
+            return None
+
+        async def create_or_update_static_binding(**kwargs):
+            writes.append(kwargs)
+            raise AssertionError("a static launch must not write a binding")
+
+        coordinator._hosts.get_binding_for_profile = get_binding_for_profile
+        coordinator._hosts.create_or_update_static_binding = (
+            create_or_update_static_binding
+        )
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-static-policy",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-static-policy"
+                ).hexdigest()[:24],
+            }
+        },
+        parameters={
+            "omnigent": {
+                "executionTargetRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-static@1",
+                "session": {"workspace": "https://example.com/repo.git"},
+            }
+        },
+    )
+
+    await _run_coordinator_failure_case(
+        fail_at="policy_authority_resolution",
+        code="OMNIGENT_STATIC_HOST_RETIRED",
+        request=request,
+        injected_error=retired,
+        setup=setup,
+    )
+
+    assert writes == []
 
 
 @pytest.mark.asyncio
@@ -7528,7 +7355,7 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("fail_at", "code"),
-    [("host_stop", "host_stop_failed"), ("host_remove", "host_remove_failed")],
+    [("host_remove", "host_remove_failed")],
 )
 async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor(
     fail_at: str, code: str
@@ -9120,12 +8947,8 @@ async def test_resolve_workload_attachment_records_actual_on_demand_container(
         workspace_root=tmp_path / "workspaces",
     )
     runtime._run = AsyncMock()
-    binding = _binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
 
     identity = await runtime._resolve_workload_attachment_identity(
-        binding=binding,
         host_lease=_host_lease(),
         container_name="mm-host-lease-1",
     )
@@ -9134,365 +8957,6 @@ async def test_resolve_workload_attachment_records_actual_on_demand_container(
     # by the production host-launch owner, never the logical registered host id.
     assert identity == "mm-host-lease-1"
     runtime._run.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_static_attachment_identity_fails_when_container_is_absent(tmp_path) -> None:
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        scripts_dir=tmp_path,
-        workspace_root=tmp_path / "workspaces",
-    )
-    runtime._run = AsyncMock(return_value=(0, "", ""))
-    binding = _binding()
-
-    with pytest.raises(OmnigentOAuthHostError) as excinfo:
-        await runtime._resolve_workload_attachment_identity(
-            binding=binding,
-            host_lease=_host_lease(),
-            container_name=None,
-        )
-    assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("runtime_id,provider,harness,volume_env,home", [
-    ("codex_cli", "openai", "codex-native", "CODEX_VOLUME_NAME", "/home/app/.codex"),
-    ("claude_code", "anthropic", "claude-native", "CLAUDE_VOLUME_NAME", "/home/app/.claude"),
-])
-async def test_static_compose_uses_selected_profile_oauth_volume(
-    tmp_path, monkeypatch, runtime_id, provider, harness, volume_env, home
-):
-    monkeypatch.setenv(volume_env, "other-profile-home")
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._run = AsyncMock(return_value=(0, "", ""))
-    runtime._deployment_compose_command = lambda: ("docker", "compose")
-    binding = _binding()
-    binding = binding.model_copy(
-        update={
-            "harness": harness,
-            "credential_mount_ref": binding.credential_mount_ref.model_copy(
-                update={
-                    "target_path": home,
-                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
-                        update={
-                            "runtime_id": runtime_id,
-                            "provider_id": provider,
-                            "volume_ref": "selected-profile-home",
-                        }
-                    ),
-                }
-            ),
-        }
-    )
-    await runtime._compose_static_check(binding=binding, workspace_source=tmp_path)
-    assert runtime._run.await_args.kwargs["env"][volume_env] == "selected-profile-home"
-
-
-@pytest.fixture
-def docker_mount_transport(tmp_path, monkeypatch):
-    """Exercise Docker's actual formatter against a hermetic inspect endpoint."""
-    docker_cli = shutil.which("docker")
-    if not docker_cli:
-        pytest.skip("Docker CLI is required for its Go-template formatter")
-    state = {"mounts": [], "status": 200, "commands": []}
-
-    class InspectHandler(BaseHTTPRequestHandler):
-        def do_HEAD(self):
-            assert self.path.endswith("/_ping")
-            self.send_response(200)
-            self.send_header("API-Version", "1.99")
-            self.end_headers()
-
-        def do_GET(self):
-            if self.path.endswith("/containers/observed-host/json"):
-                payload = json.dumps(
-                    {"Id": "a" * 64, "Mounts": state["mounts"]}
-                ).encode()
-                status = state["status"]
-            elif self.path.endswith("/_ping"):
-                payload, status = b"OK", 200
-            else:
-                payload, status = b'{"message":"unknown test container"}', 404
-            self.send_response(status)
-            self.send_header("API-Version", "1.99")
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), InspectHandler)
-    thread = threading.Thread(
-        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
-    )
-    thread.start()
-    config_dir = tmp_path / "docker-config"
-    config_dir.mkdir()
-    endpoint = f"tcp://127.0.0.1:{server.server_port}"
-    real_subprocess = asyncio.create_subprocess_exec
-
-    async def docker_transport(*argv, **kwargs):
-        state["commands"].append(argv)
-        if argv[:3] == ("docker", "inspect", "--format"):
-            assert argv[-1] == "observed-host"
-            # Explicit endpoint/config prevent discovery of the deployment
-            # daemon or credentials, while the real CLI evaluates the template.
-            child_env = {
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("DOCKER_")
-            }
-            kwargs["env"] = child_env
-            return await real_subprocess(
-                docker_cli,
-                "--config",
-                str(config_dir),
-                "--host",
-                endpoint,
-                *argv[1:],
-                **kwargs,
-            )
-        assert argv == (
-            "docker",
-            "exec",
-            "observed-host",
-            "/opt/moonmind/check-runner-projections.sh",
-        )
-        return await real_subprocess(sys.executable, "-c", "", **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", docker_transport)
-    try:
-        yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "runtime_id,provider,harness,home",
-    [
-        ("codex_cli", "openai", "codex-native", "/home/app/.codex"),
-        ("claude_code", "anthropic", "claude-native", "/home/app/.claude"),
-    ],
-)
-async def test_static_host_mount_probe_survives_runtime_output_redaction(
-    docker_mount_transport, runtime_id, provider, harness, home
-):
-    binding = _binding()
-    binding = binding.model_copy(
-        update={
-            "harness": harness,
-            "credential_mount_ref": binding.credential_mount_ref.model_copy(
-                update={
-                    "target_path": home,
-                    "auth_volume_ref": binding.credential_mount_ref.auth_volume_ref.model_copy(
-                        update={"runtime_id": runtime_id, "provider_id": provider}
-                    ),
-                }
-            ),
-        }
-    )
-    docker_mount_transport["mounts"] = [
-        {
-            "Type": "volume",
-            "Name": binding.credential_mount_ref.auth_volume_ref.volume_ref,
-            "Destination": home,
-            "RW": True,
-        }
-    ]
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    # Observe the actual runner's redaction, then attest without bypassing it.
-    _, raw_mounts, _ = await runtime._run(
-        "docker", "inspect", "--format", "{{json .Mounts}}", "observed-host"
-    )
-    assert home not in raw_mounts
-    assert "[REDACTED_AUTH_PATH]" in raw_mounts
-    docker_mount_transport["commands"].clear()
-
-    await runtime._compose_static_exec_check(
-        binding=binding, container_name="observed-host"
-    )
-
-    commands = docker_mount_transport["commands"]
-    assert len(commands) == 2
-    assert "{{json" not in commands[0][3]
-    assert commands[0][-1] == commands[1][2] == "observed-host"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mounts,allowed",
-    [
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                }
-            ],
-            True,
-            id="selected-home",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "another-profile",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                }
-            ],
-            False,
-            id="substituted-profile",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "bind",
-                    "Source": "/unrelated",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                }
-            ],
-            False,
-            id="bind",
-        ),
-        pytest.param([], False, id="missing"),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                },
-                {
-                    "Type": "bind",
-                    "Source": "/unrelated",
-                    "Destination": "/home/app/.codex/auth.json",
-                    "RW": True,
-                },
-            ],
-            False,
-            id="nested",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                }
-            ]
-            * 2,
-            False,
-            id="duplicate",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": False,
-                }
-            ],
-            False,
-            id="read-only",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": "true",
-                }
-            ],
-            False,
-            id="malformed",
-        ),
-        pytest.param(
-            [
-                {
-                    "Type": "volume",
-                    "Name": "codex_auth_volume",
-                    "Destination": "/home/app/.codex",
-                    "RW": True,
-                },
-                {"Type": "volume", "Name": "other", "Destination": "/tmp", "RW": True},
-                {
-                    "Type": "volume",
-                    "Name": "other",
-                    "Destination": "/home/app/.codex-other",
-                    "RW": True,
-                },
-            ],
-            True,
-            id="unrelated-short-and-sibling-mounts",
-        ),
-    ],
-)
-async def test_static_host_probe_attests_actual_oauth_volume(
-    docker_mount_transport, mounts, allowed
-):
-    docker_mount_transport["mounts"] = mounts
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    if allowed:
-        await runtime._compose_static_exec_check(
-            binding=_binding(), container_name="observed-host"
-        )
-        assert len(docker_mount_transport["commands"]) == 2
-    else:
-        with pytest.raises(OmnigentOAuthHostError) as caught:
-            await runtime._compose_static_exec_check(
-                binding=_binding(), container_name="observed-host"
-            )
-        assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
-        assert len(docker_mount_transport["commands"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_static_host_probe_rejects_failed_inspection(docker_mount_transport):
-    docker_mount_transport["status"] = 500
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    with pytest.raises(OmnigentOAuthHostError) as caught:
-        await runtime._compose_static_exec_check(
-            binding=_binding(), container_name="observed-host"
-        )
-    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
-    assert len(docker_mount_transport["commands"]) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "code,output",
-    [
-        (0, ""),
-        (0, "{}"),
-        (0, "invalid"),
-        (0, "validinvalid"),
-        (0, "validvalid"),
-        (1, "valid"),
-    ],
-)
-async def test_static_host_probe_rejects_invalid_mount_verdict(code, output):
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    runtime._run = AsyncMock(return_value=(code, output, ""))
-    with pytest.raises(OmnigentOAuthHostError) as caught:
-        await runtime._compose_static_exec_check(
-            binding=_binding(), container_name="observed-host"
-        )
-    assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
-    assert runtime._run.await_count == 1
 
 
 @pytest.mark.asyncio

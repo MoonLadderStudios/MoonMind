@@ -16,7 +16,14 @@
 #   CLAUDE_VOLUME_NAME   Docker volume name (default: claude_auth_volume)
 #   CLAUDE_VOLUME_PATH   Container-side auth root (default: /home/app/.claude)
 #   CLAUDE_HOME          Legacy alias for CLAUDE_VOLUME_PATH
+#   MOONMIND_OAUTH_RUNNER_IMAGE  --login image, as for in-product OAuth login;
+#                        otherwise the shared Omnigent host image selected by
+#                        OMNIGENT_SHARED_HOST_IMAGE_REF or
+#                        OMNIGENT_SHARED_HOST_IMAGE/_TAG (default: latest).
+#                        Image settings are read from the environment, then .env.
 set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 export CLAUDE_VOLUME_NAME="${CLAUDE_VOLUME_NAME:-claude_auth_volume}"
 VOLUME_NAME="${CLAUDE_VOLUME_NAME}"
@@ -37,6 +44,46 @@ _ensure_volume() {
     echo "Creating Docker volume '$VOLUME_NAME'..."
     docker volume create "$VOLUME_NAME" >/dev/null
   fi
+}
+
+# Docker creates the mount point root-owned; the CLI writes it as 1000:1000.
+_own_volume() {
+  docker run --rm \
+    --mount "type=volume,source=${VOLUME_NAME},target=${CLAUDE_HOME}" \
+    alpine:3.24 sh -c "chown -R 1000:1000 '${CLAUDE_HOME}' && chmod 0700 '${CLAUDE_HOME}'"
+}
+
+# Compose used to resolve the login image from the shell, then the project
+# .env; keep that precedence now that --login runs the image directly.
+_image_setting() {
+  local key="$1" value
+  local double_quoted='^"([^"]*)"' single_quoted="^'([^']*)'"
+  if [[ -n "${!key+x}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  value="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "${ROOT_DIR}/.env" 2>/dev/null | tail -n 1)" || return 0
+  value="${value#*=}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  if [[ "$value" =~ $double_quoted || "$value" =~ $single_quoted ]]; then
+    value="${BASH_REMATCH[1]}"
+  else
+    value="${value%%[[:space:]]#*}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+  printf '%s' "$value"
+}
+
+# The in-product OAuth runner's image: its explicit override, else the shared
+# Omnigent host image as the deployment's Compose file selects it.
+_login_image() {
+  local runner shared legacy name tag
+  runner="$(_image_setting MOONMIND_OAUTH_RUNNER_IMAGE)"
+  shared="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE_REF)"
+  legacy="$(_image_setting OMNIGENT_HOST_IMAGE_REF)"
+  name="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE)"
+  tag="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE_TAG)"
+  printf '%s' "${runner:-${shared:-${legacy:-${name:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${tag:-latest}}}}"
 }
 
 # ---------------------------------------------------------------------------
@@ -76,13 +123,11 @@ cmd_sync() {
 }
 
 # ---------------------------------------------------------------------------
-# --login: interactive claude login inside a container
+# --login: interactive claude login in a one-off shared host container
 # ---------------------------------------------------------------------------
 cmd_login() {
   _require_docker
 
-  local AUTH_SERVICE="${CLAUDE_AUTH_SERVICE:-omnigent-host-claude}"
-  local AUTH_PROFILE="${CLAUDE_AUTH_PROFILE:-omnigent-host-claude}"
   local CLAUDE_TERM="${TERM:-xterm-256color}"
 
   if ! [ -t 0 ] || ! [ -t 1 ]; then
@@ -90,15 +135,18 @@ cmd_login() {
     exit 1
   fi
 
-  local COMPOSE_PROFILE_ARGS=()
-  if [ -n "$AUTH_PROFILE" ]; then
-    COMPOSE_PROFILE_ARGS+=(--profile "$AUTH_PROFILE")
-  fi
+  local image
+  image="$(_login_image)"
+  _ensure_volume
+  _own_volume
 
-  docker compose ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} run --rm -it \
+  docker run --rm -it \
     --user 1000:1000 \
-    -v "${VOLUME_NAME}:${CLAUDE_HOME}" \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --mount "type=volume,source=${VOLUME_NAME},target=${CLAUDE_HOME}" \
     --entrypoint /bin/bash \
+    -e HOME=/home/app \
     -e MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth \
     -e ANTHROPIC_API_KEY= \
     -e CLAUDE_API_KEY= \
@@ -106,7 +154,7 @@ cmd_login() {
     -e CLAUDE_HOME="${CLAUDE_HOME}" \
     -e CLAUDE_CONFIG_DIR="${CLAUDE_HOME}" \
     -e CLAUDE_VOLUME_NAME="${CLAUDE_VOLUME_NAME}" \
-    "$AUTH_SERVICE" \
+    "$image" \
     -lc 'unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude auth login'
 }
 

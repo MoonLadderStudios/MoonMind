@@ -12,30 +12,6 @@ from temporalio.testing import WorkflowEnvironment
 from api_service.docker import cache_temporal_test_server
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MOUNTED_TOOL_PATH = (
-    "/opt/moonmind-tools/bin:"
-    "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
-    "/usr/bin:/usr/sbin:/bin:/sbin}"
-)
-# Shared static-host image expression (MoonLadderStudios/MoonMind#3834): both
-# static rows and both init services must reference this exact string.
-SHARED_STATIC_HOST_IMAGE = (
-    "${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-"
-    "${OMNIGENT_SHARED_HOST_IMAGE:-"
-    "ghcr.io/moonladderstudios/omnigent-host-moonmind}:"
-    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}"
-)
-GENERIC_STATIC_ENTRYPOINT = ["/opt/moonmind/start-omnigent-host.sh"]
-GENERIC_STATIC_HEALTHCHECK = {
-    "test": [
-        "CMD-SHELL",
-        "/opt/moonmind/check-omnigent-host.sh && /opt/moonmind/check-runner-projections.sh",
-    ],
-    "interval": "10s",
-    "timeout": "5s",
-    "retries": 12,
-    "start_period": "30s",
-}
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -96,31 +72,6 @@ def test_docker_proxy_preserves_policy_and_socket_boundary():
             "POST",
         )
     )
-
-
-def _render_codex_host_compose() -> dict:
-    _require_docker_compose()
-    result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            "/dev/null",
-            "-f",
-            "docker-compose.yaml",
-            "--profile",
-            "omnigent-host-codex",
-            "config",
-            "--format",
-            "json",
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
 
 
 def _require_docker_compose() -> None:
@@ -296,16 +247,6 @@ def test_omnigent_hosts_use_image_owned_tools_without_tool_bundle():
         "temporal-worker-agent-runtime"
     ].get("depends_on", {})
 
-    for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
-        host = services[service_name]
-        environment = _env_map(host["environment"])
-        assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert "omnigent-tools-init" not in host.get("depends_on", {})
-        assert "omnigent-tools:/opt/moonmind-tools:ro" not in host["volumes"]
-        assert (
-            "./services/omnigent/scripts/moonmind-tools.sh:"
-            "/etc/profile.d/moonmind-tools.sh:ro"
-        ) not in host["volumes"]
 
 def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     compose = _load_compose()
@@ -805,14 +746,10 @@ def test_local_compose_enables_temporal_workflow_editing_readiness():
     )
 
 
-def test_omnigent_host_profile_service_is_wired_for_mm_971():
-    # MM-971 carries the optional host-service slice from source issue MM-968.
+def test_omnigent_server_runs_without_static_host_services():
     compose = _load_compose()
     services = compose["services"]
     volumes = compose["volumes"]
-
-    assert "omnigent" in services
-    assert "omnigent-host" in services
 
     server_service = services["omnigent"]
     assert "profiles" not in server_service
@@ -826,253 +763,44 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         "omnigent-egress-network",
     }
 
-    host_service = services["omnigent-host"]
-    assert host_service["profiles"] == ["omnigent-host"]
-    assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
-    )
-    assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
-    assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
-    assert _network_names(host_service) == {"control-plane-network"}
-
-    host_env = _env_map(host_service["environment"])
-    assert host_env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == (
-        "MOONMIND_ACTIVE_SKILLS_DIR"
-    )
-    assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
-    assert "CODEX_HOME" not in host_env
-    assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
-    assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
-    assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
-
-    host_volumes = {
-        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    # Codex and Claude OAuth run on on-demand hosts the launcher creates;
+    # no static-connected host service, profile, or state volume remains.
+    retired = {
+        "omnigent-host",
+        "omnigent-host-codex",
+        "omnigent-host-codex-init",
+        "omnigent-host-claude",
+        "omnigent-host-claude-init",
     }
-    assert "omnigent-host-state:/root/.omnigent" in host_volumes
-    assert (
-        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
-        in host_volumes
+    assert retired.isdisjoint(services)
+    declared_profiles = {
+        profile
+        for service in services.values()
+        for profile in service.get("profiles", ())
+    }
+    assert {"omnigent-host", "omnigent-host-codex", "omnigent-host-claude"}.isdisjoint(
+        declared_profiles
     )
-    assert "codex_auth_volume:/root/.codex" not in host_volumes
-    assert "omnigent-host-artifacts:/artifacts" in host_volumes
-    assert "omnigent-host-cache:/root/.cache" in host_volumes
-    assert "omnigent-host-state" in volumes
-    assert "codex_auth_volume" in volumes
+    assert not any(key.startswith("x-omnigent") for key in compose)
+    assert {
+        "omnigent-host-state",
+        "omnigent-host-claude-state",
+        "omnigent-host-claude-home",
+        "omnigent-host-codex-state",
+        "omnigent-host-artifacts",
+        "omnigent-host-cache",
+    }.isdisjoint(volumes)
     assert "omnigent-server-state" not in volumes
 
-
-def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
-    compose = _load_compose()
-    host_service = compose["services"]["omnigent-host-claude"]
-
-    assert host_service["profiles"] == ["omnigent-host-claude"]
-    assert host_service["hostname"] == "omnigent-host-claude"
-    assert host_service["image"] == SHARED_STATIC_HOST_IMAGE
-    assert host_service["entrypoint"] == GENERIC_STATIC_ENTRYPOINT
-    assert "command" not in host_service
-    assert host_service["user"] == "1000:1000"
-    assert host_service["working_dir"] == "/home/app"
-    assert "env_file" not in host_service
-
-    host_env = _env_map(host_service["environment"])
-    assert host_env == {
-        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
-        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
-        "http_proxy": "http://omnigent-egress-proxy:3129",
-        "https_proxy": "http://omnigent-egress-proxy:3129",
-            "NO_PROXY": "localhost,127.0.0.1",
-            "no_proxy": "localhost,127.0.0.1",
-        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
-            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
-            "MOONMIND_ACTIVE_SKILLS_DIR"
-        ),
-        "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
-        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
-        "HOME": "/home/app",
-        "PATH": MOUNTED_TOOL_PATH,
-        "MOONMIND_OMNIGENT_RUNTIME_PACK_REF": "claude-native-pack@1",
-        "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF": "claude-oauth-home@1",
-        "CLAUDE_HOME": "/home/app/.claude",
-        "CLAUDE_VOLUME_PATH": "/home/app/.claude",
-        "CLAUDE_CONFIG_DIR": "/home/app/.claude",
-        "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
-        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
-            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
-        ),
-        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
-            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
-        ),
-    }
-
-    host_volumes = {
-        volume for volume in host_service["volumes"] if isinstance(volume, str)
-    }
-    assert "omnigent-host-claude-home:/home/app" in host_volumes
-    assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
-    assert "claude_auth_volume:/home/app/.claude" in host_volumes
-    assert (
-        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
-        in host_volumes
+    # On-demand hosts keep mounting the same credential volumes.
+    assert volumes["codex_auth_volume"]["name"] == (
+        "${CODEX_VOLUME_NAME:-codex_auth_volume}"
     )
-    assert "omnigent-tools:/opt/moonmind-tools:ro" not in host_volumes
-    assert (
-        "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
-        "/opt/moonmind-skills:ro"
-    ) in host_volumes
-    assert "omnigent-host-claude-state" in compose["volumes"]
-    assert "omnigent-host-claude-home" in compose["volumes"]
-
-    assert host_service["depends_on"] == {
-        "omnigent": {"condition": "service_started"},
-        "omnigent-host-claude-init": {"condition": "service_completed_successfully"},
-        "sandbox-egress-proxy": {"condition": "service_healthy"},
-    }
-    assert _network_names(host_service) == {"omnigent-egress-network"}
-    init_service = compose["services"]["omnigent-host-claude-init"]
-    assert init_service["network_mode"] == "none"
-    assert init_service["cap_drop"] == ["ALL"]
-    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
-    assert init_service["security_opt"] == ["no-new-privileges:true"]
-    assert init_service["read_only"] is True
-    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
-    assert host_service["labels"] == {
-        "moonmind.egress.profile": "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}",
-        "moonmind.egress.profile_digest": (
-            "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
-        ),
-        "moonmind.egress.applied_rule_digest": (
-            "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
-        ),
-    }
-    assert host_service["cap_drop"] == ["ALL"]
-    assert host_service["security_opt"] == ["no-new-privileges:true"]
-    assert host_service["restart"] == "unless-stopped"
-    assert host_service["healthcheck"] == GENERIC_STATIC_HEALTHCHECK
-
-
-def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
-    compose = _load_compose()
-    host_service = compose["services"]["omnigent-host-codex"]
-
-    assert host_service["profiles"] == ["omnigent-host-codex"]
-    assert host_service["hostname"] == "omnigent-host-codex"
-    assert host_service["image"] == SHARED_STATIC_HOST_IMAGE
-    assert compose["services"]["omnigent-host-codex-init"]["image"] == SHARED_STATIC_HOST_IMAGE
-    assert compose["services"]["omnigent-host-claude"]["image"] == SHARED_STATIC_HOST_IMAGE
-    assert compose["services"]["omnigent-host-claude-init"]["image"] == SHARED_STATIC_HOST_IMAGE
-    assert host_service["entrypoint"] == GENERIC_STATIC_ENTRYPOINT
-    assert "command" not in host_service
-    assert host_service["user"] == "1000:1000"
-    assert host_service["working_dir"] == "/home/app"
-    assert "env_file" not in host_service
-    assert _env_map(host_service["environment"]) == {
-        # Restricted-egress enforcement (MoonLadderStudios/MoonMind#3516): the
-        # static Codex host is routed through the trusted proxy on the internal
-        # network. Only same-container loopback bypasses the proxy so Codex's
-        # native TUI can connect to its local app-server WebSocket.
-        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
-        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
-        "http_proxy": "http://omnigent-egress-proxy:3129",
-        "https_proxy": "http://omnigent-egress-proxy:3129",
-            "NO_PROXY": "localhost,127.0.0.1",
-            "no_proxy": "localhost,127.0.0.1",
-        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
-            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
-            "MOONMIND_ACTIVE_SKILLS_DIR"
-        ),
-        "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
-        "HOME": "/home/app",
-        "PATH": MOUNTED_TOOL_PATH,
-        "MOONMIND_OMNIGENT_RUNTIME_PACK_REF": "codex-native-pack@1",
-        "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF": "codex-oauth-home@1",
-        "CODEX_HOME": "/home/app/.codex",
-        "CODEX_CONFIG_HOME": "/home/app/.codex",
-        "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
-        "CODEX_VOLUME_PATH": "/home/app/.codex",
-        "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
-        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
-        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
-            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
-        ),
-        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
-            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
-        ),
-        "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
-        "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
-        "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
-        "OMNIGENT_CAPTURE_RETENTION_DAYS": "${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}",
-    }
-    assert host_service["stop_grace_period"] == "${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s"
-    assert "command" not in host_service
-    assert {
-        volume for volume in host_service["volumes"] if isinstance(volume, str)
-    } == {
-        "omnigent-host-codex-state:/home/app/.omnigent",
-        "codex_auth_volume:/home/app/.codex",
-        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run",
-        "omnigent-host-artifacts:/artifacts",
-        "omnigent-host-cache:/home/app/.cache",
-        "./services/omnigent/scripts:/opt/moonmind:ro",
-        (
-            "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
-            "/opt/moonmind-skills:ro"
-        ),
-    }
-    assert "omnigent-host-codex-state" in compose["volumes"]
-    assert host_service["depends_on"] == {
-        "omnigent": {"condition": "service_started"},
-        "omnigent-host-codex-init": {
-            "condition": "service_completed_successfully"
-        },
-        "sandbox-egress-proxy": {"condition": "service_healthy"},
-    }
-    init_service = compose["services"]["omnigent-host-codex-init"]
-    assert init_service["user"] == "0:0"
-    assert init_service["network_mode"] == "none"
-    assert init_service["cap_drop"] == ["ALL"]
-    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
-    assert init_service["security_opt"] == ["no-new-privileges:true"]
-    assert init_service["read_only"] is True
-    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
-    assert "omnigent-host-artifacts:/artifacts" in init_service["volumes"]
-    assert "omnigent-host-cache:/home/app/.cache" in init_service["volumes"]
-    assert init_service["depends_on"] == {
-        "codex-auth-init": {"condition": "service_completed_successfully"}
-    }
-    assert init_service["entrypoint"] == [
-        "/opt/moonmind/init-oauth-host.sh"
-    ]
-    # Restricted egress: the host attaches only to the internal enforcing
-    # network (MoonLadderStudios/MoonMind#3516), never the routable
-    # control-plane network.
-    assert _network_names(host_service) == {"omnigent-egress-network"}
-    assert host_service["labels"]["moonmind.egress.profile"] == (
-        "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}"
+    assert volumes["claude_auth_volume"]["name"] == (
+        "${CLAUDE_VOLUME_NAME:-claude_auth_volume}"
     )
-    assert host_service["labels"]["moonmind.egress.profile_digest"] == (
-        "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
-    )
-    assert host_service["labels"]["moonmind.egress.applied_rule_digest"] == (
-        "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
-    )
-    assert host_service["healthcheck"] == GENERIC_STATIC_HEALTHCHECK
-
-
-def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
-    config = _render_codex_host_compose()
-    host_service = config["services"]["omnigent-host-codex"]
-    mounts = host_service["volumes"]
-    oauth_mount = next(
-        mount for mount in mounts if mount.get("target") == "/home/app/.codex"
-    )
-
-    assert oauth_mount["type"] == "volume"
-    assert oauth_mount["source"] == "codex_auth_volume"
-    assert host_service["working_dir"] == "/home/app"
-    assert config["volumes"]["codex_auth_volume"]["name"] == "codex_auth_volume"
-    assert config["volumes"]["codex_auth_volume"].get("external") is not True
-    assert config["volumes"]["omnigent-host-codex-state"].get("name")
+    assert volumes["codex_auth_volume"].get("external") is not True
+    assert volumes["claude_auth_volume"].get("external") is not True
 
 
 def test_oauth_hosts_have_no_platform_specific_compose_overlays():
@@ -1396,64 +1124,6 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
     assert config["admins"] == []
     assert config["allowed_domains"] == []
     assert "sandbox" not in config
-
-
-def test_generic_host_uses_explicit_credential_environment():
-    host = _load_compose()["services"]["omnigent-host"]
-    assert "env_file" not in host
-    environment = host["environment"]
-    for key in ("OMNIGENT_HOST_ID", "OMNIGENT_HOST_NAME", "OMNIGENT_HOST_TOKEN",
-                "OMNIGENT_DATA_DIR", "OMNIGENT_CONFIG_HOME", "DATABRICKS_TOKEN"):
-        # Absent optional values must remain absent in rendered Compose. In
-        # particular, upstream treats an empty host UUID as explicitly invalid.
-        assert key in environment and environment[key] is None
-    for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY",
-                "OMNIGENT_ACCOUNTS_COOKIE_SECRET", "OMNIGENT_OIDC_CLIENT_SECRET"):
-        assert key not in environment
-    assert "omnigent-host-state:/root/.omnigent" in host["volumes"]
-
-
-@pytest.mark.parametrize("identity", [
-    {},
-    {"OMNIGENT_HOST_ID": "11111111-1111-4111-8111-111111111111", "OMNIGENT_HOST_NAME": "Existing host"},
-    {"OMNIGENT_HOST_ID": "11111111-1111-4111-8111-111111111111"},
-])
-def test_generic_host_render_keeps_supported_credentials_only(tmp_path, identity):
-    _require_docker_compose()
-    compose_path = tmp_path / "compose.yaml"
-    compose_path.write_text((REPO_ROOT / "docker-compose.yaml").read_text())
-    values = {
-        "POSTGRES_PASSWORD": "database-sentinel",
-        "JWT_SECRET_KEY": "signing-sentinel",
-        "ENCRYPTION_MASTER_KEY": "encryption-sentinel",
-        "OMNIGENT_ACCOUNTS_COOKIE_SECRET": "server-cookie-sentinel",
-        "OPENAI_API_KEY": "provider-sentinel",
-        "OMNIGENT_HOST_TOKEN": "host-launch-sentinel",
-        "DATABRICKS_TOKEN": "databricks-sentinel",
-        "OMNIGENT_DATA_DIR": "/root/.omnigent",
-        **identity,
-    }
-    env_file = tmp_path / ".env"
-    env_file.write_text("\n".join(f'{key}="{value}"' for key, value in values.items()) + "\n")
-    result = subprocess.run(
-        ["docker", "compose", "--project-directory", str(tmp_path),
-         "--env-file", str(env_file), "-f", str(compose_path),
-         "--profile", "omnigent-host", "config", "--format", "json"],
-        capture_output=True, text=True, check=False,
-        env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)},
-    )
-    assert result.returncode == 0, result.stderr
-    host = json.loads(result.stdout)["services"]["omnigent-host"]
-    env = host["environment"]
-    for key in ("OPENAI_API_KEY", "OMNIGENT_HOST_TOKEN", "DATABRICKS_TOKEN", "OMNIGENT_DATA_DIR"):
-        assert env[key] == values[key]
-    for key in ("OMNIGENT_HOST_ID", "OMNIGENT_HOST_NAME"):
-        if key in identity:
-            assert env[key] == identity[key]
-        else:
-            assert env.get(key) is None
-    for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY", "OMNIGENT_ACCOUNTS_COOKIE_SECRET"):
-        assert key not in env
 
 
 def test_deployment_project_name_follows_the_running_compose_project():

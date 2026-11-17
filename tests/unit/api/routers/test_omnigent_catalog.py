@@ -181,7 +181,6 @@ class _Session:
         *,
         configurations=_DEFAULT,
         slots=(),
-        bindings=(),
         host_leases=(),
         policies=(),
         bridge_sessions=_DEFAULT,
@@ -205,7 +204,6 @@ class _Session:
                 _Result(profiles),
                 _Result(configurations),
                 _Result(slots),
-                _Result(bindings),
                 _Result(host_leases),
                 _Result(policies),
                 _Result(bridge_sessions),
@@ -921,7 +919,6 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         "upstream_omnigent_server_proxy"
     )
     assert {row["hostMode"] for row in diagnostics["supportMatrix"]} == {
-        "static_compose",
         "on_demand_docker",
     }
 
@@ -2391,37 +2388,6 @@ def test_catalog_checks_workflow_supervisor_child_registration(
     assert ("reconciler_generation" in body["admissionReadiness"]["blocking"]) is (
         not agent_session_on_workflow_queue
     )
-
-
-def test_static_policy_requires_live_connected_host_lease(monkeypatch):
-    binding = SimpleNamespace(
-        provider_profile_id="codex-oauth", static_host_id="opaque"
-    )
-    stale_lease = SimpleNamespace(
-        provider_profile_id="codex-oauth",
-        status="ready",
-        host_readiness="ready",
-        expires_at=datetime.now(UTC) - timedelta(seconds=1),
-        disconnected_at=None,
-    )
-    body = (
-        TestClient(
-            _app(
-                monkeypatch,
-                session=_Session(
-                    [_profile()], bindings=[binding], host_leases=[stale_lease]
-                ),
-            )
-        )
-        .get("/api/omnigent/codex-catalog-readiness")
-        .json()
-    )
-
-    profile = body["executionProfiles"][0]
-    assert "static_host_not_ready" not in {
-        reason["code"] for reason in profile["gateReasons"]
-    }
-    assert body["hostModes"] == ["on_demand_docker"]
 
 
 # --- Exact-artifact + freshness support gating (MoonLadderStudios/MoonMind#3710 AC10) -

@@ -304,7 +304,6 @@ orchestrator. The runtime adapter contributes these Claude-specific values:
 | OAuth home | `/home/app/.claude` |
 | User-level state | the mounted Claude home, including `.claude.json` when produced by the supported CLI |
 | Harness | `claude-native` |
-| Static service | `omnigent-host-claude` |
 | Readiness | exact-host Claude auth status plus matching generation and harness registration |
 
 A stored Claude login ends once its refresh token expires, which can happen
@@ -317,7 +316,7 @@ new runs wait for validation instead of launching hosts. Any other `needs-auth`
 keeps the host's own verdict.
 
 Everything else is provider neutral: profile capacity, provider and host
-leases, deterministic on-demand ownership, static/on-demand policy,
+leases, deterministic on-demand ownership, launch policy,
 WorkspaceLocator resolution, bridge authorization, session identity, evidence
 capture, checkpoint identity, candidate and remediation workspace authority,
 ContextPack references, cleanup, janitor reconciliation, and Provider Profile

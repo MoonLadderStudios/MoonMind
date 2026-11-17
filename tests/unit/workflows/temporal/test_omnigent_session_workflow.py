@@ -2840,3 +2840,61 @@ async def test_leased_binding_keeps_its_launch_against_a_newer_plan() -> None:
     )
     assert same is binding
     assert launch == binding.effective_launch_snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy", [False, True])
+async def test_retained_static_binding_moves_to_on_demand_only_while_idle(
+    busy: bool,
+) -> None:
+    """A static-connected binding migrates to the selected on-demand launch."""
+
+    hosts = _HostBindings(
+        active_leases=[SimpleNamespace(lease_id="lease-1")] if busy else ()
+    )
+    retained = SimpleNamespace(
+        binding_ref="omnigent-oauth:codex",
+        endpoint_ref="default",
+        static_host_id="retained-static-host",
+        host_launch_profile_ref=None,
+        effective_launch_snapshot={"hostMode": "static_compose"},
+    )
+    on_demand = {
+        "snapshotRef": "omnigent-launch:sha256:on-demand",
+        "hostMode": "on_demand_docker",
+    }
+    arguments = dict(
+        profile_id="codex",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-on-demand@1",
+        effective_launch=on_demand,
+        planned=False,
+    )
+
+    if busy:
+        # The leased binding is left as-is; a later retry migrates it.
+        with pytest.raises(OmnigentOAuthHostError) as leased:
+            await omnigent_session_activities._bind_cached_host_launch(
+                hosts, retained, **arguments
+            )
+        assert leased.value.code == "OMNIGENT_HOST_BINDING_LEASED"
+        assert hosts.updates == []
+        return
+    binding, launch = await omnigent_session_activities._bind_cached_host_launch(
+        hosts, retained, **arguments
+    )
+
+    assert launch == on_demand
+    assert binding.effective_launch_snapshot == on_demand
+    assert hosts.updates == [
+        {
+            "profile_id": "codex",
+            "endpoint_ref": "default",
+            "host_launch_profile_ref": "codex-on-demand@1",
+            "execution_profile_ref": "omnigent-codex@1",
+            "launch_policy_ref": "codex-on-demand@1",
+            "effective_launch_snapshot": on_demand,
+            "require_idle": True,
+            "expected_binding": retained,
+        }
+    ]

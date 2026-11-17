@@ -528,18 +528,17 @@ def production_drivers(
 
     The runner recreates the omnigent server container onto the recorded
     digests (Compose renders them from the release-owned desired-state env
-    file), plus any static host profile already running.
+    file). Hosts are launched on demand, so they pick up the recorded host
+    image at their next launch.
     """
 
-    async def _up_services(
-        services: tuple[str, ...], phase: str, *, include_dependencies: bool = False
-    ) -> None:
+    async def _up_services(services: tuple[str, ...], phase: str) -> None:
         result = await runner.up(
             stack=stack,
             command=(
                 "up",
                 "-d",
-                *(() if include_dependencies else ("--no-deps",)),
+                "--no-deps",
                 "--wait",
                 "--wait-timeout",
                 "300",
@@ -572,26 +571,6 @@ def production_drivers(
         # state published after live verification, not the refs their process
         # environment inherited.
         await _up_services(("omnigent",), "restart-server")
-        if target.get("shared"):
-            state = await runner.capture_state(
-                stack=stack, phase="pre-static-host-refresh"
-            )
-            active = tuple(
-                service
-                for service in ("omnigent-host-codex", "omnigent-host-claude")
-                if any(
-                    row.get("Service") == service and row.get("State") == "running"
-                    for row in state.get("services", ())
-                    if isinstance(row, Mapping)
-                )
-            )
-            if active:
-                # Targeting only running profile services avoids activating
-                # unused hosts. Dependencies rerun changed init images, and
-                # Compose --wait checks each refreshed host's health.
-                await _up_services(
-                    active, "restart-static-hosts", include_dependencies=True
-                )
 
     base = _default_drivers()
     operator_project = getattr(runner, "local_project_dir", None) or getattr(

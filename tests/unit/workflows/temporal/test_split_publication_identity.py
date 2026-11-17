@@ -157,11 +157,12 @@ async def test_split_session_preparation_keeps_recorded_identity(monkeypatch):
     launch = {
         "executionProfileRef": "codex-test",
         "snapshotRef": "launch",
-        "hostMode": "static",
+        "hostMode": "on_demand_docker",
     }
     binding = SimpleNamespace(
         execution_profile_ref="codex-test",
         launch_policy_ref="launch@1",
+        host_launch_profile_ref="launch@1",
         effective_launch_snapshot=launch,
         endpoint_ref="endpoint",
         binding_ref="binding",

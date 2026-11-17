@@ -374,37 +374,3 @@ async def test_profile_cleanup_cannot_remove_newer_stamped_cache(tmp_path, histo
         or args[:3] == ("docker", "volume", "rm")
         for args in calls
     )
-
-
-@pytest.mark.asyncio
-async def test_static_host_without_request_projection_keeps_lazy_credential_owner(
-    tmp_path,
-):
-    from unittest.mock import Mock
-
-    from tests.unit.omnigent.test_oauth_profile_lifecycle import _binding, _host_lease
-
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime._validate_effective_launch = Mock(
-        return_value={"harness": "codex-native", "providerRuntime": "codex_cli"}
-    )
-    runtime._prepare_skill_projection = AsyncMock(
-        side_effect=RuntimeError("static preparation reached")
-    )
-    runtime.reserve_github_projection = AsyncMock()
-    resolver = AsyncMock()
-    with pytest.raises(RuntimeError, match="static preparation reached"):
-        await runtime.prepare_host(
-            binding=_binding(),
-            host_lease=_host_lease(),
-            workspace_key="workflow:step",
-            workspace_locator={},
-            current_workflow_id="workflow",
-            current_step_execution_id="step",
-            required_capabilities=("gh",),
-            github_token_resolver=resolver,
-        )
-    runtime.reserve_github_projection.assert_not_awaited()
-    resolver.assert_not_awaited()
