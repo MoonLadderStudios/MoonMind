@@ -295,7 +295,7 @@ the browser terminal.
 ## 11. Omnigent execution semantics
 
 An OAuth-backed `claude_code` profile is eligible for the shared
-profile-bound Omnigent execution path. It is not a separate Claude
+`generic-omnigent-host@1` execution path. It is not a separate Claude
 orchestrator. The runtime adapter contributes these Claude-specific values:
 
 | Concern | Claude value |

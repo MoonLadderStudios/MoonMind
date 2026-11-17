@@ -5,7 +5,7 @@ BEFORE the production fix, so it will FAIL until the code is corrected:
 
 1. OpenCode auth.json must use `key` not `apiKey` (pinned opencode-ai@1.18.x)
 2. get_opencode_host_image_ref must fail closed when no real digest-pinned REF
-3. omnigent-opencode@1 unavailable when no real image, no realizer, incompatible profile
+3. omnigent-opencode@2 unavailable when no real image, no realizer, incompatible profile
 4. No harness-specific branches in realizer dispatch (executionRealizerRef trusted)
 """
 
@@ -140,11 +140,12 @@ def test_get_opencode_host_image_ref_requires_real_digest(monkeypatch):
 
 
 def test_host_class_unavailable_without_real_image():
-    """omnigent-opencode@1 unavailable when no real image digest exists."""
+    """omnigent-opencode@2 unavailable when no real image digest exists."""
     env_keys = [
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         "OMNIGENT_OPENCODE_HOST_IMAGE",
         "OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
     ]
     saved = {k: os.environ.get(k) for k in env_keys}
     try:
@@ -154,9 +155,9 @@ def test_host_class_unavailable_without_real_image():
         # After fixing host_classes, get_opencode_host_class should raise or
         # indicate unavailable when image not configured.
         # Should fail closed or return unavailable - either raising or having placeholder
-        # The contract: attempting to compile a plan with omnigent-opencode@1 when no real image
+        # The contract: attempting to compile a plan with omnigent-opencode@2 when no real image
         # should fail with HOST_CLASS_UNAVAILABLE or HARNESS_BUILD_MISMATCH, not silently use synthetic.
-        # We test via planner: compiling with omnigent-opencode@1 should fail when no real image
+        # We test via planner: compiling with omnigent-opencode@2 should fail when no real image
         from datetime import UTC, datetime
 
         from moonmind.omnigent.harness_platform.agent_profile import (
@@ -284,7 +285,7 @@ def test_host_class_unavailable_without_real_image():
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=bs,
-                host_class_ref="omnigent-opencode@1",
+                host_class_ref="omnigent-opencode@2",
                 launch_policy_ref="omnigent-on-demand@1",
                 model_qualified_id="opencode/test-model",
                 model_effort=None,

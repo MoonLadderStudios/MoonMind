@@ -23,10 +23,8 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
 )
 from moonmind.omnigent import deployment_identity
+from moonmind.omnigent.execution_profiles import compile_persisted_effective_launch
 from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-from moonmind.omnigent.profile_bound_execution import (
-    _compile_persisted_effective_launch,
-)
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -190,7 +188,7 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     )
 
     async def dispatch_authority(snapshot):
-        launch = _compile_persisted_effective_launch(
+        launch = compile_persisted_effective_launch(
             session.policies[snapshot["launchPolicyRef"]],
             provider_profile_id=session.provider.profile_id,
             follow_up_retrieval={},

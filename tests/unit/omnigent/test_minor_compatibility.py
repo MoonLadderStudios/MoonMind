@@ -300,19 +300,13 @@ async def test_bootstrap_selects_each_images_actual_provenance(
         integration_mode="native-server",
         materializer_refs=["none@1"],
         requested_host_class_ref=(
-            "omnigent-opencode@1" if harness_id == "opencode-native" else None
+            "omnigent-opencode@2" if harness_id == "opencode-native" else None
         ),
     )
     expected = refs[
-        (
-            "OMNIGENT_PI_HOST_IMAGE"
-            if harness_id == "pi-native"
-            else (
-                "OMNIGENT_OPENCODE_HOST_IMAGE"
-                if harness_id == "opencode-native"
-                else "OMNIGENT_SHARED_HOST_IMAGE"
-            )
-        )
+        "OMNIGENT_PI_HOST_IMAGE"
+        if harness_id == "pi-native"
+        else "OMNIGENT_SHARED_HOST_IMAGE"
     ]
     assert host.imageRef == expected
     assert host.omnigentBuildDigest == builds[expected]

@@ -6,11 +6,11 @@ Plan compilation is the single new-admission boundary for every client: the
 trusted planner default, a schedule, and a preset all resolve here. Stores
 strip caller-authored realizer fields before compilation. These
 tests drive :func:`compile_execution_plan` itself — not a nearby helper — so the
-code-owned retirement class is proven to gate real Codex plan admission.
+realizer gate is proven on real Codex plan admission.
 
-New Codex plans use the enabled shared owner. The retired profile-bound owner
-cannot be restored by a stale selector or caller field, while its recorded
-plans retain their realizer and digest.
+New Codex plans use the enabled shared owner. The removed profile-bound owner
+cannot be restored by a stale selector or caller field, and its recorded plans
+keep their realizer and digest but fail closed with retirement guidance.
 """
 
 from __future__ import annotations
@@ -42,13 +42,13 @@ from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-from moonmind.omnigent.legacy_retirement import (
-    RetirementClass,
-    get_retirement_record,
+from moonmind.omnigent.harness_platform.support import (
+    KNOWN_REALIZERS,
+    PROFILE_BOUND_RETIRED_MESSAGE,
+    validate_realizer,
 )
 
 PROFILE_BOUND_REALIZER = "codex-profile-bound@1"
-PROFILE_BOUND_PATH_ID = "omnigent.legacy.profile_bound_realizer"
 _IMPL_DIGEST = "sha256:" + "e" * 64
 
 
@@ -205,10 +205,7 @@ def codex_plan_inputs(monkeypatch) -> dict[str, object]:
 def test_retired_profile_bound_admission_preserves_new_shared_plans(
     codex_plan_inputs,
 ) -> None:
-    assert (
-        get_retirement_record(PROFILE_BOUND_PATH_ID).retirement_class
-        is RetirementClass.NEW_ADMISSION_DISABLED
-    )
+    assert PROFILE_BOUND_REALIZER not in KNOWN_REALIZERS
     envelope = compile_execution_plan(**codex_plan_inputs)
     assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
 
@@ -226,7 +223,8 @@ def test_retirement_guard_rejects_a_stale_trusted_planner_default(
         excinfo.value.code
         == HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE.value
     )
-    assert "no longer admits new work" in str(excinfo.value)
+    assert PROFILE_BOUND_REALIZER in str(excinfo.value)
+    assert str(excinfo.value.__cause__) == PROFILE_BOUND_RETIRED_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -287,8 +285,8 @@ async def test_disabled_admission_does_not_change_recorded_plans(
     assert await store.load(binding["planRef"]) == recorded
     assert compute_plan_ref(recorded.payload) == binding["planRef"]
     assert recorded.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
-    # The realizer stays registered and resolvable for the recorded plan even
-    # though no new plan may select it.
-    from moonmind.omnigent.harness_platform.support import validate_realizer
-
-    validate_realizer(recorded.payload.executionRealizerRef)
+    # The removed realizer cannot run the recorded plan; it fails closed with
+    # guidance instead of an unknown-realizer error.
+    with pytest.raises(ValueError) as excinfo:
+        validate_realizer(recorded.payload.executionRealizerRef)
+    assert str(excinfo.value) == PROFILE_BOUND_RETIRED_MESSAGE

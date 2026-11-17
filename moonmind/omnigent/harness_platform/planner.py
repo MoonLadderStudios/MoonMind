@@ -91,7 +91,6 @@ from moonmind.omnigent.runtime_provider_rollout import (
 
 
 GENERIC_REALIZER_REF = "generic-omnigent-host@1"
-LEGACY_CODEX_REALIZER_REF = "codex-profile-bound@1"
 
 
 def _rollout_admits_new_authoring(
@@ -186,11 +185,7 @@ def _build_rollout_combination(
     materializer_ref = _primary_materializer_ref(
         harness_id=profile.harness.id, materializer_refs=materializer_refs
     )
-    path_class = (
-        RuntimeProviderPathClass.legacy_profile_bound_omnigent
-        if realizer == LEGACY_CODEX_REALIZER_REF
-        else RuntimeProviderPathClass.generic_omnigent
-    )
+    path_class = RuntimeProviderPathClass.generic_omnigent
     return RuntimeProviderCombination.model_validate(
         {
             "harnessId": profile.harness.id,
@@ -357,12 +352,7 @@ def select_execution_realizer(
     rollout_policy: RuntimeProviderRolloutPolicy | None = None,
     required_authority_kinds: tuple[str, ...] = ("model",),
 ) -> str:
-    """Select the shared owner for a new plan, or fail closed.
-
-    Recorded plans keep their versioned realizer and registry entry. A disabled
-    shared path must not create another lifecycle through the historical Codex
-    coordinator, including when a deployment restores a compatibility default.
-    """
+    """Select the shared owner for a new plan, or fail closed."""
     policy = rollout_policy or load_runtime_provider_rollout_policy()
     if not _rollout_admits_new_authoring(
         policy=policy,

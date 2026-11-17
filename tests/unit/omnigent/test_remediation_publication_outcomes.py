@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent import workspace_publication
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as activities,
@@ -136,23 +136,14 @@ async def test_canonical_session_applies_remediation_verdict_before_publication(
     )
     monkeypatch.setattr(activities, "_settle_command", AsyncMock(return_value={}))
     monkeypatch.setattr(
-        "moonmind.omnigent.profile_bound_execution.OmnigentProfileBoundExecutionCoordinator._github_token",
-        AsyncMock(return_value=None),
+        activities, "_repository_github_token", AsyncMock(return_value=None)
     )
+    publisher = workspace_publication.OmnigentWorkspacePublicationService(tmp_path)
+    publisher.publish_workspace = AsyncMock(return_value={"push_status": "pushed"})
     monkeypatch.setattr(
-        activities,
-        "_omnigent_client_context",
-        AsyncMock(
-            return_value=(SimpleNamespace(aclose=AsyncMock()), SimpleNamespace()),
-        ),
-    )
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-    runtime.publish_workspace = AsyncMock(return_value={"push_status": "pushed"})
-    monkeypatch.setattr(
-        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime",
-        lambda **_: runtime,
+        workspace_publication,
+        "OmnigentWorkspacePublicationService",
+        lambda *_args, **_kwargs: publisher,
     )
     written = {}
     artifacts = {"art_prior_publication": {"publication": {"push_status": "pushed"}}}
@@ -189,13 +180,13 @@ async def test_canonical_session_applies_remediation_verdict_before_publication(
         return
     if status == "succeeded":
         if prior_publication:
-            runtime.publish_workspace.assert_not_awaited()
+            publisher.publish_workspace.assert_not_awaited()
         else:
-            runtime.publish_workspace.assert_awaited_once()
+            publisher.publish_workspace.assert_awaited_once()
         assert terminal["status"] == "completed"
         assert terminal["result"]["objectiveOutcome"] == "succeeded"
     else:
-        runtime.publish_workspace.assert_not_awaited()
+        publisher.publish_workspace.assert_not_awaited()
         assert terminal["status"] == "execution_failed"
         assert terminal["result"]["objectiveOutcome"] == "failed"
         assert terminal["result"]["publicationState"] == (
@@ -205,8 +196,8 @@ async def test_canonical_session_applies_remediation_verdict_before_publication(
     # A lost final acknowledgement reconciles captured evidence and confirmed
     # effects without reading a reclaimed workspace or publishing again.
     first_result = terminal["result"]
-    publication_calls = runtime.publish_workspace.await_count
-    runtime.inspect_request_terminal = AsyncMock(
+    publication_calls = publisher.publish_workspace.await_count
+    publisher.inspect_request_terminal = AsyncMock(
         side_effect=AssertionError("workspace reclaimed")
     )
     await activities.omnigent_publish_workspace_activity(
@@ -219,8 +210,8 @@ async def test_canonical_session_applies_remediation_verdict_before_publication(
             "fencingGeneration": 1,
         }
     )
-    runtime.inspect_request_terminal.assert_not_awaited()
-    assert runtime.publish_workspace.await_count == publication_calls
+    publisher.inspect_request_terminal.assert_not_awaited()
+    assert publisher.publish_workspace.await_count == publication_calls
     assert (
         written["omnigent.session_terminal"]["terminalResult"]["result"] == first_result
     )

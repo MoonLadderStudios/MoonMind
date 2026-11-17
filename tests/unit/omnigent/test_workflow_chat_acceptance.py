@@ -841,7 +841,7 @@ def test_binding_identity_must_recompute_the_support_combination_key(
     if field == "modelConfigDigest":
         identity[field] = "sha256:" + "9" * 64
     elif field == "executionRealizerRef":
-        identity[field] = "generic-omnigent-host@1"
+        identity[field] = "tampered-realizer@1"
     else:
         identity[field] = "omnigent-harness-implementation:sha256:" + "9" * 64
 

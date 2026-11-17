@@ -529,7 +529,6 @@ EXACT_ARTIFACT_EXACT = {
     "tests/unit/tools/test_run_credential_free_host_recovery.py",
     "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
     "tests/integration/reliability/test_interrupted_step_replacement_journey.py",
-    "moonmind/omnigent/oauth_host_runtime.py",
     "moonmind/omnigent/bridge_store.py",
     "moonmind/omnigent/workspace_publication.py",
     "tools/register_omnigent_agent.py",

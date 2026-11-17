@@ -20,7 +20,6 @@ from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 
 
 class FakeLoreClient:
@@ -360,89 +359,6 @@ async def test_managed_launcher_rejects_foreign_lore_locator(tmp_path):
         await launcher._prepare_workspace_path(
             run_id="run-1", request=request, workspace_path=None
         )
-
-
-@pytest.mark.asyncio
-async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tmp_path):
-    workflow_id, step_id = "workflow", "step"
-    workspace_id = hashlib.sha256(
-        f"{workflow_id}:{step_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    locator = SandboxWorkspaceLocator(workspaceId=workspace_id, relativePath="repo")
-    authority = tmp_path / "temporal_sandbox" / workspace_id / "repo"
-    client = FakeLoreClient()
-    adapter = LoreRepositoryProviderAdapter(client)
-    launcher = ManagedRuntimeLauncher(
-        ManagedRunStore(tmp_path / "managed_runs"),
-        lore_repository_adapter=adapter,
-    )
-    managed_path = await launcher._prepare_workspace_path(
-        run_id="managed-run",
-        workspace_path=None,
-        request=AgentExecutionRequest(
-            agentKind="managed",
-            agentId="agent",
-            correlationId=workflow_id,
-            idempotencyKey=step_id,
-            workspaceSpec={
-                "provider": "lore",
-                "repository": "Tactics",
-                "branch": "main",
-                "revisionSignature": "rev-1",
-                "connectionRef": "repository-connection:lore",
-                "workspaceLocator": locator.model_dump(by_alias=True),
-            },
-        ),
-    )
-    assert managed_path == str(authority)
-    runtime = OmnigentOAuthHostRuntime(
-        client=object(),
-        workspace_root=tmp_path,
-        lore_repository_adapter=adapter,
-    )
-    resolved = await runtime._prepare_workspace(
-        workspace_locator=locator.model_dump(by_alias=True),
-        current_workflow_id=workflow_id,
-        current_step_execution_id=step_id,
-        repository_provider="lore",
-        omnigent_isolation_verified=True,
-    )
-    assert resolved == authority
-    assert [call[0] for call in client.calls].count("materialize") == 1
-    assert runtime._last_workspace_evidence["materialization"]["action"] == (
-        "reused_lore_authority"
-    )
-
-
-@pytest.mark.asyncio
-async def test_omnigent_launcher_materializes_fresh_lore_sandbox(tmp_path):
-    workflow_id, step_id = "workflow", "fresh-step"
-    workspace_id = hashlib.sha256(
-        f"{workflow_id}:{step_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    locator = SandboxWorkspaceLocator(workspaceId=workspace_id, relativePath="repo")
-    client = FakeLoreClient()
-    runtime = OmnigentOAuthHostRuntime(
-        client=object(),
-        workspace_root=tmp_path,
-        lore_repository_adapter=LoreRepositoryProviderAdapter(client),
-    )
-
-    resolved = await runtime._prepare_workspace(
-        workspace_locator=locator.model_dump(by_alias=True),
-        current_workflow_id=workflow_id,
-        current_step_execution_id=step_id,
-        repository_source="Tactics",
-        repository_provider="lore",
-        repository_connection_ref="repository-connection:lore",
-        repository_client_evidence={"clientVersion": "1"},
-        starting_branch="main",
-        checkout_commit="rev-1",
-        omnigent_isolation_verified=True,
-    )
-
-    assert resolved == tmp_path / "temporal_sandbox" / workspace_id / "repo"
-    assert [call[0] for call in client.calls].count("materialize") == 1
 
 
 class FakeArtifactService:

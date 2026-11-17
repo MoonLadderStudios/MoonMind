@@ -172,7 +172,7 @@ Server-side readers and PR operations in `GitHubService` (pull-request and targe
 
 Issue collaboration (claims, labels, comments, search) uses the default connection's `issues` operation through `GitHubService.resolve_github_token`; Source Control grants `issues` with the other publishing operations, and a denied operation reports unavailable without substituting another account's token.
 
-Managed clones scope credential-helper responses to the admitted HTTPS repository; profile-bound clones also permit its standard LFS endpoint. Git's HTTP clone transport rejects redirects rather than implicitly admitting a different repository. Git LFS uses its own download transport; Git's redirect setting is not a confinement guarantee for LFS transfers. A moved repository must be selected again through admission. These transport checks do not confine a broad credential against arbitrary agent code.
+Managed clones scope credential-helper responses to the admitted HTTPS repository. Git's HTTP clone transport rejects redirects rather than implicitly admitting a different repository. Git LFS uses its own download transport; Git's redirect setting is not a confinement guarantee for LFS transfers. A moved repository must be selected again through admission. These transport checks do not confine a broad credential against arbitrary agent code.
 
 ### INV-004 Ambient identity cannot override admitted identity
 
@@ -182,7 +182,7 @@ In Omnigent delivery, realizers clone with a Git environment that keeps only pro
 
 ### QUALITY-003 Routing and confinement are separate guarantees
 
-Routing guarantees that MoonMind-controlled operations use the admitted repository, operation, and identity. A raw PAT exposed to agent code keeps its provider-granted scope, so confinement against arbitrary code needs scope-limited credentials or mediation without bypass; a None selection is not a sandbox when the agent can read a broad write token. Managed publication keeps destination credentials outside the agent; Skill-owned `auto` needs a mediated path or an explicitly accepted exposing policy, and high-security mode rejects unsupported confinement. `githubCredentialsIsolated` is a routing guarantee; the profile-bound host reports a projected `gh` credential as `githubCredentialExposure: agent_readable_unconfined` (otherwise `not_projected`) in preflight and `credential_preflight` metadata.
+Routing guarantees that MoonMind-controlled operations use the admitted repository, operation, and identity. A raw PAT exposed to agent code keeps its provider-granted scope, so confinement against arbitrary code needs scope-limited credentials or mediation without bypass; a None selection is not a sandbox when the agent can read a broad write token. Managed publication keeps destination credentials outside the agent; Skill-owned `auto` needs a mediated path or an explicitly accepted exposing policy, and high-security mode rejects unsupported confinement. `githubCredentialsIsolated` is a routing guarantee; a projected `gh` credential stays agent-readable.
 
 ### INV-005 Anonymous access does not remove source-safety controls
 

@@ -905,6 +905,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
     payload.update(
         {
             "harnessImplementationRef": implementation.implementation_ref(),
+            "hostClassRef": "omnigent-opencode@2",
             "launchPolicyRef": policy_ref,
             "hostImageRef": exact_image,
             "omnigentHostBuildDigest": "sha256:" + "b" * 64,

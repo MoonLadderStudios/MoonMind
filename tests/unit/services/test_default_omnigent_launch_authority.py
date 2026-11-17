@@ -216,7 +216,8 @@ def _publish_opencode_catalog_authority(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
-    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", _OPENCODE_HOST_IMAGE_REF)
+    # OpenCode runs omnigent-opencode@2 on the shared host image.
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _OPENCODE_HOST_IMAGE_REF)
     monkeypatch.setattr(
         store,
         "load_resolved_state",

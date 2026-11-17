@@ -245,7 +245,7 @@ class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
     The provider emitted a post-dispatch completion event and the marked turn
     has a stable, fully matched tool-output boundary, but its authoritative
     session projection remains active.  This is recovery evidence, not terminal
-    evidence: a profile-bound owner may submit one fenced continuation while
+    evidence: the same-session recovery owner may submit one fenced continuation while
     retaining the host and workspace leases; other callers must preserve the
     ambiguous-session cleanup fence.
     """
@@ -751,7 +751,7 @@ async def _build_omnigent_first_message(
         else None
     )
     if request.resolved_skillset_ref and isinstance(profile_authorization, Mapping):
-        # The profile-bound host preflight has already verified and mounted the
+        # The host preflight has already verified and mounted the
         # exact resolved snapshot at this fixed runner-visible path. Put the
         # canonical activation block in the actual first message so explicit
         # prompt text and artifact-backed prompts cannot bypass Skill delivery.
@@ -2067,7 +2067,7 @@ async def _await_marked_turn_terminal(
     output instead of final assistant text. After the longer tool-only quiet
     period, an explicitly supplied continuation owner can receive
     :class:`OmnigentSameSessionContinuationRequired`; elapsed time never turns
-    an active provider projection into terminal success. A profile-bound owner
+    an active provider projection into terminal success. The continuation owner
     can use the typed signal to continue the same session without releasing the
     authoritative workspace. Without that owner, polling continues under the
     existing timeout until the provider projects a terminal turn.
@@ -2891,7 +2891,7 @@ def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> flo
 
     if request.execution_budget is not None:
         return request.execution_budget.remaining_seconds(datetime.now(UTC))
-    # Recorded profile-bound requests retain the historical retry reserve.
+    # Requests without an execution budget retain the historical retry reserve.
     base_seconds = float(
         resolve_execution_budget(
             agent_kind=request.agent_kind,
@@ -2914,7 +2914,6 @@ async def run_omnigent_execution(
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
     allow_same_session_continuation: bool = False,
-    allow_stall_interruption: bool = False,
     session_authority_sink: Any | None = None,
     transport_pool: Any | None = None,
 ) -> AgentRunResult:
@@ -4761,37 +4760,6 @@ async def run_omnigent_execution(
                 content_type="application/json",
             )
             _safe_heartbeat({"turnRecoveryDiagnosticsRef": diagnostic_ref})
-        # This catches every observation path, including reattachment. Only
-        # the admitted same-session recovery owner may interrupt the turn.
-        if (
-            allow_same_session_continuation
-            and allow_stall_interruption
-            and client is not None
-        ):
-            try:
-                # The execution transport has exited its context. Reopen it
-                # through its existing owner for the bounded recovery probe.
-                async with omnigent_httpx_client(transport_pool) as recovery_httpx:
-                    recovery_client = OmnigentHttpClient(
-                        base_url=resolved_server_url(),
-                        api_token=resolved_api_token(),
-                        client=recovery_httpx,
-                        upstream_header_allowlist=resolved_proxy_forward_headers(),
-                    )
-                    await asyncio.wait_for(
-                        recovery_client.interrupt(session_id), timeout=30
-                    )
-                    recovered_snapshot = await asyncio.wait_for(
-                        recovery_client.get_session(session_id), timeout=30
-                    )
-            except Exception:
-                raise exc
-            if _snapshot_projects_inactive_turn(recovered_snapshot):
-                raise OmnigentSameSessionContinuationRequired(
-                    str(exc),
-                    session_id=session_id,
-                    snapshot=recovered_snapshot,
-                ) from exc
         raise
     except OmnigentSessionStillRunningError:
         await cancel_and_wait(heartbeat_task)

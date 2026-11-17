@@ -183,18 +183,10 @@ async def test_shared_command_transport_preserves_context_and_recorded_retry(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "interruption_allowed,interrupt_confirmed",
-    [(True, True), (True, False), (False, True)],
-)
-async def test_active_heartbeat_only_turn_recovers_after_semantic_stall(
+async def test_active_heartbeat_only_turn_keeps_its_stall_ambiguous(
     monkeypatch,
     tmp_path,
-    interruption_allowed,
-    interrupt_confirmed,
 ) -> None:
-    from moonmind.omnigent.execute import OmnigentSameSessionContinuationRequired
-
     marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
     streamed = {"value": 0}
     base = _never_started_client(marker, stream_shape="heartbeats", streamed=streamed)
@@ -241,7 +233,7 @@ async def test_active_heartbeat_only_turn_recovers_after_semantic_stall(
         async def interrupt(self, session_id):
             assert not self.http_client.is_closed
             interruptions.append(session_id)
-            provider_state["interrupted"] = interrupt_confirmed
+            provider_state["interrupted"] = True
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
@@ -265,23 +257,19 @@ async def test_active_heartbeat_only_turn_recovers_after_semantic_stall(
         }
     )
     store = _RecordingBridgeStore()
-    expected = (
-        OmnigentSameSessionContinuationRequired
-        if interruption_allowed and interrupt_confirmed
-        else OmnigentSessionStillRunningError
-    )
-    with pytest.raises(expected) as failure:
+    # A semantic stall is recovery evidence, not terminal evidence: even the
+    # same-session recovery owner never interrupts the turn on its own.
+    with pytest.raises(OmnigentSessionStillRunningError) as failure:
         await asyncio.wait_for(
             run_omnigent_execution(
                 request,
                 artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
                 run_store=store,
                 allow_same_session_continuation=True,
-                allow_stall_interruption=interruption_allowed,
             ),
             timeout=3,
         )
-    assert interruptions == (["session-1"] if interruption_allowed else [])
+    assert interruptions == []
     assert "progress" in str(failure.value)
     assert not store.terminal_calls
     assert store.row.raw_events_ref and store.row.normalized_events_ref

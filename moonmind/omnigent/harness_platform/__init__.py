@@ -8,7 +8,6 @@ Implements docs/Omnigent/OmnigentHarnessPlatformDesign.md
 - Host Classes + materializer registry + launch policies
 - Canonical secret-free execution plan + fenced runtime binding
 - Support classification keyed by exact model config + realizer version
-- Preserves Codex lane via codex-profile-bound@1 realizer coexistence
 """
 
 from moonmind.omnigent.harness_platform.agent_profile import (

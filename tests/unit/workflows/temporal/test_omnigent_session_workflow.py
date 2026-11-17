@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 from moonmind.config.settings import TemporalSettings
 from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DecisionKind,
@@ -436,7 +435,6 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
 @pytest.mark.parametrize(
     "activity_name",
     [
-        "omnigent_ensure_host_activity",
         "omnigent_ensure_provider_session_activity",
         "omnigent_submit_turn_activity",
     ],
@@ -762,53 +760,6 @@ def test_recorded_rollout_setting_decisions_remain_replay_decodable(
 
 
 @pytest.mark.asyncio
-async def test_unbound_legacy_host_launch_follows_durable_policy_default() -> None:
-    service = SimpleNamespace(
-        resolve_default_runtime_snapshot=AsyncMock(
-            return_value={"policyRef": "opencode-on-demand@4"}
-        ),
-        resolve_runtime_snapshot=AsyncMock(),
-    )
-
-    policy_ref, snapshot = await (
-        omnigent_session_activities._resolve_legacy_launch_policy_snapshot(
-            policy_service=service,
-            launch_policy_ref="opencode-on-demand@1",
-            resolve_default=True,
-        )
-    )
-
-    assert policy_ref == "opencode-on-demand@4"
-    assert snapshot["policyRef"] == policy_ref
-    service.resolve_default_runtime_snapshot.assert_awaited_once_with(
-        "opencode-on-demand"
-    )
-    service.resolve_runtime_snapshot.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_bound_legacy_host_launch_preserves_exact_policy_version() -> None:
-    service = SimpleNamespace(
-        resolve_default_runtime_snapshot=AsyncMock(),
-        resolve_runtime_snapshot=AsyncMock(
-            return_value={"policyRef": "opencode-on-demand@1"}
-        ),
-    )
-
-    policy_ref, _snapshot = await (
-        omnigent_session_activities._resolve_legacy_launch_policy_snapshot(
-            policy_service=service,
-            launch_policy_ref="opencode-on-demand@1",
-            resolve_default=False,
-        )
-    )
-
-    assert policy_ref == "opencode-on-demand@1"
-    service.resolve_runtime_snapshot.assert_awaited_once_with(policy_ref)
-    service.resolve_default_runtime_snapshot.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_plan_bound_admission_uses_persisted_host_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -839,7 +790,7 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
                 "96f9ac4c77a5ae0137b5f65d48be4eb021d741081da51af0f0a0717e5db395d5"
             ),
             launchPolicyRef="codex-on-demand@1",
-            executionRealizerRef="codex-profile-bound@1",
+            executionRealizerRef="generic-omnigent-host@1",
         )
     )
     monkeypatch.setattr(
@@ -884,7 +835,8 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
         )
     )
 
-    assert decision["admitted"] is True
+    assert decision["admitted"] is False
+    assert decision["reasonCode"] == "realizer_managed_lifecycle"
     assert decision["capacityAcquisitionOwner"] == "workflow"
     assert decision["capacityProfiles"] == [
         {
@@ -895,6 +847,69 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
         }
     ]
     validate_support.assert_called_once_with(plan)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("plan_shape", ["bound", "reference_only"])
+async def test_admission_refuses_a_retired_profile_bound_plan_without_retry(
+    monkeypatch: pytest.MonkeyPatch, plan_shape: str
+) -> None:
+    """A plan recorded for the removed Codex realizer stops without retrying."""
+
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.omnigent.harness_platform.support import (
+        PROFILE_BOUND_RETIRED_MESSAGE,
+    )
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="provider-profile-1",
+                    materializerRef="codex-oauth-home@1",
+                )
+            },
+            hostClassRef="omnigent-codex-current@1",
+            executionRealizerRef="codex-profile-bound@1",
+        )
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_verified_execution_plan",
+        AsyncMock(return_value=plan),
+    )
+    monkeypatch.setattr(DbExecutionPlanStore, "load", AsyncMock(return_value=plan))
+    plan_authority = (
+        {
+            "omnigentExecutionPlan": OmnigentExecutionPlanBinding(
+                planRef=plan_ref,
+                planDigest="sha256:" + "a" * 64,
+                planArtifactRef="art-plan",
+                taskInputSnapshotRef="art-task",
+                taskInputSnapshotDigest="sha256:" + "b" * 64,
+            )
+        }
+        if plan_shape == "bound"
+        else {"executionPlanRef": plan_ref}
+    )
+
+    with pytest.raises(ApplicationError) as refused:
+        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+            OmnigentSessionAdmissionRequest(
+                workflowId="workflow-1",
+                stepExecutionId="step-1",
+                agentRunId="agent-run-1",
+                executionProfileRef="provider-profile-1",
+                **plan_authority,
+            ).model_dump(mode="json", by_alias=True)
+        )
+
+    assert refused.value.non_retryable is True
+    assert refused.value.type == "OmnigentExecutionRealizerUnavailable"
+    assert refused.value.message == PROFILE_BOUND_RETIRED_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -911,21 +926,6 @@ async def test_plan_admission_rejects_missing_support_evidence() -> None:
         await omnigent_session_activities._validate_plan_admission_authority(
             persisted, access=ArtifactAccessContext.for_execution("workflow-1")
         )
-
-
-@pytest.mark.asyncio
-async def test_pre_evidence_codex_plan_keeps_recorded_legacy_realizer() -> None:
-    persisted = SimpleNamespace(
-        payload=SimpleNamespace(
-            authority=object(),
-            admissionAuthority=None,
-            executionRealizerRef="codex-profile-bound@1",
-        )
-    )
-
-    await omnigent_session_activities._validate_plan_admission_authority(
-        persisted, access=ArtifactAccessContext.for_execution("workflow-1")
-    )
 
 
 @pytest.mark.asyncio
@@ -1038,7 +1038,7 @@ async def test_plan_admission_rejects_active_rollback_gate(
                 "96f9ac4c77a5ae0137b5f65d48be4eb021d741081da51af0f0a0717e5db395d5"
             ),
             launchPolicyRef="codex-on-demand@1",
-            executionRealizerRef="codex-profile-bound@1",
+            executionRealizerRef="generic-omnigent-host@1",
         )
     )
     binding = OmnigentExecutionPlanBinding(
@@ -1104,7 +1104,7 @@ async def test_reference_only_admission_follows_shared_rollback_control(
     plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
     plan = SimpleNamespace(
         payload=SimpleNamespace(
-            executionRealizerRef="codex-profile-bound@1",
+            executionRealizerRef="generic-omnigent-host@1",
             hostClassRef="omnigent-codex-current@1",
             credentialBindings={
                 "primary-model": SimpleNamespace(
@@ -1158,9 +1158,9 @@ async def test_reference_only_admission_follows_shared_rollback_control(
                 request
             )
         )
-        assert decision["admitted"] is True
-        assert decision["reasonCode"] == "enabled"
-        assert decision["executionRealizerRef"] == "codex-profile-bound@1"
+        assert decision["admitted"] is False
+        assert decision["reasonCode"] == "realizer_managed_lifecycle"
+        assert decision["executionRealizerRef"] == "generic-omnigent-host@1"
         assert decision["capacityProfiles"][0]["providerProfileRef"] == (
             "provider-profile-1"
         )
@@ -1176,23 +1176,13 @@ _PLANLESS_ADMISSION = OmnigentSessionAdmissionRequest(
 
 
 @pytest.mark.asyncio
-async def test_planless_admission_has_no_separate_rollout_selection(
+async def test_planless_admission_is_not_admitted_to_the_retired_supervisor_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retired rollout settings can no longer divert plan-less admission."""
+    """Plan-less requests ran only on the removed profile-bound supervisor host."""
 
     from moonmind.config.settings import FeatureFlagsSettings, settings
 
-    for name, value in (
-        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE", "disabled"),
-        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS", "other"),
-        (
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
-            "other-profile",
-        ),
-        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION", "superseded"),
-    ):
-        monkeypatch.setenv(name, value)
     monkeypatch.setattr(
         settings,
         "feature_flags",
@@ -1205,10 +1195,11 @@ async def test_planless_admission_has_no_separate_rollout_selection(
         )
     )
 
-    assert decision["admitted"] is True
-    assert decision["reasonCode"] == "enabled"
+    assert decision["admitted"] is False
+    assert decision["reasonCode"] == "new_selection_disabled"
     assert decision["admissionMode"] == "enabled"
     assert decision["admittedFeatureGeneration"] == OMNIGENT_SESSION_FEATURE_GENERATION
+    assert decision["executionRealizerRef"] is None
 
 
 @pytest.mark.asyncio
@@ -1328,130 +1319,6 @@ async def test_side_effect_rejects_obsolete_runtime_binding_fence(
 
     with pytest.raises(ValueError, match="authority is obsolete"):
         await omnigent_session_activities._claim_command(request)
-
-
-def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
-    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
-
-    host_class_ref = "omnigent-codex-current@1"
-    host_image_ref = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
-    host_build_digest = "sha256:" + "b" * 64
-    implementation = HarnessImplementationIdentity.model_validate(
-        {
-            "sourceKind": "core",
-            "package": "omnigent",
-            "version": "1.0.0",
-            "digest": "sha256:" + "e" * 64,
-        }
-    )
-    plan = SimpleNamespace(
-        payload=SimpleNamespace(
-            hostClassRef=host_class_ref,
-            hostImageRef=host_image_ref,
-            omnigentHostBuildDigest=host_build_digest,
-            hostArchitecture="linux/amd64",
-            harnessId="codex-native",
-            harnessImplementationRef=implementation.implementation_ref(),
-            supportIdentity=SimpleNamespace(vendorRuntimeRefs=()),
-            classAdmissionDecision={
-                "requiredSatisfied": [],
-                "preferredSatisfied": [],
-                "degraded": [],
-                "unknown": [],
-            },
-            modelConfig=SimpleNamespace(
-                qualifiedId=None,
-                modelConfigDigest="sha256:" + "1" * 64,
-            ),
-            resolvedSkills={
-                "resolvedSkillSetRef": "artifact:skillset-1",
-                "resolvedSkillSetDigest": "sha256:" + "2" * 64,
-                "skillDeliveryRef": "skill-delivery:sha256:" + "3" * 64,
-            },
-            workspaceIntentRef="workspace-intent:sha256:" + "4" * 64,
-        )
-    )
-    preflight: dict[str, object] = {
-        "hostId": "host-1",
-        "resolvedSkillsetRef": "skillset-1",
-        "workspaceMountAttested": True,
-        "skillDeliveryAttested": True,
-        "restrictedEgressAttested": True,
-        "egressEvidenceRef": "art-egress-1",
-        "workspaceResolution": {"workspaceId": "workspace-1"},
-        "hostRegistrationEvidence": {
-            "hostId": "host-1",
-            "imageRef": host_image_ref,
-            "omnigentVersion": "1.0.0",
-            "omnigentBuildDigest": host_build_digest,
-            "harnessImplementation": implementation.model_dump(
-                mode="json", by_alias=True
-            ),
-            "runtimeDependencies": [],
-            "architecture": "linux/amd64",
-            "capabilities": {},
-        },
-    }
-    return plan, preflight
-
-
-@pytest.mark.asyncio
-async def test_runtime_binding_requires_positive_skill_delivery_attestation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plan, preflight = _exact_host_evidence_fixture()
-    preflight.pop("skillDeliveryAttested")
-
-    async def persist(**kwargs: object) -> str:
-        return f"art-{kwargs['artifact_type']}"
-
-    monkeypatch.setattr(omnigent_session_activities, "_write_json_artifact", persist)
-    with pytest.raises(RuntimeError, match="Skill delivery attestation"):
-        await omnigent_session_activities._persist_host_runtime_evidence(
-            request=SimpleNamespace(),
-            plan=plan,
-            preflight=preflight,
-            model_options={},
-            host_lease_generation=1,
-        )
-
-
-@pytest.mark.asyncio
-async def test_runtime_binding_exact_capabilities_use_preflight_attestations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plan, preflight = _exact_host_evidence_fixture()
-    captured: dict[str, object] = {}
-
-    async def persist(**kwargs: object) -> str:
-        return f"art-{kwargs['artifact_type']}"
-
-    from moonmind.omnigent.harness_platform import capabilities
-
-    real_validate = capabilities.validate_exact_host_capabilities
-
-    def capture_validate(**kwargs: object):
-        captured.update(kwargs)
-        return real_validate(**kwargs)
-
-    monkeypatch.setattr(omnigent_session_activities, "_write_json_artifact", persist)
-    monkeypatch.setattr(
-        capabilities,
-        "validate_exact_host_capabilities",
-        capture_validate,
-    )
-    refs = await omnigent_session_activities._persist_host_runtime_evidence(
-        request=SimpleNamespace(),
-        plan=plan,
-        preflight=preflight,
-        model_options={},
-        host_lease_generation=1,
-    )
-
-    assert captured["mount_attested"] is True
-    assert captured["network_attested"] is True
-    assert captured["required_capabilities"] == []
-    assert refs["cleanup_authority_refs"] == ["art-egress-1"]
 
 
 def test_failure_contract_carries_only_typed_bounded_evidence() -> None:
@@ -2106,17 +1973,31 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     assert "compact_workspace_checkpoint_authority" in resolve_call
 
 
-def test_ensure_host_materializes_canonical_execution_inputs_as_attachments() -> None:
-    source = inspect.getsource(
-        omnigent_session_activities.omnigent_ensure_host_activity
+@pytest.mark.asyncio
+async def test_ensure_host_refuses_retained_profile_bound_sessions_without_retry() -> None:
+    """The supervisor host launch was removed; a retry cannot bring it back."""
+
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.omnigent.harness_platform.support import (
+        PROFILE_BOUND_RETIRED_MESSAGE,
     )
 
-    assert (
-        "OmnigentProfileBoundExecutionCoordinator._attachment_refs"
-        in source
-    )
-    assert "workspace_intent.connection_ref" in source
-    assert "workspace_checkpoint_restore_ref" in source
+    with pytest.raises(ApplicationError) as refused:
+        await omnigent_session_activities.omnigent_ensure_host_activity(
+            {
+                "sessionId": "oms_123",
+                "compiledExecutionIntentRef": "art_intent_123",
+                "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+                "expectedRevision": 7,
+                "fencingGeneration": 1,
+                "commandId": "cmd-1",
+            }
+        )
+
+    assert refused.value.non_retryable is True
+    assert refused.value.type == "OmnigentExecutionRealizerUnavailable"
+    assert refused.value.message == PROFILE_BOUND_RETIRED_MESSAGE
 
 
 def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> None:
@@ -2753,148 +2634,3 @@ async def test_signal_continuation_claims_through_the_canonical_command_service(
         ) == 2
 
     await engine.dispose()
-
-
-class _HostBindings:
-    def __init__(self, *, active_leases=()):
-        self.active_leases = list(active_leases)
-        self.updates: list[dict] = []
-
-    async def create_or_update_static_binding(self, **kwargs):
-        assert kwargs["profile_id"] == "codex"
-        # The repository checks and updates under one binding-row lock.
-        if kwargs.get("require_idle") and self.active_leases:
-            raise OmnigentOAuthHostError(
-                "host binding is leased and keeps its launch",
-                code="OMNIGENT_HOST_BINDING_LEASED",
-            )
-        self.updates.append(kwargs)
-        return SimpleNamespace(
-            binding_ref="omnigent-oauth:codex",
-            effective_launch_snapshot=kwargs["effective_launch_snapshot"],
-        )
-
-
-def _cached_binding():
-    return SimpleNamespace(
-        binding_ref="omnigent-oauth:codex",
-        endpoint_ref="default",
-        static_host_id=None,
-        host_launch_profile_ref="codex-on-demand@16",
-        effective_launch_snapshot={"snapshotRef": "omnigent-launch:sha256:old"},
-    )
-
-
-@pytest.mark.asyncio
-async def test_admitted_plan_replaces_an_idle_binding_launch() -> None:
-    """A plan bound to newly installed images is not blocked by an old cache."""
-
-    hosts = _HostBindings()
-    planned = {"snapshotRef": "omnigent-launch:sha256:installed"}
-
-    binding, launch = await omnigent_session_activities._bind_cached_host_launch(
-        hosts,
-        _cached_binding(),
-        profile_id="codex",
-        execution_profile_ref="omnigent-codex@1",
-        launch_policy_ref="codex-on-demand@16",
-        effective_launch=planned,
-        planned=True,
-    )
-
-    assert launch == planned
-    assert binding.effective_launch_snapshot == planned
-    assert hosts.updates[0]["launch_policy_ref"] == "codex-on-demand@16"
-    assert hosts.updates[0]["host_launch_profile_ref"] == "codex-on-demand@16"
-    assert hosts.updates[0]["require_idle"] is True
-
-
-@pytest.mark.asyncio
-async def test_leased_binding_keeps_its_launch_against_a_newer_plan() -> None:
-    """A host still running the cached launch keeps its actual binding."""
-
-    hosts = _HostBindings(active_leases=[SimpleNamespace(lease_id="lease-1")])
-
-    with pytest.raises(ValueError, match="conflicts with planned launch authority"):
-        await omnigent_session_activities._bind_cached_host_launch(
-            hosts,
-            _cached_binding(),
-            profile_id="codex",
-            execution_profile_ref="omnigent-codex@1",
-            launch_policy_ref="codex-on-demand@16",
-            effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
-            planned=True,
-        )
-    assert hosts.updates == []
-
-    # Without an admitted plan the cached launch stays authority.
-    binding = _cached_binding()
-    same, launch = await omnigent_session_activities._bind_cached_host_launch(
-        hosts,
-        binding,
-        profile_id="codex",
-        execution_profile_ref="omnigent-codex@1",
-        launch_policy_ref="codex-on-demand@16",
-        effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
-        planned=False,
-    )
-    assert same is binding
-    assert launch == binding.effective_launch_snapshot
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("busy", [False, True])
-async def test_retained_static_binding_moves_to_on_demand_only_while_idle(
-    busy: bool,
-) -> None:
-    """A static-connected binding migrates to the selected on-demand launch."""
-
-    hosts = _HostBindings(
-        active_leases=[SimpleNamespace(lease_id="lease-1")] if busy else ()
-    )
-    retained = SimpleNamespace(
-        binding_ref="omnigent-oauth:codex",
-        endpoint_ref="default",
-        static_host_id="retained-static-host",
-        host_launch_profile_ref=None,
-        effective_launch_snapshot={"hostMode": "static_compose"},
-    )
-    on_demand = {
-        "snapshotRef": "omnigent-launch:sha256:on-demand",
-        "hostMode": "on_demand_docker",
-    }
-    arguments = dict(
-        profile_id="codex",
-        execution_profile_ref="omnigent-codex@1",
-        launch_policy_ref="codex-on-demand@1",
-        effective_launch=on_demand,
-        planned=False,
-    )
-
-    if busy:
-        # The leased binding is left as-is; a later retry migrates it.
-        with pytest.raises(OmnigentOAuthHostError) as leased:
-            await omnigent_session_activities._bind_cached_host_launch(
-                hosts, retained, **arguments
-            )
-        assert leased.value.code == "OMNIGENT_HOST_BINDING_LEASED"
-        assert hosts.updates == []
-        return
-    binding, launch = await omnigent_session_activities._bind_cached_host_launch(
-        hosts, retained, **arguments
-    )
-
-    assert launch == on_demand
-    assert binding.effective_launch_snapshot == on_demand
-    assert hosts.updates == [
-        {
-            "profile_id": "codex",
-            "endpoint_ref": "default",
-            "host_launch_profile_ref": "codex-on-demand@1",
-            "execution_profile_ref": "omnigent-codex@1",
-            "launch_policy_ref": "codex-on-demand@1",
-            "effective_launch_snapshot": on_demand,
-            "require_idle": True,
-            "expected_binding": retained,
-        }
-    ]

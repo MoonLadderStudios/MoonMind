@@ -1202,7 +1202,7 @@ async def test_product_boundary_rejects_revoked_freshness_trust(
 
     async def load_authority(**_kwargs):
         return {
-            "hostClassRef": "omnigent-opencode@1",
+            "hostClassRef": "omnigent-opencode@2",
             "implementationDigest": harness.implementation.digest,
             "materializerRef": "opencode-auth-json@1",
             "authModel": "own-auth",

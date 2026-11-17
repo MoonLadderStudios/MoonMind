@@ -38,7 +38,6 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/support.py",
         "moonmind/omnigent/harness_platform/harness_registry.py",
         "moonmind/omnigent/codex_execution_decisions.py",
-        "moonmind/omnigent/execution_ports.py",
         "moonmind/omnigent/host_failures.py",
         "moonmind/omnigent/host_ports.py",
     ),
@@ -50,15 +49,12 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
     ),
     "persistence": (
         "moonmind/omnigent/control_plane/repositories.py",
-        "moonmind/omnigent/execution_adapters.py",
         "moonmind/omnigent/harness_platform/stores.py",
     ),
     "provider_host": (
         "moonmind/omnigent/bridge_artifacts.py",
         "moonmind/omnigent/bridge_store.py",
         "moonmind/omnigent/execute.py",
-        "moonmind/omnigent/oauth_host_runtime.py",
-        "moonmind/omnigent/profile_bound_execution.py",
         "moonmind/omnigent/workspace_publication.py",
     ),
     "workspace_credential": (
@@ -132,8 +128,6 @@ FORBIDDEN_UI_AUTHORITY_IMPORTS = (
     "moonmind.omnigent.harness_platform.materializers",
     "moonmind.omnigent.harness_platform.stores",
     "moonmind.omnigent.host_runtime",
-    "moonmind.omnigent.oauth_host_runtime",
-    "moonmind.omnigent.profile_bound_execution",
 )
 
 FORBIDDEN_EVIDENCE_AUTHORITY_IMPORTS = (
@@ -145,7 +139,6 @@ FORBIDDEN_EVIDENCE_AUTHORITY_IMPORTS = (
 CONTAINER_AND_PROCESS_MODULES = ("docker", "subprocess")
 CONTAINER_AND_PROCESS_OWNERS = (
     "moonmind/omnigent/host_services/",
-    "moonmind/omnigent/oauth_host_runtime.py",
     "moonmind/omnigent/bootstrap/qualification.py",
     "moonmind/omnigent/production.py",
 )
@@ -213,11 +206,9 @@ FORBIDDEN_ROUTER_SIDE_EFFECT_IMPORTS = (
     "docker",
     "subprocess",
     "moonmind.omnigent.host_runtime",
-    "moonmind.omnigent.oauth_host_runtime",
     "moonmind.omnigent.host_services",
     "moonmind.omnigent.credential_materializers",
     "moonmind.omnigent.harness_platform.materializers",
-    "moonmind.omnigent.profile_bound_execution",
     "moonmind.omnigent.harness_platform.planner",
     "moonmind.omnigent.host_auth_profile",
     "moonmind.omnigent.host_auth_store",
@@ -528,9 +519,9 @@ def test_generic_realizer_does_not_import_api_persistence() -> None:
             for name in _imports(str(path.relative_to(REPO_ROOT)))
         )
     }
-    # Codex remains an explicit legacy realizer. Generic infrastructure is
-    # assembled only by the outer production composition module.
-    assert importing_api == {"codex_profile_bound.py", "registry.py"}
+    # Generic infrastructure is assembled only by the outer production
+    # composition module.
+    assert importing_api == {"registry.py"}
 
 
 @pytest.mark.parametrize(
@@ -806,7 +797,6 @@ def test_container_and_process_leakage_negative_fixtures(source: str) -> None:
     (
         "from moonmind.omnigent.host_auth_profile import resolve_host_auth_credentials",
         "from moonmind.omnigent.host_auth_store import HostAuthProfileStore",
-        "from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime",
     ),
 )
 def test_router_side_effect_import_negative_fixtures(source: str) -> None:

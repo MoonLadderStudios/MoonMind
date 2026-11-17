@@ -214,9 +214,8 @@ def test_snapshot_identity_is_stable_across_revalidation_timestamps():
 
 
 def test_production_checkpoint_evidence_is_cold_restore_eligible():
-    # The production checkpoint capture stamps the six compact fields from the
-    # compiled launch snapshot (see profile_bound_execution). Reproduce that
-    # mapping and confirm the resulting evidence passes the exact policy check
+    # A checkpoint capture stamps the six compact fields from the compiled
+    # launch snapshot. Reproduce that mapping and confirm the resulting evidence passes the exact policy check
     # that validate_restore_material performs, keeping the checkpoint cold-
     # restore eligible against its run snapshot.
     snapshot = compile_policy_snapshot(

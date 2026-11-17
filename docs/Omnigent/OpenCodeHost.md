@@ -56,9 +56,8 @@ The shared image, its publication, and its deployment configuration are owned
 by [`SharedHostImage.md`](./SharedHostImage.md) §1, which also holds the
 verified vendor pins. OpenCode-specific rules that remain here: no workflow
 installs OpenCode dynamically, and the warm plugin-SDK cache contract in §4
-below. An explicit `OMNIGENT_OPENCODE_HOST_IMAGE_REF` override remains
-authoritative for specialized deployments but must pass the same bootstrap
-checks; an incompatible pin is quarantined rather than silently replaced.
+below. No Host Class launches the deprecated `OMNIGENT_OPENCODE_HOST_IMAGE_REF`
+(§13).
 
 ## 2. Governing image rules
 
@@ -92,9 +91,9 @@ and the one-harness admission rule are owned by
 [`SharedHostImage.md`](./SharedHostImage.md) §3; separate Host Classes
 preserve independent support and rollout decisions.
 
-Fresh OpenCode work selects the shared-image row `omnigent-opencode@2`.
-`@1` resolves only plans and retries that recorded it, or an explicit
-`omnigent.hostClassRef` request (see [`SharedHostImage.md`](./SharedHostImage.md) §3):
+Requests and recorded plans naming the removed `omnigent-opencode@1` fail closed
+with `OMNIGENT_HOST_CLASS_UNAVAILABLE`. OpenCode runs the shared-image row
+`omnigent-opencode@2`:
 
 ```yaml
 hostClassId: omnigent-opencode
@@ -201,9 +200,8 @@ crosses the host, runner, or server boundary. The seed is copied into the
 run-owned state volume rather than the tmpfs home so the cache costs disk, not
 the host's memory limit. A host image without the seed fails the launch with an
 explicit message in the captured host log instead of degrading to the cold
-registry install; deployments that pin `OMNIGENT_OPENCODE_HOST_IMAGE_REF` must
-move to a digest built with the warm cache when they adopt this MoonMind
-revision.
+registry install; a pinned `OMNIGENT_SHARED_HOST_IMAGE_REF` must name a digest
+built with the warm cache.
 
 ## 5. Credential materializer: `opencode-auth-json@1`
 
@@ -621,11 +619,13 @@ OMNIGENT_SHARED_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-moonmind
 OMNIGENT_SHARED_HOST_IMAGE_TAG=latest
 ```
 
-`OMNIGENT_OPENCODE_HOST_IMAGE_REF` selects an explicit immutable OpenCode host
-pin. `OMNIGENT_SHARED_HOST_IMAGE_REF` independently selects the shared host pin.
-The OpenCode keys remain the canonical OpenCode configuration; there is no
-`OMNIGENT_RUNTIME_HOST_IMAGE*` configuration or alias translation. Omitting the
-OpenCode repository in direct API startup selects the same default as Compose.
+`OMNIGENT_SHARED_HOST_IMAGE_REF` selects the shared host pin that
+`omnigent-opencode@2` launches. `OMNIGENT_OPENCODE_HOST_IMAGE_REF` is
+deprecated: an explicit OpenCode pin is still honored for bootstrap judgment and
+OpenCode credential validation but warns at startup naming the shared variable.
+There is no `OMNIGENT_RUNTIME_HOST_IMAGE*` configuration or alias translation.
+Omitting the OpenCode repository in direct API startup selects the same default
+as Compose.
 Mutable image and tag coordinates are resolution inputs only. Launch authority
 is always the resolved digest, and explicit pins are never silently replaced.
 
@@ -760,7 +760,7 @@ image. The selected image must pass bootstrap admission and exact-host
 qualification before new plans can use it.
 
 The OpenCode Host Class's resolved image and qualification evidence bind the
-exact immutable digest; plans that recorded `omnigent-opencode@1` keep it. Updates and rollbacks
+exact immutable digest. Updates and rollbacks
 change future selection. They do not rewrite an admitted execution plan or
 silently use another digest for an in-flight run.
 

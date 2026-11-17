@@ -37,12 +37,11 @@ closed and deployments migrate as described in
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- Codex uses the generic realizer by default. Explicit
-  `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` blocks new shared work;
-  recorded profile-bound plans keep their owner. Rollout stops, custom policy and recorded plans retain
-  their meaning; see [Runtime Provider Rollout](RuntimeProviderRollout.md).
-- Generic Claude Code has no profile-bound realizer, so it is admitted as an
-  explicit choice by default: a connected Anthropic OAuth Provider Profile
+- Codex runs only on the generic realizer. Explicit
+  `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` blocks new Codex work, and
+  recorded `codex-profile-bound@1` plans fail closed. Rollout stops and custom
+  policy retain their meaning; see [Runtime Provider Rollout](RuntimeProviderRollout.md).
+- Generic Claude Code is admitted as an explicit choice by default: a connected Anthropic OAuth Provider Profile
   needs no manual toggle. Image, policy, inventory, credential readiness, and
   exact-host attestation still gate each launch, and
   `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` stops new admission.

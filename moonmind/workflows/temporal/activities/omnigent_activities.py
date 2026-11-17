@@ -1,14 +1,10 @@
 """Temporal activities for Omnigent streaming execution."""
 
 from __future__ import annotations
-from moonmind.workflows.skills.run_projection import step_execution_artifact_access
-from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 
 import logging
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from temporalio import activity
@@ -1075,9 +1071,7 @@ async def omnigent_execute_activity(
     from moonmind.omnigent.execute import omnigent_activity_heartbeat
 
     async with omnigent_activity_heartbeat():
-        return await _classify_ended_codex_login(
-            await _omnigent_execute_activity(request)
-        )
+        return await _omnigent_execute_activity(request)
 
 
 def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
@@ -1136,91 +1130,6 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
     )
 
 
-# Failures of a marked turn the native harness never started: Omnigent's own
-# undelivered startup failure, or MoonMind's turn-start watchdog.
-_HARNESS_NEVER_STARTED_CODES = frozenset(
-    {"agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"}
-)
-
-
-async def _classify_ended_codex_login(result: AgentRunResult) -> AgentRunResult:
-    """Report a never-started Codex turn on an ended login as reauthentication.
-
-    A ChatGPT login whose session has ended still passes ``codex login
-    status``, so Codex parks on its sign-in screen and Omnigent reports only
-    that the harness never started. A fresh host cannot fix that; the operator
-    must re-authenticate the Provider Profile. Only when the credential home
-    of the exact binding and generation that ran proves the session ended does
-    the result take the canonical ``codex_reauth_required``/``reauthenticate``
-    classification, which the workflow does not retry. Without that proof, or
-    after the binding or generation moved on, the original failure stands.
-    """
-
-    from moonmind.omnigent.failure_classification import (
-        OmnigentFailureReason,
-        classify_omnigent_failure,
-    )
-
-    if result.provider_error_code not in _HARNESS_NEVER_STARTED_CODES:
-        return result
-    metadata = dict(result.metadata or {})
-    capture = metadata.get("omnigentCheckpointCapture")
-    if not isinstance(capture, Mapping):
-        return result
-    profile_id = str(capture.get("providerProfileId") or "").strip()
-    if not profile_id:
-        return result
-    from api_service.db.base import async_session_maker
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-
-    try:
-        binding = await OmnigentOAuthHostRepository(
-            async_session_maker
-        ).get_binding_for_profile(profile_id)
-    except Exception:
-        logger.warning(
-            "Codex login session check could not load the host binding for %s",
-            profile_id,
-            exc_info=True,
-        )
-        return result
-    if (
-        binding is None
-        or binding.binding_ref != capture.get("hostBindingRef")
-        or binding.credential_mount_ref.auth_volume_ref.credential_generation
-        != capture.get("credentialGeneration")
-    ):
-        return result
-    verdict = await OmnigentOAuthHostRuntime.probe_login_session(
-        binding=binding, effective_launch=binding.effective_launch_snapshot
-    )
-    if verdict != "ended":
-        return result
-    from moonmind.omnigent.codex_login import record_ended_codex_login
-
-    await record_ended_codex_login(profile_id, capture["credentialGeneration"])
-    metadata["codexLoginSession"] = {
-        "verdict": "ended",
-        "harnessStartFailureCode": result.provider_error_code,
-    }
-    return result.model_copy(
-        update={
-            "summary": (
-                f"The ChatGPT login stored for Provider Profile {profile_id} has "
-                "ended and cannot be refreshed, so Codex is waiting for a "
-                "sign-in; re-authenticate the Provider Profile, then rerun."
-            ),
-            "failure_class": classify_omnigent_failure(
-                OmnigentFailureReason.AUTH_FAILURE
-            ),
-            "provider_error_code": "codex_reauth_required",
-            "retry_recommendation": "reauthenticate",
-            "metadata": metadata,
-        }
-    )
-
-
 async def _omnigent_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
@@ -1229,10 +1138,10 @@ async def _omnigent_execute_activity(
     An accepted turn that can never make progress (the provider never started
     it, or its host is gone) is finalized inside
     ``run_omnigent_execution`` itself (decisive snapshot captured, bridge row
-    terminal) and returned as a typed ``AgentRunResult``, so every execution
-    shape below (plan-dispatched realizer, unprofiled direct run, profile-bound
-    coordinator) consumes one classification with its evidence attached and
-    releases its authorities through normal cleanup. The ambiguous parent
+    terminal) and returned as a typed ``AgentRunResult``, so both execution
+    shapes below (plan-dispatched realizer, unprofiled direct run) consume one
+    classification with its evidence attached and release their authorities
+    through normal cleanup. The ambiguous parent
     (``OmnigentSessionStillRunningError``) keeps raising so a retry can reattach
     to work that may still be live.
     """
@@ -1245,25 +1154,7 @@ async def _omnigent_execute_activity(
         CanonicalTurnCommandService,
     )
     from moonmind.omnigent.execute import run_omnigent_execution
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
-    )
-    from moonmind.omnigent.settings import (
-        resolved_api_token,
-        resolved_proxy_forward_headers,
-        resolved_server_url,
-    )
-    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
-    )
-    from moonmind.workflows.adapters.omnigent_client import (
-        OmnigentHttpClient,
-        pooled_http_client,
-    )
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     # One durable gateway for every Omnigent path in this Activity. A
     # filesystem-scoped gateway cannot dereference an admitted request's durable
@@ -1332,135 +1223,32 @@ async def _omnigent_execute_activity(
             ),
         )
 
-    async with pooled_http_client() as http_client:
-        omnigent_client = OmnigentHttpClient(
-            base_url=resolved_server_url(),
-            api_token=resolved_api_token(),
-            client=http_client,
-            upstream_header_allowlist=resolved_proxy_forward_headers(),
-        )
-        artifact_service = ScopedTemporalArtifactService(async_session_maker)
-        from moonmind.omnigent.remediation_workspace import (
-            ArtifactRemediationHeadLoader,
-            ManagedServiceRemediationRestorer,
-            SandboxRemediationWorkspaceOwner,
-        )
-        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
-            ManagedCheckpointRestoreService,
-        )
+    # A profiled request without an admitted plan ran only on the removed
+    # profile-bound coordinator; plans recorded for its realizer are refused by
+    # the registry above. Neither can run any more.
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformFailure,
+        remediation_for,
+    )
+    from moonmind.omnigent.harness_platform.support import (
+        PROFILE_BOUND_RETIRED_MESSAGE,
+    )
 
-        workspace_root = Path(
-            os.environ.get("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
-        )
-        restore_service = ManagedCheckpointRestoreService(
-            authority_root=workspace_root,
-            artifact_service=artifact_service,
-        )
-
-        lore_repository_adapter = build_lore_repository_adapter_from_environment()
-        host_repository = OmnigentOAuthHostRepository(async_session_maker)
-        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
-            bind_remediation_context_inputs,
-        )
-
-        coordinator = OmnigentProfileBoundExecutionCoordinator(
-            request_input_binder=bind_remediation_context_inputs,
-            session_factory=async_session_maker,
-            lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            host_repository=host_repository,
-            host_runtime=OmnigentOAuthHostRuntime(
-                client=omnigent_client,
-                lore_repository_adapter=lore_repository_adapter,
-            ),
-            run_store=run_store,
-            execution_runner=run_omnigent_execution,
-            artifact_gateway=artifact_gateway,
-            artifact_service=artifact_service,
-            workspace_owner=SandboxRemediationWorkspaceOwner(
-                workspace_root,
-                restorer=(
-                    ManagedServiceRemediationRestorer(
-                        restore_service,
-                        access=await step_execution_artifact_access(request),
-                    )
-                    if request.remediation_workspace is not None
-                    else None
-                ),
-                head_loader=ArtifactRemediationHeadLoader(
-                    artifact_service,
-                    workflow_id=(
-                        request.step_execution.workflow_id
-                        if request.step_execution is not None
-                        else None
-                    ),
-                ),
-            ),
-            # This activity still reaches the coordinator directly whenever a
-            # profile-bound request carries no executionPlanRef and no
-            # agentProfileRef, so it must own the same canonical turn boundary
-            # the realizer-dispatched path owns (#3707 §1). Without it every
-            # repository continuation on this path would submit outside the
-            # boundary and fence no cleanup.
-            turn_command_service=CanonicalTurnCommandService(
-                OmnigentControlPlaneStore(async_session_maker)
-            ),
-        )
-        recovery_inputs = _checkpoint_recovery_from_request(request)
-        recovery_payload = request.checkpoint_recovery
-        if branch_inputs is not None:
-            return await coordinator.execute(request)
-        if recovery_inputs is not None:
-            checkpoint, candidate_workspace = recovery_inputs
-            authority = await _resolve_live_recovery_authority(
-                checkpoint=checkpoint,
-                session_factory=async_session_maker,
-                host_repository=host_repository,
-                run_store=run_store,
-            )
-            if not isinstance(recovery_payload, dict):
-                raise ValueError("checkpoint recovery payload is invalid")
-            decision = _checkpoint_recovery_decision(
-                recovery_payload,
-                live_authority=authority,
-                live_reattach_authorized=bool(
-                    checkpoint.validation.valid
-                    and checkpoint.validation.live_reattach_available
-                ),
-                cold_restore_authorized=bool(
-                    checkpoint.validation.valid
-                    and checkpoint.validation.workspace_cold_restore_available
-                    and authority["current_credential_generation"]
-                    == checkpoint.credential_generation
-                    and request.execution_profile_ref == checkpoint.provider_profile_id
-                ),
-            )
-            recovery_payload["recoveryDecision"] = decision
-            recovery_payload["recoveryAction"] = decision["recoveryAction"]
-            if decision["recoveryAction"] == "resume_unavailable":
-                reasons = decision.get("reasonCodes") or [
-                    "checkpoint_authority_unavailable"
-                ]
-                raise ValueError(
-                    "checkpoint resume unavailable: " + ",".join(map(str, reasons[:20]))
-                )
-            if decision["recoveryAction"] == "cold_restore":
-                raise ValueError(
-                    "checkpoint cold restore requires an owned workspace restoration "
-                    "boundary before Omnigent launch"
-                )
-            return await coordinator.recover_from_checkpoint(
-                request=request,
-                checkpoint=checkpoint,
-                candidate_workspace=candidate_workspace,
-                **authority,
-            )
-        return await coordinator.execute(request)
+    code = HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE.value
+    return AgentRunResult(
+        summary=PROFILE_BOUND_RETIRED_MESSAGE,
+        failureClass="integration_error",
+        providerErrorCode=code,
+        retryRecommendation=remediation_for(code),
+    )
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")
 async def omnigent_profile_bound_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
+    """Run a profiled plan; the replay-visible name predates the shared realizer."""
+
     if not request.execution_profile_ref:
         raise ValueError(
             "profile-bound Omnigent execution requires executionProfileRef"
@@ -1477,8 +1265,13 @@ async def _reconcile_oauth_hosts(
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
     from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
+    from moonmind.omnigent.host_services.legacy_host_containers import (
+        LegacyOmnigentHostContainerService,
+    )
+    from moonmind.omnigent.host_services.oauth_credential_validation import (
+        run_host_command,
+    )
     from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.settings import (
         resolved_api_token,
@@ -1504,11 +1297,10 @@ async def _reconcile_oauth_hosts(
         )
         janitor = OmnigentOAuthHostJanitor(
             repository=OmnigentOAuthHostRepository(async_session_maker),
-            runtime=OmnigentOAuthHostRuntime(client=client),
+            runtime=LegacyOmnigentHostContainerService(run_command=run_host_command),
             client=client,
             run_store=OmnigentBridgeSessionStore(async_session_maker),
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            artifact_gateway=ScopedTemporalArtifactService(async_session_maker),
             runtime_binding_store=DbRuntimeBindingStore(async_session_maker),
             control_plane_store=OmnigentControlPlaneStore(async_session_maker),
         )

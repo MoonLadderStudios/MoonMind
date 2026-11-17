@@ -4,12 +4,6 @@ import pytest
 
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.planner import select_execution_realizer
-from moonmind.omnigent.legacy_retirement import (
-    LegacyAdmissionRejected,
-    assert_surface_admits_new_work,
-)
-from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
-from moonmind.omnigent.realizers.registry import OmnigentExecutionRealizerRegistry
 from moonmind.omnigent.runtime_provider_rollout import (
     RUNTIME_PROVIDER_ROLLBACK_ENV,
     RuntimeProviderPathClass,
@@ -51,12 +45,3 @@ def test_restoring_a_default_does_not_restore_profile_bound_admission():
         assert (
             effective_rule_state(rule, policy)[0] is RolloutState.retired_for_new_work
         )
-
-
-def test_retired_realizer_remains_available_to_recorded_plans():
-    with pytest.raises(LegacyAdmissionRejected):
-        assert_surface_admits_new_work("realizer:codex-profile-bound@1")
-    recorded_owner = CodexProfileBoundRealizer()
-    registry = OmnigentExecutionRealizerRegistry()
-    registry.register(recorded_owner)
-    assert registry.require("codex-profile-bound@1") is recorded_owner

@@ -3,9 +3,7 @@
 import asyncio
 import hashlib
 import json
-import os
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
@@ -25,7 +23,6 @@ from moonmind.omnigent.harness_platform.host_classes import (
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.registry import (
     OmnigentExecutionRealizerRegistry,
@@ -100,7 +97,7 @@ def _select_opencode_host_class(catalog):
     return OmnigentHostClassSelector(
         environment={
             "OMNIGENT_IMAGE_REF": _SERVER_IMAGE_REF,
-            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
         }
     ).select(
         harness=catalog.harnesses[0],
@@ -216,10 +213,6 @@ def test_plan_persisted_and_retries_load_same_plan():
                 }
             },
         )
-        # Need opencode image env for host class
-        os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = (
-            "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "a" * 64
-        )
         store = InMemoryExecutionPlanStore()
         host_class = _select_opencode_host_class(catalog)
 
@@ -229,7 +222,7 @@ def test_plan_persisted_and_retries_load_same_plan():
             trust_record=trust,
             resolved_skills=skills,
             credential_binding_set=bs,
-            host_class_ref="omnigent-opencode@1",
+            host_class_ref="omnigent-opencode@2",
             host_class=host_class,
             launch_policy_ref="omnigent-on-demand@1",
             model_qualified_id="opencode/model",
@@ -247,7 +240,7 @@ def test_plan_persisted_and_retries_load_same_plan():
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=bs,
-                host_class_ref="omnigent-opencode@1",
+                host_class_ref="omnigent-opencode@2",
                 host_class=host_class,
                 launch_policy_ref="omnigent-on-demand@1",
                 model_qualified_id="opencode/model",
@@ -265,7 +258,6 @@ def test_plan_persisted_and_retries_load_same_plan():
     import asyncio as _asyncio
 
     _asyncio.run(run())
-    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
 
 
 def _codex_plan_inputs(launch_policy_ref: str = "codex-on-demand@1") -> dict:
@@ -386,101 +378,9 @@ async def test_workflow_cannot_author_realizer(field, legacy_default, monkeypatc
     assert await store.load(envelope.planRef) == envelope
 
 
-@pytest.fixture
-def retained_codex_realizer(monkeypatch):
-    """Restore current admission immediately after historical fixture production."""
-    import sys
-    from tests.helpers.retained_codex import pre_upgrade_profile_bound_admission
-
-    current_compiler, current_helper = compile_execution_plan, _compile_codex_plan
-
-    def historical_compile(*args, **kwargs):
-        with pre_upgrade_profile_bound_admission(monkeypatch):
-            return current_compiler(*args, **kwargs)
-
-    def historical_helper(*args, **kwargs):
-        with pre_upgrade_profile_bound_admission(monkeypatch):
-            return current_helper(*args, **kwargs)
-
-    monkeypatch.setattr(
-        sys.modules[__name__], "compile_execution_plan", historical_compile
-    )
-    monkeypatch.setattr(sys.modules[__name__], "_compile_codex_plan", historical_helper)
-
-
-def _codex_dispatch_request(plan, *, target: str, policy: str):
-    from types import SimpleNamespace
-
-    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-
-    return SimpleNamespace(
-        omnigent_execution_plan=OmnigentExecutionPlanBinding(
-            planRef=plan.planRef,
-            planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
-            planArtifactRef="art_plan",
-            taskInputSnapshotRef="art_input",
-            taskInputSnapshotDigest="sha256:" + "f" * 64,
-        ),
-        execution_profile_ref="p1",
-        parameters={
-            "omnigent": {"executionTargetRef": target, "launchPolicyRef": policy}
-        },
-    )
-
-
-def _codex_coordinator(plan):
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
-    )
-
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    coordinator._execution_plan = plan
-    return coordinator
-
-
-@pytest.mark.parametrize("policy", ["codex-on-demand@2"])
-@pytest.mark.usefixtures("retained_codex_realizer")
-def test_codex_dispatch_accepts_an_admitted_policy_other_than_the_target_default(
-    policy,
-):
-    """The target default is a selection fallback, not a conflict.
-
-    Bootstrap publishes ``codex-on-demand@2`` when the host image changes; the
-    plan and request both carry the admitted policy while the built-in target
-    still names ``codex-on-demand@1``.
-    """
-    plan = compile_execution_plan(**_codex_plan_inputs(policy))
-    request = _codex_dispatch_request(plan, target="omnigent-codex@1", policy=policy)
-
-    assert _codex_coordinator(plan)._require_recorded_plan_request(request) is plan
-
-
-@pytest.mark.parametrize(
-    ("target", "policy"),
-    [
-        ("omnigent-claude@1", "claude-on-demand@1"),
-        ("omnigent-codex@9", "codex-on-demand@1"),
-    ],
-)
-@pytest.mark.usefixtures("retained_codex_realizer")
-def test_codex_dispatch_rejects_a_target_outside_the_admitted_plan(target, policy):
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-        HarnessPlatformFailure,
-    )
-
-    plan = compile_execution_plan(**_codex_plan_inputs(policy))
-    request = _codex_dispatch_request(plan, target=target, policy=policy)
-
-    with pytest.raises(HarnessPlatformError) as exc:
-        _codex_coordinator(plan)._require_recorded_plan_request(request)
-    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
-
-
 def test_realizer_registry_no_fallback():
     reset_default_registry()
     registry = OmnigentExecutionRealizerRegistry()
-    registry.register(CodexProfileBoundRealizer())
 
     class ReadyGenericRealizer:
         ref = GenericOmnigentHostRealizer.ref
@@ -493,10 +393,9 @@ def test_realizer_registry_no_fallback():
 
     registry.register(ReadyGenericRealizer())
 
-    assert registry.require("codex-profile-bound@1").ref == "codex-profile-bound@1"
     assert registry.require("generic-omnigent-host@1").ref == "generic-omnigent-host@1"
 
-    # Must not fallback: generic failure does not select codex
+    # Must not fall back to the registered realizer for an unknown ref.
     with pytest.raises(Exception) as exc:
         registry.require("nonexistent@1")
     assert "unavailable" in str(exc.value).lower()
@@ -877,7 +776,7 @@ async def test_repository_codex_ignores_caller_realizer(field):
     inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
         env={_GATE_ENV: "true"}
     )
-    inputs[field] = CodexProfileBoundRealizer.ref
+    inputs[field] = "codex-profile-bound@1"
     store = InMemoryExecutionPlanStore()
     plan = await store.load_or_compile(
         compile_fn=compile_execution_plan,
@@ -1225,13 +1124,12 @@ def test_stop_all_new_omnigent_work_never_substitutes_another_runtime(monkeypatc
     assert "claude_code" not in message
 
 
-# ---- The Codex realizer must run on the deployment's durable artifacts ------
+# ---- Realizers run on the deployment's durable artifacts ---------------------
 #
-# mm:1fe51ca8-824c-4e56-ad02-89df8a56751a failed with
-# ``OMNIGENT_GENERIC_DISPATCH_FAILED: ... Unable to dereference artifact ref:
-# art_...``. The realizer handed the profile-bound coordinator a filesystem-only
-# artifact gateway, so host preparation could not read the admitted run's
-# durable resolved Skill snapshot and the run died before any host launched.
+# A realizer given a filesystem-only artifact gateway cannot dereference the
+# admitted run's durable resolved Skill snapshot (``art_...``), so the run dies
+# before any host launches. The snapshot helpers below are shared with the
+# durable-skill integration journeys.
 
 
 _DURABLE_SKILL_NAME = "batch-pr-resolver"
@@ -1271,310 +1169,6 @@ def durable_artifact_storage(tmp_path, monkeypatch):
         yield factory
     finally:
         asyncio.run(engine.dispose())
-
-
-def _durable_skill_snapshot_request(plan):
-    from moonmind.schemas.agent_runtime_models import (
-        AgentExecutionRequest,
-        OmnigentExecutionPlanBinding,
-    )
-
-    return AgentExecutionRequest.model_validate(
-        {
-            "agentKind": "external",
-            "agentId": "omnigent",
-            "correlationId": "workflow-codex-skill",
-            "idempotencyKey": "step-codex-skill",
-            "executionProfileRef": "codex_openai_oauth",
-            "omnigentExecutionPlan": OmnigentExecutionPlanBinding(
-                planRef=plan.planRef,
-                planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
-                planArtifactRef="art_plan",
-                taskInputSnapshotRef="art_input",
-                taskInputSnapshotDigest="sha256:" + "f" * 64,
-            ),
-            "parameters": {"executionPlanRef": plan.planRef},
-        }
-    )
-
-
-def _codex_authority_dispatch_request(plan, *, authority="typed"):
-    from moonmind.schemas.agent_runtime_models import AgentRuntimeStepExecutionLaunch
-
-    request = _durable_skill_snapshot_request(plan)
-    binding = request.omnigent_execution_plan if authority != "legacy_flat" else None
-    parameters = {
-        "repository": "MoonLadderStudios/Tactics",
-        "startingBranch": "main",
-        "publishMode": "none",
-    }
-    if authority != "typed":
-        parameters["executionPlanRef"] = plan.planRef
-    return request.model_copy(
-        update={
-            "parameters": parameters,
-            "omnigent_execution_plan": binding,
-            "execution_profile_ref": plan.payload.credentialBindings[
-                "primary-model"
-            ].providerProfileRef,
-            "resolved_skillset_ref": plan.payload.resolvedSkills["resolvedSkillSetRef"],
-            "step_execution": AgentRuntimeStepExecutionLaunch(
-                workflowId=request.correlation_id,
-                runId="run-admitted-codex",
-                logicalStepId="node-1",
-                executionOrdinal=1,
-                stepExecutionId=(
-                    f"{request.correlation_id}:run-admitted-codex:node-1:execution:1"
-                ),
-                runtimeContextPolicy="fresh_agent_run",
-                omnigentExecutionPlan=binding,
-            ),
-        }
-    )
-
-
-def _codex_authority_realizer(session_factory):
-    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
-    from moonmind.omnigent.control_plane.turn_commands import (
-        CanonicalTurnCommandService,
-    )
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
-
-    delivered_requests = []
-
-    class RecordingCoordinator:
-        def __init__(self, **_kwargs):
-            pass
-
-        async def execute(self, request):
-            delivered_requests.append(request)
-            return AgentRunResult(
-                summary="Codex session completed",
-                metadata={
-                    "omnigentSessionId": "provider-session-admitted-codex",
-                    "runtimeBindingRef": "binding-recorded",
-                    "retainedEvidenceRef": "art_prior_evidence",
-                    "omnigentCheckpointCapture": {
-                        "runtimeBindingRef": "binding-recorded",
-                        "checkpointRefs": ["art_checkpoint"],
-                        "executionScopeRef": request.step_execution.step_execution_id,
-                    },
-                },
-            )
-
-    store = OmnigentControlPlaneStore(session_factory)
-    realizer = CodexProfileBoundRealizer(
-        session_factory=session_factory,
-        coordinator_factory=RecordingCoordinator,
-        turn_command_service=CanonicalTurnCommandService(store),
-    )
-    return realizer, delivered_requests, store
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("authority", ["typed", "typed_and_flat", "legacy_flat"])
-@pytest.mark.usefixtures("retained_codex_realizer")
-async def test_codex_dispatch_preserves_admitted_plan_and_checkpoint_authority(
-    durable_artifact_storage, authority
-):
-    """The Activity's typed plan binding survives the real Codex turn boundary."""
-
-    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
-    from moonmind.workflows.temporal.activities.omnigent_activities import (
-        _try_generic_realizer_dispatch,
-    )
-
-    inputs = _codex_plan_inputs()
-    inputs.update(model_qualified_id="gpt-6.1-sol", model_effort="max")
-    plan = compile_execution_plan(**inputs)
-    request = _codex_authority_dispatch_request(plan, authority=authority)
-    plans = InMemoryExecutionPlanStore()
-    await plans.persist(plan)
-    realizer, delivered, store = _codex_authority_realizer(durable_artifact_storage)
-    registry = OmnigentExecutionRealizerRegistry()
-    registry.register(realizer)
-    admitted = []
-
-    class _AdmissionGateway:
-        async def admit_execution_plan_inputs(self, *, request, plan):
-            admitted.append((request, plan))
-
-    result = await _try_generic_realizer_dispatch(
-        request,
-        plan_store=plans,
-        realizer_registry=registry,
-        artifact_gateway=_AdmissionGateway(),
-    )
-
-    assert result.failure_class is None
-    assert result.summary == "Codex session completed"
-    # Every step-bound plan delegates verified inputs before the realizer,
-    # including retained plans that have no compact typed binding.
-    assert admitted == [(request, plan)]
-    assert len(delivered) == 1
-    assert delivered[0].execution_profile_ref == request.execution_profile_ref
-    assert delivered[0].step_execution == request.step_execution
-    assert delivered[0].omnigent_execution_plan == request.omnigent_execution_plan
-    assert delivered[0].parameters.get("executionPlanRef") == request.parameters.get(
-        "executionPlanRef"
-    )
-    assert delivered[0].parameters["model"] == "gpt-6.1-sol"
-    assert delivered[0].parameters["effort"] == "max"
-    assert delivered[0].parameters["omnigent"]["session"] == {
-        "modelOverride": "gpt-6.1-sol",
-        "reasoningEffort": "max",
-    }
-    assert "model" not in request.parameters
-    assert "omnigent" not in request.parameters
-    assert request.parameters.get("executionPlanRef") == (
-        None if authority == "typed" else plan.planRef
-    )
-    assert result.metadata["executionPlanRef"] == plan.planRef
-    assert result.metadata["runtimeBindingRef"] == "binding-recorded"
-    assert result.metadata["retainedEvidenceRef"] == "art_prior_evidence"
-    assert result.metadata["omnigentCheckpointCapture"] == {
-        "runtimeBindingRef": "binding-recorded",
-        "checkpointRefs": ["art_checkpoint"],
-        "executionScopeRef": request.step_execution.step_execution_id,
-        "executionPlanRef": plan.planRef,
-    }
-    session_id = canonical_omnigent_session_id(
-        workflow_id=request.step_execution.workflow_id,
-        step_execution_id=request.step_execution.step_execution_id,
-        agent_run_id=request.correlation_id,
-    )
-    async with store.transaction() as repos:
-        session = await repos.sessions.get(session_id)
-        turns = await repos.turn_attempts.list_for_session(session_id)
-        commands = await repos.commands.list_for_session(session_id)
-    assert session.provider_session_ref == "provider-session-admitted-codex"
-    assert len(turns) == len(commands) == 1
-    assert commands[0].payload_digest == plan.planRef
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "conflict", ["typed_plan", "typed_digest", "flat_plan", "legacy_flat", "missing"]
-)
-async def test_codex_plan_conflict_precedes_turn_and_provider_effects(
-    durable_artifact_storage, conflict
-):
-    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-        HarnessPlatformFailure,
-    )
-
-    plan = compile_execution_plan(**_codex_plan_inputs())
-    request = _codex_authority_dispatch_request(plan, authority="typed_and_flat")
-    wrong_ref = "omnigent-execution-plan:sha256:" + "f" * 64
-    if conflict in {"typed_plan", "typed_digest"}:
-        updates = {"plan_digest": "sha256:" + "f" * 64}
-        if conflict == "typed_plan":
-            updates["plan_ref"] = wrong_ref
-        binding = request.omnigent_execution_plan.model_copy(update=updates)
-        request = request.model_copy(update={"omnigent_execution_plan": binding})
-    elif conflict in {"flat_plan", "legacy_flat"}:
-        request = request.model_copy(
-            update={
-                "parameters": {**request.parameters, "executionPlanRef": wrong_ref},
-                "omnigent_execution_plan": (
-                    None
-                    if conflict == "legacy_flat"
-                    else request.omnigent_execution_plan
-                ),
-            }
-        )
-    else:
-        request = request.model_copy(
-            update={"parameters": {}, "omnigent_execution_plan": None}
-        )
-    realizer, delivered, store = _codex_authority_realizer(durable_artifact_storage)
-
-    with pytest.raises(HarnessPlatformError) as error:
-        await realizer.execute(request, plan)
-
-    assert error.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
-    assert delivered == []
-    session_id = canonical_omnigent_session_id(
-        workflow_id=request.step_execution.workflow_id,
-        step_execution_id=request.step_execution.step_execution_id,
-        agent_run_id=request.correlation_id,
-    )
-    async with store.transaction() as repos:
-        assert await repos.sessions.get(session_id) is None
-        assert await repos.turn_attempts.list_for_session(session_id) == []
-        assert await repos.commands.list_for_session(session_id) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("location", "field", "value"),
-    [
-        ("root", "model", "gpt-5.6"),
-        ("root", "effort", "low"),
-        ("session", "modelOverride", "gpt-5.6"),
-        ("session", "reasoningEffort", "low"),
-    ],
-)
-async def test_codex_model_conflict_precedes_turn_and_provider_effects(
-    durable_artifact_storage, location, field, value
-):
-    """A coordinator rejection must not journal an undelivered provider turn."""
-
-    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
-    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
-    from moonmind.omnigent.control_plane.turn_commands import (
-        CanonicalTurnCommandService,
-    )
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-        HarnessPlatformFailure,
-    )
-
-    inputs = _codex_plan_inputs()
-    inputs.update(model_qualified_id="gpt-6.1-sol", model_effort="max")
-    plan = compile_execution_plan(**inputs)
-    request = _codex_authority_dispatch_request(plan)
-    parameters = dict(request.parameters)
-    if location == "root":
-        parameters[field] = value
-    else:
-        parameters["omnigent"] = {"session": {field: value}}
-    request = request.model_copy(update={"parameters": parameters})
-    effects = []
-
-    class UndeliveredBridgeStore:
-        async def get_or_create(self, **_kwargs):
-            effects.append("bridge_created")
-            raise AssertionError("conflicting selection reached provider lifecycle")
-
-    def coordinator_factory(**_kwargs):
-        coordinator = _codex_coordinator(plan)
-        coordinator._run_store = UndeliveredBridgeStore()
-        return coordinator
-
-    store = OmnigentControlPlaneStore(durable_artifact_storage)
-    realizer = CodexProfileBoundRealizer(
-        session_factory=durable_artifact_storage,
-        coordinator_factory=coordinator_factory,
-        turn_command_service=CanonicalTurnCommandService(store),
-    )
-
-    with pytest.raises(HarnessPlatformError) as error:
-        await realizer.execute(request, plan)
-
-    assert error.value.code == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
-    assert effects == []
-    session_id = canonical_omnigent_session_id(
-        workflow_id=request.step_execution.workflow_id,
-        step_execution_id=request.step_execution.step_execution_id,
-        agent_run_id=request.correlation_id,
-    )
-    async with store.transaction() as repos:
-        assert await repos.sessions.get(session_id) is None
-        assert await repos.turn_attempts.list_for_session(session_id) == []
-        assert await repos.commands.list_for_session(session_id) == []
 
 
 async def _write_durable_skill_snapshot(
@@ -1655,106 +1249,26 @@ async def _write_durable_skill_snapshot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("retained_codex_realizer")
-async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
-    tmp_path, durable_artifact_storage, monkeypatch
-):
-    """An admitted Codex run projects Skills from durable artifact storage.
-
-    Host preparation resolves ``request.resolvedSkillsetRef`` through the
-    artifact gateway the realizer installs. A gateway that cannot dereference
-    durable refs aborts the run before the container launches.
-    """
-
-    from types import SimpleNamespace
-
-    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
-
-    monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
-    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
-
-    from tests.unit.omnigent.test_admitted_input_authority import (
-        _admitted_plan,
-        _request,
-    )
-
-    durable_gateway = TemporalOmnigentArtifactGateway(durable_artifact_storage)
-    skillset_ref = await _write_durable_skill_snapshot(
-        durable_artifact_storage, "workflow-codex-skill", "run-codex-skill"
-    )
-    assert skillset_ref.startswith("art_")
-    skills = SimpleNamespace(manifest_id=skillset_ref)
-    from tests.helpers.retained_codex import pre_upgrade_profile_bound_admission
-
-    with pre_upgrade_profile_bound_admission(monkeypatch):
-        plan, binding = await _admitted_plan(durable_artifact_storage, skills)
-    request = _request(
-        plan, binding, workflow_id="workflow-codex-skill", skills=skills
-    )
-    await durable_gateway.admit_execution_plan_inputs(request=request, plan=plan)
-
-    installed: dict[str, Any] = {}
-
-    class _RecordingCoordinator:
-        def __init__(self, **kwargs: Any) -> None:
-            installed.update(kwargs)
-
-        async def execute(self, _request: Any) -> AgentRunResult:
-            return AgentRunResult(summary="codex lifecycle ran")
-
-    realizer = CodexProfileBoundRealizer(
-        session_factory=durable_artifact_storage,
-        coordinator_factory=_RecordingCoordinator,
-        artifact_gateway=durable_gateway,
-    )
-    result = await realizer.execute(request, plan)
-    assert result.summary == "codex lifecycle ran"
-
-    # Exactly the read host preparation performs before it mutates a host.
-    host_runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(),
-        network="test-network",
-        workspace_root=tmp_path / "runs",
-    )
-    projection = await host_runtime._prepare_skill_projection(
-        workspace_key="workflow-codex-skill:step-codex-skill",
-        resolved_skillset_ref=skillset_ref,
-        artifact_gateway=installed["artifact_gateway"],
-        request=request,
-    )
-
-    assert (projection / "_manifest.json").is_file()
-    assert (projection / _DURABLE_SKILL_NAME / "SKILL.md").is_file()
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("retained_codex_realizer")
-async def test_production_composition_installs_the_durable_artifact_gateway(
+async def test_production_composition_binds_remediation_inputs_before_dispatch(
     durable_artifact_storage, monkeypatch, production_transport_pool,
 ):
-    """The registered Codex realizer runs on the deployment's durable gateway.
+    """The composed generic realizer binds remediation context before dispatch.
 
-    ``build_generic_omnigent_execution_services`` owns one artifact gateway for
-    the whole execution surface. Every realizer it registers must use it, so no
-    realizer can privately substitute a filesystem-scoped gateway that cannot
-    read durable refs.
+    ``build_generic_omnigent_execution_services`` installs the Activity's
+    request-input binder, so a remediation request without its context fails
+    before any realizer effect.
     """
 
     from unittest.mock import AsyncMock
 
     from moonmind.omnigent import production
-    from moonmind.schemas.agent_runtime_models import (
-        AgentExecutionRequest,
-        AgentRunResult,
-    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
     for key, value in {
         "MOONMIND_OMNIGENT_HOST_SERVER_URL": "http://omnigent-host:8000",
         "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": "test-owner",
         "OMNIGENT_IMAGE_REF": _SERVER_IMAGE_REF,
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(production, "generic_host_enabled", lambda: True)
@@ -1786,37 +1300,3 @@ async def test_production_composition_installs_the_durable_artifact_gateway(
             )
         )
     missing_context.assert_awaited_once_with("workflow-remediation")
-
-    installed: dict[str, Any] = {}
-
-    class _RecordingCoordinator:
-        def __init__(self, **kwargs: Any) -> None:
-            installed.update(kwargs)
-
-        async def execute(self, _request: Any) -> AgentRunResult:
-            return AgentRunResult(summary="codex lifecycle ran")
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.profile_bound_execution."
-        "OmnigentProfileBoundExecutionCoordinator",
-        _RecordingCoordinator,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.client.TemporalClientAdapter", object
-    )
-    monkeypatch.setattr(
-        "moonmind.repositories.lore_runtime."
-        "build_lore_repository_adapter_from_environment",
-        object,
-    )
-
-    plan = compile_execution_plan(**_codex_plan_inputs())
-    realizer = services.realizer_registry.require("codex-profile-bound@1")
-    result = await realizer.execute(_durable_skill_snapshot_request(plan), plan)
-
-    assert result.summary == "codex lifecycle ran"
-    assert installed["artifact_gateway"] is deployment_gateway
-    assert (
-        installed["request_input_binder"]
-        is services.generic_realizer._bind_request_inputs
-    )

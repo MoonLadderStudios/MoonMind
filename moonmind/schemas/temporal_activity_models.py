@@ -393,6 +393,7 @@ class AcceptedRepositoryEvidence(BaseModel):
     remote_verified: bool = Field(..., alias="remoteVerified")
     authority: Literal[
         "agent_runtime.fetch_result",
+        # Recorded by the removed profile-bound coordinator; still readable.
         "omnigent.profile_bound_execution",
         "omnigent.generic_host_execution",
     ] = "agent_runtime.fetch_result"

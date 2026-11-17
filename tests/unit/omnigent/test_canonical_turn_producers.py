@@ -7,9 +7,9 @@ behaves correctly once it is handed a source. Every source value there is
 supplied by the test, so it cannot catch a *producer* that reaches the provider
 under the wrong source -- or under no claimed command at all.
 
-These tests assert the routing instead: an admitted request is dispatched
-through the real production realizer against a real control-plane store, and the
-durable turn journal is read back. Nothing here tells the production code which
+These tests assert the routing instead: the run workflow's dispatch loop is the
+only source authority, and every production realizer delivers through the one
+wrapper that derives the source. Nothing here tells the production code which
 source to use.
 """
 
@@ -19,39 +19,19 @@ import ast
 import inspect
 import json
 import textwrap
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
-from moonmind.omnigent.control_plane import (
-    CLEANUP_STATE_COMPLETE,
-    OmnigentControlPlaneStore,
-    TurnSource,
-)
-from moonmind.omnigent.control_plane.identities import (
-    canonical_omnigent_session_id,
-)
-from moonmind.omnigent.control_plane.turn_admission import (
-    RemediationAuthorityBroadenedError,
-)
-from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
+from moonmind.omnigent.control_plane import TurnSource
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
-    create_execution_plan_envelope,
 )
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS
-from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.turn_delivery import canonical_turn_source
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
     RemediationLoopPhase,
@@ -66,47 +46,13 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_CANONICAL_TURN_LINEAGE_PATCH,
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
-    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     MoonMindRunWorkflow,
 )
 
 PROVIDER_PROFILE_REF = "codex"
 
-_CONTROL_PLANE_TABLES = (
-    "omnigent_chat_binding_aliases",
-    "omnigent_cleanup_authority",
-    "omnigent_reconciliation_decisions",
-    "omnigent_commands",
-    "omnigent_observations",
-    "omnigent_turn_attempts",
-    "omnigent_sessions",
-)
 
-
-@pytest_asyncio.fixture(scope="module")
-async def _engine(tmp_path_factory):
-    root = tmp_path_factory.mktemp("turn_producers")
-    engine = create_async_engine(f"sqlite+aiosqlite:///{root}/turn_producers.db")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
-
-
-@pytest_asyncio.fixture()
-async def session_factory(_engine):
-    async with _engine.begin() as conn:
-        for table in _CONTROL_PLANE_TABLES:
-            await conn.execute(text(f"DELETE FROM {table}"))
-    return sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
-
-
-@pytest_asyncio.fixture()
-async def turn_commands(session_factory):
-    return CanonicalTurnCommandService(OmnigentControlPlaneStore(session_factory))
-
-
-# --- Real admitted Codex execution plan --------------------------------------
+# --- Retained admitted Codex execution plan ---------------------------------
 
 
 def _codex_execution_plan():
@@ -123,7 +69,6 @@ def _codex_execution_plan():
         fixture["artifacts"][binding["planArtifactRef"]]
     )
     assert plan.planRef == binding["planRef"]
-    assert plan.payload.executionRealizerRef == CodexProfileBoundRealizer.ref
     assert (
         plan.payload.credentialBindings["primary-model"].providerProfileRef
         == PROVIDER_PROFILE_REF
@@ -257,7 +202,6 @@ def _dispatch_request(
     node: dict,
     *,
     plan_ref: str,
-    extra_patches: tuple[str, ...] = (),
 ) -> AgentExecutionRequest:
     """Build the request exactly as the run workflow's dispatch loop does.
 
@@ -273,11 +217,7 @@ def _dispatch_request(
     ), patch(
         "moonmind.workflows.temporal.workflows.run.workflow.patched",
         side_effect=lambda patch_id: patch_id
-        in {
-            RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
-            RUN_CANONICAL_TURN_LINEAGE_PATCH,
-            *extra_patches,
-        },
+        in {RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH, RUN_CANONICAL_TURN_LINEAGE_PATCH},
     ):
         wf._record_canonical_turn_lineage(node=node, node_id=node_id)
         return wf._build_agent_execution_request(
@@ -287,116 +227,6 @@ def _dispatch_request(
             workflow_parameters={"executionPlanRef": plan_ref},
             step_execution=1,
         )
-
-
-def _request(
-    *,
-    plan,
-    correlation_id: str,
-    idempotency_key: str,
-    publish_mode: str = "none",
-) -> AgentExecutionRequest:
-    """A minimal admitted request for boundary cases with no Step Execution."""
-
-    return AgentExecutionRequest.model_validate(
-        {
-            "agentKind": "external",
-            "agentId": "omnigent",
-            "correlationId": correlation_id,
-            "idempotencyKey": idempotency_key,
-            "executionProfileRef": PROVIDER_PROFILE_REF,
-            "parameters": {
-                "executionPlanRef": plan.planRef,
-                "publishMode": publish_mode,
-            },
-        }
-    )
-
-
-class _RecordingCoordinator:
-    """Stand in for the Codex lifecycle without replacing turn ownership."""
-
-    def __init__(self, **_kwargs) -> None:
-        self.requests: list[AgentExecutionRequest] = []
-
-    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-        self.requests.append(request)
-        return AgentRunResult(
-            summary="codex lifecycle ran",
-            metadata={"omnigentSessionId": "provider-session-1"},
-        )
-
-
-def _realizer(turn_commands, session_factory):
-    lifecycles: list[_RecordingCoordinator] = []
-
-    def factory(**kwargs):
-        coordinator = _RecordingCoordinator(**kwargs)
-        lifecycles.append(coordinator)
-        return coordinator
-
-    realizer = CodexProfileBoundRealizer(
-        session_factory=session_factory,
-        coordinator_factory=factory,
-        turn_command_service=turn_commands,
-    )
-    return realizer, lifecycles
-
-
-def _assert_admitted_model_projection(delivered, original_payload, plan):
-    """Only the admitted model pair changes at the provider request boundary."""
-
-    delivered_payload = delivered.model_dump(mode="json")
-    delivered_parameters = delivered_payload.pop("parameters")
-    authored_payload = dict(original_payload)
-    authored_parameters = authored_payload.pop("parameters")
-    # Keep all scope, branch, workspace, profile, and lineage authority intact.
-    assert delivered_payload == authored_payload
-    omnigent = dict(authored_parameters.get("omnigent") or {})
-    session = dict(omnigent.get("session") or {})
-    session.update(
-        modelOverride=plan.payload.modelConfig.qualifiedId,
-        reasoningEffort=plan.payload.modelConfig.effort,
-    )
-    omnigent["session"] = session
-    assert delivered_parameters == {
-        **authored_parameters,
-        "model": plan.payload.modelConfig.qualifiedId,
-        "effort": plan.payload.modelConfig.effort,
-        "omnigent": omnigent,
-    }
-
-
-def _session_id(correlation_id: str) -> str:
-    """The canonical session identity a request with no Step Execution gets."""
-
-    return canonical_omnigent_session_id(
-        workflow_id=correlation_id,
-        step_execution_id=correlation_id,
-        agent_run_id=correlation_id,
-    )
-
-
-def _session_id_for(request: AgentExecutionRequest) -> str:
-    """The canonical session identity the realizer boundary derives itself."""
-
-    step_execution = request.step_execution
-    if step_execution is None:
-        return _session_id(request.correlation_id)
-    return canonical_omnigent_session_id(
-        workflow_id=step_execution.workflow_id,
-        step_execution_id=step_execution.step_execution_id,
-        agent_run_id=request.correlation_id,
-    )
-
-
-async def _turn_journal(session_factory, session_id: str):
-    store = OmnigentControlPlaneStore(session_factory)
-    async with store.transaction() as repos:
-        turns = await repos.turn_attempts.list_for_session(session_id)
-        commands = await repos.commands.list_for_session(session_id)
-        cleanup = await repos.cleanup.get(session_id)
-    return turns, commands, cleanup
 
 
 # --- The launching controller is the only source authority -------------------
@@ -463,524 +293,6 @@ def test_published_handoff_replay_keeps_legacy_metadata_path(current_history) ->
         assert "acceptedPublishedHead" not in payload["remediation_loop_continuation"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("later_status", [None, "no_commits", "", "unknown"])
-@pytest.mark.parametrize("continue_as_new", [False, True])
-async def test_escaped_publication_base_survives_remediation_dispatch(
-    turn_commands, session_factory, plan, later_status, continue_as_new
-) -> None:
-    """Replay the publication handoff that drifted from a job branch to main."""
-    fixture = json.loads(
-        (Path(__file__).parent / "fixtures/remediation-branch-handoff.json").read_text()
-    )
-    wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    base_node = _base_node(publish_mode="branch")
-    base_node["inputs"].update(
-        repository="MoonLadderStudios/MoonMind", startingBranch="main"
-    )
-    base = _dispatch_request(wf, base_node, plan_ref=plan.planRef)
-    await realizer.execute(base, plan)
-    patches = (
-        RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
-        RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
-    )
-    with patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.patched",
-        side_effect=lambda patch_id: patch_id in patches,
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.info",
-        return_value=_MockWorkflowInfo(),
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.now",
-        return_value=datetime(2026, 9, 6, tzinfo=UTC),
-    ):
-        wf._record_execution_context(
-            node_id="implement",
-            execution_result={"outputs": fixture["publicationOutputs"]},
-        )
-        wf._record_execution_context(
-            node_id="verify",
-            execution_result={"outputs": {"push_status": later_status}},
-        )
-        if continue_as_new:
-            payload = wf._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
-            restored = _run_workflow(base_step_execution_id=None)
-            restored._remediation_loop_continuation = payload[
-                "remediation_loop_continuation"
-            ]
-            restored._restore_remediation_loop_continuation(ordered_nodes=[])
-            wf = restored
-    node = _remediation_node(ordinal=1, publish_mode="branch")
-    node["inputs"].update(
-        repository="MoonLadderStudios/MoonMind", startingBranch="main"
-    )
-    request = _dispatch_request(wf, node, plan_ref=plan.planRef, extra_patches=patches)
-    assert request.workspace_spec["startingBranch"] == "main"
-    assert (
-        request.workspace_spec["repositoryTarget"]["revision"]["commitSha"]
-        == fixture["publicationOutputs"]["push_head_sha"]
-    )
-    assert (
-        request.workspace_spec["targetBranch"]
-        == fixture["publicationOutputs"]["push_branch"]
-    )
-    result = await realizer.execute(request, plan)
-    assert result.failure_class is None
-    assert len(lifecycles) == 2
-    turns, commands, _ = await _turn_journal(session_factory, _session_id_for(request))
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-    assert len(commands) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("accepted_handoff", [True, False])
-async def test_escaped_second_attempt_continues_the_head_its_predecessor_published(
-    turn_commands, session_factory, plan, accepted_handoff
-) -> None:
-    """Replay ``mm:f794b242-604d-557e-9c1c-524caf1f4969``.
-
-    Remediation attempt 1 ran from the authored base and published its
-    candidate. Attempt 2 must continue that published head *and* stay inside
-    attempt 1's recorded authority. The escaped dispatch pinned attempt 2's
-    starting branch to the published job branch because the publication outputs
-    named their base as ``push_base_branch``, which the legacy base-ref recorder
-    never read; the AC6 guard then refused the attempt as broadening
-    ``repositoryBranch``.
-
-    ``accepted_handoff=True`` is every current history: the accepted publication
-    record carries the base atomically and the attempt is admitted.
-    ``accepted_handoff=False`` is the legacy handoff the escaped run executed;
-    it reproduces the refusal so this fixture is known to discriminate.
-    """
-
-    fixture = json.loads(
-        (
-            Path(__file__).parent / "fixtures/remediation-second-attempt-handoff.json"
-        ).read_text()
-    )
-    publication = fixture["publicationOutputs"]
-    patches = (RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,)
-    if accepted_handoff:
-        patches += (RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,)
-    authored = {"repository": "MoonLadderStudios/MoonMind", "startingBranch": "main"}
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-
-    # Attempt 1 repairs the authored implementation; nothing has published yet.
-    wf = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
-    base_node = _base_node(publish_mode="branch")
-    base_node["inputs"].update(authored)
-    base = _dispatch_request(
-        wf, base_node, plan_ref=plan.planRef, extra_patches=patches
-    )
-    await realizer.execute(base, plan)
-    first_node, first_verifier = materialize_attempt_nodes(
-        spec=_loop_spec(),
-        ordinal=1,
-        workspace_head_ref="artifact://loop-head/1",
-        runtime={"mode": "omnigent", "executionProfileRef": PROVIDER_PROFILE_REF},
-        remediation_inputs={"publishMode": "branch"},
-    )
-    first_node["inputs"].update(authored)
-    first = _dispatch_request(
-        wf, first_node, plan_ref=plan.planRef, extra_patches=patches
-    )
-    assert first.workspace_spec["startingBranch"] == "main"
-    assert (await realizer.execute(first, plan)).failure_class is None
-    assert len(lifecycles) == 2
-
-    # Attempt 1 publishes its candidate; the read-only verifier publishes nothing.
-    with patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.patched",
-        side_effect=lambda patch_id: patch_id in patches,
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.info",
-        return_value=_MockWorkflowInfo(),
-    ), patch(
-        "moonmind.workflows.temporal.workflows.run.workflow.now",
-        return_value=datetime(2026, 9, 6, tzinfo=UTC),
-    ):
-        wf._record_execution_context(
-            node_id=str(first_node["id"]),
-            execution_result={"outputs": publication},
-        )
-        wf._record_execution_context(
-            node_id=str(first_verifier["id"]),
-            execution_result={"outputs": {"push_status": None}},
-        )
-
-    # Attempt 2 continues the head attempt 1 produced and is bounded by it.
-    wf._remediation_loop_state = RemediationLoopState(
-        loopId=LOOP_ID,
-        attemptOrdinal=2,
-        phase=RemediationLoopPhase.REMEDIATION_RUNNING,
-        consumedBudgets=ConsumedRemediationBudgets(attempts=2),
-    )
-    wf._remediation_workspace_head = _loop_head(
-        base_step_execution_id=first.step_execution.step_execution_id
-    )
-    second_node = _remediation_node(ordinal=2, publish_mode="branch")
-    second_node["inputs"].update(authored)
-    second = _dispatch_request(
-        wf, second_node, plan_ref=plan.planRef, extra_patches=patches
-    )
-    lineage = second.step_execution.canonical_turn_lineage
-    assert lineage is not None
-    assert lineage.base_step_execution_id == first.step_execution.step_execution_id
-    workspace = second.workspace_spec
-    assert workspace["targetBranch"] == publication["push_branch"]
-    assert workspace["repositoryTarget"]["branch"]["name"] == publication["push_branch"]
-    assert (
-        workspace["repositoryTarget"]["revision"]["commitSha"]
-        == publication["push_head_sha"]
-    )
-
-    if not accepted_handoff:
-        # The escaped shape: the published branch became the starting branch,
-        # so the attempt asserted a branch its predecessor never held.
-        assert workspace["startingBranch"] == publication["push_branch"]
-        with pytest.raises(RemediationAuthorityBroadenedError) as excinfo:
-            await realizer.execute(second, plan)
-        assert excinfo.value.broadened == ("repositoryBranch",)
-        assert str(excinfo.value) == fixture["escapedDispatchError"]
-        # Refused before provider mutation.
-        assert len(lifecycles) == 2
-        _, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
-        assert commands == []
-        return
-
-    assert workspace["startingBranch"] == "main"
-    original_payload = second.model_dump(mode="json")
-    result = await realizer.execute(second, plan)
-    assert result.failure_class is None
-    assert len(lifecycles) == 3 and len(lifecycles[2].requests) == 1
-    _assert_admitted_model_projection(lifecycles[2].requests[0], original_payload, plan)
-    assert second.model_dump(mode="json") == original_payload
-    turns, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-    assert len(commands) == 1
-
-
-@pytest.mark.asyncio
-async def test_remediation_uses_its_own_admitted_skill_snapshot(
-    turn_commands, session_factory, plan
-) -> None:
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    workflow = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
-    base = _dispatch_request(
-        workflow, _base_node(publish_mode="branch"), plan_ref=plan.planRef
-    )
-    await realizer.execute(base, plan)
-
-    payload = plan.payload.model_dump(by_alias=True, mode="json")
-    payload["resolvedSkills"] = {
-        "resolvedSkillSetRef": "artifact:remediate-issue",
-        "resolvedSkillSetDigest": "sha256:" + "c" * 64,
-        "skillDeliveryRef": "skill-delivery:sha256:" + "d" * 64,
-    }
-    remediation_plan = create_execution_plan_envelope(payload)
-    remediation = _dispatch_request(
-        workflow,
-        _remediation_node(ordinal=1, publish_mode="branch"),
-        plan_ref=remediation_plan.planRef,
-    )
-
-    result = await realizer.execute(remediation, remediation_plan)
-
-    assert result.failure_class is None
-    assert len(lifecycles) == 2
-    turns, commands, _ = await _turn_journal(
-        session_factory, _session_id_for(remediation)
-    )
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-    assert len(commands) == 1
-
-
-@pytest.mark.asyncio
-async def test_remediation_dispatched_through_the_realizer_journals_remediation(
-    turn_commands, session_factory, plan
-) -> None:
-    """A production remediation attempt persists lineage_kind='remediation'."""
-
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    base = _dispatch_request(
-        _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-        _base_node(publish_mode="none"),
-        plan_ref=plan.planRef,
-    )
-    await realizer.execute(base, plan)
-
-    request = _dispatch_request(
-        _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-        _remediation_node(ordinal=1, publish_mode="none"),
-        plan_ref=plan.planRef,
-    )
-    original_payload = request.model_dump(mode="json")
-    result = await realizer.execute(request, plan)
-
-    assert result.failure_class is None
-    assert len(lifecycles) == 2 and len(lifecycles[1].requests) == 1
-    _assert_admitted_model_projection(lifecycles[1].requests[0], original_payload, plan)
-    assert request.model_dump(mode="json") == original_payload
-
-    base_session_id = _session_id_for(base)
-    session_id = _session_id_for(request)
-    # Each attempt is its own Step Execution and therefore its own canonical
-    # session; the remediation turn is still journaled under its own source.
-    assert session_id != base_session_id
-    store = OmnigentControlPlaneStore(session_factory)
-    async with store.transaction() as repos:
-        assert await repos.sessions.get(session_id) is not None
-    turns, commands, cleanup = await _turn_journal(session_factory, session_id)
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-    assert len(commands) == 1
-    assert commands[0].turn_attempt_id == turns[0].turn_attempt_id
-    # An admitted turn fences incompatible cleanup before provider mutation.
-    assert cleanup is not None and cleanup.generation >= 1
-    base_turns, _, _ = await _turn_journal(session_factory, base_session_id)
-    assert [turn.lineage_kind for turn in base_turns] == [TurnSource.INITIAL.value]
-
-
-@pytest.mark.asyncio
-async def test_non_remediation_dispatch_still_journals_initial(
-    turn_commands, session_factory, plan
-) -> None:
-    """The derivation is authority-driven, not a blanket rename."""
-
-    realizer, _ = _realizer(turn_commands, session_factory)
-    request = _request(
-        plan=plan, correlation_id="initial-run", idempotency_key="initial-key"
-    )
-
-    await realizer.execute(request, plan)
-
-    turns, _, _ = await _turn_journal(session_factory, _session_id("initial-run"))
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.INITIAL.value]
-
-
-@pytest.mark.asyncio
-async def test_the_delivered_provider_session_is_attached_to_canonical_authority(
-    turn_commands, session_factory, plan
-) -> None:
-    """Settlement must attach the provider session, not only receipt it.
-
-    The realizer bootstraps its canonical session before the provider session
-    exists. Leaving ``provider_session_ref`` empty made every later
-    provider-scoped checkpoint or bridge lookup miss this aggregate and
-    bootstrap a second canonical session for the same provider session.
-    """
-
-    realizer, _ = _realizer(turn_commands, session_factory)
-    request = _request(
-        plan=plan, correlation_id="attach-run", idempotency_key="attach-key"
-    )
-
-    await realizer.execute(request, plan)
-
-    store = OmnigentControlPlaneStore(session_factory)
-    session_id = _session_id("attach-run")
-    async with store.transaction() as repos:
-        session = await repos.sessions.get(session_id)
-        by_scope = await repos.sessions.get_by_scope("attach-run", "provider-session-1")
-
-    assert session.provider_session_ref == "provider-session-1"
-    assert by_scope is not None and by_scope.session_id == session_id
-
-
-@pytest.mark.asyncio
-async def test_remediation_broadening_is_bounded_by_the_repaired_attempt(
-    turn_commands, session_factory, plan
-) -> None:
-    """AC6 fires on a real dispatch, against the base attempt's own record.
-
-    The remediation attempt bootstraps its *own* canonical session, so the only
-    non-vacuous bound is the durable authority of the Step Execution it repairs.
-    """
-
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    base = _dispatch_request(
-        _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-        _base_node(publish_mode="none"),
-        plan_ref=plan.planRef,
-    )
-    await realizer.execute(base, plan)
-    assert len(lifecycles) == 1
-
-    broadened = _dispatch_request(
-        _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-        _remediation_node(ordinal=1, publish_mode="branch"),
-        plan_ref=plan.planRef,
-    )
-    with pytest.raises(RemediationAuthorityBroadenedError) as excinfo:
-        await realizer.execute(broadened, plan)
-
-    assert "publishMode" in excinfo.value.broadened
-    # Refused before any provider mutation: no second lifecycle ran and no
-    # command was ever journaled, so nothing owned delivery for this attempt.
-    assert len(lifecycles) == 1
-    _, broadened_commands, _ = await _turn_journal(
-        session_factory, _session_id_for(broadened)
-    )
-    assert broadened_commands == []
-    # The attempt being repaired keeps exactly its own turn and command.
-    base_turns, base_commands, _ = await _turn_journal(
-        session_factory, _session_id_for(base)
-    )
-    assert len(base_turns) == 1
-    assert len(base_commands) == 1
-
-
-@pytest.mark.asyncio
-async def test_broadening_check_reads_the_base_record_not_the_same_claim(
-    turn_commands, session_factory, plan
-) -> None:
-    """The identical broadened attempt passes when no base record exists.
-
-    This is the control for the test above: if the guard compared the claim
-    against the copy it had just written to its own session metadata it would
-    behave identically in both cases, and AC6 would be vacuous in production.
-    """
-
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    broadened = _dispatch_request(
-        _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-        _remediation_node(ordinal=1, publish_mode="branch"),
-        plan_ref=plan.planRef,
-    )
-
-    # The repaired Step Execution never established a canonical session, so
-    # there is no recorded authority the attempt could broaden.
-    await realizer.execute(broadened, plan)
-
-    assert len(lifecycles) == 1
-    turns, _, _ = await _turn_journal(session_factory, _session_id_for(broadened))
-    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
-
-
-def _followup_counts(kind: str) -> list[tuple[str, int]]:
-    """Return the recorded follow-up availability counts for one source."""
-
-    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
-
-    return sorted(
-        (labels["availability"], count)
-        for name, labels, count in control_plane_metrics.counter_series()
-        if name == control_plane_metrics.MIGRATION_FOLLOWUP_AVAILABILITY
-        and labels["harness_class"] == "codex"
-        and labels["followup_kind"] == kind
-    )
-
-
-@pytest.mark.asyncio
-async def test_an_admitted_follow_up_turn_records_its_availability(
-    turn_commands, session_factory, plan
-) -> None:
-    """The shared delivery wrapper reports an accepted follow-up source.
-
-    The instruction that establishes the session is not a follow-up, so only the
-    remediation turn is counted, and no realizer names its own source.
-    """
-
-    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
-
-    realizer, _ = _realizer(turn_commands, session_factory)
-    control_plane_metrics.reset()
-    await realizer.execute(
-        _dispatch_request(
-            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-            _base_node(publish_mode="none"),
-            plan_ref=plan.planRef,
-        ),
-        plan,
-    )
-    assert _followup_counts("remediation") == []
-
-    await realizer.execute(
-        _dispatch_request(
-            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-            _remediation_node(ordinal=1, publish_mode="none"),
-            plan_ref=plan.planRef,
-        ),
-        plan,
-    )
-
-    assert _followup_counts("remediation") == [("available", 1)]
-
-
-@pytest.mark.asyncio
-async def test_a_refused_follow_up_turn_records_its_unavailability(
-    turn_commands, session_factory, plan
-) -> None:
-    """A follow-up refused before provider mutation is reported as unavailable."""
-
-    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
-
-    realizer, _ = _realizer(turn_commands, session_factory)
-    await realizer.execute(
-        _dispatch_request(
-            _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-            _base_node(publish_mode="none"),
-            plan_ref=plan.planRef,
-        ),
-        plan,
-    )
-    control_plane_metrics.reset()
-
-    with pytest.raises(RemediationAuthorityBroadenedError):
-        await realizer.execute(
-            _dispatch_request(
-                _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID),
-                _remediation_node(ordinal=1, publish_mode="branch"),
-                plan_ref=plan.planRef,
-            ),
-            plan,
-        )
-
-    assert _followup_counts("remediation") == [("unavailable", 1)]
-
-
-@pytest.mark.asyncio
-async def test_realizer_cannot_reach_the_lifecycle_after_cleanup_completes(
-    turn_commands, session_factory, plan
-) -> None:
-    """No production realizer call reaches the provider without a claim."""
-
-    realizer, lifecycles = _realizer(turn_commands, session_factory)
-    admitted = _request(
-        plan=plan, correlation_id="cleaned-run", idempotency_key="admitted-key"
-    )
-    await realizer.execute(admitted, plan)
-    assert len(lifecycles) == 1
-
-    session_id = _session_id("cleaned-run")
-    store = OmnigentControlPlaneStore(session_factory)
-    async with store.transaction() as repos:
-        janitor = await repos.cleanup.claim_cleanup(
-            session_id, owner_class="janitor", claim_token="janitor-1"
-        )
-        done = await repos.cleanup.complete_cleanup(
-            session_id,
-            generation=janitor.record.generation,
-            owner_class="janitor",
-            claim_token="janitor-1",
-            session_repository=repos.sessions,
-        )
-        assert done.applied is True
-
-    follow_up = _request(
-        plan=plan,
-        correlation_id="cleaned-run",
-        idempotency_key="follow-up-key",
-    )
-    with pytest.raises(HarnessPlatformError):
-        await realizer.execute(follow_up, plan)
-    assert len(lifecycles) == 1
-
-    async with store.transaction() as repos:
-        cleanup = await repos.cleanup.get(session_id)
-    assert cleanup.state == CLEANUP_STATE_COMPLETE
-
-
 # --- Every production realizer routes through the one wrapper ----------------
 
 
@@ -988,7 +300,6 @@ async def test_realizer_cannot_reach_the_lifecycle_after_cleanup_completes(
 #: realizer added to ``KNOWN_REALIZERS`` without an entry here fails the first
 #: test below rather than silently escaping the routing assertion.
 _PRODUCTION_REALIZERS = {
-    CodexProfileBoundRealizer.ref: CodexProfileBoundRealizer,
     GenericOmnigentHostRealizer.ref: GenericOmnigentHostRealizer,
 }
 

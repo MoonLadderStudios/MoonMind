@@ -24,8 +24,6 @@ from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.policies import compile_policy_snapshot
-from moonmind.omnigent.execution_adapters import DbExecutionPolicyAuthority
 from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WorkspaceLocatorResolutionError,
@@ -36,10 +34,6 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-    _run_coordinator_failure_case,
-)
-from tests.unit.omnigent.test_policy_authority import policy_document
 
 # The rollout gate deliberately composes the production-owner fixtures rather
 # than replacing bridge and executor behavior with journey-local fakes.
@@ -50,30 +44,6 @@ pytest_plugins = (
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
-
-
-@pytest.fixture(autouse=True)
-def persisted_policy_authority(monkeypatch):
-    """Resolve the same persisted launch-policy snapshots as the unit owner."""
-
-    async def resolve(_self, policy_ref):
-        document = policy_document()
-        if policy_ref.startswith("codex-on-demand@"):
-            document["host"]["mode"] = "on_demand_docker"
-            document["host"]["backendRef"] = "container-backend"
-            document["session"]["cleanup"] = "remove"
-        return compile_policy_snapshot(
-            policy_id=policy_ref.rsplit("@", 1)[0],
-            version=int(policy_ref.rsplit("@", 1)[1]),
-            document=document,
-            validation={"valid": True, "diagnostics": []},
-        )
-
-    monkeypatch.setattr(
-        DbExecutionPolicyAuthority,
-        "resolve_runtime_snapshot",
-        resolve,
-    )
 
 
 def _browser_payload() -> dict[str, object]:
@@ -95,7 +65,7 @@ def _browser_payload() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
+async def test_browser_payload_compiles_and_replays_durable_projection(
     tmp_path,
 ) -> None:
     authored = _browser_payload()
@@ -174,29 +144,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         same_row.bridge_session_id == row.bridge_session_id
     )  # retry/worker restart keeps one session
 
-    # Execute the production profile-bound coordinator.  Only its Docker and
-    # provider transports are controlled; lifecycle, cleanup, release, and
-    # terminalization remain owned by the real coordinator.
-    lifecycle, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at="none", code="unused", request=request
-    )
-    assert actions.count("envelope_created") == 1
-    assert actions.count("provider_released") == 1
-    assert actions.count("host_stopped") == 1
-    assert actions.count("alternate_profile") == 0
-    assert actions.count("direct_codex") == 0
-    assert owner_calls.count("session_create") == 1
-    assert owner_calls.count("first_message_digest") == 1
-    assert owner_calls.count("first_message_reconcile") == 1
-    assert owner_calls.count("resource_harvest") == 1
-    assert lifecycle[-1][0] == "terminal"
-    terminal = lifecycle[-1][1]["metadata"]
-    assert terminal["cleanupCompleted"] is True
-    assert terminal["leaseReleased"] is True
-    assert terminal["janitorRequired"] is False
-    assert actions.index("host_stopped") < actions.index("provider_released")
-
-    # Workflow Detail reload resolves the durable projection after host removal.
+    # Workflow Detail reload resolves the durable projection.
     replay = await store.resolve_projection_session(
         step_execution_id=request.step_execution.step_execution_id
     )
@@ -266,93 +214,6 @@ def test_product_path_workspace_owner_rejects_invalid_and_escaped_locators(
             workspace_root=tmp_path,
             expected_workspace_id="browser-product-path",
         )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("fail_at", "code"),
-    [
-        ("profile_missing", "profile_resolution_missing"),
-        ("profile_readiness", "profile_readiness_failed"),
-        ("lease", "profile_lease_timeout"),
-        ("binding", "host_binding_mismatch"),
-        ("host_lease", "container_allocation_failed"),
-        ("image_pull", "image_pull_failed"),
-        ("container_start", "container_start_failed"),
-        ("network_start", "network_unavailable"),
-        ("credential_volume_missing", "credential_volume_missing"),
-        ("credential_volume_owner", "credential_owner_mismatch"),
-        ("credential_generation", "credential_generation_stale"),
-        ("credential_login", "oauth_login_preflight_failed"),
-        ("host_registration", "host_registration_failed"),
-        ("host_registration_timeout", "host_registration_timeout"),
-        ("host_capability", "codex_native_capability_missing"),
-        ("harness_readiness", "harness_incompatible"),
-        ("bridge_authentication", "bridge_auth_401"),
-        ("server_endpoint", "server_endpoint_invalid"),
-        ("session_create", "session_create_failed"),
-        ("first_message_digest", "first_message_digest_mismatch"),
-        ("first_message_reconcile", "ambiguous_posting_reconciliation"),
-        ("resource_harvest", "resource_harvest_failed"),
-        ("host_remove", "host_remove_failed"),
-        ("release", "profile_lease_release_failed"),
-    ],
-)
-async def test_product_path_failures_never_fallback_and_preserve_release_order(
-    fail_at: str, code: str
-) -> None:
-    """Drive the real coordinator with failures only at external-owner seams."""
-    events, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at=fail_at,
-        code=code,
-        release_failures=3 if fail_at == "release" else 0,
-    )
-
-    # The coordinator never invokes a direct Codex/alternate-profile fallback.
-    assert "direct_codex" not in actions
-    assert "alternate_profile" not in actions
-    assert actions.count("envelope_created") == 1
-    assert owner_calls.count(fail_at) <= 1 or fail_at == "release"
-    assert events[-1][0] == "terminal"
-    terminal = events[-1][1]["metadata"]
-    if fail_at in {"host_remove", "release"}:
-        assert terminal["janitorRequired"] is True
-        assert terminal["leaseReleased"] is False
-    elif fail_at in {
-        "image_pull",
-        "container_start",
-        "network_start",
-        "credential_login",
-        "host_registration_timeout",
-        "host_capability",
-        "bridge_authentication",
-        "first_message_reconcile",
-        "resource_harvest",
-    }:
-        assert actions.index("host_stopped") < actions.index("provider_released")
-
-
-@pytest.mark.asyncio
-async def test_product_path_unavailable_worker_dispatch_fails_closed() -> None:
-    """Unavailable Docker worker authority cannot reroute an Omnigent request."""
-
-    events, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at="host_lease",
-        code="docker_worker_unavailable",
-    )
-
-    assert actions == ["envelope_created", "provider_released"]
-    assert owner_calls == []
-    assert "direct_codex" not in actions
-    assert "alternate_profile" not in actions
-    assert "host_stopped" not in actions
-    terminal = events[-1]
-    assert terminal[0] == "terminal"
-    assert terminal[1]["status"] == "failed"
-    assert terminal[1]["metadata"]["cleanupCompleted"] is True
-    assert terminal[1]["metadata"]["leaseReleased"] is True
-    assert terminal[1]["metadata"]["janitorRequired"] is False
-    assert "docker_worker_unavailable" in json.dumps(events)
 
 
 async def test_controlling_bridge_failure_and_recovery_owners(

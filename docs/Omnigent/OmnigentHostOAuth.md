@@ -59,7 +59,7 @@ Settings OAuth connection
   -> Provider Profile lease releases last
 ```
 
-The current Codex profile-bound path remains a compatibility realizer until the generic Codex support combination has passing parity, rollback, and replay evidence. Direct Codex and direct Claude remain migration and historical-read compatibility according to their own retirement contracts.
+Codex runs only on the generic realizer; recorded `codex-profile-bound@1` plans fail closed with `OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE`. Direct Codex and direct Claude remain migration and historical-read compatibility according to their own retirement contracts.
 
 ## 2. Scope
 
@@ -656,7 +656,7 @@ Workflow Create, presets, schedules, reruns, branches, remediation, and continua
 
 ### Retirement last
 
-Legacy `oauth_host_runtime.py`, profile-bound Codex realization, direct-runtime defaulting, duplicate Compose scripts, and deprecated environment aliases are removed only after:
+Direct-runtime defaulting, duplicate Compose scripts, and deprecated environment aliases are removed only after:
 
 - no new plan selects them
 - active executions and cleanup drain

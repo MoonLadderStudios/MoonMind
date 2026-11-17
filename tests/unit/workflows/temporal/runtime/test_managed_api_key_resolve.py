@@ -1331,14 +1331,14 @@ async def test_default_connection_without_repository_preserves_readiness_and_reg
         for operation in operations
     ],
 )
-async def test_profile_bound_publication_denies_missing_connection_operation_before_secret(
+async def test_session_publication_denies_missing_connection_operation_before_secret(
     monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, missing_operation
 ) -> None:
     from unittest.mock import AsyncMock
 
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _repository_github_token,
     )
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.workflows.executions.repository_contract import (
@@ -1382,7 +1382,7 @@ async def test_profile_bound_publication_denies_missing_connection_operation_bef
     )
     try:
         with pytest.raises(OmnigentOAuthHostError) as denied:
-            await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+            await _repository_github_token(request)
         assert denied.value.code == "github_auth_unavailable"
         assert missing_operation in str(denied.value)
         read_secret.assert_not_awaited()
@@ -1398,11 +1398,11 @@ async def test_profile_bound_publication_denies_missing_connection_operation_bef
         ("pr", ("read", "write", "branch_write", "review_request")),
     ],
 )
-async def test_profile_bound_publication_accepts_exact_connection_operations(
+async def test_session_publication_accepts_exact_connection_operations(
     monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, operations
 ) -> None:
-    from moonmind.omnigent.profile_bound_execution import (
-        OmnigentProfileBoundExecutionCoordinator,
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _repository_github_token,
     )
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.workflows.executions.repository_contract import (
@@ -1437,9 +1437,7 @@ async def test_profile_bound_publication_accepts_exact_connection_operations(
         parameters={"publishMode": publish_mode, "requiredCapabilities": ["git", "gh"]},
     )
     try:
-        assert await OmnigentProfileBoundExecutionCoordinator._github_token(
-            request
-        ) == ("selected-only")
+        assert await _repository_github_token(request) == ("selected-only")
     finally:
         await engine.dispose()
 

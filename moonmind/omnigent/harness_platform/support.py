@@ -198,17 +198,26 @@ def classify_support(
 
 # Realizer registry: executionRealizerRef is trusted planner selected, never workflow-authored
 KNOWN_REALIZERS = {
-    "codex-profile-bound@1": {
-        "description": "Recorded Codex profile-bound coordinator",
-        "deprecated": True,
-    },
     "generic-omnigent-host@1": {
         "description": "Generic Omnigent host realizer",
         "deprecated": False,
     },
 }
 
+PROFILE_BOUND_RETIRED_MESSAGE = (
+    "Profile-bound Codex execution was removed; start a new attempt, which "
+    "runs on the shared Omnigent realizer."
+)
+
+# Removed realizers that recorded plans may still name. They fail closed with
+# guidance instead of an unknown-realizer error.
+RETIRED_REALIZERS = {"codex-profile-bound@1": PROFILE_BOUND_RETIRED_MESSAGE}
+
+
+def unavailable_realizer_message(ref: str) -> str:
+    return RETIRED_REALIZERS.get(ref, f"execution realizer {ref} unavailable")
+
 
 def validate_realizer(ref: str) -> None:
     if ref not in KNOWN_REALIZERS:
-        raise ValueError(f"execution realizer {ref} unavailable")
+        raise ValueError(unavailable_realizer_message(ref))

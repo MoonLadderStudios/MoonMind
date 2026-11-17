@@ -104,8 +104,8 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
     UpstreamOwnershipRow(
         candidate_id="immutable-profile-snapshot-vs-launch-args",
         production_entrypoint=(
-            "moonmind/omnigent/execution_adapters.py + "
-            "moonmind/omnigent/profile_bound_execution.py"
+            "api_service/services/omnigent_execution_plan_service.py + "
+            "moonmind/omnigent/realizers/generic_host.py"
         ),
         state_decision_owned=(
             "Provider Profile selection, policy snapshot, effectiveLaunch "
@@ -120,7 +120,10 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
             "MoonMind authorization/policyEvidence in place of caller-supplied "
             "launch args"
         ),
-        surviving_owner="MoonMind execution adapters (upstream owns host realization mechanics)",
+        surviving_owner=(
+            "MoonMind execution-plan admission and the shared realizer "
+            "(upstream owns host realization mechanics)"
+        ),
         evidence_test=(
             "tests/unit/omnigent/test_upstream_duplication_audit_3954.py::"
             "test_profile_snapshot_guard_rejects_credential_mismatch"

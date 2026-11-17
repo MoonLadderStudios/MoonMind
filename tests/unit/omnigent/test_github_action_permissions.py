@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.profile_bound_execution import (
-    OmnigentProfileBoundExecutionCoordinator,
+from moonmind.omnigent.workspace_intent import (
+    WorkspaceIntentCompilationError,
+    authored_github_operations,
+    authored_repository_mutation_required,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_skill_models import SkillSelector
@@ -17,14 +18,7 @@ from moonmind.services.skill_resolution import (
     BuiltInSkillLoader,
     SkillResolutionContext,
 )
-from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.helpers.github_projection import projection_reservation, reserve_projection
-from tests.helpers.repository_connections import (
-    github_pat_connection,
-    github_repository_assignment,
-    record_repository_connections,
-)
 
 PATCH = "run-github-action-permissions-v1"
 ROOT = Path(__file__).parents[3]
@@ -95,61 +89,6 @@ async def run_request(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "skill_name, missing",
-    [
-        ("fix-ci", "branch_write"),
-        ("fix-merge-conflicts", "write"),
-        ("fix-comments", "review_request"),
-        ("pr-resolver", "merge_request"),
-    ],
-)
-async def test_resolved_skill_actions_deny_narrowed_connection_before_secret(
-    monkeypatch, tmp_path, skill_name, missing
-):
-    built = await run_request(
-        skill_name, parameters={"publishMode": "auto", "githubOperations": []}
-    )
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
-    ).model_copy(
-        update={
-            "allowed_operations": (
-                "read",
-                "write",
-                "branch_write",
-                "review_request",
-                "merge_request",
-            )
-        }
-    )
-    connection = connection.model_copy(update={
-        "allowed_operations": tuple(
-            op for op in connection.allowed_operations if op != missing
-        )
-    })
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id,
-                "owner/repo",
-            )
-        ],
-    )
-    secret = AsyncMock(return_value="selected-secret")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    try:
-        with pytest.raises(OmnigentOAuthHostError, match=missing):
-            await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-        secret.assert_not_awaited()
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
     "skill_name, finish, operations",
     [
         ("fix-ci", None, ("read", "write", "branch_write")),
@@ -168,9 +107,7 @@ async def test_resolved_skill_actions_deny_narrowed_connection_before_secret(
         ("batch-github-workflows", None, ("read",)),
     ],
 )
-async def test_resolved_skill_accepts_exact_operations(
-    monkeypatch, tmp_path, skill_name, finish, operations
-):
+async def test_resolved_skill_requires_exact_operations(skill_name, finish, operations):
     built = await run_request(
         skill_name,
         parameters={
@@ -178,36 +115,10 @@ async def test_resolved_skill_accepts_exact_operations(
         },
         skill_payload={"inputs": {"finishMode": finish}} if finish else {},
     )
-    assert (
-        OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(built)
-        is (operations != ("read",))
-    )
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
-    ).model_copy(update={"allowed_operations": operations})
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id, "owner/repo",
-            )
-        ],
-    )
-    secret = AsyncMock(return_value="selected-secret")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    try:
-        assert (
-            await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-            == "selected-secret"
-        )
-        secret.assert_awaited_once()
-    finally:
-        await engine.dispose()
+    assert authored_repository_mutation_required(built) is (operations != ("read",))
+    assert authored_github_operations(built) == operations
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "parameters",
     [
@@ -231,60 +142,10 @@ async def test_resolved_skill_accepts_exact_operations(
         ],
     ],
 )
-async def test_invalid_action_intent_stops_before_any_host_or_lease_work(parameters):
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    # No dependencies exist: validation must precede even bridge/host binding.
-    result = await coordinator.execute(request(**parameters))
-    assert result.failure_class == "user_error"
-    assert result.provider_error_code == "github_action_intent_invalid"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("parameters", "failure_code"),
-    [
-        ({"githubOperations": ["admin"]}, "github_action_intent_invalid"),
-        ({"githubOperations": ["write"]}, "github_auth_unavailable"),
-        (
-            {"requiredCapabilities": [], "maxBudgetUsd": 1},
-            "OMNIGENT_MAX_BUDGET_ENFORCEMENT_UNAVAILABLE",
-        ),
-    ],
-)
-async def test_preflight_rejection_does_not_bind_execution_inputs(
-    parameters, failure_code
-):
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    coordinator._execution_plan = None
-    coordinator._bind_request_inputs = AsyncMock(
-        side_effect=AssertionError("rejected request reached input binding")
-    )
-    coordinator._github_action_authority_error = AsyncMock(
-        return_value=SimpleNamespace(safe_summary="selected action is denied")
-    )
-
-    result = await coordinator.execute(request(**parameters))
-
-    assert result.failure_class == "user_error"
-    assert result.provider_error_code == failure_code
-    coordinator._bind_request_inputs.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_valid_request_binds_required_inputs_before_bridge_mutation():
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    coordinator._execution_plan = None
-    coordinator._bind_request_inputs = AsyncMock(
-        side_effect=ValueError("required remediation context is missing")
-    )
-    coordinator._run_store = SimpleNamespace(get_or_create=AsyncMock())
-    authored = request(requiredCapabilities=[])
-
-    with pytest.raises(ValueError, match="required remediation context"):
-        await coordinator.execute(authored)
-
-    coordinator._bind_request_inputs.assert_awaited_once_with(authored)
-    coordinator._run_store.get_or_create.assert_not_awaited()
+def test_invalid_action_intent_is_rejected_at_action_compilation(parameters):
+    with pytest.raises(WorkspaceIntentCompilationError) as rejected:
+        authored_github_operations(request(**parameters))
+    assert rejected.value.code == "github_action_intent_invalid"
 
 
 @pytest.mark.asyncio
@@ -304,181 +165,6 @@ async def test_runtime_and_skill_declarations_have_replay_gate():
     ]
     assert "githubOperations" not in replay.parameters
     assert "publish" not in replay.parameters["skill"]
-
-
-@pytest.mark.asyncio
-async def test_generic_actions_reach_credential_boundary(monkeypatch):
-    from moonmind.auth.github_credentials import (
-        GitHubCredentialSource,
-        ResolvedGitHubCredential,
-    )
-
-    built = await run_request(
-        parameters={
-            "requiredCapabilities": ["gh"],
-            "githubOperations": ["merge_request"],
-        }
-    )
-    resolver = AsyncMock(
-        return_value=ResolvedGitHubCredential(
-            source=GitHubCredentialSource.UNRESOLVABLE,
-            diagnostic="denied merge_request",
-        )
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_default_github_connection_credential",
-        resolver,
-    )
-    with pytest.raises(OmnigentOAuthHostError, match="merge_request"):
-        await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-    assert resolver.await_args.kwargs["required_operations"] == (
-        "read",
-        "merge_request",
-    )
-
-
-@pytest.mark.asyncio
-async def test_auto_merge_conflict_skill_projects_usable_git_credentials(
-    tmp_path, monkeypatch
-):
-    """Resolved requirements select the gh projection used by Git's real helper."""
-    import asyncio
-    import os
-    import shutil
-    import subprocess
-
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from tests.unit.omnigent.test_gh_config_migration_suppression import (
-        _static_host_github_block,
-    )
-
-    built = await run_request("fix-merge-conflicts", parameters={"publishMode": "auto"})
-    assert "gh" in built.parameters["requiredCapabilities"]
-    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT")
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id,
-                "owner/repo",
-            )
-        ],
-    )
-    monkeypatch.setenv("ACTION_PAT", "selected_action_token")
-    try:
-        token = await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-    finally:
-        await engine.dispose()
-    gh = shutil.which("gh")
-    assert gh, "This qualification requires the image's GitHub CLI"
-    home = tmp_path / "host-home"
-    config = home / ".cache/moonmind-xdg"
-    runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=tmp_path
-    )
-
-    async def run_projection(*argv, **kwargs):
-        index = argv.index("-ceu")
-        script = argv[index + 1].replace("/home/app", str(home))
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            ["/bin/sh", "-ceu", script, *argv[index + 2 :]],
-            input=kwargs["input_bytes"],
-            capture_output=True,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stderr
-        return 0, "", ""
-
-    runtime._run = run_projection
-    reservation = projection_reservation("owned")
-    reserve_projection(config / "gh", reservation)
-    await runtime._project_github_credential(
-        token,
-        github_projection_reservation=reservation,
-        cache_volume="owned-cache",
-        host_image_ref="host",
-        runtime_uid=os.getuid(),
-        runtime_gid=os.getgid(),
-    )
-    environment = {
-        "HOME": str(home),
-        "XDG_CONFIG_HOME": str(config),
-        "PATH": os.environ["PATH"],
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GH_PROMPT_DISABLED": "1",
-    }
-    setup = (
-        _static_host_github_block()
-        .replace("/home/app", str(home))
-        .replace("/opt/moonmind-tools/bin/gh", gh)
-    )
-    await asyncio.to_thread(
-        subprocess.run,
-        ["/bin/sh", "-c", setup],
-        env=environment,
-        capture_output=True,
-        check=True,
-    )
-    filled = await asyncio.to_thread(
-        subprocess.run,
-        ["git", "credential", "fill"],
-        env=environment,
-        input="protocol=https\nhost=github.com\n\n",
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "password=selected_action_token" in filled.stdout
-    assert "selected_action_token" not in (config / "git/config").read_text()
-
-
-@pytest.mark.asyncio
-async def test_denied_action_grant_preserves_existing_host_before_binding(
-    monkeypatch, tmp_path
-):
-    """No lease claim or cleanup can run when an existing action loses its grant."""
-    built = await run_request("pr-resolver", parameters={"publishMode": "auto"})
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT",
-        operations=("read", "write", "branch_write", "review_request"),
-    )
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id,
-                "owner/repo",
-            )
-        ],
-    )
-    secret = AsyncMock(return_value="must-not-be-read")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    coordinator._run_store = SimpleNamespace(
-        get_or_create=AsyncMock(), bind_profile_authorization=AsyncMock()
-    )
-    coordinator._hosts = SimpleNamespace(
-        create_host_lease=AsyncMock(), claim_host_lease_cleanup=AsyncMock()
-    )
-    coordinator._host_release = SimpleNamespace(stop_host=AsyncMock())
-    try:
-        result = await coordinator.execute(built)
-        assert result.provider_error_code == "github_auth_unavailable"
-        assert "merge_request" in result.summary
-        coordinator._run_store.get_or_create.assert_not_awaited()
-        coordinator._run_store.bind_profile_authorization.assert_not_awaited()
-        coordinator._hosts.create_host_lease.assert_not_awaited()
-        coordinator._hosts.claim_host_lease_cleanup.assert_not_awaited()
-        coordinator._host_release.stop_host.assert_not_awaited()
-        secret.assert_not_awaited()
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -602,54 +288,6 @@ metadata:
     assert built.parameters["skill"]["sideEffect"]["kind"] == "merge_pull_request"
 
 
-@pytest.mark.asyncio
-async def test_metadata_preflight_is_rechecked_before_secret_access(
-    monkeypatch, tmp_path
-):
-    from api_service.services.repository_connections import RepositoryConnectionService
-    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-        validate_default_github_connection_operations,
-    )
-
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
-    ).model_copy(update={"allowed_operations": ("read", "merge_request")})
-    assignment = github_repository_assignment(
-        connection.id, "owner/repo",
-    )
-    engine = await record_repository_connections(
-        monkeypatch, tmp_path, connection, assignments=[assignment]
-    )
-    secret = AsyncMock(return_value="selected_token")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    try:
-        assert (
-            await validate_default_github_connection_operations(
-                repo="owner/repo", required_operations=("read", "merge_request")
-            )
-            is None
-        )
-        secret.assert_not_awaited()
-        from api_service.db.base import async_session_maker
-
-        async with async_session_maker() as session:
-            await RepositoryConnectionService(session).update_connection(
-                connection.model_copy(update={"allowed_operations": ("read",)}),
-                expected_policy_revision=connection.policy_revision,
-                actor_ref="system:deployment",
-                request_id="narrowed-after-preflight",
-                principal_ref="system:deployment",
-                principal_scope=("system", None),
-            )
-        with pytest.raises(OmnigentOAuthHostError, match="merge_request"):
-            await OmnigentProfileBoundExecutionCoordinator._github_token(
-                request(githubOperations=["merge_request"])
-            )
-        secret.assert_not_awaited()
-    finally:
-        await engine.dispose()
-
-
 def test_different_selected_skills_cannot_inherit_parent_merge_actions():
     from moonmind.omnigent.workspace_intent import (
         WorkspaceIntentCompilationError,
@@ -666,9 +304,8 @@ def test_different_selected_skills_cannot_inherit_parent_merge_actions():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish", ["merge", "fix_only"])
 async def test_merge_gate_planner_carries_finish_mode_to_action_boundary(
-    monkeypatch, tmp_path, finish
+    monkeypatch, finish
 ):
-    from moonmind.omnigent.workspace_intent import authored_github_operations
     from moonmind.workflows.temporal import worker_runtime
     from moonmind.workflows.temporal.workflows.merge_gate import (
         build_resolver_run_request,
@@ -712,36 +349,6 @@ async def test_merge_gate_planner_carries_finish_mode_to_action_boundary(
     )
     assert built.parameters["skill"]["inputs"]["finishMode"] == finish
     assert ("merge_request" in authored_github_operations(built)) is (finish == "merge")
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT",
-        operations=("read", "write", "branch_write", "review_request"),
-    )
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id,
-                "owner/repo",
-            )
-        ],
-    )
-    secret = AsyncMock(return_value="selected_token")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    try:
-        if finish == "merge":
-            with pytest.raises(OmnigentOAuthHostError, match="merge_request"):
-                await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-            secret.assert_not_awaited()
-        else:
-            assert (
-                await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-                == "selected_token"
-            )
-            secret.assert_awaited_once()
-    finally:
-        await engine.dispose()
 
 
 def test_runtime_planner_preserves_authored_skill_action_metadata():
@@ -830,143 +437,6 @@ def test_canonical_skill_args_cannot_be_discarded_into_default_merge():
     assert "merge_request" not in authored_github_operations(built)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("revocation", ["operation", "credential"])
-async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
-    monkeypatch, tmp_path, revocation
-):
-    from api_service.services.repository_connections import RepositoryConnectionService
-
-    connection = github_pat_connection(
-        DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"
-    ).model_copy(update={"allowed_operations": ("read", "merge_request")})
-    assignment = github_repository_assignment(
-        connection.id, "owner/repo",
-    )
-    engine = await record_repository_connections(
-        monkeypatch, tmp_path, connection, assignments=[assignment]
-    )
-    secret = AsyncMock(return_value="selected_token")
-    if revocation == "credential":
-        secret.side_effect = RuntimeError("selected credential disabled")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-        _run_coordinator_failure_case,
-    )
-
-    retained = {}
-
-    async def validate_then_revoke(built):
-        denied = await OmnigentProfileBoundExecutionCoordinator._github_action_authority_error(
-            built
-        )
-        assert denied is None
-        from api_service.db.base import async_session_maker
-
-        if revocation == "operation":
-            async with async_session_maker() as session:
-                await RepositoryConnectionService(session).update_connection(
-                    connection.model_copy(update={"allowed_operations": ("read",)}),
-                    expected_policy_revision=connection.policy_revision,
-                    actor_ref="system:deployment",
-                    request_id="revoke-between-admission-and-secret",
-                    principal_ref="system:deployment",
-                    principal_scope=("system", None),
-                )
-
-    async def setup(runtime, coordinator):
-        retained.update(runtime=runtime, coordinator=coordinator)
-        coordinator._github_action_authority_error = validate_then_revoke
-        coordinator._github_token = (
-            OmnigentProfileBoundExecutionCoordinator._github_token
-        )
-        coordinator._run_store.reserve_github_projection = AsyncMock(
-            return_value=projection_reservation(coordinator._hosts.lease.lease_id),
-        )
-        coordinator._run_store.validate_github_projection = AsyncMock()
-        runtime.reserve_github_projection = AsyncMock()
-        runtime.stop_host = AsyncMock()
-
-    built = request(
-        githubOperations=["merge_request"],
-        omnigent={"launchPolicyRef": "codex-on-demand@1"},
-    )
-    import hashlib
-
-    built = built.model_copy(
-        update={
-            "workspace_spec": {
-                **built.workspace_spec,
-                "workspaceLocator": {
-                    "kind": "sandbox",
-                    "workspaceId": hashlib.sha256(b"actions:actions").hexdigest()[:24],
-                },
-            }
-        }
-    )
-    try:
-        events, actions, owners = await _run_coordinator_failure_case(
-            fail_at="container_start",
-            code="OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED",
-            request=built,
-            setup=setup,
-        )
-        coordinator, runtime = retained["coordinator"], retained["runtime"]
-        coordinator._run_store.reserve_github_projection.assert_awaited_once()
-        runtime.reserve_github_projection.assert_awaited_once()
-        runtime._prepare_workspace.assert_not_awaited()
-        runtime._launch_on_demand.assert_not_awaited()
-        runtime.stop_host.assert_not_awaited()
-        assert "provider_released" not in actions
-        assert not {"host_stop", "host_remove"}.intersection(owners)
-        cleanup = next(payload for kind, payload in events if kind == "host_cleanup")
-        assert cleanup["status"] == "waiting"
-        assert cleanup["metadata"]["cleanupCompleted"] is False
-        if revocation == "operation":
-            secret.assert_not_awaited()
-        else:
-            secret.assert_awaited_once()
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_action_token_is_reused_by_lazy_workspace_owner(monkeypatch, tmp_path):
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
-    from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-        _drive_authority_chain_coordinator,
-    )
-
-    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT")
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        connection,
-        assignments=[
-            github_repository_assignment(
-                connection.id, "owner/repo",
-            )
-        ],
-    )
-    secret = AsyncMock(return_value="selected_token")
-    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    credential = AsyncMock(
-        side_effect=OmnigentProfileBoundExecutionCoordinator._github_token
-    )
-    try:
-        outcome = await _drive_authority_chain_coordinator(
-            AsyncMock(return_value=AgentRunResult(summary="read completed")),
-            request_parameters={"requiredCapabilities": ["gh"], "publishMode": "none"},
-            credential_resolver=credential,
-            resolve_source_credential=True,
-        )
-        assert outcome[-1].summary == "read completed"
-        secret.assert_awaited_once()
-        credential.assert_awaited_once()
-    finally:
-        await engine.dispose()
-
-
 def test_portable_resolver_rejects_native_review_mode_when_config_model_expands(
     monkeypatch,
 ):
@@ -1042,7 +512,6 @@ def _runtime_signal_request(signals):
     return built
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "signals",
     [
@@ -1059,25 +528,13 @@ def _runtime_signal_request(signals):
         {"skill": {"publish": {"mode": True}}},
     ],
 )
-async def test_runtime_mutation_signals_fail_closed_before_ownership_or_token(
-    monkeypatch, signals
-):
+def test_runtime_mutation_signals_fail_closed_at_action_compilation(signals):
     built = _runtime_signal_request(signals)
-    resolver = AsyncMock()
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_default_github_connection_credential",
-        resolver,
-    )
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    outcome = await coordinator.execute(built)
-    assert outcome.provider_error_code == "github_action_intent_invalid"
-    with pytest.raises(OmnigentOAuthHostError) as rejected:
-        await OmnigentProfileBoundExecutionCoordinator._github_token(built)
+    with pytest.raises(WorkspaceIntentCompilationError) as rejected:
+        authored_github_operations(built)
     assert rejected.value.code == "github_action_intent_invalid"
-    resolver.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "signals, expected",
     [
@@ -1104,26 +561,8 @@ async def test_runtime_mutation_signals_fail_closed_before_ownership_or_token(
         ),
     ],
 )
-async def test_valid_runtime_mutation_signals_preserve_exact_action_requirements(
-    monkeypatch, signals, expected
+def test_valid_runtime_mutation_signals_preserve_exact_action_requirements(
+    signals, expected
 ):
-    from moonmind.auth.github_credentials import (
-        GitHubCredentialSource,
-        ResolvedGitHubCredential,
-    )
-
     built = _runtime_signal_request(signals)
-    resolver = AsyncMock(
-        return_value=ResolvedGitHubCredential(
-            token="selected_token", source=GitHubCredentialSource.SETTINGS_TOKEN_REF
-        )
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_default_github_connection_credential",
-        resolver,
-    )
-    assert (
-        await OmnigentProfileBoundExecutionCoordinator._github_token(built)
-        == "selected_token"
-    )
-    assert resolver.await_args.kwargs["required_operations"] == expected
+    assert authored_github_operations(built) == expected

@@ -157,21 +157,12 @@ def test_planner_admits_declared_native_binding_without_agent_repository_capabil
         HOST_CLASSES.update(saved)
 
 
-@pytest.mark.parametrize("realizer_name", ["codex", "generic"])
 @pytest.mark.asyncio
-async def test_native_plan_cannot_enter_any_agent_realizer(realizer_name):
-    from moonmind.omnigent.realizers.codex_profile_bound import (
-        CodexProfileBoundRealizer,
-    )
+async def test_native_plan_cannot_enter_any_agent_realizer():
     from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 
-    realizer_type = (
-        CodexProfileBoundRealizer
-        if realizer_name == "codex"
-        else GenericOmnigentHostRealizer
-    )
-    # Reject before touching coordinator, runtime bindings, turn claims, or leases.
-    realizer = object.__new__(realizer_type)
+    # Reject before touching runtime bindings, turn claims, or leases.
+    realizer = object.__new__(GenericOmnigentHostRealizer)
     plan = SimpleNamespace(
         payload=SimpleNamespace(
             credentialBindings=_bindings(consumer="native").bindings

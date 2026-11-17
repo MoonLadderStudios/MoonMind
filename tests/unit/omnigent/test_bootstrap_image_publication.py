@@ -953,6 +953,7 @@ def test_host_selection_preserves_quarantine_reason(
     )
 
     state = _state(
+        sharedHostImageRef=HOST_REF,
         details={
             "opencodeHostCompatibility": {
                 "status": "blocked",
@@ -960,17 +961,17 @@ def test_host_selection_preserves_quarantine_reason(
                 "serverImageRef": SERVER_REF,
                 "hostImageRef": HOST_REF,
             }
-        }
+        },
     )
     monkeypatch.setattr(store, "load_resolved_state", lambda: state)
-    environment = {"OMNIGENT_OPENCODE_HOST_IMAGE_REF": HOST_REF} if explicit_pin else {}
+    environment = {"OMNIGENT_SHARED_HOST_IMAGE_REF": HOST_REF} if explicit_pin else {}
     with pytest.raises(HarnessPlatformError) as caught:
         OmnigentHostClassSelector(environment=environment).select(
             harness=SimpleNamespace(id="opencode-native"),
             omnigent_version="0.12.0",
             integration_mode="native-server",
             materializer_refs=["opencode-auth-json@1"],
-            requested_host_class_ref="omnigent-opencode@1",
+            requested_host_class_ref="omnigent-opencode@2",
         )
     assert caught.value.code == HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE
     assert failure_code in str(caught.value)
@@ -1001,13 +1002,13 @@ def test_host_selection_preserves_adjacent_image_failures(
     monkeypatch.setattr(store, "load_resolved_state", lambda: None)
     with pytest.raises(HarnessPlatformError, match=expected):
         OmnigentHostClassSelector(
-            environment={"OMNIGENT_OPENCODE_HOST_IMAGE_REF": image_ref}
+            environment={"OMNIGENT_SHARED_HOST_IMAGE_REF": image_ref}
         ).select(
             harness=SimpleNamespace(id="opencode-native"),
             omnigent_version="0.12.0",
             integration_mode="native-server",
             materializer_refs=["opencode-auth-json@1"],
-            requested_host_class_ref="omnigent-opencode@1",
+            requested_host_class_ref="omnigent-opencode@2",
         )
 
 

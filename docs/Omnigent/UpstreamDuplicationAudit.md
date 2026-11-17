@@ -33,7 +33,7 @@ states the durable disposition; the module enforces it in CI.
 | Suspected duplicate | Production entrypoint | State/decision owned | Surviving owner | Upstream replacement at pinned commit |
 | --- | --- | --- | --- | --- |
 | Workflow binding vs upstream session | `bridge_store.py` + `bridge_proxy.py` | Bridge authorization, idempotency ownership, attach ordering, session.created journal | MoonMind binding | None demonstrated: audit baseline differs from implementation pin, submodule not checked out |
-| Immutable profile snapshot vs launch args | `execution_adapters.py` + `profile_bound_execution.py` | Profile selection, policy snapshot, effectiveLaunch evidence | MoonMind adapters | None demonstrated: no audited upstream policy/snapshot API |
+| Immutable profile snapshot vs launch args | `api_service/services/omnigent_execution_plan_service.py` + `realizers/generic_host.py` | Profile selection, policy snapshot, effectiveLaunch evidence | MoonMind plan/realizer | None demonstrated: no audited upstream policy/snapshot API |
 | Provider Profile lease vs runtime authentication | `provider_leases.py` | Profile lease, OAuth-home exclusivity, generation fencing, release-last | MoonMind lease | Upstream authentication does not grant MoonMind lease ownership |
 | Event journal vs provider stream | `bridge_store.py` event index + `execute.py` | Durable pages, normalized events, raw bounded journal | MoonMind journal | None demonstrated: provider SSE has no durable cursors |
 | Catalog projection vs agent inventory | `harness_platform/catalog.py` + `omnigent_catalog.py` router | Trust classification, profile support evidence, readiness gating | MoonMind projection | None demonstrated: stock inventory carries no trust semantics |

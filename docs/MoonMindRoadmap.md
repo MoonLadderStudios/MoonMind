@@ -56,7 +56,7 @@ Security remains enforced at the real boundary. Operator admission, machine capa
 | Deployment and independent repair | One portable controller using the installed Docker Compose stack, local durable progress, and changed-service recreation. |
 | Specialized tools and connectors | Maintained external implementations invoked through existing jobs and thin adapters, not a new permanent service per integration. |
 
-Direct or profile-bound legacy runtimes remain only for actual supported consumers during their controlled transition. Preserve their recorded history and saved work, but do not expand or retain them simply because a past roadmap listed them. Static and on-demand host behavior stays qualified where still supported, without requiring a separate architecture for every harness.
+Direct legacy runtimes remain only for actual supported consumers during their controlled transition. Preserve their recorded history and saved work, but do not expand or retain them simply because a past roadmap listed them. Static and on-demand host behavior stays qualified where still supported, without requiring a separate architecture for every harness.
 
 # Milestone 1: Complete the Omnigent Agent Platform
 

@@ -11,6 +11,7 @@ the pure guard so the wiring at the startup boundary is proven, not assumed.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import pytest
@@ -45,8 +46,8 @@ def _deprecated() -> tuple[ObsoleteConfiguration, ...]:
 
 def test_startup_accepts_the_current_configuration(monkeypatch) -> None:
     monkeypatch.setenv(VARIABLE, "ghcr.io/example/host@sha256:" + "a" * 64)
-    # Nothing is deprecated today: the alias is still the supported way to pin a
-    # prior image while the rollback window is open.
+    # This alias is not deprecated: it is still the supported way to pin a prior
+    # image while the rollback window is open.
     _startup_guard()()
 
 
@@ -79,6 +80,70 @@ def test_startup_ignores_an_unset_obsolete_variable(monkeypatch) -> None:
     monkeypatch.setattr(legacy_retirement, "OBSOLETE_CONFIGURATION", removed)
     monkeypatch.delenv(VARIABLE, raising=False)
     _startup_guard()()
+
+
+# ---------------------------------------------- the deprecated OpenCode pin
+
+OPENCODE_VARIABLE = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
+OPENCODE_ROW = "omnigent.legacy.opencode_host_image_alias"
+
+
+def _opencode_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if OPENCODE_VARIABLE in record.getMessage()
+    ]
+
+
+def test_supplied_opencode_image_pin_warns_without_failing_startup(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", raising=False)
+    monkeypatch.setenv(OPENCODE_VARIABLE, "ghcr.io/example/opencode@sha256:" + "a" * 64)
+    with caplog.at_level(logging.WARNING):
+        _startup_guard()()
+    warnings = _opencode_warnings(caplog)
+    assert len(warnings) == 1
+    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" in warnings[0]
+    assert OPENCODE_ROW in warnings[0]
+
+
+def test_release_rendered_opencode_ref_is_not_deployment_configuration(
+    monkeypatch, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The release controller writes its recorded refs into ``.env.deploy``.
+
+    A default deployment never chose the deprecated variable, so the value the
+    installed release rendered must not warn; a different value is the
+    deployment's own pin and still does.
+    """
+
+    rendered = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "b" * 64
+    desired_state = tmp_path / "desired-state.json"
+    desired_state.write_text(
+        json.dumps(
+            {
+                "omnigentRelease": {
+                    "serverImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:"
+                    + "c" * 64,
+                    "hostImageRefs": {"opencode": rendered, "shared": rendered},
+                }
+            }
+        )
+    )
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(desired_state)
+    )
+    monkeypatch.setenv(OPENCODE_VARIABLE, rendered)
+    with caplog.at_level(logging.WARNING):
+        _startup_guard()()
+    assert _opencode_warnings(caplog) == []
+
+    monkeypatch.setenv(OPENCODE_VARIABLE, "ghcr.io/example/opencode@sha256:" + "d" * 64)
+    with caplog.at_level(logging.WARNING):
+        _startup_guard()()
+    assert len(_opencode_warnings(caplog)) == 1
 
 
 # ---------------------------------------------- every consuming process

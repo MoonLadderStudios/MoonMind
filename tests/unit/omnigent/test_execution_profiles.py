@@ -13,7 +13,9 @@ from moonmind.omnigent.execution_profiles import (
     validate_effective_launch_snapshot,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.host_services.oauth_credential_validation import (
+    validate_effective_launch,
+)
 from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
     CODEX_STOCK_AGENT_NAME,
@@ -326,7 +328,7 @@ def test_runtime_revalidates_complete_on_demand_policy_before_mutation(
     )
 
     with pytest.raises(OmnigentOAuthHostError) as error:
-        OmnigentOAuthHostRuntime._validate_effective_launch(
+        validate_effective_launch(
             binding=type("Binding", (), {"host_launch_profile_ref": "on-demand"})(),
             effective_launch=launch,
         )
