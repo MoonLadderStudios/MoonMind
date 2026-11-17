@@ -84,8 +84,9 @@ that outlasts in-place recovery reports
 `OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE` with `retry_step_execution`: no session
 exists yet, so the parent's existing bounded step retry starts a fresh Step
 Execution instead of failing the workflow. `OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED`
-(`retry_materialization`, for example a timed-out host image pull, which resumes
-from the layers already pulled) gets the same bounded retry. Hermetic coverage
+(`retry_materialization`, for example any timed-out materialization Docker step;
+a host image pull resumes from the layers already pulled) gets the same bounded
+retry. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
 | `moonmind/omnigent/legacy_retirement.py`, `session_supervisor_rollback.py` | Legacy admission table, rollback authority | Governance |
