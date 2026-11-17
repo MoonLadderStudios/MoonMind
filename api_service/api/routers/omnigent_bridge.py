@@ -433,7 +433,7 @@ def _compatibility_diagnostics(
         else readiness.get("gateReason") or "bridge_not_ready"
     )
     support_matrix = []
-    for host_mode in ("static_compose", "on_demand_docker"):
+    for host_mode in ("on_demand_docker",):
         row = config.readiness(
             evidence_validation=validation or None,
             host_mode=host_mode,

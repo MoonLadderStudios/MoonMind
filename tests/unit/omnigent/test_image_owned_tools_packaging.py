@@ -152,12 +152,6 @@ def test_shared_host_path_has_no_tools_volume_lifecycle() -> None:
     assert "OMNIGENT_GH_VERSION" not in rendered
     assert "OMNIGENT_GH_IMAGE" not in rendered
     assert "MOONMIND_OMNIGENT_TOOLS_VOLUME_REF" not in rendered
-    for name in ("omnigent-host", "omnigent-host-codex", "omnigent-host-claude"):
-        service = compose["services"][name]
-        volumes = " ".join(str(item) for item in service.get("volumes", []))
-        assert "/opt/moonmind-tools" not in volumes, name
-        assert "moonmind-tools.sh" not in volumes, name
-        assert "omnigent-tools-init" not in service.get("depends_on", {}), name
     for worker in ("temporal-worker-agent-runtime", "temporal-worker-core"):
         environment = " ".join(
             str(item) for item in compose["services"][worker].get("environment", [])

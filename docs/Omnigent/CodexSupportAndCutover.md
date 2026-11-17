@@ -145,8 +145,8 @@ supervisor reports readiness and registration for its child workers;
 worker build identities are recorded independently and do not have to match for
 new admission. The canonical Compose path enables the bridge and internal
 endpoint by default, seeds an active portable `codex` agent profile, resolves
-stock image tags to immutable policy digests, and uses the on-demand policy
-unless an operator explicitly selects static hosting. The API synchronizes the stable
+stock image tags to immutable policy digests, and uses the on-demand policy.
+The API synchronizes the stable
 upstream agent identity before activating that profile, keeps its projection
 fresh, and retries transient image, bridge, or inventory startup failures with
 capped backoff; no service restart is required for recovery.

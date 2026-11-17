@@ -33,7 +33,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentBridgeSession,
-    OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     OmnigentObservation,
     OmnigentPolicy,
@@ -106,8 +105,6 @@ _EVENT_OBSERVATION_TYPES = (
     "provider_event_batch",
 )
 _ACCEPTANCE_ROWS = (
-    "static_profile_bound",
-    "static_restart_replay",
     "on_demand_policy_selected",
     "repository_read_analysis",
     "repository_mutation_publication",
@@ -394,10 +391,6 @@ _REASONS: dict[str, tuple[str, str]] = {
         "MoonMind retries automatically; if this persists, check that the "
         "container backend is enabled and the agent runtime worker is running.",
         "/settings#system",
-    ),
-    "static_host_not_ready": (
-        "Start and validate the selected static Omnigent host.",
-        "/settings#omnigent",
     ),
     "immutable_image_unavailable": (
         "Retry stock Omnigent image acquisition or configure explicit server and host image digests.",
@@ -1241,28 +1234,9 @@ async def get_omnigent_codex_catalog_readiness(
                 )
             )
 
-    bindings = list(
-        (await session.execute(select(OmnigentOAuthHostBindingRecord))).scalars().all()
-    )
     host_leases = list(
         (await session.execute(select(OmnigentOAuthHostLeaseRecord))).scalars().all()
     )
-    static_profile_ids = {
-        binding.provider_profile_id for binding in bindings if binding.static_host_id
-    }
-    profile_runtime_by_id = {
-        row.profile_id: str(getattr(row.runtime_id, "value", row.runtime_id))
-        for row in rows
-    }
-    static_ready_runtimes = {
-        profile_runtime_by_id.get(lease.provider_profile_id)
-        for lease in host_leases
-        if lease.provider_profile_id in static_profile_ids
-        and lease.status in {"ready", "assigned"}
-        and lease.expires_at > now
-        and lease.disconnected_at is None
-        and (lease.host_readiness or lease.status) in {"ready", "assigned"}
-    }
     try:
         backend_configured = resolve_container_backend_settings().enabled
     except ContainerBackendConfigError:
@@ -1399,24 +1373,12 @@ async def get_omnigent_codex_catalog_readiness(
                 )
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
-            if not backend_ready and (
-                policy.host_mode == "on_demand_docker"
-                or not live_readiness.backend_ready
-            ):
+            if not backend_ready:
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
-            if (
-                policy.host_mode == "static_compose"
-                and profile.provider_runtime not in static_ready_runtimes
-            ):
-                policy_reasons.append(_reason("static_host_not_ready"))
             if not policy_reasons:
                 launch_policies_by_ref[policy.ref] = LaunchPolicyReadiness(
                     ref=policy.ref,
-                    displayName=(
-                        "On-demand Docker"
-                        if policy.host_mode == "on_demand_docker"
-                        else "Static Compose"
-                    ),
+                    displayName="On-demand Docker",
                     hostMode=policy.host_mode,
                     isDefault=False,
                 )
@@ -1433,6 +1395,10 @@ async def get_omnigent_codex_catalog_readiness(
             if document.get("execution", {}).get("profileRef") != profile.ref:
                 continue
             host = document.get("host", {})
+            # Stored static_compose versions stay readable but are never
+            # selectable: static-connected hosts were removed.
+            if host.get("mode") != "on_demand_docker":
+                continue
             network = document.get("network", {})
             policy_reasons = []
             if not version.validation_json.get("valid"):
@@ -1448,27 +1414,16 @@ async def get_omnigent_codex_catalog_readiness(
                 not in live_readiness.enforced_egress_profile_refs
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
-            host_mode = str(host.get("mode") or "")
-            if not backend_ready and (
-                host_mode == "on_demand_docker" or not live_readiness.backend_ready
-            ):
+            host_mode = str(host["mode"])
+            if not backend_ready:
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
-            if (
-                host_mode == "static_compose"
-                and profile.provider_runtime not in static_ready_runtimes
-            ):
-                policy_reasons.append(_reason("static_host_not_ready"))
             if not policy_reasons:
                 persisted_ref = f"{identity.policy_id}@{version.version}"
                 launch_policies_by_ref[persisted_ref] = LaunchPolicyReadiness(
                     ref=persisted_ref,
                     displayName=(
                         str(getattr(identity, "name", "") or "").strip()
-                        or (
-                            "On-demand Docker"
-                            if host_mode == "on_demand_docker"
-                            else "Static Compose"
-                        )
+                        or "On-demand Docker"
                     ),
                     hostMode=host_mode,
                     isDefault=False,

@@ -327,11 +327,7 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
             ),
             "hostLifecycleOutcome": (
                 "reconciled"
-                if row_id
-                in {
-                    "remediation.host.static-lifecycle",
-                    "remediation.host.on-demand-lifecycle",
-                }
+                if row_id == "remediation.host.on-demand-lifecycle"
                 else "not_applicable"
             ),
         },

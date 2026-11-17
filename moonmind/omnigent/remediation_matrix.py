@@ -922,18 +922,6 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ),
     ),
     RemediationMatrixRow(
-        "remediation.host.static-lifecycle",
-        owner="moonmind.remediation.reliability",
-        gate=GATE_MANUAL_MUTATION,
-        evidence_kind="reliabilitySecurityEvidence",
-        action_capability="host.lifecycle",
-        verification_capability="verification.host-reconciled",
-        authority_mode="approval_gated",
-        ui_journey="workflow-detail.remediate.action",
-        host_modes=("static",),
-        thresholds=("hostLifecycleReconciliationRate",),
-    ),
-    RemediationMatrixRow(
         "remediation.host.on-demand-lifecycle",
         owner="moonmind.remediation.reliability",
         gate=GATE_MANUAL_MUTATION,

@@ -657,7 +657,7 @@ interface OmnigentCatalogGateReason {
 interface OmnigentLaunchPolicyOption {
   ref: string;
   displayName: string;
-  hostMode: "static_compose" | "on_demand_docker";
+  hostMode: "on_demand_docker";
   isDefault: boolean;
 }
 
@@ -729,7 +729,6 @@ const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
   "no_eligible_codex_oauth_profile",
   "on_demand_backend_unavailable",
   "profile_capacity_unavailable",
-  "static_host_not_ready",
 ]);
 
 interface OmnigentReadinessSelection {

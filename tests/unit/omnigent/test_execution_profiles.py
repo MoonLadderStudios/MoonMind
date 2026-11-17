@@ -210,10 +210,10 @@ def test_product_selection_is_explicit_and_versioned() -> None:
         {
             "omnigent": {
                 "executionTargetRef": "omnigent-codex@1",
-                "launchPolicyRef": "codex-static@1",
+                "launchPolicyRef": "codex-on-demand@1",
             }
         }
-    ) == ("omnigent-codex@1", "codex-static@1")
+    ) == ("omnigent-codex@1", "codex-on-demand@1")
 
 
 def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
@@ -224,12 +224,12 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
         "omnigent-opencode@1",
     }
     assert {policy["ref"] for policy in catalog["policies"]} == {
-        "codex-static@1",
         "codex-on-demand@1",
-        "claude-static@1",
         "claude-on-demand@1",
-        "opencode-static@1",
         "opencode-on-demand@1",
+    }
+    assert {policy["hostMode"] for policy in catalog["policies"]} == {
+        "on_demand_docker"
     }
     codex_profile = next(
         profile
@@ -257,10 +257,28 @@ def test_cross_provider_policy_is_rejected() -> None:
     with pytest.raises(OmnigentOAuthHostError) as error:
         compile_effective_launch(
             profile_ref="omnigent-claude@1",
-            policy_ref="codex-static@1",
+            policy_ref="codex-on-demand@1",
             provider_profile_id="claude-oauth",
         )
     assert error.value.code == "OMNIGENT_LAUNCH_POLICY_PROVIDER_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("profile_ref", "policy_ref"),
+    [
+        ("omnigent-codex@1", "codex-static@1"),
+        ("omnigent-claude@1", "claude-static@1"),
+        ("omnigent-opencode@1", "opencode-static@1"),
+    ],
+)
+def test_removed_static_policies_are_not_admitted(profile_ref, policy_ref) -> None:
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        compile_effective_launch(
+            profile_ref=profile_ref,
+            policy_ref=policy_ref,
+            provider_profile_id="oauth",
+        )
+    assert error.value.code == "OMNIGENT_LAUNCH_POLICY_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(

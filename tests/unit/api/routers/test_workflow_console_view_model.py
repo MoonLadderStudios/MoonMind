@@ -125,7 +125,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     omnigent_catalog = config["system"]["omnigentExecutionCatalog"]
     assert omnigent_catalog["profiles"][0]["ref"] == "omnigent-codex@1"
     assert {policy["hostMode"] for policy in omnigent_catalog["policies"]} == {
-        "static_compose",
         "on_demand_docker",
     }
     assert "buildId" in config["system"]

@@ -87,14 +87,11 @@ LIVE_CASES = {
         "events.replay-overlap-schema-drift",
         "resources.bounds-and-secret-scan",
     },
-    "static": {"compose.static-codex-oauth"},
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
     "workflow_chat": {"workflow-chat.native-release-matrix"},
 }
 BROWSER_ROWS = (
-    "static_profile_bound",
-    "static_restart_replay",
     "on_demand_policy_selected",
     "repository_read_analysis",
     "repository_mutation_publication",
@@ -270,7 +267,6 @@ SCENARIOS = {
     "cumulative": f"{PROVIDER_TEST}::test_live_cumulative_remediation_journey",
     "remediation": f"{PROVIDER_TEST}::test_live_operator_remediation_release_matrix",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
-    "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
     "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
     "failures": f"{PROVIDER_TEST}::test_live_failure_matrix_and_durable_evidence",
     "workflow_chat": (
@@ -300,7 +296,6 @@ SCENARIO_EVIDENCE_ENV = {
     "cumulative": "MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE",
     "remediation": "MOONMIND_OMNIGENT_REMEDIATION_MATRIX_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
-    "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
     "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
     "failures": "MOONMIND_OMNIGENT_FAILURE_EVIDENCE",
     "workflow_chat": "MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE",
@@ -1026,13 +1021,7 @@ class LiveRunner:
             )
             self.run(
                 f"workflow-chat-up-{combination_id}",
-                self.compose_profile(
-                    combination.compose_profile,
-                    "up",
-                    "-d",
-                    "--wait",
-                    *combination.compose_services,
-                ),
+                self.compose("up", "-d", "--wait", *combination.compose_services),
             )
             observed = self._workflow_chat_combination(
                 combination,
@@ -1127,10 +1116,9 @@ class LiveRunner:
         self.scenario("workflow_chat")
 
     def stock(self, images: dict[str, str]) -> None:
-        self.run(
-            "stock-up",
-            self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
-        )
+        # The stock host is launched on demand by the server from the pinned
+        # host image, so only the server service is started here.
+        self.run("stock-up", self.compose("up", "-d", "--wait", "omnigent"))
         observed = {route: self.action("stock", route) for route in STOCK_ROUTES}
         inventory = self.action("stock", "inventory")
         self.write_evidence("stock", {
@@ -1355,14 +1343,6 @@ class LiveRunner:
                     and bool(result.get("repositoryCommitSha"))
                     and bool(result.get("publicationRef"))
                 )
-            if row == "static_restart_replay":
-                assertions["static_restart"] = (
-                    result.get("staticHostRestarted") is True
-                    and bool(result.get("hostIdentityBeforeRestart"))
-                    and bool(result.get("hostIdentityAfterRestart"))
-                    and result.get("hostIdentityBeforeRestart")
-                    != result.get("hostIdentityAfterRestart")
-                )
             if not all(assertions.values()):
                 raise ConformanceContractError(
                     f"browser/{row} did not prove browser control or no fallback"
@@ -1474,12 +1454,15 @@ class LiveRunner:
                 )
             selected = browser_observation.get("selected")
             selected_host_mode = (
-                "static"
+                selected.get("hostMode", "on_demand_docker")
                 if isinstance(selected, dict)
-                and selected.get("hostMode") == "static_compose"
-                else "on_demand"
+                else "on_demand_docker"
             )
-            if selected_host_mode != facts["hostMode"]:
+            # On-demand Docker is the only host mode a browser can select.
+            if (
+                selected_host_mode != "on_demand_docker"
+                or facts["hostMode"] != "on_demand"
+            ):
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} browser and host evidence disagree"
                 )
@@ -1751,25 +1734,15 @@ class LiveRunner:
 
     @staticmethod
     def compose(*args: str) -> list[str]:
-        return LiveRunner.compose_profile("omnigent-host-codex", *args)
+        return ["docker", "compose", "--project-name", PROJECT, *args]
 
-    @staticmethod
-    def compose_profile(profile: str, *args: str) -> list[str]:
-        return [
-            "docker", "compose", "--project-name", PROJECT,
-            "--profile", profile, *args,
-        ]
-
-    def scenario(self, mode: str, *, phase: str | None = None) -> None:
+    def scenario(self, mode: str) -> None:
         """Run exactly one strict provider scenario and reject skips/no collection."""
         self.env["MOONMIND_OMNIGENT_LIVE_MODE"] = mode
         self.env["MOONMIND_OMNIGENT_STRICT_LIVE"] = "1"
-        if phase is not None:
-            self.env["MOONMIND_OMNIGENT_STATIC_PHASE"] = phase
-        evidence_name = f"{mode}-{phase}" if phase else mode
-        junit = self.output_dir / f"{evidence_name}-junit.xml"
+        junit = self.output_dir / f"{mode}-junit.xml"
         self.run(
-            f"{evidence_name}-journey",
+            f"{mode}-journey",
             [sys.executable, "-m", "pytest", SCENARIOS[mode], "-q", "-s", f"--junitxml={junit}"],
         )
         if not junit.is_file():
@@ -1782,37 +1755,6 @@ class LiveRunner:
         totals = {key: sum(int(s.get(key, "0")) for s in suites) for key in ("tests", "failures", "errors", "skipped")}
         if totals["tests"] != 1 or any(totals[key] for key in ("failures", "errors", "skipped")):
             raise RuntimeError(f"{mode} scenario was not one unskipped passing test: {totals}")
-
-    def static(self) -> None:
-        self.run(
-            "static-up",
-            self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
-        )
-        executed = self.action("static", "execute")
-        identifiers = {key: executed.get(key) for key in ("workflowId", "agentRunId", "sessionId")}
-        if not all(identifiers.values()):
-            raise ConformanceContractError("static execute did not return durable identifiers")
-        self.write_evidence("static", {**identifiers, "assertions": {
-            **{name: bool(executed.get(name)) for name in (
-                "one_first_message", "live_events", "final_snapshot", "resources",
-                "workflow_detail", "secret_free")},
-            "workflow_created_through_static_profile": True,
-        }})
-        self.scenario("static", phase="execute")
-        self.run("static-restart", self.compose("restart", "omnigent", "omnigent-host-codex"))
-        # Reload the persisted identifiers and assert the same workflow after
-        # restart.  This is deliberately a real second provider invocation,
-        # never collection-only evidence.
-        replayed = self.action("static", "replay", **identifiers)
-        if any(replayed.get(key) != value for key, value in identifiers.items()):
-            raise ConformanceContractError("static replay returned different durable identifiers")
-        self.write_evidence("static", {**identifiers, "assertions": {
-            **{name: bool(replayed.get(name)) for name in (
-                "one_first_message", "live_events", "final_snapshot", "resources",
-                "workflow_detail", "secret_free", "durable_replay")},
-            "services_restarted": True, "same_identifiers_reloaded": True,
-        }})
-        self.scenario("static", phase="replay")
 
     def ondemand(self) -> None:
         events: list[str] = []
@@ -2002,8 +1944,6 @@ def main() -> int:
                     runner.remediation(images)
                 elif mode == "stock":
                     runner.stock(images)
-                elif mode == "static":
-                    runner.static()
                 elif mode == "ondemand":
                     runner.ondemand()
                 elif mode == "workflow_chat":

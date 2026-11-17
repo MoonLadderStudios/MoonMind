@@ -9,8 +9,8 @@ Everything here is hermetic (no Docker, no network): a real Git source and a rea
 bare remote back the canonical ``PublishService`` publisher, the real
 ``OmnigentOAuthHostRuntime`` materializes the authoritative workspace, and the
 real profile-bound coordinator is driven through materialization -> repository
-mutation -> publication/saved-work -> terminal harvest -> cleanup -> replay for
-both the static and on-demand host modes.
+mutation -> publication/saved-work -> terminal harvest -> cleanup -> replay on
+on-demand hosts, including a binding retained from static-connected hosts.
 """
 
 from __future__ import annotations
@@ -753,12 +753,10 @@ async def _drive_coordinator_materialization_to_cleanup(
             return binding
 
         async def create_or_update_static_binding(self, **kwargs):
-            if "effective_launch_snapshot" not in kwargs:
-                return binding
             return binding.model_copy(
                 update={
-                    "host_launch_profile_ref": kwargs.get("host_launch_profile_ref")
-                    or binding.host_launch_profile_ref,
+                    "static_host_id": kwargs.get("static_host_id"),
+                    "host_launch_profile_ref": kwargs["host_launch_profile_ref"],
                     "execution_profile_ref": kwargs["execution_profile_ref"],
                     "launch_policy_ref": kwargs["launch_policy_ref"],
                     "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
@@ -998,9 +996,10 @@ async def test_coordinator_materialization_to_cleanup_on_demand_mutation(
 
 
 @pytest.mark.asyncio
-async def test_coordinator_materialization_to_cleanup_static_read_only(
+async def test_coordinator_materialization_to_cleanup_retained_static_read_only(
     tmp_path,
 ) -> None:
+    # A binding retained from static-connected hosts runs on-demand.
     ordered = await _drive_coordinator_materialization_to_cleanup(
         tmp_path, on_demand=False, publish_mode="none"
     )
@@ -1014,9 +1013,9 @@ async def test_coordinator_materialization_to_cleanup_static_read_only(
     ]
     assert len(chains) == 2
     first, second = chains
-    assert first["runtime"]["hostMode"] == "static_compose"
-    # Static read-only work performs no repository mutation or publication.
+    assert first["runtime"]["hostMode"] == "on_demand_docker"
+    # Read-only work performs no repository mutation or publication.
     assert first["publication"]["publishMode"] == "none"
     assert first["publication"]["publicationState"] == "read_only_no_publication"
-    assert first["terminal"]["cleanupMode"] == "static_drain"
+    assert first["terminal"]["cleanupMode"] == "on_demand_remove"
     assert second["workspace"]["materializationAction"] == "reused_pre_materialized"

@@ -932,7 +932,7 @@ _MATERIALIZER_REF_PATTERN = __import__("re").compile(
 # reintroduce per-provider image identity behind the shared image.
 SHARED_IMAGE_AUTHORITY_MODULES = (
     "moonmind/omnigent/harness_platform/host_classes.py",
-    "moonmind/omnigent/harness_platform/static_hosts.py",
+    "moonmind/omnigent/harness_platform/shared_host_image.py",
     "moonmind/omnigent/bootstrap/image_resolution.py",
     "moonmind/omnigent/bootstrap/store.py",
 )

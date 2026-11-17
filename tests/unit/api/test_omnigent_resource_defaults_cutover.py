@@ -184,8 +184,6 @@ async def test_startup_seeds_fixed_defaults_without_any_docker_probe(
         service = policies.OmnigentPolicyService(session)
         snapshots = {}
         for policy_id in (
-            "omnigent-codex",
-            "codex-static",
             "codex-on-demand",
             "claude-on-demand",
             "omnigent-on-demand",

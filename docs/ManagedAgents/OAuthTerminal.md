@@ -277,9 +277,10 @@ auth volume, and finalization endpoint rather than on the tmate URL itself.
 
 The auth runner uses the installed shared Omnigent host image, which contains
 the provider CLIs. `MOONMIND_OAUTH_RUNNER_IMAGE` selects an explicit custom image.
-The shell login helpers use the corresponding `omnigent-host-codex` or
-`omnigent-host-claude` Compose service and mount the selected credential volume
-at the configured `CODEX_VOLUME_PATH` or `CLAUDE_VOLUME_PATH`.
+The `tools/auth-*-volume.sh --login` helpers run the CLI in a one-off container
+of that image (settings from the shell, then the checkout `.env`) with the
+credential volume, owned by `1000:1000`, at `CODEX_VOLUME_PATH` or
+`CLAUDE_VOLUME_PATH`.
 
 ### 5.4 Provider terminal finalization workflow
 
@@ -357,13 +358,14 @@ parallel credential store.
 
 Before post-registration credential validation, MoonMind resolves missing launch
 metadata for a new or existing host binding from the persisted launch policy.
-Existing policy, execution-profile, endpoint, and applicable static-host choices
-are preserved. Bindings predating saved policy references select the persisted
-default policy for their existing runtime and static/on-demand host mode; a
-legacy substrate reference is not interpreted as a policy reference. Conflicting
-policy host modes fail before binding updates. Complete bindings retain their
-launch settings; new validation leases select the installed host and server
-images and record that selection. Retries reuse the lease's recorded snapshot
+Existing on-demand policy, execution-profile, and endpoint choices are
+preserved. Bindings predating saved policy references or retained from
+static-connected hosts select their runtime's persisted on-demand default,
+rewritten only while the Provider Profile is idle; a legacy substrate reference
+is not interpreted as a policy reference. A policy that does not launch an
+on-demand host fails before binding updates.
+Complete bindings retain their launch settings; new validation leases select the
+installed host and server images and record that selection. Retries reuse the lease's recorded snapshot
 without rewriting prior attempts. Credential-generation, lease, login-status,
 and cleanup checks still apply. Validation errors record
 the exception type and failure code without exposing credential material.

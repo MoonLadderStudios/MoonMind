@@ -141,22 +141,6 @@ class GenericOmnigentHostRuntime:
         github_projection_verifier: Callable[[], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
         await self.validate_repository_intent(request=request, plan=plan)
-        static = host_class.runtime.get("staticHostSelection") is not None
-        if static and authority_sink is not None:
-            sink = authority_sink
-
-            async def authority_sink(authority):
-                await sink(
-                    {
-                        **authority,
-                        **(
-                            {"retainEmptyVolume": True}
-                            if authority.get("kind") == "github_credentials"
-                            else {}
-                        ),
-                    }
-                )
-
         workspace = await self._workspace.materialize(
             request,
             mutation=plan.payload.workspaceMutation,
@@ -244,8 +228,6 @@ class GenericOmnigentHostRuntime:
                 "GitHub credential materialization changed its anticipated authority",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
-        if static and github_credentials is not None:
-            github_credentials = {**github_credentials, "retainEmptyVolume": True}
         egress = await self._egress.attest(request=request, launch_policy=launch_policy)
         if authority_sink is not None:
             await authority_sink({"kind": "egress", **egress})
@@ -357,23 +339,7 @@ class GenericOmnigentHostRuntime:
                 "labels": labels,
             }
         )
-        static_selection = host_class.runtime.get("staticHostSelection")
-        if static_selection is not None:
-            spec = await self._launcher.resolve_launch_spec(spec)
-            correlation = spec.correlationName
-            state_volume = str(spec.stateAttachment["sourceRef"])
         anticipated_authority = {
-            **(
-                {
-                    "staticHostId": spec.expectedOmnigentHostId,
-                    "staticHostImageRef": spec.imageRef,
-                    "staticPreviousContainerId": spec.runtime.get(
-                        "staticPreviousContainerId"
-                    ),
-                }
-                if static_selection is not None
-                else {}
-            ),
             "kind": "host",
             "containerName": correlation,
             "stateVolumeRef": state_volume,
@@ -410,11 +376,6 @@ class GenericOmnigentHostRuntime:
                     )
                 ),
                 expected_host_id=(str(spec.expectedOmnigentHostId) or None),
-                **(
-                    {"expected_host_name": spec.runtime["staticHostName"]}
-                    if static_selection is not None
-                    else {}
-                ),
             )
             attestations = await self._attestor.attest(
                 request=request,
@@ -454,17 +415,6 @@ class GenericOmnigentHostRuntime:
                         host_lease_generation=host_lease_generation,
                         state_volume_ref=launch["stateVolumeRef"],
                         control_volume_ref=launch.get("controlVolumeRef"),
-                        **(
-                            {
-                                "static_host_id": spec.expectedOmnigentHostId,
-                                "static_host_image_ref": spec.imageRef,
-                                "static_previous_container_id": spec.runtime.get(
-                                    "staticPreviousContainerId"
-                                ),
-                            }
-                            if static_selection is not None
-                            else {}
-                        ),
                     )
                     setattr(failure, "host_cleanup_evidence", host_cleanup_evidence)
                 except Exception as cleanup_error:
@@ -475,17 +425,6 @@ class GenericOmnigentHostRuntime:
                 raise failure from exc
             raise
         return {
-            **(
-                {
-                    "staticHostId": spec.expectedOmnigentHostId,
-                    "staticHostImageRef": spec.imageRef,
-                    "staticPreviousContainerId": spec.runtime.get(
-                        "staticPreviousContainerId"
-                    ),
-                }
-                if static_selection is not None
-                else {}
-            ),
             "hostId": registration["omnigentHostId"],
             "omnigentHostId": registration["omnigentHostId"],
             "containerName": launch["containerName"],
@@ -626,17 +565,6 @@ class GenericOmnigentHostRuntime:
                 str(host_context["controlVolumeRef"])
                 if host_context.get("controlVolumeRef")
                 else None
-            ),
-            **(
-                {
-                    "static_host_id": str(host_context["staticHostId"]),
-                    "static_host_image_ref": host_context.get("staticHostImageRef"),
-                    "static_previous_container_id": host_context.get(
-                        "staticPreviousContainerId"
-                    ),
-                }
-                if host_context.get("staticHostId")
-                else {}
             ),
         )
 

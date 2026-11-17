@@ -1,13 +1,12 @@
 #!/bin/sh
-# Generic static-connected Omnigent host entrypoint (MoonLadderStudios/MoonMind#3834).
+# On-demand Codex/Claude OAuth Omnigent host entrypoint.
 #
-# One trusted implementation owns shared host preparation and Omnigent startup
-# for the static Codex and Claude services, which share the digest-pinned
-# `omnigent-host-moonmind` image. Runtime differences resolve only through the
-# trusted pack/materializer registries:
+# One trusted implementation owns host preparation and Omnigent startup on the
+# shared `omnigent-host-moonmind` image. The launcher selects the runtime only
+# through the trusted pack/materializer registries:
 #
-#   omnigent-host-codex  -> MOONMIND_OMNIGENT_RUNTIME_PACK_REF=codex-native-pack@1
-#   omnigent-host-claude -> MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1
+#   Codex  -> MOONMIND_OMNIGENT_RUNTIME_PACK_REF=codex-native-pack@1
+#   Claude -> MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1
 #
 # The entrypoint must not accept arbitrary shell commands, target paths, or
 # environment allowlists from Compose variables or workflow input. Any variable
@@ -70,15 +69,15 @@ else
 fi
 
 [ -n "$expected_generation" ] || { echo "credential generation is required" >&2; exit 64; }
-[ "$(id -u):$(id -g)" = "1000:1000" ] || { echo "static host must run as 1000:1000" >&2; exit 70; }
-[ "${HOME:-}" = "/home/app" ] || { echo "static host HOME must be /home/app" >&2; exit 70; }
+[ "$(id -u):$(id -g)" = "1000:1000" ] || { echo "Omnigent host must run as 1000:1000" >&2; exit 70; }
+[ "${HOME:-}" = "/home/app" ] || { echo "Omnigent host HOME must be /home/app" >&2; exit 70; }
 [ -d "$credential_root" ] && [ -w "$credential_root" ] || {
   echo "credential home is missing or not writable: $credential_root" >&2
   exit 66
 }
 
 # --- 4. Reject unapproved ambient credential selectors -------------------------
-# A static service must never become a multi-profile host merely because the
+# A host must never become a multi-profile host merely because the
 # shared image contains several CLIs. Any API-key-shaped ambient credential or
 # cross-runtime OAuth selector fails closed before staging.
 for key in OPENAI_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL MINIMAX_API_KEY \
@@ -204,8 +203,7 @@ printf '%s\n' "$expected_generation" > "$state_root/credential-generation"
 printf '%s\n' "$pack_ref" > "$state_root/runtime-pack"
 # The staged marker records which generation this container staged; it is not
 # admission evidence by itself. Admission authority stays with the Provider
-# Profile lease/generation, host binding/lease, and attestation owners named
-# in moonmind.omnigent.harness_platform.static_hosts.static_host_authority_notes.
+# Profile lease/generation, host binding/lease, and attestation owners.
 # Verify the staging write read it back before gating on it.
 [ "$(cat "$state_root/credential-generation")" = "$expected_generation" ] || {
   echo "credential generation staging verification failed" >&2
@@ -213,7 +211,7 @@ printf '%s\n' "$pack_ref" > "$state_root/runtime-pack"
 }
 
 # --- 9. Bounded readiness gates --------------------------------------------------
-# An optional static service may wait for operator enrollment, but a workflow
+# A host may wait for credential enrollment, but a workflow
 # must not wait indefinitely and process existence is never admitted usable
 # capacity: the workflow admission/retry deadline and the capacity, lease,
 # attestation, and session owners decide admitted capacity. These loops bound
@@ -229,22 +227,22 @@ readiness_interval=5
 # pattern applied to the pair. Checking the pair jointly exits 64 even for
 # the defaults, before either readiness probe can run.
 case "$credential_timeout" in
-  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+  ""|*[!0-9]*) echo "host readiness timeouts must be positive integers" >&2; exit 64 ;;
 esac
 case "$skill_timeout" in
-  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+  ""|*[!0-9]*) echo "host readiness timeouts must be positive integers" >&2; exit 64 ;;
 esac
 [ "$credential_timeout" -ge "$readiness_interval" ] || { echo "credential readiness timeout is below the probe interval" >&2; exit 64; }
 [ "$skill_timeout" -ge "$readiness_interval" ] || { echo "skill readiness timeout is below the probe interval" >&2; exit 64; }
 if [ "$pack_ref" = "codex-native-pack@1" ]; then
-  waiting_label="Codex static host waiting for authenticated credentials"
+  waiting_label="Codex host waiting for authenticated credentials"
 else
-  waiting_label="Claude static host waiting for authenticated credentials"
+  waiting_label="Claude host waiting for authenticated credentials"
 fi
 elapsed=0
 until /opt/moonmind/check-omnigent-host.sh; do
   if [ "$elapsed" -ge "$credential_timeout" ]; then
-    echo "static host waiting-for-enrollment deadline exceeded after ${credential_timeout}s: authenticated credentials not ready (operator enrollment pending, not admitted capacity)" >&2
+    echo "host waiting-for-enrollment deadline exceeded after ${credential_timeout}s: authenticated credentials not ready (operator enrollment pending, not admitted capacity)" >&2
     exit 69
   fi
   echo "$waiting_label" >&2
@@ -255,10 +253,10 @@ done
 elapsed=0
 until /opt/moonmind/check-runner-projections.sh; do
   if [ "$elapsed" -ge "$skill_timeout" ]; then
-    echo "static host Skill-projection deadline exceeded after ${skill_timeout}s: no resolved Skill projection (missing projection, not admitted capacity)" >&2
+    echo "host Skill-projection deadline exceeded after ${skill_timeout}s: no resolved Skill projection (missing projection, not admitted capacity)" >&2
     exit 69
   fi
-  echo "Static host waiting for a resolved Skill projection" >&2
+  echo "Host waiting for a resolved Skill projection" >&2
   sleep "$readiness_interval"
   elapsed=$((elapsed + readiness_interval))
 done

@@ -216,13 +216,7 @@ class GenericHostCapacityAdmission:
 
         from sqlalchemy import func, or_, select
 
-        from api_service.db.models import (
-            OmnigentHostLeaseRecordV2,
-            OmnigentOAuthHostLeaseRecord,
-        )
-        from moonmind.omnigent.harness_platform.static_hosts import (
-            GENERIC_STATIC_LEASE_PURPOSE,
-        )
+        from api_service.db.models import OmnigentHostLeaseRecordV2
 
         observed_at = now or datetime.now(UTC)
         window_start = observed_at - timedelta(
@@ -242,24 +236,6 @@ class GenericHostCapacityAdmission:
                 ),
             )
         )
-        active_static = (
-            select(func.count())
-            .select_from(OmnigentOAuthHostLeaseRecord)
-            .where(
-                OmnigentOAuthHostLeaseRecord.lease_purpose
-                == GENERIC_STATIC_LEASE_PURPOSE,
-                OmnigentOAuthHostLeaseRecord.status.in_(
-                    (
-                        "allocating",
-                        "starting",
-                        "ready",
-                        "assigned",
-                        "draining",
-                        "failed",
-                    )
-                ),
-            )
-        )
         recent_on_demand = (
             select(func.count())
             .select_from(OmnigentHostLeaseRecordV2)
@@ -267,23 +243,8 @@ class GenericHostCapacityAdmission:
                 OmnigentHostLeaseRecordV2.created_at >= window_start,
             )
         )
-        recent_static = (
-            select(func.count())
-            .select_from(OmnigentOAuthHostLeaseRecord)
-            .where(
-                OmnigentOAuthHostLeaseRecord.lease_purpose
-                == GENERIC_STATIC_LEASE_PURPOSE,
-                OmnigentOAuthHostLeaseRecord.acquired_at >= window_start,
-            )
-        )
-        # Each allocation has exactly one storage owner. Both physical forms
-        # contribute to the same two counts and serialized admission decision.
-        active = await session.execute(
-            select(active_on_demand.scalar_subquery() + active_static.scalar_subquery())
-        )
-        recent = await session.execute(
-            select(recent_on_demand.scalar_subquery() + recent_static.scalar_subquery())
-        )
+        active = await session.execute(active_on_demand)
+        recent = await session.execute(recent_on_demand)
         return int(active.scalar() or 0), int(recent.scalar() or 0)
 
     @staticmethod

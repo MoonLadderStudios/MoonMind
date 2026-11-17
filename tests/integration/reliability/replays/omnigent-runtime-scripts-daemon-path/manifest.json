@@ -9,7 +9,9 @@
   "requiredScripts": [
     "init-oauth-host.sh",
     "moonmind-tools.sh",
-    "start-codex-oauth-host.sh",
-    "start-claude-oauth-host.sh"
+    "start-omnigent-host.sh",
+    "check-omnigent-host.sh",
+    "check-runner-projections.sh",
+    "clear-stale-host-daemons.sh"
   ]
 }

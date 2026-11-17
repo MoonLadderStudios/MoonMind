@@ -128,7 +128,6 @@ class WorkflowChatCombination:
     host_class_ref: str
     launch_policy_ref: str
     execution_realizer_ref: str
-    compose_profile: str
     compose_services: tuple[str, ...]
     native_chat_claimed: bool
     # Credential/provider authority identity is code-owned per combination:
@@ -183,11 +182,10 @@ class WorkflowChatCombination:
 
     @property
     def required_cleanup_steps(self) -> tuple[str, ...]:
-        """Return the ordered cleanup steps this host mode can truthfully emit.
+        """Return the ordered cleanup steps this cleanup mode can truthfully emit.
 
-        On-demand hosts are removed, so the live host stops. Static-connected
-        hosts are drained and keep serving the next run, so demanding a stopped
-        host would force the adapter to publish false evidence.
+        On-demand hosts are removed, so the live host stops. Any other cleanup
+        mode has no contract here and fails closed rather than borrowing one.
         """
 
         steps = _CLEANUP_STEPS_BY_MODE.get(self.cleanup_mode)
@@ -212,9 +210,8 @@ class WorkflowChatCombination:
         )
 
 
-# Every combination MoonMind claims for native Workflow Chat, including the
-# host modes whose transport and cleanup behavior differ materially (on-demand
-# hosts are removed; static-connected hosts are drained and keep serving).
+# Every combination MoonMind claims for native Workflow Chat. Each launches its
+# host on demand from the omnigent server, which needs no Compose profile.
 WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
     WorkflowChatCombination(
         combination_id="codex-on-demand-through-omnigent",
@@ -222,22 +219,7 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         host_class_ref="omnigent-codex-current@1",
         launch_policy_ref="codex-on-demand@1",
         execution_realizer_ref="codex-profile-bound@1",
-        compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
-        native_chat_claimed=True,
-        provider_profile_class=_CODEX_OAUTH_PROFILE_CLASS,
-        credential_materializer_ref="codex-oauth-home@1",
-        auth_mode="codex-oauth",
-        host_image_key="host",
-    ),
-    WorkflowChatCombination(
-        combination_id="codex-static-connected-through-omnigent",
-        harness_id="codex-native",
-        host_class_ref="omnigent-codex-current@1",
-        launch_policy_ref="codex-static@1",
-        execution_realizer_ref="codex-profile-bound@1",
-        compose_profile="omnigent-host-codex",
-        compose_services=("omnigent", "omnigent-host-codex"),
         native_chat_claimed=True,
         provider_profile_class=_CODEX_OAUTH_PROFILE_CLASS,
         credential_materializer_ref="codex-oauth-home@1",
@@ -250,7 +232,6 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         host_class_ref="omnigent-opencode@2",
         launch_policy_ref="opencode-on-demand@1",
         execution_realizer_ref="generic-omnigent-host@1",
-        compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
         native_chat_claimed=True,
         provider_profile_class=_OPENCODE_API_KEY_PROFILE_CLASS,
@@ -397,10 +378,9 @@ _DENIAL_KINDS = frozenset(
         "cross_workflow",
     }
 )
-# Cleanup must finish with provider-profile release, after the live host is
-# retired for its host mode, the provider session is gone, and the workspace
-# result is durable. On-demand hosts stop; static-connected hosts drain and keep
-# serving, so their truthful terminal step is a drain, not a stop.
+# Cleanup must finish with provider-profile release, after the on-demand live
+# host is stopped, the provider session is gone, and the workspace result is
+# durable.
 _PROVIDER_PROFILE_RELEASE_STEP = "provider_profile_release"
 _REQUIRED_CLEANUP_STEPS = (
     "live_host_stopped",
@@ -408,19 +388,10 @@ _REQUIRED_CLEANUP_STEPS = (
     "workspace_published",
     _PROVIDER_PROFILE_RELEASE_STEP,
 )
-_DRAIN_CLEANUP_STEPS = (
-    "live_host_drained",
-    "provider_session_removed",
-    "workspace_published",
-    _PROVIDER_PROFILE_RELEASE_STEP,
-)
 _CLEANUP_STEPS_BY_MODE: Mapping[str, tuple[str, ...]] = {
     "remove": _REQUIRED_CLEANUP_STEPS,
-    "drain": _DRAIN_CLEANUP_STEPS,
 }
-_CLEANUP_STEP_KINDS = frozenset(_REQUIRED_CLEANUP_STEPS) | frozenset(
-    _DRAIN_CLEANUP_STEPS
-)
+_CLEANUP_STEP_KINDS = frozenset(_REQUIRED_CLEANUP_STEPS)
 # Cross-scope denials only prove isolation when they record the authorized and
 # attempted identities, so a relabelled ordinary 403 cannot satisfy them.
 _CROSS_SCOPE_IDENTITY_FIELDS = (

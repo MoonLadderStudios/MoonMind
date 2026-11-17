@@ -69,11 +69,11 @@ def _run_codex_preflight_check(
             volume=volume,
         )
 
-    from moonmind.omnigent.harness_platform.static_hosts import (
-        resolve_static_host_image_ref,
+    from moonmind.omnigent.harness_platform.shared_host_image import (
+        resolve_shared_host_image_ref,
     )
 
-    image = settings.workflow.codex_login_check_image or resolve_static_host_image_ref()
+    image = settings.workflow.codex_login_check_image or resolve_shared_host_image_ref()
     stdout = ""
     stderr = ""
     exit_code: Optional[int] = None

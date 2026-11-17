@@ -1637,6 +1637,16 @@ async def compile_and_persist_execution_plan(
         effective_launch,
         expected_ref=launch_policy_ref,
     )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        RETIRED_STATIC_HOST_MODES,
+    )
+
+    if planner_launch_policy.hostMode in RETIRED_STATIC_HOST_MODES:
+        raise ValueError(
+            f"launch policy {launch_policy_ref} uses the removed "
+            f"{planner_launch_policy.hostMode} host mode; select the on-demand "
+            "launch policy for this profile"
+        )
     expected_execution_profile = str(
         agent_profile_snapshot.get("executionProfileRef") or ""
     ).strip()
@@ -1716,24 +1726,6 @@ async def compile_and_persist_execution_plan(
             "host image family than the installed one"
         )
     effective_launch = reconciled
-    if planner_launch_policy.hostMode in {"static-connected", "static_compose"}:
-        from moonmind.omnigent.harness_platform.static_hosts import (
-            bind_static_host_selection,
-        )
-        from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-
-        host_session_factory = session_factory
-        if db_session is not None:
-
-            @asynccontextmanager
-            async def host_session_factory():
-                yield db_session
-
-        effective_launch = await bind_static_host_selection(
-            repository=OmnigentOAuthHostRepository(host_session_factory),
-            effective_launch=effective_launch,
-            commit_binding=db_session is None,
-        )
     policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
         artifact_service=artifact_service,
         principal=principal,

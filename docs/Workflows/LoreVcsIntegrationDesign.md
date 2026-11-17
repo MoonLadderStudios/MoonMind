@@ -339,14 +339,14 @@ The UI shows the authoritative provider and exact identities, the connection and
 
 A lane supports a capability only when its workspace, tool, Skill, credential, checkpoint, publication, and cleanup boundaries are proven; unsupported combinations block before launch.
 
-| Capability | Managed runtime | Omnigent on-demand / run-dedicated | Omnigent reusable static host |
-| --- | --- | --- | --- |
-| Exact read-only workspace | Sandbox binding | Bind mount | When isolation is verified |
-| Pinned `lore`, Skill, read-only credential isolation | Yes | Yes | Yes (per immutable bundle) |
-| Managed `branch` / `pr` | Yes | Yes | Yes; remote write stays adapter-side |
-| Agent-owned `auto` mutation | Isolated runtime only | With verified scan/evidence enforcement | Unsupported until per-run isolation is verified |
-| Checkpoint restore, lock reconciliation | Yes | Yes | When restore isolation is verified; no retained foreign locks |
-| Lore merge automation | When advertised | When advertised | Coordinator access stays control-plane work |
+| Capability | Managed runtime | Omnigent on-demand / run-dedicated |
+| --- | --- | --- |
+| Exact read-only workspace | Sandbox binding | Bind mount |
+| Pinned `lore`, Skill, read-only credential isolation | Yes | Yes |
+| Managed `branch` / `pr` | Yes | Yes |
+| Agent-owned `auto` mutation | Isolated runtime only | With verified scan/evidence enforcement |
+| Checkpoint restore, lock reconciliation | Yes | Yes |
+| Lore merge automation | When advertised | When advertised |
 
 ---
 

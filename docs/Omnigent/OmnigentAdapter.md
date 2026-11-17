@@ -38,7 +38,7 @@ The canonical execution topology is:
 MoonMind.UserWorkflow / MoonMind.AgentRun
   -> profile-bound Omnigent execution coordinator
       -> Provider Profile lease + durable host lease
-      -> static Compose host or deterministic on-demand Docker host
+      -> deterministic on-demand Docker host
       -> MoonMind Omnigent bridge
           -> stock Omnigent server and unchanged omnigent-host
               -> one codex-native session / runner
@@ -156,38 +156,30 @@ Large instructions and inputs remain artifact-backed. The bridge posts the first
 
 ## 5. Launch modes
 
-The profile-bound Codex lane supports two host modes under one binding, bridge, readiness, evidence, and cleanup contract.
+The profile-bound Codex lane has one host mode under its binding, bridge, readiness, evidence, and cleanup contract. Stored `static_compose` plans remain readable history but fail closed rather than execute, because their Compose host no longer exists.
 
-### 5.1 Static Compose bootstrap
-
-`static_compose` uses the canonical repository `docker-compose.yaml` and the `omnigent-host-codex` profile. It is the supported local/bootstrap path and may keep a stable host identity between runs.
-
-MoonMind still acquires the Provider Profile lease before assignment, validates the exact registered host and credential generation, permits at most one active session, and drains the host before releasing the profile lease.
-
-### 5.2 Deterministic on-demand Docker
+### 5.1 Deterministic on-demand Docker
 
 `on_demand_docker` starts one lease-owned container after the Provider Profile lease is acquired. Its name and labels are deterministic from durable lease identity. It receives one workflow workspace, one Codex OAuth home, one Omnigent state volume, and one active session.
 
 Terminal cleanup removes only the lease-owned container and Omnigent state volume. The canonical OAuth volume and unrelated containers or volumes survive.
 
-### 5.3 Selection authority
+### 5.2 Selection authority
 
 The desired product authority is an explicit, versioned host-mode choice compiled from the selected Omnigent agent profile and policy. Workflows and operators select policy/profile concepts, not a raw launch-profile string.
 
 Workflow Create selects the versioned `omnigent-codex@1` execution target and
-one of the built-in `codex-static@1` or `codex-on-demand@1` launch policies.
-MoonMind compiles that selection into secret-free `effectiveLaunch` evidence
+the built-in `codex-on-demand@1` launch policy. MoonMind compiles that selection into secret-free `effectiveLaunch` evidence
 before acquiring a Provider Profile lease or mutating a host. Existing durable
 bindings remain authoritative for retry and conflicting explicit policy fails
 closed.
 
-On-demand Docker is the built-in Codex default; static Compose is an explicit
-advanced policy. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when configured, supplies
+`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when configured, supplies
 host-substrate settings after on-demand policy selection and cannot override a
 product-owned selection or durable binding. Workflow requests cannot provide
 host IDs, Docker volume names, credential bodies, or absolute bind sources.
 
-### 5.4 Image authority
+### 5.3 Image authority
 
 Stock repository/tag values, including `latest`, are convenient bootstrap
 inputs. MoonMind acquires and resolves them at the service boundary, then
@@ -208,7 +200,7 @@ For one logical idempotency key, the coordinator follows this order:
 4. Resolve the profile-bound host binding.
 5. Create or reattach the deterministic host lease.
 6. Persist bridge authorization with profile, provider lease, credential generation, binding, and host-lease refs.
-7. Prepare the static or on-demand host.
+7. Launch the on-demand host.
 8. Validate the credential mount and Codex login in the exact host environment.
 9. Resolve exactly one online host advertising `codex-native`.
 10. Persist the exact host id and readiness evidence.
@@ -222,7 +214,7 @@ For one logical idempotency key, the coordinator follows this order:
     idempotency boundary.
 13. Stream and normalize events, then harvest terminal resources and artifacts.
 14. Interrupt or stop the session as required.
-15. Drain the static host or remove the on-demand host and lease-owned state.
+15. Remove the on-demand host and lease-owned state.
 16. Persist terminal host state and release the host lease.
 17. Release the Provider Profile lease last.
 
@@ -276,7 +268,7 @@ When the daemon shares the worker filesystem (`WORKFLOW_DOCKER_DAEMON_MODE=local
 | Temporary storage | `/tmp` | Bounded, removable, and non-authoritative |
 | Optional caches | Policy-selected | Explicit owner, scope, retention, and invalidation |
 
-The supported host user is UID/GID `1000:1000` with `HOME=/home/app`. On-demand hosts use a read-only root filesystem and bounded temporary storage. Static and on-demand modes must preserve the same safe target paths and credential separation.
+The supported host user is UID/GID `1000:1000` with `HOME=/home/app`. On-demand hosts use a read-only root filesystem and bounded temporary storage.
 
 ### 8.3 Network policy
 
@@ -296,11 +288,9 @@ Runs without that requirement receive neither the file nor its selector. Raw
 capability values must not be written to shell profiles, Docker arguments,
 durable artifacts, or diagnostics.
 
-The baseline file handoff requires a run-dedicated on-demand host. If an
-advanced static-host selection requests `execution.fanout`, preflight blocks
-before workspace or host mutation and directs the operator to the canonical
-on-demand profile; MoonMind does not place a run-scoped bearer into shared host
-state or silently broaden the selected policy.
+The baseline file handoff requires a run-dedicated on-demand host; MoonMind
+does not place a run-scoped bearer into shared host state or silently broaden
+the selected policy.
 
 ---
 
@@ -356,7 +346,7 @@ The bridge preserves:
 - changed files, workspace files, optional diffs, session files, and child-session evidence;
 - terminal and checkpoint external-state refs.
 
-The Workflow Detail projection uses these records rather than relying on host-local logs or an Omnigent-only dashboard. Replay remains useful after a static host restart or an on-demand host removal.
+The Workflow Detail projection uses these records rather than relying on host-local logs or an Omnigent-only dashboard. Replay remains useful after an on-demand host removal.
 
 The SSE client accepts the stock producer's bounded tool-output mirror: 1 MiB
 of UTF-8 plus its truncation notice. The wire-line ceiling accounts for JSON's
@@ -392,7 +382,6 @@ Cancellation is typed and evidence-producing. Depending on runtime state, MoonMi
 Cleanup is idempotent across activity retry and worker failure:
 
 - on-demand cleanup stops and removes the deterministic container and its lease-owned Omnigent state volume;
-- static cleanup stops or drains the dedicated Codex host according to policy;
 - container absence is cleanup evidence only after the lease crosses the
   materialization boundary into `ready` or `assigned`; an `allocating` or
   `starting` lease is cleanup-eligible only when it is expired, stale, or named
@@ -485,15 +474,15 @@ Profile-bound Omnigent hosts should reuse those primitives where their contracts
 - Durable payloads contain safe refs, not credential contents or daemon authority.
 - Workspace and mount sources are resolved at trusted boundaries and containment-checked.
 - On-demand containers are deterministic, labeled, non-root, read-only at the root filesystem, and limited by the effective runtime policy.
-- Policy realization fails closed; MoonMind never silently selects a broader network, writable mount, alternate credential, or static host.
+- Policy realization fails closed; MoonMind never silently selects a broader network, writable mount, alternate credential, or another host.
 - Artifact and lifecycle evidence is redacted before publication.
 
 ---
 
 ## 15. Conformance and acceptance
 
-The design is satisfied when a workflow can select a Codex Omnigent agent and Provider Profile without a pre-provisioned host or manual host id; MoonMind chooses a policy-authorized static or on-demand mode, acquires all required capacity, resolves a canonical workspace, materializes exactly one stock compatible host, proves credential and `codex-native` readiness, runs and harvests one session, projects durable evidence into Workflow Detail, cleans only owned resources, and releases the Provider Profile lease last.
+The design is satisfied when a workflow can select a Codex Omnigent agent and Provider Profile without a pre-provisioned host or manual host id; MoonMind applies the policy-authorized on-demand mode, acquires all required capacity, resolves a canonical workspace, materializes exactly one stock compatible host, proves credential and `codex-native` readiness, runs and harvests one session, projects durable evidence into Workflow Detail, cleans only owned resources, and releases the Provider Profile lease last.
 
-The same request, binding, bridge, readiness, artifact, checkpoint, and cleanup contracts apply to both launch modes. Direct Codex remains a compatibility producer until the Omnigent path passes the required deterministic and credentialed live conformance gates.
+Direct Codex remains a compatibility producer until the Omnigent path passes the required deterministic and credentialed live conformance gates.
 
 Credentialed conformance uses `tools/run_omnigent_live_conformance.py` with digest-pinned server and host references and an operator-provisioned live action adapter. Evidence references are durable, schema-versioned, scenario-bound, secret-scanned, and independently resolved; a bare success boolean or repository semantic test backend is not accepted as proof of live behavior. The isolated live Compose project cleans its own containers and networks without removing enrolled OAuth or unrelated volumes.

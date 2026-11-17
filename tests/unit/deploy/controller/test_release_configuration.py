@@ -46,9 +46,21 @@ class ReleaseRunner:
                 "minio": {"image": "retained-store", "volumes": ["minio-data:/data"]},
             }
         }
+        # Existing project containers as (project, service, name, running).
+        self.containers = []
 
     def run(self, args, timeout_seconds):
         self.commands.append(tuple(args))
+        if args[:2] == ("docker", "ps"):
+            # Docker lists only running containers unless asked for --all.
+            filters = [args[i + 1] for i, arg in enumerate(args) if arg == "--filter"]
+            rows = [
+                json.dumps({"service": service, "name": name})
+                for project, service, name, running in self.containers
+                if (running or "--all" in args)
+                and f"label=com.docker.compose.project={project}" in filters
+            ]
+            return {"exit": 0, "stdout": "\n".join(rows)}
         if args[:2] == ("docker", "pull"):
             return {"exit": 0, "stdout": "pulled"}
         if args[:3] == ("docker", "image", "inspect"):
@@ -113,11 +125,14 @@ def test_retry_reuses_resolved_release_after_tag_and_checkout_advance(
         store, op, runner=ReleaseRunner(), overlay="image.env"
     )
 
-    class NoCommands:
-        def run(self, *args, **kwargs):
-            pytest.fail(
-                "An admitted release must survive a retry without reselecting latest"
-            )
+    class NoCommands(ReleaseRunner):
+        def run(self, args, *rest, **kwargs):
+            # Only the retired-host gate's read-only container listing runs.
+            if tuple(args[:2]) != ("docker", "ps"):
+                pytest.fail(
+                    "An admitted release must survive a retry without reselecting latest"
+                )
+            return super().run(args, *rest, **kwargs)
 
     assert (
         server.prepare_release_configuration(
@@ -191,6 +206,191 @@ def test_explicit_custom_base_keeps_its_authority(controller_path, tmp_path):
         == op
     )
     assert runner.commands == []
+
+
+def refused_release(server, store, op, runner):
+    with pytest.raises(server.engine.StageError, match="release-configuration") as info:
+        server.prepare_release_configuration(
+            store, op, runner=runner, overlay="image.env"
+        )
+    # Refusal precedes any container change and leaves the update retryable.
+    assert not any(
+        word in args for args in runner.commands for word in ("up", "stop", "rm")
+    )
+    assert "releaseConfiguration" not in store.load(op["operationId"])
+    return info.value.output
+
+
+def assert_static_host_migration_guidance(message):
+    assert "Static-connected Omnigent hosts were removed" in message
+    assert "Codex and Claude Code OAuth run on on-demand hosts" in message
+    assert "Let active static-connected runs finish (or cancel them)" in message
+    assert "retry the update" in message
+    assert "codex_auth_volume" in message and "claude_auth_volume" in message
+    assert "nothing is deleted" in message
+
+
+def test_retired_profile_in_deployment_env_is_refused_with_migration_guidance(
+    controller_path, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    env_file = Path(op["target"]["envFile"])
+    env_file.write_text("COMPOSE_PROFILES=temporal-ui, omnigent-host-codex\n")
+    message = refused_release(server, store, op, ReleaseRunner())
+    assert (
+        f"COMPOSE_PROFILES in {env_file} enables retired profile "
+        "omnigent-host-codex" in message
+    )
+    assert f"remove omnigent-host-codex from COMPOSE_PROFILES in {env_file}" in message
+    assert "temporal-ui" not in message
+    assert_static_host_migration_guidance(message)
+
+
+def test_last_deployment_env_file_owns_compose_profiles(
+    controller_path, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    repo = Path(op["target"]["projectDir"])
+    Path(op["target"]["envFile"]).write_text("COMPOSE_PROFILES=\n")
+    release_env = repo / "deploy" / "state" / ".env.deploy"
+    release_env.parent.mkdir(parents=True)
+    release_env.write_text("COMPOSE_PROFILES=omnigent-host-claude,omnigent-host\n")
+    message = refused_release(server, store, op, ReleaseRunner())
+    assert (
+        "remove omnigent-host-claude, omnigent-host from COMPOSE_PROFILES "
+        f"in {release_env}" in message
+    )
+
+
+def test_controller_environment_profiles_take_compose_precedence(
+    controller_path, tmp_path, monkeypatch
+):
+    server, store, op = installation(controller_path, tmp_path)
+    Path(op["target"]["envFile"]).write_text("COMPOSE_PROFILES=omnigent-host-codex\n")
+    monkeypatch.setenv("COMPOSE_PROFILES", "")
+    server.prepare_release_configuration(
+        store, op, runner=ReleaseRunner(), overlay="image.env"
+    )
+
+    (tmp_path / "process").mkdir()
+    server, store, op = installation(controller_path, tmp_path / "process")
+    monkeypatch.setenv("COMPOSE_PROFILES", "omnigent-host-claude")
+    message = refused_release(server, store, op, ReleaseRunner())
+    assert (
+        "remove omnigent-host-claude from COMPOSE_PROFILES in the controller "
+        "environment" in message
+    )
+    assert_static_host_migration_guidance(message)
+
+
+@pytest.mark.parametrize(
+    "profiles", ["", "temporal-ui", " temporal-tools , site-extra ,"]
+)
+def test_default_and_unretired_profiles_are_admitted(
+    controller_path, tmp_path, monkeypatch, profiles
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    Path(op["target"]["envFile"]).write_text(f"COMPOSE_PROFILES={profiles}\n")
+    runner = ReleaseRunner()
+    prepared = server.prepare_release_configuration(
+        store, op, runner=runner, overlay="image.env"
+    )
+    assert prepared["target"]["services"] == ["api", "minio"]
+
+
+def test_release_still_providing_a_profile_keeps_it(
+    controller_path, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    Path(op["target"]["envFile"]).write_text("COMPOSE_PROFILES=omnigent-host-codex\n")
+    runner = ReleaseRunner()
+    runner.compose["services"]["omnigent-host-codex"] = {
+        "image": "host",
+        "profiles": ["omnigent-host-codex"],
+    }
+    runner.compose["services"]["omnigent-host-codex-init"] = {
+        "image": "host",
+        "profiles": ["omnigent-host-codex"],
+    }
+    runner.containers.append(
+        ("moonmind-test", "omnigent-host-codex", "moonmind-test-codex-1", True)
+    )
+    server.prepare_release_configuration(store, op, runner=runner, overlay="image.env")
+
+
+def test_running_retired_service_is_refused_until_drained(
+    controller_path, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    runner = ReleaseRunner()
+    runner.containers.append(
+        ("moonmind-test", "omnigent-host-claude", "moonmind-test-claude-1", True)
+    )
+    message = refused_release(server, store, op, runner)
+    assert (
+        "Retired service omnigent-host-claude is still running "
+        "(container moonmind-test-claude-1)" in message
+    )
+    assert "stop moonmind-test-claude-1 (docker stop moonmind-test-claude-1)" in message
+    assert "COMPOSE_PROFILES" not in message
+    assert_static_host_migration_guidance(message)
+
+
+def test_bound_configuration_from_an_earlier_controller_is_still_gated(
+    controller_path, tmp_path, monkeypatch
+):
+    # A controller predating the gate can bind the release configuration and
+    # hand off; the release's controller checks again before any apply.
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    server.prepare_release_configuration(
+        store, op, runner=ReleaseRunner(), overlay="image.env"
+    )
+    bound = store.load(op["operationId"])
+    Path(bound["target"]["envFile"]).write_text("COMPOSE_PROFILES=omnigent-host-codex\n")
+    runner = ReleaseRunner()
+    runner.containers.append(
+        ("moonmind-test", "omnigent-host-codex", "moonmind-test-codex-1", True)
+    )
+
+    with pytest.raises(server.engine.StageError, match="release-configuration") as info:
+        server.prepare_release_configuration(
+            store, bound, runner=runner, overlay="image.env"
+        )
+
+    message = info.value.output
+    assert "enables retired profile omnigent-host-codex" in message
+    assert "moonmind-test-codex-1" in message
+    assert_static_host_migration_guidance(message)
+    assert not any(
+        word in args for args in runner.commands for word in ("up", "stop", "rm")
+    )
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        ("moonmind-test", "omnigent-host-codex", "moonmind-test-codex-1", False),
+        ("moonmind-test", "omnigent-host-codex-init", "moonmind-test-init-1", False),
+        ("other-project", "omnigent-host-codex", "other-project-codex-1", True),
+    ],
+)
+def test_stopped_or_foreign_retired_containers_do_not_block(
+    controller_path, tmp_path, monkeypatch, container
+):
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    server, store, op = installation(controller_path, tmp_path)
+    runner = ReleaseRunner()
+    runner.containers.append(container)
+    prepared = server.prepare_release_configuration(
+        store, op, runner=runner, overlay="image.env"
+    )
+    assert prepared["target"]["services"] == ["api", "minio"]
 
 
 @pytest.mark.parametrize("storage_failure", [False, True])

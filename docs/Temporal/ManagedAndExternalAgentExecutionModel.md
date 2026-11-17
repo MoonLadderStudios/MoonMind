@@ -296,7 +296,7 @@ MoonMind.AgentRun
   -> Provider Profile lease (acquired in the workflow, before the Activity)
   -> the plan's recorded realizer Activity
       -> durable Omnigent host binding and host lease
-      -> static Compose or on-demand host
+      -> on-demand host
       -> exact stock host registration and harness readiness
       -> bridge-authorized Omnigent session and first turn
       -> bounded event batches plus periodic authoritative snapshots
@@ -334,7 +334,6 @@ can be replayed or exactly rerun and no stored Omnigent schedule lacks a plan.
 The top-level identity describes the session and interaction provider, not only who issued `docker run`. Keeping `external/omnigent`:
 
 - preserves one bridge, checkpoint, policy, metric, and UI identity;
-- avoids aliases for static versus on-demand hosts;
 - keeps the stock Omnigent session/resource protocol visible at the adapter boundary;
 - lets host materialization evolve without changing workflow identity;
 - distinguishes the Omnigent lane from direct Codex managed sessions.
@@ -354,7 +353,7 @@ each side effect to a short, idempotent activity. It:
 4. resolves the profile-bound host binding;
 5. creates or reattaches the deterministic host lease;
 6. persists profile authorization before host/session side effects become ambiguous;
-7. prepares the static or on-demand host;
+7. launches the on-demand host;
 8. validates the exact credential generation and mount;
 9. verifies Codex login state inside the exact host environment;
 10. resolves exactly one online host advertising `codex-native`;
@@ -393,12 +392,11 @@ janitor is recorded; Provider Profile capacity is not released early.
 ### 7.4 Launch modes
 
 Host mode comes from the versioned launch policy compiled from the selected
-execution configuration:
-
-- **deterministic on-demand Docker**, the default policy, uses one lease-owned, run-dedicated stock host container, adding no idle host and realizable from the trusted worker;
-- **static Compose bootstrap** uses canonical `docker-compose.yaml` and its Omnigent host profile, an explicit advanced choice for deployments that need a long-lived host lifecycle.
-
-Both share the binding, profile lease, host lease, exact registration, readiness, bridge, artifact, checkpoint, and cleanup contracts, and neither requires manual `hostId` editing. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when present, is only
+execution configuration. Its only admitted mode, deterministic on-demand Docker,
+uses one lease-owned, run-dedicated stock host container, adds no idle host, is
+realizable from the trusted worker, and requires no manual `hostId` editing.
+Stored static Compose plans stay readable but fail closed instead of running.
+`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when present, is only
 host-substrate configuration after on-demand policy selection; it does not opt
 the runtime in or choose the product policy.
 
@@ -627,7 +625,7 @@ The Codex host filesystem separates:
 | State | Target | Rule |
 | --- | --- | --- |
 | Codex OAuth home | `/home/app/.codex` | Exclusive profile-bound read/write mount, generation-checked |
-| Omnigent state | `/home/app/.omnigent` | Separate static-host or lease-owned state |
+| Omnigent state | `/home/app/.omnigent` | Separate lease-owned state |
 | Workflow workspace | `/workspaces/run` for on-demand | Resolved from canonical workspace authority |
 | Resolved Skills | `/opt/moonmind-skills` | Immutable and read-only |
 | Versioned tools | `/opt/moonmind-tools` | Pinned and read-only |
@@ -647,7 +645,7 @@ Skill source resolution and precedence occur before `MoonMind.AgentRun`. The chi
 Delivery patterns include:
 
 - direct managed materialization into the runtime workspace or canonical Skill path;
-- read-only projection into static or on-demand Omnigent hosts;
+- read-only projection into on-demand Omnigent hosts;
 - compact bundles or provider-accessible artifacts for remote external systems.
 
 Adapters provide transport and capability boundaries. They do not duplicate the semantic logic already defined by a resolved Skill.
@@ -1008,4 +1006,4 @@ Deterministic CI and credentialed live evidence are separate gates. CI proves sc
 
 A Step can start one `MoonMind.AgentRun` using any supported lane and receive the same canonical status, result, artifact, cancellation, retry, and checkpoint semantics without provider-specific workflow logic.
 
-For Omnigent, a workflow selects `external/omnigent` with a Provider Profile; MoonMind compiles the execution plan and launch policy, acquires capacity, resolves a canonical workspace, materializes or validates exactly one compatible stock host, proves credential and harness readiness, authorizes one bridge session, posts the first message once, projects durable conversation and lifecycle evidence, harvests artifacts, cleans owned runtime state, and releases Provider Profile capacity last. Static and on-demand host modes are interchangeable at the workflow contract boundary while preserving explicit policy, readiness, evidence, and cleanup differences.
+For Omnigent, a workflow selects `external/omnigent` with a Provider Profile; MoonMind compiles the execution plan and launch policy, acquires capacity, resolves a canonical workspace, materializes or validates exactly one compatible stock host, proves credential and harness readiness, authorizes one bridge session, posts the first message once, projects durable conversation and lifecycle evidence, harvests artifacts, cleans owned runtime state, and releases Provider Profile capacity last.

@@ -84,11 +84,6 @@ These services start only when their Compose profile is selected (via
 | `temporal-ui` | `temporal-ui` | `8088:8080` (via `TEMPORAL_UI_HOST_PORT`) | Temporal web UI for operator inspection |
 | `temporal-admin-tools` | `temporal-tools` | none | Long-running admin-tools shell for operator troubleshooting |
 | `temporal-visibility-rehearsal` | `temporal-tools` | none | One-shot visibility-schema rehearsal |
-| `omnigent-host` | `omnigent-host` | none | Optional generic Omnigent host (never receives MoonMind OAuth homes; never a fallback for a failed profile-bound host) |
-| `omnigent-host-claude` | `omnigent-host-claude` | none | Dedicated static Claude OAuth host |
-| `omnigent-host-claude-init` | `omnigent-host-claude` | none | One-shot setup for the dedicated Claude host |
-| `omnigent-host-codex` | `omnigent-host-codex` | none | Dedicated static Codex OAuth host |
-| `omnigent-host-codex-init` | `omnigent-host-codex` | none | One-shot setup for the dedicated Codex host |
 
 ## Worker-created on-demand containers
 

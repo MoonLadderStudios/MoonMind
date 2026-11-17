@@ -88,9 +88,8 @@ re-evaluated.
 
 ## Bootstrap migration
 
-Startup seeds `omnigent-codex@1`, `codex-static@1`, and
-`codex-on-demand@1` as explicit Codex policies. When OpenCode support is
-enabled, startup also seeds `omnigent-on-demand@1` and
+Startup seeds `codex-on-demand@1` as the explicit Codex policy. When OpenCode
+support is enabled, startup also seeds `omnigent-on-demand@1` and
 `opencode-on-demand@1` with the qualified OpenCode harness, provider, and host
 image authority. The stock server tag is acquired and resolved during seeding;
 only repository digests are projected into immutable active versions. Codex,
@@ -107,10 +106,11 @@ family fails closed), and admitted attempts keep the images they recorded.
 Bootstrap therefore cuts a successor only for a resource-default migration or
 an installed image of another family; a same-family digest move leaves the
 recorded version, its Agent Profiles, OAuth bindings and schedules unchanged.
-`codex-on-demand@1` is the normal Codex default and static hosting remains an
-explicit advanced choice. Normal work uses persisted selections; a planner or
-runtime may not synthesize one policy from another, and durable/environment
-conflicts fail closed. Bootstrap Agent Profiles and unbound replay paths resolve
+`codex-on-demand@1` is the normal Codex default. Static-connected host modes are
+refused for new policies and plans; stored static policy versions stay readable
+history. Normal work uses persisted selections; a planner or runtime may not
+synthesize one policy from another, and durable/environment conflicts fail
+closed. Bootstrap Agent Profiles and unbound replay paths resolve
 the policy identity's current persisted default, then carry that exact version;
 already-bound runs continue using their recorded version.
 Transient acquisition failures are retried by the API's capped reconciliation

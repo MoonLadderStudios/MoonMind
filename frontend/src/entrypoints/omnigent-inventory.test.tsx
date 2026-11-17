@@ -250,7 +250,7 @@ describe('OmnigentInventoryPage', () => {
       const url = String(input);
       if (url.endsWith('/versions/2/usage')) return {
         ok: true, json: async () => ({
-          policyRef: 'codex-static@2', default: true,
+          policyRef: 'codex-on-demand@2', default: true,
           dependents: {
             hostBindings: ['oauth-host-codex'], hostBindingCount: 1,
             providerProfiles: ['codex-profile'], providerProfileCount: 1,
@@ -264,10 +264,10 @@ describe('OmnigentInventoryPage', () => {
       } as Response;
       if (url.endsWith('/versions')) return {
         ok: true, json: async () => ({ items: [
-          { policyId: 'codex-static', version: 2, ref: 'codex-static@2', state: 'active', digest: 'sha256:2',
-            validation: { valid: true }, document: { host: { mode: 'static_compose' } } },
-          { policyId: 'codex-static', version: 1, ref: 'codex-static@1', state: 'superseded', digest: 'sha256:1',
-            validation: { valid: true }, document: { host: { mode: 'static_compose' } } },
+          { policyId: 'codex-on-demand', version: 2, ref: 'codex-on-demand@2', state: 'active', digest: 'sha256:2',
+            validation: { valid: true }, document: { host: { mode: 'on_demand_docker' } } },
+          { policyId: 'codex-on-demand', version: 1, ref: 'codex-on-demand@1', state: 'superseded', digest: 'sha256:1',
+            validation: { valid: true }, document: { host: { mode: 'on_demand_docker' } } },
         ] }),
       } as Response;
       if (url.endsWith('/audit')) return {
@@ -278,9 +278,9 @@ describe('OmnigentInventoryPage', () => {
       return {
         ok: true,
         json: async () => ({ items: [{
-          id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2,
+          id: 'codex-on-demand', name: 'Codex on-demand', status: 'active', defaultVersion: 2,
           summary: 'Immutable policy authority', version: {
-            validation: { valid: true }, document: { host: { mode: 'static_compose' } },
+            validation: { valid: true }, document: { host: { mode: 'on_demand_docker' } },
           },
         }] }),
       } as Response;
@@ -289,27 +289,27 @@ describe('OmnigentInventoryPage', () => {
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
       initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/policies' } },
     });
-    expect((await screen.findAllByText('Static Codex')).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText('Codex on-demand')).length).toBeGreaterThanOrEqual(1);
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]!);
     expect(screen.getByRole('region', { name: 'Immutable policy version' })).toBeTruthy();
     expect(screen.getByText('Validation: Valid')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Activate / rollback' }).length).toBeGreaterThanOrEqual(1);
-    expect(await screen.findByRole('button', { name: 'codex-static@1 · superseded' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'codex-on-demand@1 · superseded' })).toBeTruthy();
     expect(await screen.findByText(/default_changed/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate against deployment' })).toBeTruthy();
     expect(await screen.findByText('Dependent host profiles: 1')).toBeTruthy();
     expect(screen.getByText('oauth-host-codex')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Disable codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
-    const reasonId = screen.getByRole('button', { name: 'Disable codex-static@2' }).getAttribute('aria-describedby');
+    expect((screen.getByRole('button', { name: 'Disable codex-on-demand@2' }) as HTMLButtonElement).disabled).toBe(true);
+    const reasonId = screen.getByRole('button', { name: 'Disable codex-on-demand@2' }).getAttribute('aria-describedby');
     expect(reasonId).toBeTruthy();
     expect(document.getElementById(reasonId!)?.textContent).toContain('Switch the policy default before disabling');
-    expect((screen.getByRole('button', { name: 'Deprecate codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Deprecate codex-on-demand@2' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('keeps a historical retrieval section readable but out of new policy versions', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     const historical = {
-      host: { mode: 'static_compose' },
+      host: { mode: 'on_demand_docker' },
       rag: { collectionRefs: ['workflow-default'], credentialRef: 'retrieval-profile' },
     };
     const posted: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -323,14 +323,14 @@ describe('OmnigentInventoryPage', () => {
       if (url.endsWith('/audit')) return { ok: true, json: async () => ({ items: [] }) } as Response;
       if (url.endsWith('/versions')) return {
         ok: true, json: async () => ({ items: [
-          { policyId: 'codex-static', version: 1, ref: 'codex-static@1', state: 'active', digest: 'sha256:1',
+          { policyId: 'codex-on-demand', version: 1, ref: 'codex-on-demand@1', state: 'active', digest: 'sha256:1',
             validation: { valid: true }, document: historical },
         ] }),
       } as Response;
       return {
         ok: true,
         json: async () => ({ items: [{
-          id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 1,
+          id: 'codex-on-demand', name: 'Codex on-demand', status: 'active', defaultVersion: 1,
           summary: 'Immutable policy authority', version: { validation: { valid: true }, document: historical },
         }] }),
       } as Response;
@@ -347,13 +347,13 @@ describe('OmnigentInventoryPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit as new version' }));
     const editor = screen.getByLabelText('Complete policy document (JSON)') as HTMLTextAreaElement;
-    expect(JSON.parse(editor.value)).toEqual({ host: { mode: 'static_compose' } });
+    expect(JSON.parse(editor.value)).toEqual({ host: { mode: 'on_demand_docker' } });
     expect(screen.queryByText(/context retrieval/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save draft' }));
     await waitFor(() => expect(posted.length).toBe(1));
-    expect(posted[0]!.url).toBe('/api/omnigent/policies/codex-static/versions');
-    expect(posted[0]!.body.document).toEqual({ host: { mode: 'static_compose' } });
+    expect(posted[0]!.url).toBe('/api/omnigent/policies/codex-on-demand/versions');
+    expect(posted[0]!.body.document).toEqual({ host: { mode: 'on_demand_docker' } });
   });
   it('keeps the filter field mounted and focused inside the dashboard shell (MoonMind#4559)', async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {

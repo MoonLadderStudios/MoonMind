@@ -72,6 +72,20 @@ from moonmind.workflows.executions.model_resolver import (
     resolve_model_effort,
 )
 
+# Static-connected Compose hosts were removed. Stored policies and recorded
+# launches may still name these modes; they fail closed rather than run on a
+# host the plan did not admit.
+RETIRED_STATIC_HOST_MODES = frozenset({"static-connected", "static_compose"})
+
+
+def reject_retired_static_host_mode(host_mode: object) -> None:
+    if host_mode in RETIRED_STATIC_HOST_MODES:
+        raise HarnessPlatformError(
+            f"static-connected host mode {host_mode!r} was removed; select the "
+            "on-demand launch policy for this profile and start a new attempt",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        )
+
 
 def _digest(value: Any) -> str:
     encoded = json.dumps(
@@ -457,6 +471,7 @@ class OmnigentExecutionPlanningService:
                 effective_launch,
                 expected_ref=policy_ref,
             )
+            reject_retired_static_host_mode(policy.hostMode)
             host_architecture = str(
                 request.parameters.get("architecture") or "linux/amd64"
             )
@@ -519,15 +534,6 @@ class OmnigentExecutionPlanningService:
                     code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
                 )
             effective_launch = reconciled
-            from moonmind.omnigent.harness_platform.static_hosts import (
-                bind_static_host_selection,
-            )
-            from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-
-            effective_launch = await bind_static_host_selection(
-                repository=OmnigentOAuthHostRepository(self._session_factory),
-                effective_launch=effective_launch,
-            )
             (
                 policy_artifact_ref,
                 policy_artifact_digest,
@@ -1099,6 +1105,7 @@ class OmnigentPlannedHostResolver:
             )
         else:
             policy = get_launch_policy(plan.payload.launchPolicyRef)
+        reject_retired_static_host_mode(policy.hostMode)
         host_class = self._selector.select(
             harness=harness,
             omnigent_version=catalog.snapshot.omnigentVersion,
@@ -1171,27 +1178,6 @@ class OmnigentPlannedHostResolver:
                 "effective launch architecture conflicts with the execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
-        static_runtime = {}
-        if launch.get("hostMode") in {"static-connected", "static_compose"}:
-            from moonmind.omnigent.harness_platform.static_hosts import (
-                validate_static_host_selection,
-            )
-
-            selection = validate_static_host_selection(
-                launch.get("staticHostSelection"), effective_launch=launch
-            )
-            if (
-                selection["harness"] != plan.payload.harnessId
-                or selection["endpointRef"] != plan.payload.endpointRef
-            ):
-                raise HarnessPlatformError(
-                    "static host selection conflicts with the execution plan",
-                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-                )
-            static_runtime = {
-                "staticHostSelection": selection,
-                "effectiveLaunchSnapshot": dict(launch),
-            }
         exact_host = HostClass.model_validate(
             {
                 **host_class.model_dump(mode="json", by_alias=True),
@@ -1202,7 +1188,6 @@ class OmnigentPlannedHostResolver:
                     **host_class.runtime,
                     "uid": int(launch.get("runtimeUid") or 1000),
                     "gid": int(launch.get("runtimeGid") or 1000),
-                    **static_runtime,
                 },
                 "features": {
                     **host_class.features,
@@ -1220,4 +1205,6 @@ __all__ = [
     "OmnigentExecutionPlanningService",
     "OmnigentPlannedHostResolver",
     "PlanningSkillResolver",
+    "RETIRED_STATIC_HOST_MODES",
+    "reject_retired_static_host_mode",
 ]

@@ -164,6 +164,35 @@ _REPOSITORY_PUBLICATION_CONTINUATION_DIGEST = compute_digest(
 logger = logging.getLogger(__name__)
 
 
+# Policies that only ever selected the removed static-connected hosts.
+_RETIRED_STATIC_POLICY_IDS = frozenset(
+    {"codex-static", "claude-static", "opencode-static", "omnigent-codex"}
+)
+
+
+def on_demand_binding_policy_ref(binding: Any) -> str | None:
+    """Return a binding's launch policy only when it selects an on-demand host.
+
+    Static-connected hosts were removed, so a binding retained from them has no
+    policy that can still launch and falls back to its provider's on-demand
+    default. An unmarked binding keeps its policy when its stored launch proves
+    on-demand mode, or when no launch is stored (bootstrap cutover clears it)
+    and the policy is not a retired static one.
+    """
+
+    policy_ref = str(binding.launch_policy_ref or "")
+    if not policy_ref:
+        return None
+    if binding.host_launch_profile_ref:
+        return policy_ref
+    host_mode = (binding.effective_launch_snapshot or {}).get("hostMode")
+    if host_mode is not None:
+        return policy_ref if host_mode == "on_demand_docker" else None
+    if policy_ref.rpartition("@")[0] in _RETIRED_STATIC_POLICY_IDS:
+        return None
+    return policy_ref
+
+
 class OmnigentProfileBoundExecutionCoordinator:
     """Own the profile lease through host/session harvesting and cleanup."""
 
@@ -1036,13 +1065,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 selected_profile_ref = str(
                     binding.execution_profile_ref or f"omnigent-{provider_slug}@1"
                 )
-                selected_policy_ref = str(
-                    binding.launch_policy_ref
-                    or (
-                        f"{provider_slug}-on-demand@1"
-                        if binding.host_launch_profile_ref
-                        else f"{provider_slug}-static@1"
-                    )
+                # A binding retained from static-connected hosts selects the
+                # provider's on-demand default and is repaired below once idle.
+                selected_policy_ref = (
+                    on_demand_binding_policy_ref(binding)
+                    or f"{provider_slug}-on-demand@1"
                 )
                 if requested_target and (
                     selected_profile_ref != requested_target
@@ -1114,6 +1141,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
             )
+            if effective_launch["hostMode"] != "on_demand_docker":
+                # Stored static policy versions stay readable but never launch,
+                # nor become a binding's on-demand marker.
+                raise OmnigentOAuthHostError(
+                    "static-connected hosts were removed; select the on-demand "
+                    "launch policy for this profile",
+                    code="OMNIGENT_STATIC_HOST_RETIRED",
+                )
             if (
                 self._repository_mutation_required(request)
                 and not effective_launch["repositoryMutation"]
@@ -1342,46 +1377,26 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
                 runtime_binding_ref = runtime_binding.runtimeBindingRef
             current_stage = "host_binding_resolution"
-            selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
+            # A binding without its on-demand marker predates on-demand hosts:
+            # a retained static-connected binding, or an older omitted-target
+            # launch. It moves to the selected on-demand launch (clearing any
+            # static host id) only while idle, under the same lock as host
+            # lease admission; a busy binding is left untouched until then.
             repair_missing_launch_ref = bool(
-                selected_on_demand
-                and binding is not None
-                and not binding.host_launch_profile_ref
-                and (
-                    not binding.static_host_id
-                    or (
-                        (binding.effective_launch_snapshot or {}).get("hostMode")
-                        == "on_demand_docker"
-                        and binding.launch_policy_ref
-                        == effective_launch["launchPolicyRef"]
-                    )
-                )
+                binding is not None and not binding.host_launch_profile_ref
             )
             binding = await self._wait_for_profile_idle(
                 operation=lambda: self._hosts.create_or_update_static_binding(
                     profile_id=profile_id,
                     endpoint_ref=str(effective_launch["endpointRef"]),
-                    static_host_id=(
-                        binding.static_host_id
-                        if binding is not None and not repair_missing_launch_ref
-                        else None
-                    ),
                     host_launch_profile_ref=(
                         binding.host_launch_profile_ref
                         if binding is not None and not repair_missing_launch_ref
-                        else (
-                            str(effective_launch["launchPolicyRef"])
-                            if selected_on_demand
-                            else None
-                        )
+                        else str(effective_launch["launchPolicyRef"])
                     ),
                     execution_profile_ref=str(effective_launch["executionProfileRef"]),
                     launch_policy_ref=str(effective_launch["launchPolicyRef"]),
                     effective_launch_snapshot=effective_launch,
-                    # Older omitted-target launches could persist an on-demand
-                    # snapshot without its mode marker, even after discovering a
-                    # static host. Repair only an idle binding whose stored launch
-                    # proves that mode, under the same lock as host lease admission.
                     require_idle=repair_missing_launch_ref,
                     expected_binding=binding if repair_missing_launch_ref else None,
                 ),
@@ -1434,7 +1449,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 credential_generation=host_lease.credential_generation,
                 host_binding_ref=binding.binding_ref,
                 host_lease_ref=host_lease.lease_id,
-                omnigent_host_id=binding.static_host_id,
+                omnigent_host_id=None,
                 effective_launch_snapshot=effective_launch,
             )
             authority_bridge_session_id = str(
@@ -1635,12 +1650,6 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             await emit("bridge_authentication", "started")
             await emit("bridge_authentication", "completed")
-            if binding.static_host_id is None and not binding.host_launch_profile_ref:
-                binding = await self._hosts.create_or_update_static_binding(
-                    profile_id=profile_id,
-                    endpoint_ref=binding.endpoint_ref,
-                    static_host_id=host_id,
-                )
             if host_lease.status == "starting":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -2685,11 +2694,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
                 else:
                     try:
-                        cleanup_mode = (
-                            "on_demand_remove"
-                            if binding.host_launch_profile_ref
-                            else "static_drain"
-                        )
+                        cleanup_mode = "on_demand_remove"
                         authority_cleanup_mode = cleanup_mode
                         await emit(
                             "host_cleanup",
@@ -3474,4 +3479,4 @@ class OmnigentProfileBoundExecutionCoordinator:
         return authored_repository_mutation_required(request)
 
 
-__all__ = ["OmnigentProfileBoundExecutionCoordinator"]
+__all__ = ["OmnigentProfileBoundExecutionCoordinator", "on_demand_binding_policy_ref"]

@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from moonmind.omnigent.host_ports import OmnigentHostReclamationPorts
-from moonmind.omnigent.harness_platform.static_hosts import GENERIC_STATIC_LEASE_PURPOSE
 from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
 )
@@ -17,6 +16,7 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 from moonmind.omnigent.oauth_hosts import (
     CLEANUP_CLAIMABLE_HOST_STATES,
     HEARTBEAT_HOST_STATES,
+    RETIRED_STATIC_LEASE_PURPOSE,
     OmnigentOAuthHostRepository,
 )
 from moonmind.provider_profiles.lease_client import (
@@ -777,16 +777,13 @@ class OmnigentOAuthHostJanitor:
         observed_runtime_ids: set[str] = {
             str(runtime_id).strip() for runtime_id in (runtime_ids or []) if str(runtime_id).strip()
         }
-        if force and profile_id:
-            binding = await self._repository.get_binding_for_profile(profile_id)
-            if binding is not None and not binding.host_launch_profile_ref:
-                await self._runtime.stop_static_host(binding=binding)
-                actions.append(
-                    {
-                        "hostBindingRef": binding.binding_ref,
-                        "action": "static_host_stopped",
-                    }
-                )
+        # Static-connected hosts were removed. Settle their open lease records
+        # first so they stop holding a Provider Profile; no container remains.
+        if hasattr(self._repository, "retire_static_host_leases"):
+            actions.extend(
+                {"leaseId": lease_id, "action": "retired_static_lease_settled"}
+                for lease_id in await self._repository.retire_static_host_leases()
+            )
         leases = await self._repository.list_active_host_leases(failures=actions)
         terminal_provider_leases = (
             await self._repository.list_terminal_host_leases_with_active_provider_capacity(
@@ -817,7 +814,9 @@ class OmnigentOAuthHostJanitor:
                     *terminal_provider_leases,
                     *binding_cleanup_leases,
                 ]
-                if lease.lease_purpose != GENERIC_STATIC_LEASE_PURPOSE
+                # Rows left by removed static-connected hosts name no
+                # lease-owned container to reclaim.
+                if lease.lease_purpose != RETIRED_STATIC_LEASE_PURPOSE
             }.values()
         )
         cleanup_required = (

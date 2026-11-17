@@ -438,17 +438,16 @@ def _codex_coordinator(plan):
     return coordinator
 
 
-@pytest.mark.parametrize("policy", ["codex-on-demand@2", "codex-static@2"])
+@pytest.mark.parametrize("policy", ["codex-on-demand@2"])
 @pytest.mark.usefixtures("retained_codex_realizer")
 def test_codex_dispatch_accepts_an_admitted_policy_other_than_the_target_default(
     policy,
 ):
     """The target default is a selection fallback, not a conflict.
 
-    Bootstrap publishes ``codex-on-demand@2`` when the host image changes, and
-    ``codex-static`` is also bound to ``omnigent-codex@1``; the plan and request
-    both carry the admitted policy while the built-in target still names
-    ``codex-on-demand@1``.
+    Bootstrap publishes ``codex-on-demand@2`` when the host image changes; the
+    plan and request both carry the admitted policy while the built-in target
+    still names ``codex-on-demand@1``.
     """
     plan = compile_execution_plan(**_codex_plan_inputs(policy))
     request = _codex_dispatch_request(plan, target="omnigent-codex@1", policy=policy)

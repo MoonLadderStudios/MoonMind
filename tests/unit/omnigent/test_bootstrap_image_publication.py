@@ -1411,7 +1411,7 @@ def test_pending_host_remediation_matches_the_failure(
     "key", ["OMNIGENT_SHARED_HOST_IMAGE_REF", "OMNIGENT_HOST_IMAGE_REF"]
 )
 @pytest.mark.parametrize("available", [True, False])
-async def test_shared_image_resolution_honors_explicit_static_coordinate(
+async def test_shared_image_resolution_honors_explicit_coordinate(
     monkeypatch, key, available
 ):
     from unittest.mock import AsyncMock
@@ -1475,6 +1475,29 @@ async def test_image_cache_fallback_does_not_substitute_another_tag(monkeypatch)
         "IMAGE", "TAG", "REF", {"IMAGE": "registry.example/host", "TAG": "chosen"}
     )
     assert ref is None
+
+
+@pytest.mark.asyncio
+async def test_unresolved_shared_host_does_not_block_other_images(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    from moonmind.omnigent.bootstrap import store
+
+    state = _state(
+        serverImageRef=SERVER_REF, opencodeHostImageRef=None, sharedHostImageRef=None
+    )
+    monkeypatch.setattr(image_resolution, "operator_image_configuration", lambda: {})
+    monkeypatch.setattr(
+        image_resolution, "resolve_omnigent_images", AsyncMock(return_value=state)
+    )
+    save = Mock()
+    monkeypatch.setattr(store, "save_resolved_state", save)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "previous")
+    assert await image_resolution.publish_resolved_omnigent_images() is state
+    save.assert_called_once_with(state)
+    import os
+
+    assert os.environ["OMNIGENT_IMAGE_REF"] == SERVER_REF
 
 
 @pytest.mark.asyncio

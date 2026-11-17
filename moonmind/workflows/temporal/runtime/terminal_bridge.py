@@ -97,14 +97,14 @@ def _oauth_runner_user() -> str:
 
 
 def _oauth_runner_image() -> str:
-    from moonmind.omnigent.harness_platform.static_hosts import (
-        resolve_static_host_image_ref,
+    from moonmind.omnigent.harness_platform.shared_host_image import (
+        resolve_shared_host_image_ref,
     )
 
     override = os.environ.get("MOONMIND_OAUTH_RUNNER_IMAGE", "").strip()
     if override:
         return override
-    return resolve_static_host_image_ref()
+    return resolve_shared_host_image_ref()
 
 
 def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[str]:

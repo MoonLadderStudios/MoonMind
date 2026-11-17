@@ -66,7 +66,7 @@ This document covers:
 
 - adding small runtime CLI tools through the shared host image;
 - one standard image-owned tool layout;
-- static Docker Compose hosts and MoonMind-launched on-demand hosts;
+- MoonMind-launched on-demand hosts;
 - tool versioning at build time;
 - runtime `PATH` projection, including login shells;
 - required-capability readiness checks;
@@ -232,19 +232,9 @@ Both mechanisms are required. Omnigent native harnesses may execute through logi
 
 MoonMind must not mount a tool volume over all of `/usr/local/bin`, because that would hide executables already supplied by the host image.
 
-### 6.2 Illustrative Compose shape
+### 6.2 Launch shape
 
-The exact service names are deployment details, but the canonical shape carries no tools lifecycle:
-
-```yaml
-services:
-  omnigent-host-codex:
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-...}
-    environment:
-      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-```
-
-There is no `omnigent-tools-init` service, no `depends_on` edge to one, no `omnigent-tools` volume, and no `OMNIGENT_GH_VERSION` / `OMNIGENT_GH_IMAGE` / tools-volume settings. Stale values for those names in an existing `.env` are ignored: they neither change tool selection nor block launch. The deployment sets `OMNIGENT_HOST_BASE_PATH` from the selected image's default `PATH`; the fallback shown above preserves the conventional executable and system-administration directories. It must not replace a discovered upstream path with a smaller static list.
+The on-demand launcher sets `PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin`, which keeps the upstream image's conventional executable and system-administration directories, and carries no tools lifecycle. There is no `omnigent-tools-init` service, no `omnigent-tools` volume, and no `OMNIGENT_GH_VERSION` / `OMNIGENT_GH_IMAGE` / tools-volume settings. Stale values for those names in an existing `.env` are ignored: they neither change tool selection nor block launch.
 
 ---
 

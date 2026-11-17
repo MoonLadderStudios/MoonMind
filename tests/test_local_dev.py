@@ -326,14 +326,6 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert "::/0" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
 
-    codex_host = services["omnigent-host-codex"]
-    assert _network_names(codex_host) == {"omnigent-egress-network"}
-    assert codex_host["cap_drop"] == ["ALL"]
-    assert codex_host["security_opt"] == ["no-new-privileges:true"]
-    codex_env = _env_map(codex_host["environment"])
-    assert codex_env["HTTPS_PROXY"] == "http://omnigent-egress-proxy:3129"
-    assert codex_env["NO_PROXY"] == "localhost,127.0.0.1"
-
 
 def test_api_service_runs_with_container_init():
     """API service supervises subprocess-capable routes and should reap children."""

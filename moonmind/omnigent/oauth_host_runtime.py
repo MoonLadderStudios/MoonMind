@@ -1,4 +1,4 @@
-"""Static and on-demand runtime boundary for profile-bound OAuth hosts."""
+"""On-demand runtime boundary for profile-bound OAuth hosts."""
 
 from __future__ import annotations
 
@@ -11,12 +11,11 @@ import re
 import shutil
 import tarfile
 import tempfile
-import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.codex_login import CODEX_LOGIN_SESSION_PROBE
@@ -25,7 +24,6 @@ from moonmind.omnigent.git_identity import (
     ensure_workspace_git_identity,
     resolve_publication_git_identity,
 )
-from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_failures import (
     HOST_CREDENTIAL_RECOVERY_ERROR,
@@ -126,7 +124,6 @@ from moonmind.workflows.temporal.runtime.git_auth import build_isolated_git_envi
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
-    daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
@@ -294,13 +291,11 @@ _RUNTIME_ADAPTERS = {
         "harness": "codex-native",
         "provider": "openai",
         "home": "/home/app/.codex",
-        "compose_profile": "omnigent-host-codex",
-        "compose_service": "omnigent-host-codex",
-        "start_script": "/opt/moonmind/start-codex-oauth-host.sh",
+        "start_script": "/opt/moonmind/start-omnigent-host.sh",
         "generation_env": "CODEX_CREDENTIAL_GENERATION",
-        "volume_env": "CODEX_VOLUME_NAME",
         "login_command": ("codex", "login", "status"),
         "env": (
+            "MOONMIND_OMNIGENT_RUNTIME_PACK_REF=codex-native-pack@1",
             "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=codex-oauth-home@1",
             "CODEX_HOME=/home/app/.codex",
             "CODEX_CONFIG_HOME=/home/app/.codex",
@@ -312,13 +307,11 @@ _RUNTIME_ADAPTERS = {
         "harness": "claude-native",
         "provider": "anthropic",
         "home": "/home/app/.claude",
-        "compose_profile": "omnigent-host-claude",
-        "compose_service": "omnigent-host-claude",
-        "start_script": "/opt/moonmind/start-claude-oauth-host.sh",
+        "start_script": "/opt/moonmind/start-omnigent-host.sh",
         "generation_env": "CLAUDE_CREDENTIAL_GENERATION",
-        "volume_env": "CLAUDE_VOLUME_NAME",
         "login_command": ("claude", "auth", "status"),
         "env": (
+            "MOONMIND_OMNIGENT_RUNTIME_PACK_REF=claude-native-pack@1",
             "MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF=claude-oauth-home@1",
             "CLAUDE_HOME=/home/app/.claude",
             "CLAUDE_CONFIG_DIR=/home/app/.claude",
@@ -326,40 +319,6 @@ _RUNTIME_ADAPTERS = {
         ),
     },
 }
-
-# Static prelaunch platform codes to host preflight codes
-# (MoonLadderStudios/MoonMind#3936 R3/R4). Platform failures that already
-# name a host-domain outcome keep that outcome; the unqualified-image code
-# has no host-domain member, so the exact platform code is preserved.
-_STATIC_PRELAUNCH_HOST_CODES = {
-    "OMNIGENT_CREDENTIAL_GENERATION_FENCED": (
-        HostPreflightFailure.GENERATION_STALE.value
-    ),
-    "OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT": (
-        HostPreflightFailure.COMPETING_CREDENTIAL.value
-    ),
-    "OMNIGENT_RUNTIME_PACK_MISMATCH": (
-        HostPreflightFailure.BINDING_MISMATCH.value
-    ),
-    "OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE": (
-        HostPreflightFailure.BINDING_MISMATCH.value
-    ),
-    "OMNIGENT_EXECUTION_PLAN_CONFLICT": (
-        HostPreflightFailure.BINDING_MISMATCH.value
-    ),
-}
-
-# Static-enrollment outcomes that spend this admission attempt's budget. A
-# ``waiting-*`` observation keeps the original probe error (operator
-# enrollment pending, retryable as a new attempt); anything else raises the
-# distinct failed/unqualified outcome instead.
-_STATIC_ENROLLMENT_TERMINAL_STATUSES = frozenset(
-    {
-        static_hosts.STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT,
-        static_hosts.STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT,
-        static_hosts.STATIC_ENROLLMENT_UNQUALIFIED,
-    }
-)
 
 
 class OmnigentOAuthHostRuntime:
@@ -442,7 +401,7 @@ class OmnigentOAuthHostRuntime:
 
     @staticmethod
     def _deployment_compose_command() -> tuple[str, ...]:
-        from moonmind.omnigent.host_services.compose_static import (
+        from moonmind.omnigent.host_services.docker_backend import (
             deployment_compose_command,
         )
 
@@ -714,17 +673,9 @@ class OmnigentOAuthHostRuntime:
             )
         except ExecutionFanoutCapabilityError as exc:
             raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
-        if (
-            EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
-            and not binding.host_launch_profile_ref
-        ):
-            raise OmnigentOAuthHostError(
-                "execution fan-out requires a run-dedicated Omnigent host",
-                code="OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED",
-            )
         github_projection_reservation = None
         gh_required = "gh" in normalized_capabilities
-        if gh_required and binding.host_launch_profile_ref:
+        if gh_required:
             try:
                 if (
                     evidence_request is None
@@ -823,110 +774,72 @@ class OmnigentOAuthHostRuntime:
             runtime_uid=int(launch["runtimeUid"]),
             runtime_gid=int(launch["runtimeGid"]),
         )
-        launched_container_name: str | None = None
-        retained_host = False
-        static_compose_env: Mapping[str, str] | None = None
         # Routing isolation is not confinement: a projected gh credential is
         # readable by arbitrary agent code in the host, so report it as such
         # rather than as a confined grant (RepositoryAccessAndWorkspaceDesign
         # QUALITY-003, MoonLadderStudios/MoonMind#4011).
         github_credential_exposure = "not_projected"
-        if binding.host_launch_profile_ref:
-            container_job_environment = self._container_job_environment(
+        container_job_environment = self._container_job_environment(
+            binding=binding,
+            host_lease=host_lease,
+            workspace_locator=workspace_locator,
+            current_workflow_id=current_workflow_id,
+            current_step_execution_id=current_step_execution_id,
+            timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
+            required_capabilities=required_capabilities,
+            execution_fanout_authorization=execution_fanout_authorization,
+            repository_connection_ref=repository_connection_ref,
+            step_policy=(
+                evidence_request.step_execution.skill_source_policy
+                if evidence_request is not None
+                and evidence_request.step_execution is not None
+                else None
+            ),
+        )
+        runtime_scripts = self._prepare_runtime_scripts(
+            host_lease.lease_id,
+            current_step_execution_id=current_step_execution_id,
+            runtime_environment=container_job_environment,
+        )
+        host_runtime_environment = self._host_runtime_environment(
+            container_job_environment
+        )
+        if gh_required:
+            await self._initialize_required_tools(image_ref=str(launch["hostImageRef"]))
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+        retained_host = (
+            await self._launch_on_demand(
                 binding=binding,
                 host_lease=host_lease,
-                workspace_locator=workspace_locator,
-                current_workflow_id=current_workflow_id,
+                container_name=container_name,
+                workspace_source=workspace_source,
+                skill_projection=skill_projection,
+                runtime_scripts=runtime_scripts,
                 current_step_execution_id=current_step_execution_id,
-                timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
-                required_capabilities=required_capabilities,
-                execution_fanout_authorization=execution_fanout_authorization,
-                repository_connection_ref=repository_connection_ref,
-                step_policy=(
-                    evidence_request.step_execution.skill_source_policy
-                    if evidence_request is not None
-                    and evidence_request.step_execution is not None
-                    else None
-                ),
-            )
-            runtime_scripts = self._prepare_runtime_scripts(
-                host_lease.lease_id,
-                current_step_execution_id=current_step_execution_id,
-                runtime_environment=container_job_environment,
-            )
-            host_runtime_environment = self._host_runtime_environment(
-                container_job_environment
-            )
-            if gh_required:
-                await self._initialize_required_tools(
-                    image_ref=str(launch["hostImageRef"])
-                )
-            container_name = (
-                host_lease.container_name
-                or deterministic_host_container_name(host_lease.lease_id)
-            )
-            launched_container_name = container_name
-            retained_host = (
-                await self._launch_on_demand(
-                    binding=binding,
-                    host_lease=host_lease,
-                    container_name=container_name,
-                    workspace_source=workspace_source,
-                    skill_projection=skill_projection,
-                    runtime_scripts=runtime_scripts,
-                    current_step_execution_id=current_step_execution_id,
-                    # A clone-only credential stays with the trusted clone above;
-                    # agent code receives the admitted credential only when the
-                    # step declares gh (MoonLadderStudios/MoonMind#4011).
-                    github_token=github_token if gh_required else None,
-                    github_projection_reservation=github_projection_reservation,
-                    container_job_environment=host_runtime_environment,
-                    effective_launch=launch,
-                    egress_attestation=egress_attestation,
-                    recovery_request=evidence_request,
-                    recovery_store=cleanup_authority_store,
-                    recovery_artifact_gateway=recovery_artifact_gateway,
-                )
-            ) is True
-            if github_token and gh_required:
-                github_credential_exposure = "agent_readable_unconfined"
-        else:
-            self._invalidate_saved_workspace(workspace_source)
-            daemon_workspace_root = await self._resolve_daemon_workspace_root()
-            daemon_workspace_source = daemon_visible_workspace_path(
-                workspace_source, daemon_root=daemon_workspace_root
-            )
-            daemon_skill_projection = daemon_visible_workspace_path(
-                skill_projection, daemon_root=daemon_workspace_root
-            )
-            # Workflow-side static-enrollment wait starts at the Compose
-            # launch admission (MoonLadderStudios/MoonMind#3936 R5). The
-            # packaged entrypoint bounds the operator waiting state with
-            # the same timeout names; the classification below bounds the
-            # workflow admission/retry wait and never treats process
-            # existence as admitted capacity.
-            static_enrollment_started = time.monotonic()
-            static_compose_env = await self._compose_static_check(
-                binding=binding,
-                host_lease=host_lease,
-                workspace_source=daemon_workspace_source,
-                skill_projection=daemon_skill_projection,
+                # A clone-only credential stays with the trusted clone above;
+                # agent code receives the admitted credential only when the
+                # step declares gh (MoonLadderStudios/MoonMind#4011).
+                github_token=github_token if gh_required else None,
+                github_projection_reservation=github_projection_reservation,
+                container_job_environment=host_runtime_environment,
                 effective_launch=launch,
                 egress_attestation=egress_attestation,
+                recovery_request=evidence_request,
+                recovery_store=cleanup_authority_store,
+                recovery_artifact_gateway=recovery_artifact_gateway,
             )
+        ) is True
+        if github_token and gh_required:
+            github_credential_exposure = "agent_readable_unconfined"
 
         launch_ref: str | None = None
-        attachment_identity = launched_container_name or ""
+        attachment_identity = container_name
         egress_evidence: dict[str, Any] = {
             **egress_attestation.model_dump(by_alias=True, mode="json"),
-            **(
-                {
-                    "attachmentIdentity": attachment_identity,
-                    "attachmentRef": f"container:{attachment_identity}",
-                }
-                if attachment_identity
-                else {}
-            ),
+            "attachmentIdentity": attachment_identity,
+            "attachmentRef": f"container:{attachment_identity}",
             "executionProfileRef": launch.get("executionProfileRef"),
             "launchPolicyRef": launch.get("launchPolicyRef"),
             "policyAuthority": launch.get("policyAuthority"),
@@ -970,9 +883,7 @@ class OmnigentOAuthHostRuntime:
             # Resolve the production-created container immediately. From this
             # point onward every fallible check has a bounded cleanup handoff.
             attachment_identity = await self._resolve_workload_attachment_identity(
-                binding=binding,
-                host_lease=host_lease,
-                container_name=launched_container_name,
+                host_lease=host_lease, container_name=container_name
             )
             egress_evidence.update(
                 {
@@ -1200,61 +1111,11 @@ class OmnigentOAuthHostRuntime:
 
             # Only after full cleanup authority is durable may host login,
             # projection, registration, harness, or mounted-tool checks run.
-            if binding.host_launch_profile_ref:
-                await self._exec_check(attachment_identity)
-                await self._exec_tools_check(attachment_identity)
-            else:
-                try:
-                    await self._compose_static_exec_check(
-                        binding=binding,
-                        env=static_compose_env,
-                        container_name=attachment_identity,
-                    )
-                except Exception as exc:
-                    # The mount/projection check failed after Compose launch
-                    # admission. Preserve its original diagnostic and cleanup
-                    # authority while classifying any enrollment wait.
-                    self._raise_static_enrollment_failure(
-                        binding=binding,
-                        host_lease=host_lease,
-                        credential_ready=True,
-                        projection_ready=False,
-                        elapsed_seconds=(time.monotonic() - static_enrollment_started),
-                        fallback=exc,
-                    )
-            try:
-                host = await self._resolve_exact_host(
-                    binding=binding, host_lease=host_lease
-                )
-            except Exception as exc:
-                if binding.host_launch_profile_ref:
-                    raise
-                # Registration never observed exactly one compatible online
-                # host within the bounded wait: enrollment, not capacity.
-                self._raise_static_enrollment_failure(
-                    binding=binding,
-                    host_lease=host_lease,
-                    credential_ready=False,
-                    projection_ready=False,
-                    elapsed_seconds=time.monotonic() - static_enrollment_started,
-                    fallback=exc,
-                )
-            if not binding.host_launch_profile_ref:
-                # Both probes report ready, but process existence (or probe
-                # success) is still not admitted capacity: the staged
-                # generation must match the live lease, or this launch is
-                # unqualified even with a running container.
-                self._require_static_enrollment_admitted(
-                    self._classify_static_enrollment(
-                        binding=binding,
-                        host_lease=host_lease,
-                        credential_ready=True,
-                        projection_ready=True,
-                        elapsed_seconds=(
-                            time.monotonic() - static_enrollment_started
-                        ),
-                    )
-                )
+            await self._exec_check(attachment_identity)
+            await self._exec_tools_check(attachment_identity)
+            host = await self._resolve_exact_host(
+                binding=binding, host_lease=host_lease
+            )
             host_id = str(
                 host.get("id") or host.get("host_id") or host.get("hostId") or ""
             )
@@ -1981,39 +1842,12 @@ class OmnigentOAuthHostRuntime:
     async def _resolve_workload_attachment_identity(
         self,
         *,
-        binding: OmnigentOAuthHostBinding,
         host_lease: OmnigentHostLease,
         container_name: str | None,
     ) -> str:
         """Resolve the actual host container selected by the production owner."""
 
-        if binding.host_launch_profile_ref:
-            identity = container_name or deterministic_host_container_name(
-                host_lease.lease_id
-            )
-        else:
-            adapter = self._runtime_adapter(binding)
-            code, out, _err = await self._run(
-                *self._deployment_compose_command(),
-                "--profile",
-                str(adapter["compose_profile"]),
-                "ps",
-                "-q",
-                str(adapter["compose_service"]),
-                check=False,
-            )
-            identity = (
-                next((line.strip() for line in out.splitlines() if line.strip()), "")
-                if code == 0
-                else ""
-            )
-            if not identity:
-                raise OmnigentOAuthHostError(
-                    "static Omnigent host container could not be resolved for "
-                    "attachment attestation",
-                    code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
-                )
-        return identity
+        return container_name or deterministic_host_container_name(host_lease.lease_id)
 
     @staticmethod
     def _runtime_adapter(binding: OmnigentOAuthHostBinding) -> Mapping[str, Any]:
@@ -2032,6 +1866,16 @@ class OmnigentOAuthHostRuntime:
         binding: OmnigentOAuthHostBinding,
         effective_launch: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
+        if not binding.host_launch_profile_ref:
+            # Static-connected Compose hosts were removed, so a binding still
+            # in that mode has no host to run on. Profile-bound execution
+            # migrates it to the on-demand policy once its profile is idle.
+            raise OmnigentOAuthHostError(
+                "static-connected Omnigent hosts were removed; this OAuth host "
+                "binding moves to an on-demand host when its Provider Profile "
+                "is idle",
+                code="OMNIGENT_STATIC_HOST_RETIRED",
+            )
         if not isinstance(effective_launch, Mapping):
             raise OmnigentOAuthHostError(
                 "effective launch policy is required before host mutation",
@@ -2039,10 +1883,7 @@ class OmnigentOAuthHostRuntime:
             )
         launch = dict(effective_launch)
         validate_effective_launch_snapshot(launch)
-        expected_mode = (
-            "on_demand_docker" if binding.host_launch_profile_ref else "static_compose"
-        )
-        if launch.get("hostMode") != expected_mode:
+        if launch.get("hostMode") != "on_demand_docker":
             raise OmnigentOAuthHostError(
                 "effective launch host mode conflicts with the durable binding",
                 code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
@@ -2135,7 +1976,7 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_CAPTURE_UNREALIZABLE",
             )
         cleanup = launch.get("cleanup")
-        expected_cleanup = "remove" if expected_mode == "on_demand_docker" else "drain"
+        expected_cleanup = "remove"
         if (
             not isinstance(cleanup, Mapping)
             or cleanup.get("mode") != expected_cleanup
@@ -2257,8 +2098,10 @@ class OmnigentOAuthHostRuntime:
         source = self._scripts_dir.resolve()
         required_scripts = (
             "init-oauth-host.sh",
-            "start-codex-oauth-host.sh",
-            "start-claude-oauth-host.sh",
+            "start-omnigent-host.sh",
+            "check-omnigent-host.sh",
+            "check-runner-projections.sh",
+            "clear-stale-host-daemons.sh",
         )
         if not source.is_dir():
             raise OmnigentOAuthHostError(
@@ -2473,25 +2316,6 @@ class OmnigentOAuthHostRuntime:
                 visible[file_env_name] = f"{_RUNTIME_CAPABILITY_MOUNT_ROOT}/{filename}"
         return visible
 
-    async def _resolve_daemon_workspace_root(self) -> Path | None:
-        """Resolve the named workspace volume in the selected Docker daemon."""
-        from moonmind.omnigent.host_services.workspace import (
-            resolve_daemon_workspace_root,
-        )
-
-        async def runner(argv: list[str]) -> tuple[int, str, str]:
-            return await self._run(*argv, check=False)
-
-        try:
-            return await resolve_daemon_workspace_root(
-                runner=runner,
-                workspace_volume=self._workspace_volume,
-            )
-        except HarnessPlatformError as exc:
-            raise OmnigentOAuthHostError(
-                str(exc), code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE"
-            ) from exc
-
     async def stop_host(
         self,
         *,
@@ -2543,118 +2367,77 @@ class OmnigentOAuthHostRuntime:
                 terminal_egress_evidence["terminalValidationResult"] = (
                     "attachment_absent_before_cleanup"
                 )
-        if not binding.host_launch_profile_ref:
-            container_name = host_lease.container_name
-            if container_name and await self._container_present(container_name):
-                await self.assert_container_owned(
-                    container_name=container_name, lease_id=host_lease.lease_id
-                )
-                await self._run("docker", "rm", "-f", container_name, check=False)
-            if attachment_identity:
-                # Stop the immutable container this lease launched on, never
-                # the service by name: an update may have recreated the service
-                # for a successor. A launched container that is already gone,
-                # even one removed between this check and the stop, is
-                # confirmed stopped by the presence check below.
-                if await self.container_exists(attachment_identity):
-                    await self._run(
-                        "docker",
-                        "stop",
-                        "--time",
-                        "20",
-                        attachment_identity,
-                        check=False,
-                    )
-            else:
-                await self.stop_static_host(binding=binding)
-            cleanup_result = "drained_owned_static_host"
-            container_present = bool(
-                container_name and await self._container_present(container_name)
-            )
-            cleanup_ok = not container_present and (
-                not attachment_identity
-                or not await self.container_exists(attachment_identity)
-            )
-            resource_cleanup = {
-                "containerRunning": not cleanup_ok,
-                "containerPresent": container_present,
-                "mode": "static_drain",
-            }
-        else:
-            container_name = (
-                host_lease.container_name
-                or deterministic_host_container_name(host_lease.lease_id)
-            )
-            attachment_identity = attachment_identity or container_name
-            if await self.container_present(container_name):
-                await self.assert_container_owned(
-                    container_name=container_name, lease_id=host_lease.lease_id
-                )
-            await self._retire_github_projection(
-                host_lease=host_lease,
-                container_name=container_name,
-                effective_launch=(
-                    effective_launch or host_lease.effective_launch_snapshot or {}
-                ),
-                cleanup_authority_store=cleanup_authority_store,
-            )
-            await self._containers.remove_initializer(
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+        attachment_identity = attachment_identity or container_name
+        if await self.container_present(container_name):
+            await self.assert_container_owned(
                 container_name=container_name, lease_id=host_lease.lease_id
             )
-            await self._run(
-                "docker", "stop", "--time", "20", container_name, check=False
-            )
-            await self._run("docker", "rm", "-f", container_name, check=False)
-            await self._run(
-                "docker",
-                "volume",
-                "rm",
-                "-f",
-                f"{container_name}-state",
-                check=False,
-            )
-            await self._run(
-                "docker",
-                "volume",
-                "rm",
-                "-f",
-                f"{container_name}-artifacts",
-                check=False,
-            )
-            await self._run(
-                "docker",
-                "volume",
-                "rm",
-                "-f",
-                f"{container_name}-cache",
-                check=False,
-            )
-            volume_names = (
-                f"{container_name}-state",
-                f"{container_name}-artifacts",
-                f"{container_name}-cache",
-            )
-            container_present = await self._container_present(container_name)
-            remaining_volumes = [
-                name for name in volume_names if await self._volume_present(name)
-            ]
-            cleanup_ok = not container_present and not remaining_volumes
-            runtime_files_removed = False
-            if cleanup_ok:
-                try:
-                    runtime_files_removed = self._remove_runtime_scripts(
-                        host_lease.lease_id
-                    )
-                except (OSError, OmnigentOAuthHostError):
-                    runtime_files_removed = False
-                cleanup_ok = runtime_files_removed
-            cleanup_result = "succeeded" if cleanup_ok else "failed"
-            resource_cleanup = {
-                "containerPresent": container_present,
-                "remainingOwnedVolumes": remaining_volumes,
-                "runtimeCapabilityFilesRemoved": runtime_files_removed,
-                "mode": "on_demand_remove",
-            }
+        await self._retire_github_projection(
+            host_lease=host_lease,
+            container_name=container_name,
+            effective_launch=(
+                effective_launch or host_lease.effective_launch_snapshot or {}
+            ),
+            cleanup_authority_store=cleanup_authority_store,
+        )
+        await self._containers.remove_initializer(
+            container_name=container_name, lease_id=host_lease.lease_id
+        )
+        await self._run("docker", "stop", "--time", "20", container_name, check=False)
+        await self._run("docker", "rm", "-f", container_name, check=False)
+        await self._run(
+            "docker",
+            "volume",
+            "rm",
+            "-f",
+            f"{container_name}-state",
+            check=False,
+        )
+        await self._run(
+            "docker",
+            "volume",
+            "rm",
+            "-f",
+            f"{container_name}-artifacts",
+            check=False,
+        )
+        await self._run(
+            "docker",
+            "volume",
+            "rm",
+            "-f",
+            f"{container_name}-cache",
+            check=False,
+        )
+        volume_names = (
+            f"{container_name}-state",
+            f"{container_name}-artifacts",
+            f"{container_name}-cache",
+        )
+        container_present = await self._container_present(container_name)
+        remaining_volumes = [
+            name for name in volume_names if await self._volume_present(name)
+        ]
+        cleanup_ok = not container_present and not remaining_volumes
+        runtime_files_removed = False
+        if cleanup_ok:
+            try:
+                runtime_files_removed = self._remove_runtime_scripts(
+                    host_lease.lease_id
+                )
+            except (OSError, OmnigentOAuthHostError):
+                runtime_files_removed = False
+            cleanup_ok = runtime_files_removed
+        cleanup_result = "succeeded" if cleanup_ok else "failed"
+        resource_cleanup = {
+            "containerPresent": container_present,
+            "remainingOwnedVolumes": remaining_volumes,
+            "runtimeCapabilityFilesRemoved": runtime_files_removed,
+            "mode": "on_demand_remove",
+        }
 
         result: dict[str, Any] = {
             "cleanupResult": cleanup_result if cleanup_ok else "failed",
@@ -2705,30 +2488,6 @@ class OmnigentOAuthHostRuntime:
                 cleanup_evidence=result,
             ) from terminal_validation_error
         return result
-
-    async def stop_static_host(
-        self, *, binding: OmnigentOAuthHostBinding | None = None
-    ) -> None:
-        """Stop the static credential consumer even when no host lease is active."""
-
-        adapter = (
-            self._runtime_adapter(binding)
-            if binding is not None
-            else _RUNTIME_ADAPTERS["codex_cli"]
-        )
-        result = await self._run(
-            *self._deployment_compose_command(),
-            "--profile",
-            str(adapter["compose_profile"]),
-            "stop",
-            str(adapter["compose_service"]),
-            check=False,
-        )
-        if result[0] != 0:
-            raise OmnigentOAuthHostError(
-                "static Omnigent host could not be stopped",
-                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
-            )
 
     async def container_exists(self, container_name: str) -> bool:
         return await self._containers.container_exists(container_name)
@@ -4035,12 +3794,6 @@ class OmnigentOAuthHostRuntime:
     ) -> dict[str, Any]:
         if "gh" not in {item.strip().lower() for item in required_capabilities}:
             return {"status": "not_required", "boundaries": []}
-        if not binding.host_launch_profile_ref:
-            raise MountedToolPreflightError(
-                "Required gh credentials cannot be isolated on a reusable static host",
-                code="github_auth_unavailable",
-                evidence={"tool": "gh", "phase": "host_launch", "hostMode": "static"},
-            )
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
         )
@@ -5123,443 +4876,6 @@ class OmnigentOAuthHostRuntime:
                 },
             )
 
-    @staticmethod
-    def _static_service_raw_env(
-        service: str,
-        operator_env: Mapping[str, str],
-    ) -> dict[str, str] | None:
-        """Load the selected Compose service's raw ``environment`` mapping.
-
-        The rendered container environment is derived from these declared
-        service fields (interpolated against the operator environment), not
-        from the worker's ambient process environment. Returns ``None`` when
-        the deployment Compose file is unavailable or unparsable so callers
-        can fall back to the supplied operator mapping.
-        """
-
-        local_root = Path(
-            os.getenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "") or Path.cwd()
-        ).expanduser()
-        compose_text = os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
-        if compose_text:
-            configured = Path(compose_text).expanduser()
-            compose_path = (
-                local_root / configured
-                if not configured.is_absolute()
-                else configured
-            )
-            if configured.is_absolute() and not configured.exists():
-                compose_path = local_root / configured.name
-        else:
-            compose_path = local_root / "docker-compose.yaml"
-        try:
-            if not compose_path.is_file():
-                return None
-            import yaml  # type: ignore[import-not-found]
-
-            loaded = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-        try:
-            services = (loaded or {}).get("services", {})
-            service_def = services.get(service, {})
-            environment = service_def.get("environment", {})
-            if isinstance(environment, dict):
-                return {str(k): str(v) for k, v in environment.items()}
-            mapped: dict[str, str] = {}
-            for item in environment or []:
-                text = str(item)
-                if "=" in text:
-                    key, value = text.split("=", 1)
-                    mapped[key] = value
-                else:
-                    mapped[text] = str(operator_env.get(text, ""))
-            return mapped
-        except Exception:
-            return None
-
-    @staticmethod
-    def _admit_static_compose_prelaunch(
-        *,
-        binding: OmnigentOAuthHostBinding,
-        host_lease: OmnigentHostLease,
-        operator_env: Mapping[str, str],
-    ) -> dict[str, object]:
-        """Admit a static Compose launch before ``docker compose up``.
-
-        This is the production caller of the static prelaunch admission
-        boundary (MoonLadderStudios/MoonMind#3936 R3/R4): it judges the
-        rendered effective environment and the effective launch image
-        through
-        ``static_hosts.admit_static_host_effective_launch`` (fails closed
-        on malformed image references), then binds the staged
-        credential generation to the live Provider Profile lease through
-        ``verify_staged_generation_against_lease`` and
-        ``trace_static_credential_ownership`` (profile -> lease -> exact
-        registered host -> one-session exclusivity on the static mode).
-        The staged marker alone is never admission evidence.
-
-        The rendered mapping is built from the selected Compose service's
-        declared ``environment`` fields (interpolated against the operator
-        environment), never by validating the worker's ambient process
-        environment: the canonical worker service defines credential keys
-        (including as empty strings) that are not part of the static
-        service environment.
-        """
-
-        adapter = OmnigentOAuthHostRuntime._runtime_adapter(binding)
-        try:
-            row = static_hosts.static_host_row(str(adapter["compose_service"]))
-            if str(adapter["generation_env"]) != row.generation_env:
-                raise HarnessPlatformError(
-                    "static host adapter and static row disagree on the "
-                    "credential generation variable",
-                    code="OMNIGENT_HOST_BINDING_MISMATCH",
-                )
-            raw_service_env = OmnigentOAuthHostRuntime._static_service_raw_env(
-                row.service, operator_env
-            )
-            if raw_service_env is not None:
-                rendered = static_hosts.render_static_service_env(
-                    raw_service_env, operator_env
-                )
-            else:
-                rendered = dict(operator_env)
-            admission = static_hosts.admit_static_host_effective_launch(
-                service=row.service,
-                pack_ref=row.runtime_pack_ref,
-                materializer_ref=row.materializer_ref,
-                rendered_env=rendered,
-                operator_env=operator_env,
-            )
-            staged_generation = str(rendered.get(row.generation_env) or "")
-            registered_host_id = str(
-                binding.static_host_id
-                or host_lease.omnigent_host_id
-                or row.service
-            )
-            static_hosts.verify_staged_generation_against_lease(
-                staged_generation=staged_generation,
-                lease_generation=str(host_lease.credential_generation),
-                provider_profile_id=str(binding.provider_profile_id),
-                registered_host_id=registered_host_id,
-            )
-            static_hosts.trace_static_credential_ownership(
-                provider_profile_id=str(binding.provider_profile_id),
-                provider_lease_ref=str(host_lease.provider_lease_id),
-                credential_generation=str(host_lease.credential_generation),
-                registered_host_id=registered_host_id,
-                active_session_count=(
-                    1 if host_lease.omnigent_session_id else 0
-                ),
-                execution_modes_observed=("static",),
-            )
-        except HarnessPlatformError as exc:
-            platform_code = str(getattr(exc, "code", "") or "")
-            raise OmnigentOAuthHostError(
-                f"static Compose prelaunch admission rejected: {exc}",
-                code=_STATIC_PRELAUNCH_HOST_CODES.get(
-                    platform_code, platform_code
-                ),
-            ) from exc
-        admission = dict(admission)
-        admission["registered_host_id"] = registered_host_id
-        return admission
-
-    @staticmethod
-    def _classify_static_enrollment(
-        *,
-        binding: OmnigentOAuthHostBinding,
-        host_lease: OmnigentHostLease,
-        credential_ready: bool,
-        projection_ready: bool,
-        elapsed_seconds: float,
-    ) -> dict[str, object]:
-        """Classify one static-enrollment observation for workflow admission.
-
-        This is the production caller of
-        ``static_hosts.classify_static_enrollment_status``
-        (MoonLadderStudios/MoonMind#3936 R5): the workflow-side bounded
-        admission/retry wait with the same timeout names and defaults as
-        the packaged entrypoint. Only ``ready`` is admitted usable
-        capacity; ``waiting-*`` keeps operator enrollment pending
-        distinguishable from a decision. The stream-admission deadline in
-        ``moonmind.omnigent.execute`` is unrelated (first-message stream
-        admission) and is never enrollment evidence.
-        """
-
-        try:
-            credential_timeout, skill_timeout = (
-                static_hosts.static_enrollment_timeouts_from_env(os.environ)
-            )
-        except HarnessPlatformError as exc:
-            raise OmnigentOAuthHostError(
-                f"static enrollment wait is not admitted: {exc}",
-                code=str(getattr(exc, "code", "") or ""),
-            ) from exc
-        generation_fenced_ok = str(
-            binding.credential_mount_ref.auth_volume_ref.credential_generation
-        ) == str(host_lease.credential_generation)
-        return dict(
-            static_hosts.classify_static_enrollment_status(
-                credential_ready=credential_ready,
-                projection_ready=projection_ready,
-                generation_fenced_ok=generation_fenced_ok,
-                elapsed_seconds=elapsed_seconds,
-                credential_timeout_seconds=credential_timeout,
-                skill_timeout_seconds=skill_timeout,
-            )
-        )
-
-    @staticmethod
-    def _require_static_enrollment_admitted(
-        classification: Mapping[str, object],
-    ) -> dict[str, object]:
-        """Require an admitted static-enrollment classification.
-
-        A stale or mismatched generation is ``unqualified`` even when both
-        probes report ready: process existence (or probe success) is never
-        admitted usable capacity on a fenced generation.
-        """
-
-        if classification.get("admitted") is True:
-            return dict(classification)
-        status = str(classification.get("status"))
-        reason = str(classification.get("reason"))
-        if status == static_hosts.STATIC_ENROLLMENT_UNQUALIFIED:
-            code = HostPreflightFailure.GENERATION_STALE.value
-        elif (
-            status
-            == static_hosts.STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT
-        ):
-            code = HostPreflightFailure.HOST_NOT_REGISTERED.value
-        elif (
-            status
-            == static_hosts.STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT
-        ):
-            code = HostPreflightFailure.LOGIN_STATUS_FAILED.value
-        else:
-            code = HostPreflightFailure.HOST_NOT_REGISTERED.value
-        raise OmnigentOAuthHostError(
-            "static host enrollment is not admitted capacity: "
-            f"{status} ({reason})",
-            code=code,
-        )
-
-    def _raise_static_enrollment_failure(
-        self,
-        *,
-        binding: OmnigentOAuthHostBinding,
-        host_lease: OmnigentHostLease,
-        credential_ready: bool,
-        projection_ready: bool,
-        elapsed_seconds: float,
-        fallback: BaseException,
-    ) -> NoReturn:
-        """Raise a static readiness failure with a bounded terminal outcome.
-
-        When the bounded enrollment wait is spent (or the generation is
-        fenced), the distinct ``failed-*``/``unqualified`` outcome replaces
-        the probe error so this attempt's budget is spent instead of
-        waiting indefinitely. Otherwise the original probe error propagates
-        (operator enrollment pending, retryable as a new attempt).
-        """
-
-        classification = OmnigentOAuthHostRuntime._classify_static_enrollment(
-            binding=binding,
-            host_lease=host_lease,
-            credential_ready=credential_ready,
-            projection_ready=projection_ready,
-            elapsed_seconds=elapsed_seconds,
-        )
-        if (
-            str(classification.get("status"))
-            in _STATIC_ENROLLMENT_TERMINAL_STATUSES
-        ):
-            try:
-                OmnigentOAuthHostRuntime._require_static_enrollment_admitted(
-                    classification
-                )
-            except OmnigentOAuthHostError as terminal:
-                raise terminal from fallback
-        raise fallback
-
-    async def _compose_static_check(
-        self,
-        *,
-        binding: OmnigentOAuthHostBinding | None = None,
-        host_lease: OmnigentHostLease | None = None,
-        workspace_source: Path,
-        skill_projection: Path | None = None,
-        effective_launch: Mapping[str, Any] | None = None,
-        egress_attestation: EgressAttestation | None = None,
-    ) -> dict[str, str]:
-        from moonmind.omnigent.bootstrap.store import with_installed_image_refs
-
-        child_env = with_installed_image_refs()
-        child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
-        if binding is not None:
-            generation = (
-                binding.credential_mount_ref.auth_volume_ref.credential_generation
-            )
-            adapter = self._runtime_adapter(binding)
-            child_env[str(adapter["generation_env"])] = str(generation)
-            child_env[str(adapter["volume_env"])] = (
-                binding.credential_mount_ref.auth_volume_ref.volume_ref
-            )
-        if skill_projection is not None:
-            child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
-        if effective_launch is not None:
-            host_image_ref = str(effective_launch["hostImageRef"])
-            child_env.update(
-                {
-                    "OMNIGENT_HOST_IMAGE_REF": host_image_ref,
-                    # Static Codex/Claude rows resolve their image from the
-                    # shared ref (MoonLadderStudios/MoonMind#3834). Export the
-                    # effective-launch digest under both names so an immutable
-                    # plan keeps its launch authority instead of falling back
-                    # to an independently inherited mutable tag. The legacy
-                    # name survives only as a bounded alias.
-                    "OMNIGENT_SHARED_HOST_IMAGE_REF": host_image_ref,
-                    "OMNIGENT_IMAGE_REF": str(effective_launch["serverImageRef"]),
-                    "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(
-                        effective_launch["snapshotRef"]
-                    ),
-                    "OMNIGENT_HOST_CPU_LIMIT": str(
-                        int(effective_launch["limits"]["cpuMillis"]) / 1000
-                    ),
-                    "OMNIGENT_HOST_MEMORY_LIMIT": (
-                        f"{effective_launch['limits']['memoryMiB']}m"
-                    ),
-                    "OMNIGENT_HOST_PIDS_LIMIT": str(
-                        effective_launch["limits"]["processes"]
-                    ),
-                    "OMNIGENT_HOST_TMPFS_LIMIT": (
-                        f"{effective_launch['limits']['temporaryStorageMiB']}m"
-                    ),
-                    "OMNIGENT_HOST_TIMEOUT_SECONDS": str(
-                        effective_launch["limits"]["timeoutSeconds"]
-                    ),
-                    "OMNIGENT_CAPTURE_RETENTION_DAYS": str(
-                        effective_launch["capture"]["retentionDays"]
-                    ),
-                    "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
-                    "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
-                    "OMNIGENT_CONTROL_CAPABILITIES": ",".join(
-                        effective_launch["controlCapabilities"]
-                    ),
-                }
-            )
-        if egress_attestation is not None:
-            child_env.update(
-                {
-                    "OMNIGENT_EGRESS_PROFILE_REF": egress_attestation.profile_ref,
-                    "OMNIGENT_EGRESS_PROFILE_DIGEST": (
-                        egress_attestation.profile_digest
-                    ),
-                    "OMNIGENT_EGRESS_APPLIED_RULE_DIGEST": (
-                        egress_attestation.applied_rule_digest
-                    ),
-                }
-            )
-        adapter = (
-            self._runtime_adapter(binding)
-            if binding is not None
-            else _RUNTIME_ADAPTERS["codex_cli"]
-        )
-        if binding is not None and host_lease is not None:
-            # Static prelaunch admission (MoonLadderStudios/MoonMind#3936
-            # R3/R4): judge the rendered effective environment and the
-            # effective launch image, and bind the staged generation to
-            # the live lease, before `docker compose up` admits the
-            # service. Malformed image references and unverified credential
-            # generations fail before any static host is launched.
-            self._admit_static_compose_prelaunch(
-                binding=binding,
-                host_lease=host_lease,
-                operator_env=child_env,
-            )
-        await self._run(
-            *self._deployment_compose_command(),
-            "--profile",
-            str(adapter["compose_profile"]),
-            "up",
-            "-d",
-            str(adapter["compose_service"]),
-            env=child_env,
-        )
-        return child_env
-
-    async def _compose_static_exec_check(
-        self,
-        *,
-        binding: OmnigentOAuthHostBinding | None = None,
-        env: Mapping[str, str] | None = None,
-        container_name: str | None = None,
-    ) -> None:
-        adapter = (
-            self._runtime_adapter(binding)
-            if binding is not None
-            else _RUNTIME_ADAPTERS["codex_cli"]
-        )
-        if binding is not None:
-            # Read actual Docker state, not the requested binding or staged
-            # generation: an existing static host can retain another profile's
-            # OAuth volume. Probe the same observed container after attestation.
-            if not container_name:
-                raise OmnigentOAuthHostError(
-                    "static OAuth host identity is missing",
-                    code=HostPreflightFailure.BINDING_MISMATCH.value,
-                )
-            home = str(adapter["home"])
-            expected_volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
-            # The shared command runner redacts OAuth paths from stdout.
-            # Compare inside Docker, as the generic credential attestor does,
-            # and retain only a bounded verdict. Every credential-subtree
-            # mount contributes a token, so missing, duplicate, and shadowing
-            # mounts cannot masquerade as one selected writable home.
-            subtree = home + "/"
-            template = (
-                "{{range .Mounts}}"
-                f"{{{{if or (eq .Destination {json.dumps(home)}) "
-                f"(and (ge (len .Destination) {len(subtree)}) "
-                f"(eq (slice .Destination 0 {len(subtree)}) {json.dumps(subtree)}))}}}}"
-                f'{{{{if and (eq .Type "volume") '
-                f"(eq .Name {json.dumps(expected_volume)}) "
-                f"(eq .Destination {json.dumps(home)}) (eq .RW true)}}}}"
-                "valid{{else}}invalid{{end}}{{end}}{{end}}"
-            )
-            code, output, _error = await self._run(
-                "docker",
-                "inspect",
-                "--format",
-                template,
-                container_name,
-                check=False,
-            )
-            if code != 0 or output.strip() != "valid":
-                raise OmnigentOAuthHostError(
-                    "static OAuth host does not mount the selected profile credential volume",
-                    code=HostPreflightFailure.BINDING_MISMATCH.value,
-                )
-            await self._run(
-                "docker",
-                "exec",
-                container_name,
-                "/opt/moonmind/check-runner-projections.sh",
-            )
-            return
-        await self._run(
-            *self._deployment_compose_command(),
-            "--profile",
-            str(adapter["compose_profile"]),
-            "exec",
-            "-T",
-            str(adapter["compose_service"]),
-            "/opt/moonmind/check-runner-projections.sh",
-            env=dict(env or os.environ),
-        )
-
     async def _exec_check(self, container_name: str) -> None:
         # ``docker run -d`` returns before the container is guaranteed to
         # accept ``docker exec``. Keep this readiness check local to the live
@@ -5622,11 +4938,10 @@ class OmnigentOAuthHostRuntime:
         binding: OmnigentOAuthHostBinding,
         host_lease: OmnigentHostLease,
     ) -> dict[str, Any]:
-        expected_id = binding.static_host_id or host_lease.omnigent_host_id
+        expected_id = host_lease.omnigent_host_id
         expected_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
         )
-        adapter = self._runtime_adapter(binding)
         for attempt in range(HOST_REGISTRATION_ATTEMPTS):
             hosts = await self._client.list_hosts()
             if expected_id:
@@ -5641,7 +4956,7 @@ class OmnigentOAuthHostRuntime:
                     host
                     for host in hosts
                     if str(host.get("name") or host.get("hostname") or "")
-                    in {expected_name, str(adapter["compose_service"])}
+                    == expected_name
                 ]
             online = [
                 host

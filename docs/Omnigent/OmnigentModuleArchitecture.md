@@ -297,9 +297,6 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `new_admission_disabled` |
 | `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `new_admission_disabled` |
 | `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `new_admission_disabled` |
-| Codex static host scripts and Compose profile | `omnigent.legacy.codex_static_host_startup` | `active_product_path` |
-| Claude static host scripts and Compose profile | `omnigent.legacy.claude_static_host_startup` | `active_product_path` |
-| Pre-consolidation `omnigent-host` service and projection entrypoint | `omnigent.legacy.projection_host_startup` | `active_product_path` |
 | Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
 | OpenCode image variable for existing deployments / legacy Host Classes | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
@@ -394,8 +391,7 @@ uncarried tool/auth configuration and other HOME choices retain their adapter
 until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
-they retain queued starts, retries and cleanup under their recorded authority. Supported
-static-connected Codex/Claude hosts use the shared lifecycle.
+they retain queued starts, retries and cleanup under their recorded authority.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.

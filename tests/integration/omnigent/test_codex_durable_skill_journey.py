@@ -9,10 +9,10 @@ dereference it from durable storage.
 
 External transports are controlled substitutes, named here explicitly:
 
-* Docker: static Compose and on-demand Docker commands are recorded instead
-  of run. Their fake reads the Skill through the emitted mounts, so a dropped
-  or misconfigured Skills mount fails the journey. On-demand cleanup removes
-  only its recorded container and run-owned volumes, preserving the OAuth home.
+* Docker: on-demand Docker commands are recorded instead of run. The fake
+  reads the Skill through the emitted mounts, so a dropped or misconfigured
+  Skills mount fails the journey. Cleanup removes only its recorded container
+  and run-owned volumes, preserving the OAuth home.
 * Provider: a fake Omnigent server (``FakeOmnigentServer``) plays the Codex
   turn. It returns a workspace file carrying the digest of the Skill the
   launched host received, so the retrieved result proves delivery.
@@ -27,15 +27,12 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
-import re
 import subprocess
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
-import yaml
 from aiohttp import web
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -149,30 +146,8 @@ class CodexTurnServer(FakeOmnigentServer):
         )
 
 
-_COMPOSE_VARIABLE = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
-
-
-def _read_through_compose_mount(
-    compose_file: Path, service: str, env: Mapping[str, str], container_path: str
-) -> bytes:
-    """Read ``container_path`` through the service's rendered bind mounts."""
-
-    volumes = yaml.safe_load(compose_file.read_text(encoding="utf-8"))["services"][
-        service
-    ].get("volumes", [])
-    for volume in volumes:
-        source, target, *options = _COMPOSE_VARIABLE.sub(
-            lambda match: env.get(match[1]) or match[2] or "", str(volume)
-        ).split(":")
-        if container_path.startswith(target.rstrip("/") + "/"):
-            assert options == ["ro"], f"{target} must be mounted read-only"
-            host_root = compose_file.parent / source
-            return (host_root / container_path[len(target) :].lstrip("/")).read_bytes()
-    raise AssertionError(f"{service} mounts nothing at {container_path}")
-
-
-class StaticCodexDocker:
-    """Record the static Codex host's Docker commands instead of running them."""
+class CodexDocker:
+    """Record shared server and egress Docker commands instead of running them."""
 
     def __init__(
         self,
@@ -188,7 +163,6 @@ class StaticCodexDocker:
         self.commands: list[tuple[str, ...]] = []
         # Shared with the artifact gateway to order host stops against writes.
         self.events = events
-        self.compose_up_env: dict[str, str] | None = None
         self.container_running = False
         self.server_container_id = hashlib.sha256(
             f"server:{workflow_id}".encode()
@@ -231,16 +205,6 @@ class StaticCodexDocker:
             platform.machine().lower(), platform.machine().lower()
         )
 
-    def _launch_host(self, args: tuple[str, ...], env: dict[str, str]) -> None:
-        self.compose_up_env = dict(env)
-        self.container_running = True
-        self.server.delivered_skill = _read_through_compose_mount(
-            Path(args[args.index("-f") + 1]),
-            args[-1],
-            env,
-            f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}/{_DURABLE_SKILL_NAME}/SKILL.md",
-        )
-
     def _stop_host(self) -> None:
         self.container_running = False
         self.events.append(("host_stop", self.host_container_id))
@@ -252,22 +216,9 @@ class StaticCodexDocker:
         joined = f" {' '.join(args)} "
         if args[:3] == ("docker", "network", "inspect"):
             return (0, json.dumps({"Internal": True, "EnableIPv6": False}), "")
-        if args[:2] == ("docker", "compose"):
-            if " up " in joined:
-                self._launch_host(args, dict(env or {}))
-            elif " stop " in joined:
-                self._stop_host()
-            elif " ps " in joined:
-                identity = (
-                    self.server_container_id
-                    if args[-1] == "omnigent"
-                    else self.host_container_id
-                )
-                return (0, f"{identity}\n", "")
-            return (0, "", "")
-        if args[:2] == ("docker", "stop") and args[-1] == self.host_container_id:
-            self._stop_host()
-            return (0, "", "")
+        if args[:2] == ("docker", "compose") and " ps " in joined:
+            assert args[-1] == "omnigent"
+            return (0, f"{self.server_container_id}\n", "")
         if args[:2] == ("docker", "inspect"):
             return self._inspect(args[3], args[4])
         if args[:3] == ("docker", "image", "inspect"):
@@ -295,13 +246,6 @@ class StaticCodexDocker:
                 )
             if args[3] == "cat":
                 return (0, "", "")
-        if args == (
-            "docker",
-            "exec",
-            self.host_container_id,
-            "/opt/moonmind/check-runner-projections.sh",
-        ):
-            return (0, "", "")
         raise AssertionError(f"unexpected host command: {args}")
 
     def _inspect(self, format_value: str, identity: str) -> tuple[int, str, str]:
@@ -349,15 +293,10 @@ class StaticCodexDocker:
                 )
             if format_value == "{{.State.Running}}":
                 return (0, "true\n" if self.container_running else "false\n", "")
-            if format_value.startswith("{{range .Mounts}}"):
-                # The selected profile's own auth volume is attached by name.
-                assert f'eq .Name "{AUTH_VOLUME}"' in format_value
-                assert 'eq .Destination "/home/app/.codex"' in format_value
-                return (0, "valid\n", "")
         raise AssertionError(f"unexpected Docker inspect: {format_value} {identity}")
 
 
-class OnDemandCodexDocker(StaticCodexDocker):
+class OnDemandCodexDocker(CodexDocker):
     """Exercise the emitted on-demand commands and their owned resource state."""
 
     def __init__(self, **kwargs) -> None:
@@ -394,9 +333,7 @@ class OnDemandCodexDocker(StaticCodexDocker):
             if "--rm" in args:
                 assert args[-2:] == ("/opt/moonmind/init-oauth-host.sh", HOST_IMAGE)
                 return (0, "", "")
-            assert (
-                "-d" in args and args[-1] == "/opt/moonmind/start-codex-oauth-host.sh"
-            )
+            assert "-d" in args and args[-1] == "/opt/moonmind/start-omnigent-host.sh"
             self.container_name = args[args.index("--name") + 1]
             self.server.host_name = self.container_name
             self.container_present = self.container_running = True
@@ -740,8 +677,6 @@ def _request(
 @pytest.mark.parametrize(
     ("launch_policy", "explicit_target", "retained_binding"),
     [
-        ("codex-static@1", False, None),
-        ("codex-static@1", True, None),
         ("codex-on-demand@1", False, None),
         ("codex-on-demand@1", True, None),
         ("codex-on-demand@1", False, "idle"),
@@ -752,7 +687,6 @@ def _request(
         ("codex-on-demand@1", False, "busy_static_drained"),
         ("codex-on-demand@1", False, "busy_static_changed"),
         ("codex-on-demand@1", False, "valid"),
-        ("codex-static@1", False, "valid"),
     ],
 )
 @pytest.mark.parametrize("auth_mode", ["disabled", "oidc"])
@@ -807,10 +741,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             workspace_root=tmp_path / "workspaces",
             repository_source_root=tmp_path,
         )
-        docker_class = (
-            OnDemandCodexDocker if "on-demand" in launch_policy else StaticCodexDocker
-        )
-        docker = docker_class(
+        docker = OnDemandCodexDocker(
             workflow_id=workflow_id,
             server=server,
             run_command=runtime._run,
@@ -859,30 +790,31 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         if retained_binding:
             from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
-            # Retained on-demand bindings can lack their mode marker, including
-            # older records that also persisted a discovered static host ID.
-            snapshot = json.loads(
-                await TemporalOmnigentArtifactGateway(
-                    session_factory, principal="system"
-                ).read_text(plan.payload.effectiveLaunchSnapshotRef)
+            # Retained bindings can lack their on-demand marker: older on-demand
+            # launches, and bindings retained from removed static-connected
+            # hosts with their static policy, launch and discovered host ID.
+            retained_static = "static" in retained_binding
+            snapshot = (
+                {"hostMode": "static_compose"}
+                if retained_static
+                else json.loads(
+                    await TemporalOmnigentArtifactGateway(
+                        session_factory, principal="system"
+                    ).read_text(plan.payload.effectiveLaunchSnapshotRef)
+                )
             )
             hosts = OmnigentOAuthHostRepository(session_factory)
             retained = await hosts.create_or_update_static_binding(
                 profile_id=PROFILE_ID,
                 endpoint_ref="default",
-                static_host_id=(
-                    host_id
-                    if (retained_binding == "valid" and "static" in launch_policy)
-                    or "static" in retained_binding
-                    else None
-                ),
+                static_host_id=host_id if retained_static else None,
                 host_launch_profile_ref=(
-                    "codex-oauth-v1"
-                    if retained_binding == "valid" and "on-demand" in launch_policy
-                    else None
+                    "codex-oauth-v1" if retained_binding == "valid" else None
                 ),
                 execution_profile_ref="omnigent-codex@1",
-                launch_policy_ref=launch_policy,
+                launch_policy_ref=(
+                    "codex-static@1" if retained_static else launch_policy
+                ),
                 effective_launch_snapshot=snapshot,
             )
             if retained_binding.startswith("busy"):
@@ -915,13 +847,15 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                             assert not docker.commands and not server.create_payloads
                             await hosts.mark_host_lease_stopped(prior_lease.lease_id)
                             if retained_binding.endswith("_changed"):
+                                # Another owner selects a different launch
+                                # while this repair waits.
                                 await update_binding(
                                     hosts,
                                     profile_id=PROFILE_ID,
                                     endpoint_ref="default",
-                                    static_host_id="newly-enrolled-static-host",
+                                    host_launch_profile_ref="codex-on-demand@1",
                                     execution_profile_ref="omnigent-codex@1",
-                                    launch_policy_ref="codex-static@1",
+                                    launch_policy_ref="codex-on-demand@1",
                                     effective_launch_snapshot={},
                                 )
                             raise
@@ -962,9 +896,9 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                 )
             assert changed.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
             current = await hosts.get_binding_for_profile(PROFILE_ID)
-            assert current.launch_policy_ref == "codex-static@1"
-            assert current.static_host_id == "newly-enrolled-static-host"
-            assert current.host_launch_profile_ref is None
+            assert current.launch_policy_ref == "codex-on-demand@1"
+            assert current.effective_launch_snapshot == {}
+            assert current.static_host_id is None
             assert not docker.commands and not server.create_payloads
             return
         result = await realizer.execute(
@@ -985,7 +919,12 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                 assert current.host_launch_profile_ref == retained.host_launch_profile_ref
                 assert current.static_host_id == retained.static_host_id
             else:
+                # Every retained binding ends on-demand without a static host.
                 assert current.host_launch_profile_ref == launch_policy
+                assert current.launch_policy_ref == launch_policy
+                assert current.effective_launch_snapshot["hostMode"] == (
+                    "on_demand_docker"
+                )
                 assert current.static_host_id is None
     finally:
         await running.runner.cleanup()
@@ -1036,19 +975,16 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
     assert checkpoint_write < host_stops[0]
     assert result.metadata["runtimeBindingState"] == "cleanup_complete"
     runtime_chain = result.metadata["authorityChain"]["runtime"]
-    assert runtime_chain["hostMode"] == (
-        "on_demand_docker" if "on-demand" in launch_policy else "static_compose"
-    )
+    assert runtime_chain["hostMode"] == "on_demand_docker"
     assert "skills_tools" in runtime_chain["mountClasses"]
 
-    # The selected profile's OAuth home is attached, never copied or logged in.
-    if isinstance(docker, OnDemandCodexDocker):
-        assert docker.launch_env["CODEX_CREDENTIAL_GENERATION"] == "3"
-        assert not docker.container_present and not docker.owned_volumes
-    else:
-        assert docker.compose_up_env is not None
-        assert docker.compose_up_env["CODEX_VOLUME_NAME"] == AUTH_VOLUME
-        assert docker.compose_up_env["CODEX_CREDENTIAL_GENERATION"] == "3"
+    # The selected profile's OAuth home is attached, never copied or logged in,
+    # and the shared entrypoint receives the trusted Codex runtime pack.
+    assert docker.launch_env["CODEX_CREDENTIAL_GENERATION"] == "3"
+    assert docker.launch_env["MOONMIND_OMNIGENT_RUNTIME_PACK_REF"] == (
+        "codex-native-pack@1"
+    )
+    assert not docker.container_present and not docker.owned_volumes
     flat_commands = [" ".join(command) for command in docker.commands]
     assert not any(" login" in command for command in flat_commands)
     assert not any(" cp " in f" {command} " for command in flat_commands)

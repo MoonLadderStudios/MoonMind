@@ -50,6 +50,19 @@ def policy_document() -> dict:
     }
 
 
+def on_demand_policy_document() -> dict:
+    """The executable shape new versions must use; ``policy_document`` is history."""
+
+    document = policy_document()
+    document["host"] = {
+        **document["host"],
+        "mode": "on_demand_docker",
+        "backendRef": "container-backend",
+    }
+    document["session"] = {**document["session"], "cleanup": "remove"}
+    return document
+
+
 def test_digest_and_compilation_are_reproducible_and_cover_every_boundary():
     document = policy_document()
     first = compile_policy_snapshot(policy_id="codex-static", version=2, document=document, validation={"valid": True})
@@ -84,7 +97,7 @@ HISTORICAL_RETRIEVAL_POLICY_DIGEST = (
 
 
 def test_new_policy_documents_need_no_native_retrieval_section():
-    parsed = PolicyDocument.model_validate(policy_document())
+    parsed = PolicyDocument.model_validate(on_demand_policy_document())
 
     assert parsed.rag is None
     assert "rag" not in normalize_document(parsed)
@@ -118,7 +131,22 @@ def test_successors_derived_from_history_drop_only_the_retired_section():
     assert "rag" not in successor
     assert successor == policy_document()
     assert historical["rag"]["collectionRefs"] == ["default"]
-    reject_retired_policy_sections(PolicyDocument.model_validate(successor))
+    # The rag check passes; only the historical static host mode remains.
+    with pytest.raises(ValueError, match="static_compose has been retired"):
+        reject_retired_policy_sections(PolicyDocument.model_validate(successor))
+
+
+def test_new_policy_versions_reject_the_retired_static_host_mode():
+    historical = PolicyDocument.model_validate(policy_document())
+
+    # Stored static versions still decode; only new authoring is refused.
+    assert historical.host.mode == "static_compose"
+    with pytest.raises(ValueError, match="static_compose has been retired"):
+        reject_retired_policy_sections(historical)
+    reject_retired_policy_sections(
+        PolicyDocument.model_validate(on_demand_policy_document())
+    )
+
 
 def test_policy_rejects_secret_bodies_raw_paths_and_docker_socket():
     for key, value in (
@@ -322,6 +350,26 @@ def test_activation_validation_checks_deployment_capabilities_and_digest_images(
     assert validation["valid"] is False
 
 
+def test_deployment_validation_no_longer_offers_static_hosts(monkeypatch):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.platform.machine", lambda: "x86_64"
+    )
+
+    static_validation, compatibility = validate_policy(
+        PolicyDocument.model_validate(policy_document())
+    )
+    on_demand_validation, _ = validate_policy(
+        PolicyDocument.model_validate(on_demand_policy_document())
+    )
+
+    assert static_validation["valid"] is False
+    assert {"OMNIGENT_HOST_MODE_UNAVAILABLE", "OMNIGENT_BACKEND_UNAVAILABLE"} <= set(
+        compatibility["diagnosticCodes"]
+    )
+    assert on_demand_validation["valid"] is True
+
+
 def test_approval_required_rule_must_be_complete_at_document_validation():
     document = policy_document()
     del document["approvals"]["actions"]["publish"]["reviewerRule"]
@@ -381,6 +429,6 @@ def test_policy_write_schema_cannot_request_retired_retrieval(request_model_name
 def test_policy_authoring_accepts_a_parsed_vector_free_document():
     from api_service.api.routers.omnigent_policies import NewVersion
 
-    parsed = PolicyDocument.model_validate(policy_document())
+    parsed = PolicyDocument.model_validate(on_demand_policy_document())
     request = NewVersion(expectedParentRef="p@1", document=parsed)
     assert normalize_document(request.document) == normalize_document(parsed)

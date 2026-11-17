@@ -1,5 +1,5 @@
 #!/bin/sh
-# Generic static-host health/readiness contract (MoonLadderStudios/MoonMind#3834).
+# On-demand Codex/Claude OAuth host health/readiness contract.
 #
 # One health contract reports the selected runtime pack, exact image and
 # Omnigent build identity, exact vendor runtime version, expected credential

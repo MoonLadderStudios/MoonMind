@@ -251,8 +251,9 @@ def reject_retired_policy_sections(document: PolicyDocument) -> PolicyDocument:
     """Reject retired sections for new policy versions (#4103).
 
     MoonMind no longer ships native retrieval, so accepting a new ``rag``
-    section would be an empty success. Historical versions that carry it stay
-    decodable and executable; only new authoring is refused here.
+    section would be an empty success. Static-connected hosts were removed, so
+    a new ``static_compose`` host would never launch. Historical versions that
+    carry either stay decodable; only new authoring is refused here.
     """
 
     if document.rag is not None:
@@ -260,6 +261,12 @@ def reject_retired_policy_sections(document: PolicyDocument) -> PolicyDocument:
             "rag has been retired (MoonLadderStudios/MoonMind#4103): MoonMind no "
             "longer provides native retrieval. Remove the rag section; historical "
             "policy versions remain readable."
+        )
+    if document.host.mode == "static_compose":
+        raise ValueError(
+            "host.mode static_compose has been retired: static-connected hosts "
+            "were removed. Use on_demand_docker with session.cleanup=remove; "
+            "historical policy versions remain readable."
         )
     return document
 

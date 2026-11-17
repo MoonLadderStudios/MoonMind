@@ -16,7 +16,14 @@
 #   CODEX_VOLUME_NAME     Docker volume name (default: codex_auth_volume)
 #   CODEX_VOLUME_PATH     Container-side auth root (default: /home/app/.codex)
 #   CODEX_HOME            Legacy alias for CODEX_VOLUME_PATH
+#   MOONMIND_OAUTH_RUNNER_IMAGE  --login image, as for in-product OAuth login;
+#                         otherwise the shared Omnigent host image selected by
+#                         OMNIGENT_SHARED_HOST_IMAGE_REF or
+#                         OMNIGENT_SHARED_HOST_IMAGE/_TAG (default: latest).
+#                         Image settings are read from the environment, then .env.
 set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 export CODEX_VOLUME_NAME="${CODEX_VOLUME_NAME:-codex_auth_volume}"
 VOLUME_NAME="${CODEX_VOLUME_NAME}"
@@ -43,9 +50,50 @@ _ensure_volume() {
   fi
 }
 
+# Docker creates the mount point root-owned; the CLI writes it as 1000:1000.
+_own_volume() {
+  docker run --rm \
+    --mount "type=volume,source=${VOLUME_NAME},target=${CODEX_HOME}" \
+    alpine:3.24 sh -c "chown -R 1000:1000 '${CODEX_HOME}' && chmod 0700 '${CODEX_HOME}'"
+}
+
+# Compose used to resolve the login image from the shell, then the project
+# .env; keep that precedence now that --login runs the image directly.
+_image_setting() {
+  local key="$1" value
+  local double_quoted='^"([^"]*)"' single_quoted="^'([^']*)'"
+  if [[ -n "${!key+x}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  value="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "${ROOT_DIR}/.env" 2>/dev/null | tail -n 1)" || return 0
+  value="${value#*=}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  if [[ "$value" =~ $double_quoted || "$value" =~ $single_quoted ]]; then
+    value="${BASH_REMATCH[1]}"
+  else
+    value="${value%%[[:space:]]#*}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+  printf '%s' "$value"
+}
+
+# The in-product OAuth runner's image: its explicit override, else the shared
+# Omnigent host image as the deployment's Compose file selects it.
+_login_image() {
+  local runner shared legacy name tag
+  runner="$(_image_setting MOONMIND_OAUTH_RUNNER_IMAGE)"
+  shared="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE_REF)"
+  legacy="$(_image_setting OMNIGENT_HOST_IMAGE_REF)"
+  name="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE)"
+  tag="$(_image_setting OMNIGENT_SHARED_HOST_IMAGE_TAG)"
+  printf '%s' "${runner:-${shared:-${legacy:-${name:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${tag:-latest}}}}"
+}
+
 # Security-hardened auth command runner (preserved from original script)
 _run_auth_command() {
   local raw_command="$1"
+  local image="$2"
   local -a command_parts=()
   local -a forbidden_patterns=(
     '$'
@@ -83,15 +131,18 @@ _run_auth_command() {
     fi
   done
 
-  docker compose ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} run --rm -it \
+  docker run --rm -it \
     --user 1000:1000 \
-    -v "${VOLUME_NAME}:${CODEX_HOME}" \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --mount "type=volume,source=${VOLUME_NAME},target=${CODEX_HOME}" \
     --entrypoint /bin/bash \
+    -e HOME=/home/app \
     -e TERM="${CODEX_TERM}" \
     -e CODEX_HOME="${CODEX_HOME}" \
     -e CODEX_CONFIG_HOME="${CODEX_HOME}" \
     -e CODEX_CONFIG_PATH="${CODEX_HOME}/config.toml" \
-    "$AUTH_SERVICE" \
+    "$image" \
     -lc 'stty sane 2>/dev/null || true; exec "$@"' -- \
     "${command_parts[@]}"
 }
@@ -130,22 +181,14 @@ cmd_sync() {
 }
 
 # ---------------------------------------------------------------------------
-# --login: interactive codex auth login inside a container
+# --login: interactive codex auth login in a one-off shared host container
 # ---------------------------------------------------------------------------
 cmd_login() {
   _require_docker
 
-  local AUTH_SERVICE="${CODEX_AUTH_SERVICE:-omnigent-host-codex}"
-  local AUTH_PROFILE="${CODEX_AUTH_PROFILE:-omnigent-host-codex}"
-
   if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "Error: --login requires an interactive terminal." >&2
     exit 1
-  fi
-
-  COMPOSE_PROFILE_ARGS=()
-  if [[ -n "$AUTH_PROFILE" ]]; then
-    COMPOSE_PROFILE_ARGS+=(--profile "$AUTH_PROFILE")
   fi
 
   # Parse and execute each auth command part
@@ -164,8 +207,13 @@ cmd_login() {
     exit 1
   fi
 
+  local image
+  image="$(_login_image)"
+  _ensure_volume
+  _own_volume
+
   for AUTH_COMMAND_LINE in "${AUTH_COMMAND_LINES[@]}"; do
-    _run_auth_command "$AUTH_COMMAND_LINE"
+    _run_auth_command "$AUTH_COMMAND_LINE" "$image"
   done
 }
 

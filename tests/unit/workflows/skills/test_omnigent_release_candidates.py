@@ -290,7 +290,7 @@ def test_compose_updater_supplies_refreshable_image_inputs(
         assert not inputs.get("OMNIGENT_PI_HOST_IMAGE")
 
 
-def test_release_refreshes_only_active_static_host_profiles(release_module):
+def test_release_recreates_only_the_omnigent_server(release_module):
     commands = []
 
     class Runner:
@@ -299,31 +299,19 @@ def test_release_refreshes_only_active_static_host_profiles(release_module):
             return {"exitCode": 0}
 
         async def capture_state(self, *, stack, phase):
-            assert stack == "moonmind"
-            assert phase == "pre-static-host-refresh"
-            return {
-                "services": [
-                    {"Service": "omnigent-host-codex", "State": "running"},
-                    {"Service": "omnigent-host-claude", "State": "exited"},
-                ]
-            }
+            raise AssertionError("a shared host image change needs no host refresh")
 
     drivers = release_module.production_drivers(
         runner=Runner(), moonmind_image="moonmind:updated"
     )
     asyncio.run(drivers.restart_server({"shared": UPSTREAM_HOST}))
-    assert commands[0][-1] == "omnigent"
-    assert commands[1][-1] == "omnigent-host-codex"
-    assert "--no-deps" not in commands[1]
-    assert all("omnigent-host-claude" not in command for command in commands)
-    # Consumers read the installed record and resolved state, so the release
-    # does not recreate the API or the agent runtime worker.
-    assert len(commands) == 2
-    assert all(
-        service not in command
-        for command in commands
-        for service in ("api", "temporal-worker-agent-runtime")
-    )
+    # On-demand hosts pick up the shared image at their next launch, so only the
+    # server is recreated. Consumers read the installed record and resolved
+    # state, so the release does not recreate the API or the agent runtime
+    # worker either.
+    assert commands == [
+        ("up", "-d", "--no-deps", "--wait", "--wait-timeout", "300", "omnigent")
+    ]
 
 
 def _load_image_resolution_module(monkeypatch):

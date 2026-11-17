@@ -630,7 +630,7 @@ class OmnigentBridgeConfig(BaseModel):
         self,
         *,
         evidence_validation: Mapping[str, Mapping[str, Any]] | None = None,
-        host_mode: Literal["static_compose", "on_demand_docker"] | None = None,
+        host_mode: Literal["on_demand_docker"] | None = None,
     ) -> dict[str, Any]:
         """Return non-secret, operator-visible mode/conformance readiness."""
 
@@ -643,17 +643,11 @@ class OmnigentBridgeConfig(BaseModel):
         selected_embedded = self.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
         proxy_ready = build_omnigent_gate().enabled
         validation = dict(evidence_validation or {})
+        required_host_mode = host_mode or "on_demand_docker"
         evidence_ready = bool(validation) and all(
             validation.get(key, {}).get("status") == "passed"
-            and (
-                (
-                    set(validation.get(key, {}).get("supportedHostModes", ()))
-                    >= {"static_compose", "on_demand_docker"}
-                )
-                if host_mode is None
-                else host_mode
-                in validation.get(key, {}).get("supportedHostModes", ())
-            )
+            and required_host_mode
+            in validation.get(key, {}).get("supportedHostModes", ())
             for key in evidence
         )
         result = {

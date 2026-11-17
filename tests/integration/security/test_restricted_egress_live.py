@@ -1000,15 +1000,7 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "host_mode",
-    [
-        "static_compose",
-        "on_demand_docker",
-    ],
-)
-async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
-    host_mode: str,
+async def test_omnigent_on_demand_host_crosses_real_runtime_attestation_boundary(
     tmp_path: Path,
 ) -> None:
     """Cross ``prepare_host`` while leaving launch and attachment owners real."""
@@ -1017,7 +1009,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
         if not os.getenv(variable, "").strip():
             pytest.fail(f"{variable} immutable image is required for live proof")
     now = datetime.now(UTC)
-    on_demand = host_mode == "on_demand_docker"
+    host_mode = "on_demand_docker"
     container_name = f"mm-host-egress-{uuid.uuid4().hex[:12]}"
     binding = OmnigentOAuthHostBinding(
         bindingRef="omnigent-oauth:egress-live",
@@ -1037,8 +1029,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
             runtimeUid=1000,
             runtimeGid=1000,
         ),
-        staticHostId=None if on_demand else "egress-live-static",
-        hostLaunchProfileRef="codex-oauth-v1" if on_demand else None,
+        hostLaunchProfileRef="codex-oauth-v1",
     )
     lease = OmnigentHostLease(
         leaseId=f"egress-live-{uuid.uuid4().hex}",
@@ -1046,8 +1037,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
         providerLeaseId=f"provider-egress-live-{uuid.uuid4().hex}",
         bindingRef=binding.binding_ref,
         credentialGeneration=1,
-        omnigentHostId=None if on_demand else "egress-live-static",
-        containerName=container_name if on_demand else None,
+        containerName=container_name,
         status="ready",
         acquiredAt=now,
         lastHeartbeatAt=now,
@@ -1055,7 +1045,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     )
     launch = compile_effective_launch(
         profile_ref="omnigent-codex@1",
-        policy_ref="codex-on-demand@1" if on_demand else "codex-static@1",
+        policy_ref="codex-on-demand@1",
         provider_profile_id="egress-live",
     )
     workspace = tmp_path / "workspace"
@@ -1070,9 +1060,6 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
         return_value=workspace
     )
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
-    runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
-        return_value=None
-    )
     runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
         return_value={"id": "egress-live-host", "harnesses": ["codex-native"]}
     )
@@ -1089,34 +1076,10 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     artifact_gateway = LocalOmnigentArtifactGateway(
         root=tmp_path / "protected-egress-evidence"
     )
-    static_was_running = False
     evidence: dict[str, object] | None = None
     launch_evidence_ref: str | None = None
     terminal_evidence_ref: str | None = None
     attachment_identity = ""
-    if not on_demand:
-        prior = _docker(
-            "compose",
-            "-f",
-            "docker-compose.yaml",
-            "--profile",
-            "omnigent-host-codex",
-            "ps",
-            "-q",
-            "omnigent-host-codex",
-        )
-        if prior.returncode == 0 and prior.stdout.strip():
-            state = _docker(
-                "inspect", "--format", "{{.State.Running}}", prior.stdout.strip()
-            )
-            static_was_running = (
-                state.returncode == 0 and state.stdout.strip() == "true"
-            )
-        if static_was_running:
-            pytest.fail(
-                "static conformance row requires a test-owned host; stop the "
-                "pre-existing omnigent-host-codex service first"
-            )
 
     try:
         preflight = await runtime.prepare_host(
@@ -1150,28 +1113,16 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
         )
 
     finally:
-        if on_demand:
-            cleanup = await runtime.stop_host(
-                binding=binding,
-                host_lease=lease,
-                effective_launch=launch,
-                egress_evidence=evidence,
-                launch_evidence_ref=launch_evidence_ref,
-                evidence_request=evidence_request,
-                artifact_gateway=artifact_gateway,
-            )
-            terminal_evidence_ref = cleanup.get("evidenceRef")
-        else:
-            cleanup = await runtime.stop_host(
-                binding=binding,
-                host_lease=lease,
-                effective_launch=launch,
-                egress_evidence=evidence,
-                launch_evidence_ref=launch_evidence_ref,
-                evidence_request=evidence_request,
-                artifact_gateway=artifact_gateway,
-            )
-            terminal_evidence_ref = cleanup.get("evidenceRef")
+        cleanup = await runtime.stop_host(
+            binding=binding,
+            host_lease=lease,
+            effective_launch=launch,
+            egress_evidence=evidence,
+            launch_evidence_ref=launch_evidence_ref,
+            evidence_request=evidence_request,
+            artifact_gateway=artifact_gateway,
+        )
+        terminal_evidence_ref = cleanup.get("evidenceRef")
 
     assert evidence is not None
     assert launch_evidence_ref is not None
@@ -1184,8 +1135,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     assert launched["state"] == "launched"
     assert launched["cleanupResult"] == "pending"
     assert launched["attachmentIdentity"] == attachment_identity
-    if on_demand:
-        assert _docker("inspect", attachment_identity).returncode != 0
+    assert _docker("inspect", attachment_identity).returncode != 0
     assert terminal_evidence_ref is not None
     terminal = parse_and_verify_conformance_evidence(
         await artifact_gateway.read_bytes(terminal_evidence_ref),
@@ -1194,10 +1144,7 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     assert terminal["conformanceRow"] == expected_row
     assert terminal["state"] == "terminal"
     assert terminal["launchEvidenceRef"] == launch_evidence_ref
-    assert terminal["cleanupResult"] in {
-        "succeeded",
-        "drained_owned_static_host",
-    }
+    assert terminal["cleanupResult"] == "succeeded"
     assert terminal["reconciliationResult"] == "succeeded"
     assert terminal["deniedConnectionCount"] > 0
     assert terminal["denialDiagnostics"]

@@ -1114,7 +1114,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   });
 
   it("polls a recoverable selected target when another target is available", () => {
-    const selectedTargetRef = "omnigent-claude-static";
+    const selectedTargetRef = "omnigent-claude-busy";
     const catalog = {
       ...readyOmnigentCatalog,
       available: true,
@@ -1122,12 +1122,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         ...readyOmnigentCatalog.executionProfiles,
         {
           ref: selectedTargetRef,
-          displayName: "Claude static",
+          displayName: "Claude busy",
           available: false,
           launchPolicies: [],
           gateReasons: [{
-            code: "static_host_not_ready",
-            message: "Start and validate the selected static Omnigent host.",
+            code: "profile_capacity_unavailable",
+            message: "The selected Provider Profile is busy.",
             remediationHref: "/settings#omnigent",
           }],
         },
@@ -2211,20 +2211,20 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     };
     initialData.dashboardConfig.system.omnigentExecutionCatalog = {
       profiles: [
-        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", defaultPolicyRef: "codex-static@1", providerRuntime: "codex_cli" },
-        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", defaultPolicyRef: "claude-static@1", providerRuntime: "claude_code" },
+        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", defaultPolicyRef: "codex-on-demand@1", providerRuntime: "codex_cli" },
+        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", defaultPolicyRef: "claude-on-demand@1", providerRuntime: "claude_code" },
       ],
       policies: [
-        { ref: "codex-static@1", displayName: "Codex static", hostMode: "static_compose" },
-        { ref: "claude-static@1", displayName: "Claude static", hostMode: "static_compose" },
+        { ref: "codex-on-demand@1", displayName: "Codex on-demand", hostMode: "on_demand_docker" },
+        { ref: "claude-on-demand@1", displayName: "Claude on-demand", hostMode: "on_demand_docker" },
       ],
     };
     const catalog = {
       ...readyOmnigentCatalog,
       defaultExecutionProfileRef: "omnigent-codex@1",
       executionProfiles: [
-        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", available: true, launchPolicies: [{ ref: "codex-static@1", displayName: "Codex static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
-        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", available: true, launchPolicies: [{ ref: "claude-static@1", displayName: "Claude static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
+        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", available: true, launchPolicies: [{ ref: "codex-on-demand@1", displayName: "Codex on-demand", hostMode: "on_demand_docker", isDefault: true }], gateReasons: [] },
+        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", available: true, launchPolicies: [{ ref: "claude-on-demand@1", displayName: "Claude on-demand", hostMode: "on_demand_docker", isDefault: true }], gateReasons: [] },
       ],
       eligibleProviderProfiles: [
         { profileId: "codex-oauth", label: "OpenAI subscription", providerId: "openai", runtimeId: "codex_cli", busy: false },
