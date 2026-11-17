@@ -3052,8 +3052,22 @@ class RecurringWorkflowsService:
                 ),
             )
 
+    @staticmethod
+    def _adopt_schedule_id(dfn: RecurringWorkflowDefinition) -> None:
+        if not dfn.temporal_schedule_id:
+            dfn.temporal_schedule_id = f"mm-schedule:{dfn.id}"
+            logger.warning(
+                "Adopted recurring definition %s saved without a Temporal schedule",
+                dfn.id,
+            )
+
     async def reconcile_schedules(self, limit: int = 100) -> int:
-        """Sweep db and reconcile temporal schedules where temporal_schedule_id is present."""
+        """Sweep db and reconcile each definition's Temporal schedule.
+
+        An enabled definition saved before Temporal schedules existed has no
+        ``temporal_schedule_id``; the sweep gives it its deterministic schedule
+        instead of leaving it to silently never run.
+        """
         # Page the existing reconciliation sweep so disabled definitions cannot
         # starve later records. A disabled saved definition is still durable
         # desired state when its pause acknowledgement was lost.
@@ -3062,7 +3076,10 @@ class RecurringWorkflowsService:
         cursor: UUID | None = None
         while True:
             statement = select(RecurringWorkflowDefinition.id).where(
-                RecurringWorkflowDefinition.temporal_schedule_id.is_not(None)
+                or_(
+                    RecurringWorkflowDefinition.temporal_schedule_id.is_not(None),
+                    RecurringWorkflowDefinition.enabled.is_(True),
+                )
             )
             if cursor is not None:
                 statement = statement.where(RecurringWorkflowDefinition.id > cursor)
@@ -3137,11 +3154,13 @@ class RecurringWorkflowsService:
                         desc = await self._adapter.describe_schedule(definition_id=dfn.id)
                     except ScheduleNotFoundError:
                         await self._recreate_temporal_schedule(dfn, policy_obj)
+                        self._adopt_schedule_id(dfn)
                         reconciled += 1
                         continue
                     except ScheduleOperationError as exc:
                         logger.warning("describe_schedule failed for %s: %s", dfn.id, exc)
                         continue
+                    self._adopt_schedule_id(dfn)
 
                     sched = getattr(desc, "schedule", None)
                     if sched is None:
@@ -3317,7 +3336,19 @@ class RecurringWorkflowsService:
             last_dispatch_error=definition.last_dispatch_error,
         )
         if not definition.temporal_schedule_id:
-            return fallback
+            if not definition.enabled:
+                return fallback
+            # Saved before Temporal schedules existed; nothing will run it until
+            # reconciliation creates its schedule.
+            return RecurringScheduleRuntimeSummary(
+                next_run_at=None,
+                last_scheduled_for=definition.last_scheduled_for,
+                last_dispatch_status=definition.last_dispatch_status,
+                last_dispatch_error=(
+                    "This definition has no Temporal schedule yet; schedule "
+                    "reconciliation at API startup creates it."
+                ),
+            )
 
         try:
             description = await self._adapter.describe_schedule(

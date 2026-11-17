@@ -598,12 +598,12 @@ For an upgrade from an old release that still ran Manifest work:
    unknown; retain the old release for unresolved work. Source inspection,
    historical rows, and fixture tests cannot establish live deployment counts.
 
-Registry-data preservation is separate. After registry writers stop,
-`tools/manifest_registry_export_4191.py` verifies protected snapshots and isolated
-restore rehearsals. Alembic revisions `376_drop_manifest_registry_4192` and
-`381_manifest_drain_audit_4191` use `manifest_registry_migration_4191` to guard
-registry disposition; an empty registry does not prove that workflow histories
-have drained. Keep protected exports and historical artifacts available.
+Registry-data preservation is separate. Alembic revisions
+`376_drop_manifest_registry_4192` and `381_manifest_drain_audit_4191` use
+`manifest_registry_migration_4191` to refuse dropping a populated registry until
+the operator binds the row count of a verified `pg_dump` snapshot to the
+approval; an empty registry does not prove that workflow histories have drained.
+Keep protected exports and historical artifacts available.
 
 Checkpoint compatibility has its own Temporal consumer observer,
 `TemporalExecutionService.observe_checkpoint_compat_drain`, and retained activity

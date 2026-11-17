@@ -28,7 +28,9 @@ assert _JOURNEY_FIXTURE is journey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ["expired", "live", "legacy", "hold", "read_failure"])
+@pytest.mark.parametrize(
+    "fault", ["expired", "live", "unleased", "hold", "read_failure"]
+)
 async def test_foreign_claim_requires_only_github_and_expired_owner_cannot_resume(
     journey, monkeypatch, tmp_path, fault
 ):
@@ -42,10 +44,10 @@ async def test_foreign_claim_requires_only_github_and_expired_owner_cannot_resum
     original = await store_a.get("default/deployment-a")
     handoff = parse_attempt_comment(original.comment_body).handoff
     assert handoff.lease_expires_at
-    if fault in {"legacy", "hold"}:
+    if fault in {"unleased", "hold"}:
         handoff = (
             replace(handoff, lease_renewed_at="", lease_expires_at="")
-            if fault == "legacy"
+            if fault == "unleased"
             else replace(handoff, operator_hold=True)
         )
         body = render_attempt_comment(handoff)
@@ -54,12 +56,16 @@ async def test_foreign_claim_requires_only_github_and_expired_owner_cannot_resum
         state["comments"][0]["body"] = body
     original_body = state["comments"][0]["body"]
     base = leases.utc_now()
+    if fault == "unleased":
+        # A version-1 claim without a lease holds while GitHub's own
+        # timestamp for it is recent.
+        state["comments"][0]["created_at"] = base.isoformat()
     # An announced-but-not-started reservation carries the five-minute
     # preparing deadline, so "live" is minutes old and "expired" is past it.
     monkeypatch.setattr(
         leases,
         "utc_now",
-        lambda: base + timedelta(minutes=31 if fault != "live" else 2),
+        lambda: base + timedelta(minutes=2 if fault in {"live", "unleased"} else 31),
     )
     if fault == "read_failure":
         state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"

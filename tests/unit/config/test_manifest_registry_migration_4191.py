@@ -5,8 +5,7 @@ preservation/disposition/verification core that sibling #4192 MR5's
 unconditional drop migration does not enforce:
 
 - caller-backed disposition completeness (REQ-1),
-- bounded protected export + verified usable restore (REQ-2/REQ-3, ACC-1),
-- writer/concurrency/incompatible-code refusal (REQ-6, ACC-5),
+- retired-writer absence and the execution-time drop refusal (REQ-6, ACC-5),
 - migration-chain self-containment and ancestry (REQ-4, ACC-2),
 - shared enum/type decoding and historical reads for both entry contracts
   (REQ-5, ACC-3, ACC-4),
@@ -23,7 +22,6 @@ suite via the existing impact selector.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -39,26 +37,16 @@ from moonmind.gates.manifest_registry_migration_4191 import (
     MANIFEST_REGISTRY_MIGRATION_CONTRACT,
     MANIFEST_TABLE,
     MANIFEST_TABLE_COLUMNS,
-    RegistryDrainInputs,
     build_sanitized_supply_package,
     check_disposition_complete,
     check_migration_text_self_contained,
     downgrade_refusal_message,
-    evaluate_registry_drain,
-    export_row_envelope,
     find_live_writers,
     is_drain_approved,
     registry_disposition_table,
     render_operator_procedure,
     require_registry_drop_approval,
-    sha256_hex,
     stable_disposition_digest,
-    verify_export_envelope,
-)
-from tools.manifest_registry_export_4191 import (
-    check_export_permissions,
-    export_rows,
-    verify_export_dir,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -69,54 +57,6 @@ INITIAL_MIGRATION = (
     REPO_ROOT
     / "api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py"
 )
-
-
-def _fixture_rows() -> list[dict]:
-    content_a = "name: demo-a\nversion: v0\nnodes: []\n"
-    content_b = "name: demo-b\nversion: v1\nnodes:\n  - id: n1\n"
-    return [
-        {
-            "id": 1,
-            "name": "demo-a",
-            "content": content_a,
-            "content_hash": hashlib.sha256(content_a.encode()).hexdigest(),
-            "version": "v0",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "updated_at": "2026-01-02T00:00:00+00:00",
-            "last_indexed_at": "2026-01-03T00:00:00+00:00",
-            "last_run_job_id": "11111111-1111-1111-1111-111111111111",
-            "last_run_source": "api",
-            "last_run_status": "completed",
-            "last_run_workflow_id": "mm:wf-a",
-            "last_run_temporal_run_id": "run-a",
-            "last_run_manifest_ref": "artifact://manifest/demo-a",
-            "last_run_started_at": "2026-01-04T00:00:00+00:00",
-            "last_run_finished_at": "2026-01-05T00:00:00+00:00",
-            "state_json": {"phase": "done"},
-            "state_updated_at": "2026-01-05T00:00:00+00:00",
-        },
-        {
-            # Nullable-field edge: no state payload, no last-run linkage.
-            "id": 2,
-            "name": "demo-b",
-            "content": content_b,
-            "content_hash": hashlib.sha256(content_b.encode()).hexdigest(),
-            "version": "v1",
-            "created_at": "2026-02-01T00:00:00+00:00",
-            "updated_at": "2026-02-02T00:00:00+00:00",
-            "last_indexed_at": None,
-            "last_run_job_id": None,
-            "last_run_source": None,
-            "last_run_status": None,
-            "last_run_workflow_id": None,
-            "last_run_temporal_run_id": None,
-            "last_run_manifest_ref": None,
-            "last_run_started_at": None,
-            "last_run_finished_at": None,
-            "state_json": None,
-            "state_updated_at": None,
-        },
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -153,153 +93,14 @@ def test_disposition_digest_is_stable_for_evidence_refs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# REQ-2/REQ-3, ACC-1: protected export with exact preservation + restore.
+# REQ-6, ACC-5: retired writers stay absent.
 # ---------------------------------------------------------------------------
 
 
-def test_export_envelope_preserves_exact_bytes_and_links() -> None:
-    row = _fixture_rows()[0]
-    envelope, content_bytes = export_row_envelope(row)
-    assert content_bytes == row["content"].encode("utf-8")
-    assert envelope["content_sha256"] == sha256_hex(content_bytes)
-    assert envelope["version"] == "v0"
-    assert envelope["state_json"] == {"phase": "done"}
-    assert envelope["last_run"]["workflow_id"] == "mm:wf-a"
-    assert envelope["last_run"]["temporal_run_id"] == "run-a"
-    assert verify_export_envelope(envelope, content_bytes) == []
-
-
-def test_export_rows_round_trip_with_usable_restore(tmp_path: Path) -> None:
-    rows = _fixture_rows()
-    export_dir = tmp_path / "protected-export"
-    report = export_rows(rows, export_dir, writers_present=(), expected_row_count=2)
-    assert report["row_count"] == 2
-    assert check_export_permissions(export_dir) == []
-
-    restored = verify_export_dir(export_dir, expected_row_count=2)
-    assert restored["row_count"] == 2
-    by_name = {row["name"]: row for row in restored["rows"]}
-    assert by_name["demo-a"]["content_sha256"] == hashlib.sha256(
-        rows[0]["content"].encode()
-    ).hexdigest()
-    assert by_name["demo-b"]["content_sha256"] == hashlib.sha256(
-        rows[1]["content"].encode()
-    ).hexdigest()
-
-
-def test_export_report_carries_no_sensitive_content(tmp_path: Path) -> None:
-    rows = _fixture_rows()
-    export_dir = tmp_path / "protected-export"
-    report = export_rows(rows, export_dir, writers_present=(), expected_row_count=2)
-    text = json.dumps(report)
-    for row in rows:
-        assert row["content"] not in text
-    assert "phase" not in text or "state_json" not in text
-    # Digests and refs are the allowed evidence, not the content itself.
-    assert report["rows"][0]["content_sha256"]
-    assert report["rows"][0]["last_run_manifest_ref"] == "artifact://manifest/demo-a"
-
-
-def test_export_requires_required_fields() -> None:
-    row = _fixture_rows()[0]
-    incomplete = dict(row)
-    del incomplete["content"]
-    with pytest.raises(ValueError, match="missing preserved column"):
-        export_row_envelope(incomplete)
-
-
-def test_tampered_export_fails_restore_not_silent(tmp_path: Path) -> None:
-    export_dir = tmp_path / "protected-export"
-    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
-    (export_dir / "manifest_rows" / "1.yaml").write_bytes(b"tampered-bytes")
-    with pytest.raises(RuntimeError, match="digest mismatch"):
-        verify_export_dir(export_dir)
-
-
-# ---------------------------------------------------------------------------
-# REQ-6, ACC-5: no silent loss — writers, partial, failure, concurrency.
-# ---------------------------------------------------------------------------
-
-
-def test_live_writers_block_export_and_drain(tmp_path: Path) -> None:
-    writers = find_live_writers(["api_service/services/manifests_service.py"])
-    assert writers
-    with pytest.raises(RuntimeError, match="live writers"):
-        export_rows(_fixture_rows(), tmp_path / "export", writers_present=writers)
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(writers_present=writers, export_verified=True)
+def test_live_writer_markers_are_detected() -> None:
+    assert find_live_writers(["api_service/services/manifests_service.py"]) == (
+        "api_service/services/manifests_service.py",
     )
-    assert not decision.may_apply_destructive
-    assert any("live_writers" in blocking for blocking in decision.blocking)
-
-
-def test_partial_export_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="partial export"):
-        export_rows(
-            _fixture_rows(),
-            tmp_path / "export",
-            writers_present=(),
-            expected_row_count=5,
-        )
-
-
-def test_failed_verification_blocks_destructive_application() -> None:
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(export_verified=False, export_row_count=2)
-    )
-    assert not decision.may_apply_destructive
-    assert "export_not_verified" in decision.blocking
-
-
-def test_row_count_mismatch_blocks_destructive_application() -> None:
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(
-            export_verified=True, export_row_count=1, expected_row_count=2
-        )
-    )
-    assert not decision.may_apply_destructive
-    assert any("row_count_mismatch" in blocking for blocking in decision.blocking)
-
-
-def test_concurrent_migrator_blocks_destructive_application() -> None:
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(
-            export_verified=True,
-            export_row_count=2,
-            expected_row_count=2,
-            migrator_lock_held_by_other=True,
-        )
-    )
-    assert not decision.may_apply_destructive
-    assert "concurrent_migrator_holds_lock" in decision.blocking
-
-
-def test_incompatible_old_code_blocks_destructive_application() -> None:
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(
-            export_verified=True,
-            export_row_count=2,
-            expected_row_count=2,
-            incompatible_code_present=("api_service/services/manifests_service.py",),
-        )
-    )
-    assert not decision.may_apply_destructive
-    assert any("incompatible_code" in blocking for blocking in decision.blocking)
-
-
-def test_drain_gate_passes_only_when_fully_ready() -> None:
-    decision = evaluate_registry_drain(
-        RegistryDrainInputs(
-            writers_present=(),
-            export_verified=True,
-            export_row_count=2,
-            expected_row_count=2,
-            incompatible_code_present=(),
-            migrator_lock_held_by_other=False,
-        )
-    )
-    assert decision.may_apply_destructive
-    assert decision.required_action == "proceed"
 
 
 def test_retired_writers_are_absent_from_this_checkout() -> None:
@@ -482,7 +283,7 @@ def test_sanitized_supply_package_is_durable_and_secret_free() -> None:
 def test_postgres_coverage_is_deployment_owned_not_sqlite() -> None:
     """Hermetic SQLite/helper tests do not certify the production upgrade.
 
-    The logic above (envelopes, digests, drain refusal, chain ancestry)
+    The logic above (digests, drain refusal, chain ancestry)
     runs in required CI; the real supported PostgreSQL migration — fresh
     ``alembic upgrade head`` plus populated old-database upgrade with
     authorized generic historical reads — is deployment-owned evidence for
@@ -577,49 +378,30 @@ def test_registry_drop_approval_refuses_stale_export_count() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "row_count,approved",
+    [(3, False), (None, False), (3, True), (None, True)],
+    ids=["populated", "unobservable", "unbound-approval", "unbound-unobservable"],
+)
+def test_registry_drop_refusal_names_a_shipped_preservation_path(
+    row_count, approved
+) -> None:
+    """An unmigrated database is told what to run, never a removed tool."""
+    with pytest.raises(RuntimeError) as refusal:
+        require_registry_drop_approval(manifest_row_count=row_count, approved=approved)
+    message = str(refusal.value)
+    for text in (message, render_operator_procedure()):
+        assert "tools/" not in text
+        assert "pg_dump" in text
+        assert DRAIN_APPROVAL_ENV_VAR in text
+
+
 def test_drain_approval_env_parsing() -> None:
     assert DRAIN_APPROVAL_VALUE == "1"
     assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: "1"}) is True
     assert is_drain_approved({}) is False
     assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: ""}) is False
     assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: "yes"}) is False
-
-
-# ---------------------------------------------------------------------------
-# REQ-2 polish: --verify-only runs without --rows-json.
-# ---------------------------------------------------------------------------
-
-
-def test_verify_only_runs_without_rows_json(tmp_path: Path) -> None:
-    from tools.manifest_registry_export_4191 import main
-
-    export_dir = tmp_path / "protected-export"
-    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
-    assert main(["--export-dir", str(export_dir), "--verify-only"]) == 0
-    assert (
-        main(
-            [
-                "--export-dir",
-                str(export_dir),
-                "--verify-only",
-                "--expected-row-count",
-                "2",
-            ]
-        )
-        == 0
-    )
-    assert (
-        main(
-            [
-                "--export-dir",
-                str(export_dir),
-                "--verify-only",
-                "--expected-row-count",
-                "5",
-            ]
-        )
-        == 2
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -826,50 +608,8 @@ def test_registry_removal_owns_no_saved_work_evidence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PR #4292 review remediation: stored hash format, column presence, writer
-# drainage, export binding, forward cutover.
+# Forward cutover for databases that already dropped the registry.
 # ---------------------------------------------------------------------------
-
-
-def test_stored_sha256_prefixed_hash_verifies() -> None:
-    from moonmind.gates.manifest_registry_migration_4191 import (
-        normalize_stored_content_hash,
-        verify_export_envelope,
-    )
-
-    row = _fixture_rows()[0]
-    envelope, content_bytes = export_row_envelope(row)
-    assert normalize_stored_content_hash(f"sha256:{envelope['content_sha256']}") == (
-        envelope["content_sha256"]
-    )
-    prefixed = dict(envelope, stored_content_hash=f"sha256:{envelope['content_sha256']}")
-    assert verify_export_envelope(prefixed, content_bytes) == []
-
-
-def test_export_refuses_missing_preserved_column() -> None:
-    row = _fixture_rows()[0]
-    incomplete = dict(row)
-    del incomplete["state_json"]
-    with pytest.raises(ValueError, match="missing preserved column"):
-        export_row_envelope(incomplete)
-
-
-def test_export_refuses_unobserved_writers(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="unobserved"):
-        export_rows(_fixture_rows(), tmp_path / "export", expected_row_count=2)
-
-
-def test_drain_refuses_unobserved_row_counts() -> None:
-    decision = evaluate_registry_drain(RegistryDrainInputs(export_verified=True))
-    assert not decision.may_apply_destructive
-    assert any("unobserved" in blocking for blocking in decision.blocking)
-
-
-def test_verify_binds_expected_row_count(tmp_path: Path) -> None:
-    export_dir = tmp_path / "protected-export"
-    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
-    with pytest.raises(RuntimeError, match="disagrees with pre-drop snapshot"):
-        verify_export_dir(export_dir, expected_row_count=5)
 
 
 def test_forward_audit_migration_covers_applied_drops() -> None:

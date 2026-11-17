@@ -4206,6 +4206,90 @@ async def test_disabled_schedule_reconciliation_does_not_recreate_or_starve(
             mock_temporal_adapter.update_schedule.assert_not_awaited()
 
 
+async def test_reconcile_adopts_enabled_definitions_without_a_schedule(
+    tmp_path: Path,
+    mock_temporal_adapter,
+) -> None:
+    """Definitions saved before Temporal schedules existed get one on reconcile."""
+    supported = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {"task": {"instructions": "Queue job"}},
+    }
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            unscheduled, unsupported, disabled = uuid4(), uuid4(), uuid4()
+            for definition_id, enabled, target in (
+                (unscheduled, True, supported),
+                (unsupported, True, {"kind": "queue_task"}),
+                (disabled, False, supported),
+            ):
+                session.add(
+                    RecurringWorkflowDefinition(
+                        id=definition_id,
+                        name="Pre-schedule",
+                        cron="0 6 * * *",
+                        timezone="UTC",
+                        enabled=enabled,
+                        target=target,
+                        policy={},
+                        temporal_schedule_id=None,
+                    )
+                )
+            await session.commit()
+            mock_temporal_adapter.describe_schedule.side_effect = ScheduleNotFoundError(
+                "missing"
+            )
+            mock_temporal_adapter.pause_schedule.side_effect = ScheduleNotFoundError(
+                "missing"
+            )
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+
+            assert await service.reconcile_schedules() == 2
+
+            assert [
+                awaited.kwargs["definition_id"]
+                for awaited in mock_temporal_adapter.create_schedule.await_args_list
+            ] == [unscheduled]
+        async with maker() as session:
+            adopted = await session.get(RecurringWorkflowDefinition, unscheduled)
+            assert adopted.temporal_schedule_id == f"mm-schedule:{unscheduled}"
+            # An unsupported saved target is paused, not given a schedule.
+            refused = await session.get(RecurringWorkflowDefinition, unsupported)
+            assert refused.enabled is False
+            assert refused.temporal_schedule_id is None
+            untouched = await session.get(RecurringWorkflowDefinition, disabled)
+            assert untouched.temporal_schedule_id is None
+
+
+async def test_runtime_summary_reports_an_unscheduled_definition(
+    tmp_path: Path,
+    mock_temporal_adapter,
+) -> None:
+    async with recurring_db(tmp_path) as maker, maker() as session:
+        definition = RecurringWorkflowDefinition(
+            id=uuid4(),
+            name="Pre-schedule",
+            cron="0 6 * * *",
+            timezone="UTC",
+            enabled=True,
+            target={},
+            policy={},
+            temporal_schedule_id=None,
+            next_run_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+
+        summary = await service.runtime_summary_for_definition(definition)
+
+        assert summary.next_run_at is None
+        assert "no Temporal schedule" in summary.last_dispatch_error
+        mock_temporal_adapter.describe_schedule.assert_not_awaited()
+
+
 async def test_occurrence_processing_denial_preserves_actionable_diagnostic(monkeypatch):
     from api_service.services import omnigent_execution_plan_service as plans
     from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError

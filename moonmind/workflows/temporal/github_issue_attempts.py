@@ -18,7 +18,8 @@ Contract summary:
   internal aliases: this is the single canonical attempt deployment field.
 * One versioned, bounded comment representation with a readable summary and
   machine-readable metadata. New leased claims use version 2; persisted
-  version-1 comments retain their non-expiring contract.
+  version-1 comments carry no lease, and GitHub's own timestamp bounds the
+  reservation they hold (``github_issue_claim_lease.reservation_status``).
 * A copied machine marker is not authentication. Callers supply trusted
   poster provenance from the authenticated GitHub boundary; validation
   rejects spoofed, unsupported, inconsistent, and missing-predecessor
@@ -52,7 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Collection, Mapping, Sequence
 
-#: Historical non-expiring format, retained for persisted attempt handoffs.
+#: Historical lease-less format, retained for persisted attempt handoffs.
 ATTEMPT_HANDOFF_FORMAT_VERSION = 1
 SUPPORTED_HANDOFF_VERSIONS = frozenset({1, 2})
 

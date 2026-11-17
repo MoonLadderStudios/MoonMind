@@ -8,11 +8,8 @@ contract that the unconditional drop migration itself does not enforce:
 
 - a caller-backed disposition table for every dedicated registry column,
   constraint/index, callback-writer link, and shared execution field,
-- export-envelope construction and verification (row counts plus
-  content/digest checks, never printing sensitive values),
-- a drain-readiness gate that refuses destructive application while old
-  writers, unverified exports, incompatible code, or a competing migrator
-  remain,
+- the execution-time drop approval that refuses a populated table until the
+  operator binds a verified ``pg_dump`` snapshot's row count to it,
 - the irreversible-boundary definition and migration-chain self-containment
   checks.
 
@@ -29,8 +26,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any
 
 #: Versioned contract name for the Manifest registry migration gate.
 #: Bump only with an explicit cutover plan; the gate is closed by default.
@@ -388,201 +385,6 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def normalize_stored_content_hash(value: Any) -> Any:
-    """Normalize a stored ``content_hash`` for comparison.
-
-    Retired ``ManifestsService`` rows store ``content_hash`` as
-    ``sha256:<hex>`` while fixtures and recomputed digests use the bare
-    hexadecimal form. The original stored value is preserved verbatim in
-    the export envelope; only the comparison normalizes the known prefix
-    so real populated snapshots are not rejected.
-    """
-    if isinstance(value, str) and value.startswith("sha256:"):
-        return value[len("sha256:") :]
-    return value
-
-
-def export_row_envelope(row: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
-    """Build the protected-export envelope for one registry row.
-
-    The exact ``content`` YAML bytes are preserved verbatim; the envelope
-    carries version/hash, incremental/state payloads, timestamps, and
-    last-run links alongside a recomputed content digest. Raises
-    ``ValueError`` when required preservation fields are missing so a
-    partial row can never produce a passing export. Every column listed in
-    ``MANIFEST_TABLE_COLUMNS`` must be present as a key (nullable columns
-    may carry an explicit ``None``); a missing key is refused instead of
-    being silently encoded as ``null``.
-    """
-    for column in MANIFEST_TABLE_COLUMNS:
-        if column not in row:
-            raise ValueError(
-                f"registry row missing preserved column for export: {column}"
-            )
-    for required in ("id", "name", "content", "content_hash", "version"):
-        if row.get(required) is None or (required != "id" and row.get(required) == ""):
-            raise ValueError(f"registry row missing required field for export: {required}")
-    raw = row["content"]
-    content_bytes = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
-    envelope = {
-        "schema": "manifest-registry-export-4191-v1",
-        "id": row["id"],
-        "name": row["name"],
-        "content_sha256": sha256_hex(content_bytes),
-        "stored_content_hash": row["content_hash"],
-        "version": row["version"],
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
-        "last_indexed_at": row.get("last_indexed_at"),
-        "last_run": {
-            "job_id": row.get("last_run_job_id"),
-            "source": row.get("last_run_source"),
-            "status": row.get("last_run_status"),
-            "workflow_id": row.get("last_run_workflow_id"),
-            "temporal_run_id": row.get("last_run_temporal_run_id"),
-            "manifest_ref": row.get("last_run_manifest_ref"),
-            "started_at": row.get("last_run_started_at"),
-            "finished_at": row.get("last_run_finished_at"),
-        },
-        "state_json": row.get("state_json"),
-        "state_updated_at": row.get("state_updated_at"),
-    }
-    return envelope, content_bytes
-
-
-def verify_export_envelope(
-    envelope: dict[str, Any],
-    content_bytes: bytes,
-    *,
-    expected_name: str | None = None,
-) -> list[str]:
-    """Verify one export envelope against its exact content bytes.
-
-    Returns problems (empty means verified): digest mismatch against the
-    stored hash, envelope digest mismatch, schema or last-run-link gaps.
-    The returned problems name refs and digests only, never content bytes.
-    """
-    problems: list[str] = []
-    if envelope.get("schema") != "manifest-registry-export-4191-v1":
-        problems.append(f"unknown export schema for row id={envelope.get('id')!r}")
-        return problems
-    digest = sha256_hex(content_bytes)
-    if envelope.get("content_sha256") != digest:
-        problems.append(
-            f"content digest mismatch for {envelope.get('name')!r} "
-            f"(envelope={envelope.get('content_sha256')!r} recomputed={digest!r})"
-        )
-    stored = envelope.get("stored_content_hash")
-    if normalize_stored_content_hash(stored) != digest:
-        # The stored content_hash is an operator-supplied hash that may use
-        # a legacy algorithm; record the mismatch against digests only.
-        problems.append(
-            f"stored content_hash mismatch for {envelope.get('name')!r} "
-            f"(stored digest does not match recomputed {digest!r})"
-        )
-    if expected_name is not None and envelope.get("name") != expected_name:
-        problems.append(
-            f"export name mismatch: envelope={envelope.get('name')!r} "
-            f"expected={expected_name!r}"
-        )
-    last_run = envelope.get("last_run")
-    if not isinstance(last_run, dict):
-        problems.append(f"export missing last-run links for {envelope.get('name')!r}")
-    return problems
-
-
-def sanitized_export_report(
-    envelopes: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Build the operator export report: counts and digests, no content.
-
-    Historical YAML/state can contain sensitive material even when current
-    validation rejects secrets. The report carries row counts, names, refs,
-    versions, timestamps, and digests only — never YAML bytes, state
-    payloads, or hash preimages beyond their digests.
-    """
-    return {
-        "contract": MANIFEST_REGISTRY_MIGRATION_CONTRACT,
-        "issue": ISSUE_REF,
-        "row_count": len(envelopes),
-        "rows": [
-            {
-                "id": envelope.get("id"),
-                "name": envelope.get("name"),
-                "version": envelope.get("version"),
-                "content_sha256": envelope.get("content_sha256"),
-                "last_run_workflow_id": (envelope.get("last_run") or {}).get("workflow_id"),
-                "last_run_temporal_run_id": (envelope.get("last_run") or {}).get(
-                    "temporal_run_id"
-                ),
-                "last_run_manifest_ref": (envelope.get("last_run") or {}).get("manifest_ref"),
-            }
-            for envelope in envelopes
-        ],
-    }
-
-
-@dataclass(frozen=True, slots=True)
-class RegistryDrainInputs:
-    """Operator-observed inputs for the destructive-migration gate."""
-
-    writers_present: tuple[str, ...] = ()
-    export_verified: bool = False
-    export_row_count: int | None = None
-    expected_row_count: int | None = None
-    incompatible_code_present: tuple[str, ...] = ()
-    migrator_lock_held_by_other: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class RegistryDrainDecision:
-    """Ownership verdict for applying the registry-drop migration."""
-
-    contract: str = MANIFEST_REGISTRY_MIGRATION_CONTRACT
-    may_apply_destructive: bool = False
-    required_action: Literal["proceed", "refuse"] = "refuse"
-    blocking: tuple[str, ...] = field(default_factory=tuple)
-
-
-def evaluate_registry_drain(inputs: RegistryDrainInputs) -> RegistryDrainDecision:
-    """Decide whether the destructive registry drop may be applied.
-
-    Destructive application requires all of: no live writer/callback
-    markers, a verified export whose row count matches the pre-drop
-    snapshot, no incompatible old application code, and no competing
-    migrator holding the migration lock. Anything else refuses with the
-    blocking dimensions named; there is no silent partial completion.
-    A verified export with unobservable row counts (either count ``None``)
-    is refused: callers must prove the verified export matches the
-    pre-drop snapshot instead of treating unknown completeness as
-    sufficient.
-    """
-    blocking: list[str] = []
-    if inputs.writers_present:
-        blocking.append(f"live_writers:{','.join(sorted(inputs.writers_present))}")
-    if inputs.incompatible_code_present:
-        blocking.append(
-            f"incompatible_code:{','.join(sorted(inputs.incompatible_code_present))}"
-        )
-    if inputs.migrator_lock_held_by_other:
-        blocking.append("concurrent_migrator_holds_lock")
-    if not inputs.export_verified:
-        blocking.append("export_not_verified")
-    elif inputs.export_row_count is None or inputs.expected_row_count is None:
-        blocking.append(
-            f"export_row_count_unobserved:export={inputs.export_row_count} "
-            f"expected={inputs.expected_row_count}"
-        )
-    elif inputs.export_row_count != inputs.expected_row_count:
-        blocking.append(
-            f"export_row_count_mismatch:export={inputs.export_row_count} "
-            f"expected={inputs.expected_row_count}"
-        )
-    if blocking:
-        return RegistryDrainDecision(may_apply_destructive=False, blocking=tuple(blocking))
-    return RegistryDrainDecision(may_apply_destructive=True, required_action="proceed")
-
-
 def find_live_writers(present_files: list[str]) -> tuple[str, ...]:
     """Return the retired-writer markers still present in the checkout."""
     found: list[str] = []
@@ -638,14 +440,24 @@ def check_migration_text_self_contained(
     return problems
 
 
-def render_operator_procedure() -> str:
-    """Render the bounded preservation/export/verification procedure.
+#: What a refused drop asks the operator to do, using only ``pg_dump`` and
+#: ``psql`` from the deployment's own PostgreSQL tooling.
+_PRESERVE_THEN_APPROVE = (
+    "after writers stop, snapshot the manifest table with a single-transaction "
+    "pg_dump into operator-owned protected storage, restore it into an "
+    "isolated database with psql and count its rows, then re-run with "
+    f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE} and "
+    f"{DRAIN_EXPORT_ROW_COUNT_ENV_VAR}=<verified row count>."
+)
 
-    The procedure reuses existing database/deployment/artifact mechanisms
-    (``pg_dump``/``psql`` snapshot, operator-owned protected directory,
-    ``tools/manifest_registry_export_4191.py`` verification); it creates no
-    new export database or secret system and never uploads exports to public
-    GitHub, normal broadly visible artifacts, or Temporal history.
+
+def render_operator_procedure() -> str:
+    """Render the bounded preservation/verification procedure.
+
+    The procedure uses the deployment's own ``pg_dump``/``psql`` and an
+    operator-owned protected directory; it creates no new export database or
+    secret system and never uploads snapshots to public GitHub, normal
+    broadly visible artifacts, or Temporal history.
     """
     return "\n".join(
         [
@@ -653,25 +465,21 @@ def render_operator_procedure() -> str:
             "",
             "1. Stop writers: retire producers/callbacks per #4188 inventory and",
             "   confirm no RETIRED_WRITER_MARKERS remain in the release under test.",
-            "2. Snapshot consistently: single-transaction pg_dump (or psql",
-            "   COPY) of the manifest table AFTER writers stop; record row count.",
-            "   A copy begun earlier needs a proven final reconciliation.",
-            "3. Export protected: run tools/manifest_registry_export_4191.py with",
-            "   the snapshot rows into an operator-owned directory (mode 0700,",
-            "   files 0600) preserving original access restrictions and retention.",
-            "   Never upload exports to public GitHub, normal broadly visible",
-            "   artifacts, or Temporal history.",
-            "4. Verify usable restore: the tool recomputes digests, compares row",
-            "   counts and content/state/reference preservation, and rehearses a",
-            "   restore into an isolated database without touching newer work.",
-            "   File creation alone is not verification.",
-            "5. Apply 376_drop_manifest_registry_4192 only when",
-            "   evaluate_registry_drain reports may_apply_destructive with the",
-            "   verified export row count bound to MOONMIND_MANIFEST_REGISTRY_",
-            "   DRAIN_APPROVED=1 via MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT;",
-            "   existing migration locking/versioning plus the transaction-scoped",
-            "   advisory lock serializes concurrent migrators.",
-            "6. After the boundary, rollback uses the matching compatible release",
+            "2. Snapshot consistently: single-transaction pg_dump of the manifest",
+            "   table AFTER writers stop, into an operator-owned directory (mode",
+            "   0700, files 0600) preserving original access restrictions and",
+            "   retention. Never upload snapshots to public GitHub, normal broadly",
+            "   visible artifacts, or Temporal history.",
+            "3. Verify usable restore: restore the snapshot with psql into an",
+            "   isolated database without touching newer work and confirm its",
+            "   manifest row count. File creation alone is not verification.",
+            f"4. Apply {DROP_REVISION} with",
+            f"   {DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE} and",
+            f"   {DRAIN_EXPORT_ROW_COUNT_ENV_VAR} set to the verified row",
+            "   count; a live count that differs refuses the drop. Existing",
+            "   migration locking/versioning plus the transaction-scoped advisory",
+            "   lock serializes concurrent migrators.",
+            "5. After the boundary, rollback uses the matching compatible release",
             "   plus verified protected restoration or forward repair; schema",
             "   downgrade alone raises RuntimeError and stops actionably.",
         ]
@@ -765,9 +573,7 @@ def require_registry_drop_approval(
 ) -> None:
     """Enforce the migration-execution drain gate for the forward drop.
 
-    This is the execution-time counterpart of :func:`evaluate_registry_drain`
-    for the one caller that cannot pass full gate inputs: the Alembic
-    ``upgrade()`` itself. Fresh installs (zero rows) proceed without
+    The Alembic ``upgrade()`` calls this before dropping. Fresh installs (zero rows) proceed without
     approval. A populated or unobservable table requires both explicit
     operator approval AND the verified export evidence bound to that
     approval: ``export_verified`` must be true and ``export_row_count``
@@ -794,14 +600,9 @@ def require_registry_drop_approval(
         if not bound_verified or bound_export_count is None:
             raise RuntimeError(
                 f"{DROP_REVISION} refused: drain approval is not bound to a "
-                "verified export; re-verify with "
-                "tools/manifest_registry_export_4191.py, confirm "
-                f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
-                "may_apply_destructive, then re-run with "
-                f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE} and "
-                f"{DRAIN_EXPORT_ROW_COUNT_ENV_VAR}=<verified row count>. "
-                "A stale approval or rows changed after the snapshot must "
-                "never authorize the drop."
+                f"verified export; {_PRESERVE_THEN_APPROVE} A stale approval "
+                "or rows changed after the snapshot must never authorize the "
+                "drop."
             )
         if manifest_row_count is not None and bound_export_count != manifest_row_count:
             raise RuntimeError(
@@ -814,21 +615,11 @@ def require_registry_drop_approval(
     if manifest_row_count is None:
         raise RuntimeError(
             f"{DROP_REVISION} refused: manifest registry row count is "
-            "unobservable; re-snapshot consistently after stopping writers, "
-            "verify with tools/manifest_registry_export_4191.py, confirm "
-            f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
-            "may_apply_destructive, then re-run with "
-            f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE}. "
-            "Concurrent migrators stay serialized by existing migration "
-            "locking/versioning."
+            f"unobservable; {_PRESERVE_THEN_APPROVE} Concurrent migrators stay "
+            "serialized by existing migration locking/versioning."
         )
     raise RuntimeError(
         f"{DROP_REVISION} refused: manifest registry still holds "
-        f"{manifest_row_count} row(s); export and verify the protected "
-        "snapshot with tools/manifest_registry_export_4191.py, confirm "
-        f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
-        "may_apply_destructive, then re-run with "
-        f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE}. "
-        "Concurrent migrators stay serialized by existing migration "
-        "locking/versioning."
+        f"{manifest_row_count} row(s); {_PRESERVE_THEN_APPROVE} Concurrent "
+        "migrators stay serialized by existing migration locking/versioning."
     )
