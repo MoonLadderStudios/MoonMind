@@ -940,3 +940,51 @@ def test_generic_codex_invalid_setting_keeps_boundary_error_and_promotion_denial
     with pytest.raises(ValueError, match="invalid boolean"):
         default_runtime_provider_rollout_policy(env=env)
     assert generic_codex_promotion_permitted(None, env) is False
+
+
+def test_drain_procedure_reports_items_for_a_named_category_set():
+    """#5343: one report owner serves other category sets, per item."""
+
+    def boom():
+        raise RuntimeError("postgres unreachable")
+
+    payload = run_codex_drain_procedure(
+        {
+            "plans": [{"id": "plan-1", "state": "clean"}],
+            "starts": boom,
+            "sessions": [{"id": "session-1", "state": "active"}],
+        },
+        categories=("plans", "starts", "sessions"),
+        informational=("sessions",),
+    )
+    assert payload["categories"] == ["plans", "starts", "sessions"]
+    assert payload["items"]["plans"] == [{"id": "plan-1", "state": "clean"}]
+    assert payload["items"]["starts"] == [
+        {
+            "id": "starts-unreachable",
+            "state": "unknown",
+            "error": "RuntimeError: postgres unreachable",
+        }
+    ]
+    assert payload["states"]["unknown"] == 1
+    assert payload["informational"] == ["sessions"]
+    assert payload["informationalStates"]["active"] == 1
+    assert payload["deletable"] is False
+
+    clean = run_codex_drain_procedure(
+        {
+            "plans": [{"id": "plan-1", "state": "clean"}],
+            "starts": [],
+            "sessions": [{"id": "session-1", "state": "active"}],
+        },
+        categories=("plans", "starts", "sessions"),
+        informational=("sessions",),
+    )
+    # Informational items are reported but never decide the drain.
+    assert clean["deletable"] is True
+    assert clean["states"]["active"] == 0
+    assert clean["items"]["sessions"] == [{"id": "session-1", "state": "active"}]
+
+    missing = run_codex_drain_procedure({"plans": []}, categories=("plans", "starts"))
+    assert missing["deletable"] is False
+    assert missing["blockers"] == ["drain_inventory_category_missing:starts"]

@@ -683,6 +683,48 @@ def worker_code_readiness(
         raise typer.Exit(code=2)
 
 
+@app.command(
+    "drain-inventory",
+    help=(
+        "Report whether any open workflow, queued start, retry or recorded "
+        "plan can still reach a retired path (codex-profile-bound@1, "
+        "omnigent-opencode@1, the legacy workflow task queue). Reads "
+        "PostgreSQL and Temporal only; never deletes, terminates or rewrites "
+        "anything. Exits 1 unless every item is clean; open AgentSession "
+        "children are listed for information only."
+    ),
+)
+def drain_inventory(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="PostgreSQL URL. Defaults to the deployment's configured database.",
+    ),
+    temporal_address: str | None = typer.Option(
+        None, "--temporal-address", help="Defaults to TEMPORAL_ADDRESS."
+    ),
+    temporal_namespace: str | None = typer.Option(
+        None, "--temporal-namespace", help="Defaults to TEMPORAL_NAMESPACE."
+    ),
+) -> None:
+    import asyncio
+
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.retired_path_inventory import run_retired_path_inventory
+
+    report = asyncio.run(
+        run_retired_path_inventory(
+            database_url=database_url or settings.database.POSTGRES_URL,
+            temporal_address=temporal_address or settings.temporal.address,
+            temporal_namespace=temporal_namespace or settings.temporal.namespace,
+            legacy_task_queue=settings.temporal.workflow_task_queue,
+        )
+    )
+    typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    if not report["deletable"]:
+        raise typer.Exit(code=1)
+
+
 def _workflow_client(api_base: str | None = None):
     """Build the thin executions client from protected configuration only."""
     from moonmind.workflow_cli import (
