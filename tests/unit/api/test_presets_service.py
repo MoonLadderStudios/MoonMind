@@ -3533,16 +3533,24 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "code-review-handoff"
     )
     no_verify_titles = [step["title"] for step in no_verify["steps"]]
+    # Opting out drops remediation; an issue assessed as already implemented
+    # still gets its one verification before it can close.
     assert no_verify_titles == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
         "Check GitHub issue blockers before implementation",
         "Mark GitHub issue In Progress",
         "Implement the issue",
+        "Verify implementation",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
-    assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
+    assert no_verify["steps"][5]["annotations"]["requiresAssessmentVerdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert "The verification and remediation pass is off" in (
+        no_verify["steps"][-2]["instructions"]
+    )
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [

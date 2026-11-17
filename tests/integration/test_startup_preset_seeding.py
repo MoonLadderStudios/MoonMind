@@ -514,10 +514,20 @@ async def test_startup_seeds_default_task_templates(provider_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in expanded_without_verify["steps"]
         ]
-        assert "Verify implementation" not in no_verify_titles
+        # Opting out drops remediation; an issue assessed as already
+        # implemented still gets its one verification before it can close.
+        no_verify_verify_step = next(
+            step
+            for step in expanded_without_verify["steps"]
+            if step["title"] == "Verify implementation"
+        )
+        assert no_verify_verify_step["annotations"]["requiresAssessmentVerdict"] == (
+            "FULLY_IMPLEMENTED"
+        )
+        assert no_verify_skill_ids.count("moonspec-verify") == 1
         assert "Verify remediation attempt 6 of 6" not in no_verify_titles
         assert "Remediate verification gaps — attempt 1 of 6" not in no_verify_titles
-        assert "moonspec-verify" not in no_verify_skill_ids
+        assert "Remediation loop controller" not in no_verify_titles
         assert "Implement the issue" in no_verify_titles
         assert "Create pull request" in no_verify_titles
         no_verify_pr_step = next(
@@ -525,7 +535,9 @@ async def test_startup_seeds_default_task_templates(provider_env_keys, tmp_path)
             for step in expanded_without_verify["steps"]
             if step["title"] == "Create pull request"
         )
-        assert "Verification was disabled" in no_verify_pr_step["instructions"]
+        assert "The verification and remediation pass is off" in (
+            no_verify_pr_step["instructions"]
+        )
         assert "moonspec-verify verdict is FULLY_IMPLEMENTED in" not in (
             no_verify_pr_step["instructions"]
         )
