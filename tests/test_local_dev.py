@@ -361,14 +361,15 @@ def test_api_service_enables_omnigent_with_stock_images_by_default():
         "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
     )
     assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
-    # The legacy generic host image aliases are deprecated; the API selects
-    # the host image only through OMNIGENT_SHARED_HOST_IMAGE*.
+    # The deprecated generic host image aliases reach the API only when the
+    # deployment supplies them (shell or a controller env file), so a pin is
+    # still honored with a startup warning; Compose injects no default.
     for legacy_name in (
         "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
     ):
-        assert legacy_name not in api_env
+        assert api_env[legacy_name] == f"${{{legacy_name}:-}}"
     for worker_name in (
         "temporal-worker-agent-runtime",
         "temporal-worker-integrations",

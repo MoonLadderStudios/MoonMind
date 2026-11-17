@@ -359,8 +359,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Existing deployment configuration that still pins a host image "
-            "through the pre-shared-image variables; neither .env-template "
-            "nor the API Compose environment supplies them."
+            "through the pre-shared-image variables; .env-template no longer "
+            "sets them and the API Compose environment forwards only a "
+            "supplied value, with no default."
         ),
         removalCondition=(
             "One release after the variables' 2026-11-17 deprecation in "

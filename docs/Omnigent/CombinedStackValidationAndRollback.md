@@ -186,9 +186,9 @@ honored with a startup warning naming its replacement; after removal, startup is
 rejected rather than silently ignoring it. A blank value or the default an older
 `.env-template` shipped counts as unset, so a copied `.env` upgrades without an
 edit. The OpenCode variable is deprecated; no Host Class launches it. The three
-`OMNIGENT_HOST_IMAGE*` variables are deprecated too, are no longer in
-`.env-template` or the API's Compose environment, and are removed one release
-after their deprecation.
+`OMNIGENT_HOST_IMAGE*` variables are deprecated too: `.env-template` no longer
+sets them, the API's Compose environment forwards only a value the deployment
+supplies, and they are removed one release after their deprecation.
 
 ## DOC-REQ-009 Optional Destructive Cleanup
 

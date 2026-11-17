@@ -281,14 +281,15 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
     )
     assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
-    # The legacy generic host image aliases are deprecated; the API selects
-    # the host image only through OMNIGENT_SHARED_HOST_IMAGE*.
+    # The deprecated generic host image aliases reach the API only when the
+    # deployment supplies them (shell or a controller env file), so a pin is
+    # still honored with a startup warning; Compose injects no default.
     for legacy_name in (
         "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
     ):
-        assert legacy_name not in api_env
+        assert api_env[legacy_name] == f"${{{legacy_name}:-}}"
     assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
         "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}"
     )

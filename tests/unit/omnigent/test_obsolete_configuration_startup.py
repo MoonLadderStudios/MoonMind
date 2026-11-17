@@ -141,7 +141,7 @@ def test_untouched_template_defaults_upgrade_without_an_edit(
     """An ``.env`` copied from the old template neither warns nor fails.
 
     ``api`` and the workers load ``.env`` directly, so removing the variables
-    from the template and the Compose pass-through does not remove them from an
+    from the template and the Compose defaults does not remove them from an
     existing deployment's process environment.
     """
 
