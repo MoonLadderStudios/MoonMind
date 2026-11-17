@@ -93,11 +93,16 @@ class MockProviderProfileManager:
                     or request.get("profile_id")
                     or "default-managed"
                 ).strip()
-                self._leases[profile_id] = str(request["requester_workflow_id"])
-                handle = workflow.get_external_workflow_handle(
-                    str(request["requester_workflow_id"])
-                )
-                await handle.signal("slot_assigned", {"profile_id": profile_id})
+                requester_id = str(request["requester_workflow_id"])
+                self._leases[profile_id] = requester_id
+                handle = workflow.get_external_workflow_handle(requester_id)
+                try:
+                    await handle.signal("slot_assigned", {"profile_id": profile_id})
+                except Exception:
+                    # Like the real manager: a requester that re-requested and
+                    # then closed no longer holds the lease.
+                    if self._leases.get(profile_id) == requester_id:
+                        del self._leases[profile_id]
         return {}
 
 @workflow.defn(name="DummyCodexSessionWorkflow")
@@ -701,3 +706,36 @@ async def test_fixture_cleanup_accepts_real_completed_execution():
             # A second shutdown targets the retained closed execution, not a new run.
             await _shutdown_fixture_workflow(handle, DummyCodexSessionWorkflow.shutdown)
             assert (await handle.result())["binding"] == {"fixture": "cleanup"}
+
+
+async def test_mock_manager_tolerates_closed_requester():
+    # AgentRun may re-request a slot and close before the manager answers.
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="closed-requester-fixture",
+            workflows=[MockProviderProfileManager, DummyCodexSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            requester = await env.client.start_workflow(
+                DummyCodexSessionWorkflow.run,
+                {"fixture": "closed-requester"},
+                id="test-closed-slot-requester",
+                task_queue="closed-requester-fixture",
+            )
+            await _shutdown_fixture_workflow(
+                requester, DummyCodexSessionWorkflow.shutdown
+            )
+            manager = await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": "codex_cli"},
+                id="test-closed-requester-manager",
+                task_queue="closed-requester-fixture",
+            )
+            await manager.signal(
+                MockProviderProfileManager.request_slot,
+                {"requester_workflow_id": requester.id},
+            )
+            await _shutdown_fixture_workflow(
+                manager, MockProviderProfileManager.shutdown
+            )
