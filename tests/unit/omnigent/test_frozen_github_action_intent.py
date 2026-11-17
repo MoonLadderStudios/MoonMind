@@ -69,6 +69,24 @@ def _request(workspace_repository="MoonLadderStudios/MoonMind", **parameters):
             },
             ["read", "write", "branch_write", "review_request"],
         ),
+        (
+            {
+                "workflow": {
+                    "tool": {"type": "skill", "name": "pr-resolver"},
+                    "skill": {"id": "pr-resolver", "args": {"finishMode": "fix_only"}},
+                }
+            },
+            ["read", "write", "branch_write", "review_request"],
+        ),
+        (
+            {
+                "workflow": {
+                    "tool": {"type": "skill", "name": "pr-resolver"},
+                    "inputs": {"finishMode": "fix_only"},
+                }
+            },
+            ["read", "write", "branch_write", "review_request"],
+        ),
     ],
 )
 async def test_plan_freezes_canonical_parameters_and_resolved_skill_actions(

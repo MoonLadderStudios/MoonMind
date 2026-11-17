@@ -681,11 +681,13 @@ metadata and undeclared mutation intent are rejected before binding a host.
 Auto snapshots without enough action metadata require a corrected request; they
 never receive inferred broader permissions. Retained work remains available.
 
-Generic Omnigent plans compose the selected resolved Skill metadata and authored
-action declarations through this same canonical reader before freezing
-collaboration authority. At credential use, the current agent's required actions
-have to remain within that frozen snapshot. The current connection must allow
-the full operation set, and its repository assignment must still be valid.
+Generic Omnigent plans compose resolved Skill metadata and authored action
+declarations through this same canonical reader before freezing collaboration
+authority. Tool and Skill selectors share their invocation inputs, including
+`finishMode`, rather than independently applying defaults. At credential use,
+the current agent's required actions have to remain within that frozen snapshot.
+The current connection must allow the full operation set, and its repository
+assignment must still be valid.
 Source reads, trusted native review,
 and publisher destination operations retain their distinct roles. Conflicting
 workspace and runtime repository projections fail before credentials or host

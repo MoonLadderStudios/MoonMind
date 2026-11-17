@@ -3356,10 +3356,17 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
     push authority its resolver needs (fix_only still pushes) and, when the
     gate merges, the resolver's merge action.
     """
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        build_resolver_run_request,
+    )
+
+    operations = ("read", "write", "branch_write", "review_request")
+    if finish_mode == "merge":
+        operations = (*operations, "merge_request")
     repository, engine, sessions = await _configure_github_repository_plan_test(
         monkeypatch,
         tmp_path,
-        operations=("read", "write", "branch_write", "review_request", "merge_request"),
+        operations=operations,
     )
     artifacts = _ReadableRepositoryPlanArtifacts()
     try:
@@ -3395,6 +3402,21 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
         assert ("merge_request" in parent_selection["operations"]) is (
             finish_mode == "merge"
         )
+        child_request = build_resolver_run_request(
+            parent_workflow_id="mm:existing-pr-parent",
+            pull_request={
+                "repo": "MoonLadderStudios/MoonMind",
+                "number": 350,
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+                "headSha": "a" * 40,
+                "headBranch": "fix/existing-pr",
+                "baseBranch": "main",
+            },
+            jira_issue_key=None,
+            merge_method="squash",
+            finish_mode=finish_mode,
+            resolver_template={"targetRuntime": "omnigent"},
+        )
         child = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
@@ -3403,9 +3425,9 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
             session_factory=sessions,
             profile_tools=("gh",),
             extra_parameters={
+                **child_request["initial_parameters"],
                 "repository": repository,
-                "publishMode": "auto",
-                "githubOperations": ["write", "branch_write", "review_request"],
+                "workflow": child_request["initial_parameters"]["task"],
             },
             workflow_id="mm:existing-pr-resolver-child",
             parent_repository_plan=parent.envelope,
@@ -3413,12 +3435,7 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
         access = child.envelope.payload.resolvedTools["repositoryAccess"]
         artifact_id = access["collaboration"]["artifactRef"].removeprefix("artifact:")
         selection = json.loads(artifacts.payloads[artifact_id])["selection"]
-        assert selection["operations"] == [
-            "read",
-            "write",
-            "branch_write",
-            "review_request",
-        ]
+        assert selection["operations"] == list(operations)
         assert "destination" not in access
     finally:
         await engine.dispose()
