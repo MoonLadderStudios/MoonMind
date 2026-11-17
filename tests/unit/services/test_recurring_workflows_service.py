@@ -45,7 +45,10 @@ from api_service.services.recurring_workflows_service import (
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.client import ScheduleTriggerResult
 from moonmind.workflows.temporal.schedule_mapping import make_scheduled_workflow_id_base
-from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
+from moonmind.workflows.temporal.schedule_errors import (
+    ScheduleNotFoundError,
+    ScheduleOperationError,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -4255,12 +4258,56 @@ async def test_reconcile_adopts_enabled_definitions_without_a_schedule(
         async with maker() as session:
             adopted = await session.get(RecurringWorkflowDefinition, unscheduled)
             assert adopted.temporal_schedule_id == f"mm-schedule:{unscheduled}"
-            # An unsupported saved target is paused, not given a schedule.
+            # An unsupported saved target is paused, not given a schedule. It
+            # keeps its deterministic identity so later sweeps can still pause
+            # an orphan schedule.
             refused = await session.get(RecurringWorkflowDefinition, unsupported)
             assert refused.enabled is False
-            assert refused.temporal_schedule_id is None
+            assert refused.temporal_schedule_id == f"mm-schedule:{unsupported}"
             untouched = await session.get(RecurringWorkflowDefinition, disabled)
             assert untouched.temporal_schedule_id is None
+
+
+async def test_reconcile_retries_a_failed_orphan_pause_after_disabling(
+    tmp_path: Path,
+    mock_temporal_adapter,
+) -> None:
+    """Disabling an unsupported target cannot drop its orphan from the sweep."""
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            definition_id = uuid4()
+            session.add(
+                RecurringWorkflowDefinition(
+                    id=definition_id,
+                    name="Pre-schedule",
+                    cron="0 6 * * *",
+                    timezone="UTC",
+                    enabled=True,
+                    target={"kind": "queue_task"},
+                    policy={},
+                    temporal_schedule_id=None,
+                )
+            )
+            await session.commit()
+            mock_temporal_adapter.pause_schedule.side_effect = ScheduleOperationError(
+                "temporal unavailable"
+            )
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            assert await service.reconcile_schedules() == 0
+
+            mock_temporal_adapter.pause_schedule.side_effect = None
+            mock_temporal_adapter.pause_schedule.reset_mock()
+            mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(state=SimpleNamespace(paused=False))
+            )
+            assert await service.reconcile_schedules() == 1
+
+            mock_temporal_adapter.pause_schedule.assert_awaited_once_with(
+                definition_id=definition_id
+            )
+            mock_temporal_adapter.create_schedule.assert_not_awaited()
 
 
 async def test_runtime_summary_reports_an_unscheduled_definition(

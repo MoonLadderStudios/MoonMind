@@ -31,8 +31,10 @@ from moonmind.workflows.temporal.github_issue_attempts import (
 )
 from moonmind.workflows.temporal.issue_claim_store import (
     ActiveIssueClaimConflict,
+    ClaimReceipt,
     IssueClaimStore,
     publish_claim_comment,
+    verify_claim,
 )
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
@@ -631,6 +633,37 @@ def test_unleased_holds_and_releases_keep_their_meaning():
         )
         == leases.RESERVATION_RELEASED
     )
+
+
+@pytest.mark.asyncio
+async def test_unleased_owner_loses_shared_writes_once_admission_reclaims_it():
+    """The owner and a contender read the same comment the same way."""
+    comment = _legacy_comment()
+
+    class Comments:
+        async def list_issue_comments(self, *, repo, issue_number):
+            return {"ok": True, "comments": [comment]}
+
+    receipt = ClaimReceipt(
+        owner="default/legacy-owner",
+        repository=REPOSITORY,
+        issue_number=ISSUE,
+        attempt_id="att-stranded-legacy",
+        actor_id="123",
+        comment_body=comment["body"],
+        comment_id="91",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    assert not leases.blocks_new_work(
+        leases.reservation_status(parse_attempt_comment(comment["body"]), comment)
+    )
+    with pytest.raises(ValueError, match="claim_lease_expired"):
+        await verify_claim(receipt, Comments())
+
+    comment["created_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    assert await verify_claim(receipt, Comments())
 
 
 @pytest.mark.asyncio

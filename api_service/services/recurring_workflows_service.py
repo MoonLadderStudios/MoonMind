@@ -3116,6 +3116,9 @@ class RecurringWorkflowsService:
                             dfn.target if isinstance(dfn.target, Mapping) else {}
                         )
                     except RecurringWorkflowValidationError as exc:
+                        # Keep the deterministic identity so the disabled sweep
+                        # retries the pause if it fails or never runs.
+                        self._adopt_schedule_id(dfn)
                         dfn.enabled = False
                         await self._session.commit()
                         dfn = await self._lock_definition_for_update(definition_id)

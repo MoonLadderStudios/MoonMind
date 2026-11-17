@@ -480,6 +480,7 @@ async def verify_claim(receipt: ClaimReceipt, service) -> bool:
     """Confirm this attempt may still perform shared work on the issue."""
     from moonmind.workflows.temporal.github_issue_claim_lease import (
         RESERVATION_EXPIRED,
+        RESERVATION_UNLEASED_STALE,
         reservation_status,
     )
 
@@ -495,7 +496,18 @@ async def verify_claim(receipt: ClaimReceipt, service) -> bool:
     )
     if not listed.get("ok") or not isinstance(listed.get("comments"), list):
         raise ValueError("read_failure: complete claim comment evidence is unavailable")
-    return bool(inspect_claim_comments(receipt, listed["comments"]))
+    comment_id = inspect_claim_comments(receipt, listed["comments"])
+    # Judge our own comment by GitHub's timestamps, as admission does, so an
+    # owner never keeps write authority another deployment may have reclaimed.
+    own = next(
+        (item for item in listed["comments"] if str(item.get("id")) == comment_id),
+        None,
+    )
+    if own is not None and reservation_status(
+        parse_attempt_comment(own.get("body")), own
+    ) in {RESERVATION_EXPIRED, RESERVATION_UNLEASED_STALE}:
+        raise ValueError("claim_lease_expired: the old attempt cannot resume shared writes")
+    return bool(comment_id)
 
 
 def is_withdrawal(body: str) -> bool:
