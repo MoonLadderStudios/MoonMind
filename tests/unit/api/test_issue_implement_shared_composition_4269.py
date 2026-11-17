@@ -62,11 +62,11 @@ def _inlined_stage_titles(raw: dict) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "inputs,verification_count",
+    "inputs,remediation_count",
     [({}, 0), ({"run_verify": False}, 0), ({"run_verify": True}, 1)],
 )
 async def test_search_composes_shared_assessment_and_work_pr(
-    tmp_path, inputs, verification_count
+    tmp_path, inputs, remediation_count
 ):
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
@@ -81,8 +81,9 @@ async def test_search_composes_shared_assessment_and_work_pr(
     assert titles[0] == "Resolve GitHub issue and load trusted brief"
     assert titles.count("Assess existing implementation state") == 1
     assert titles.count("Implement the issue") == 1
-    assert titles.count("Verify implementation") == verification_count
-    assert titles.count("Remediation loop controller") == verification_count
+    # Verification stays for issues assessed as already implemented.
+    assert titles.count("Verify implementation") == 1
+    assert titles.count("Remediation loop controller") == remediation_count
     assert titles.count("Create pull request") == 1
     # One selection step only: continuation resumes without a second search.
     assert titles.count("Resolve GitHub issue and load trusted brief") == 1

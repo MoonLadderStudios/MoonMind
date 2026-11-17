@@ -3366,7 +3366,14 @@ async def test_search_implement_verification_is_opt_in(
         is False
     )
     titles = [step["title"] for step in expanded["steps"]]
-    assert ("Verify implementation" in titles) is expected_verification
+    verify = next(
+        step for step in expanded["steps"] if step["title"] == "Verify implementation"
+    )
+    # Opting out drops the remediation pass, not the one verification that an
+    # issue assessed as already implemented needs before it can close.
+    assert (verify.get("annotations") or {}).get("requiresAssessmentVerdict") == (
+        "" if expected_verification else "FULLY_IMPLEMENTED"
+    )
     assert ("Remediation loop controller" in titles) is expected_verification
     assert "Implement the issue" in titles
     assert "Create pull request" in titles
