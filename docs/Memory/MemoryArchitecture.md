@@ -101,9 +101,9 @@ belong to the artifact authority.
 - The primary name takes precedence when both are supplied.
 - The default is 4096 tokens, and the value must be positive.
 
-`MEMORY_LONG_TERM` accepts only `off`. Selecting a retired long-term provider
-fails configuration validation. This setting does not enable a hosted Mem0
-client or a long-term-memory lookup.
+Long-term memory providers are retired and `MEMORY_LONG_TERM` is no longer
+read. Until its obsolete-configuration row is deleted, API and worker startup
+fail when it selects anything but `off`.
 
 Optional-context handling stays with the prepared-context caller, and summary
 write failures stay with the terminal artifact owner.

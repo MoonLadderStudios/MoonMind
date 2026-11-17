@@ -1,7 +1,7 @@
-"""Obsolete Omnigent configuration is never silently ignored at startup.
+"""Obsolete configuration is never silently ignored at startup.
 
 Source issues: MoonLadderStudios/MoonMind#3835 (required work section 10),
-MoonLadderStudios/MoonMind#5342.
+MoonLadderStudios/MoonMind#5342, MoonLadderStudios/MoonMind#5341.
 
 Before an image or environment alias is removed, a deployment that still supplies
 it must get an actionable failure naming the replacement; after removal the value
@@ -325,3 +325,41 @@ def _unreachable_topology():
     raise AssertionError(
         "worker startup must reject obsolete configuration before topology use"
     )
+
+
+# ------------------------------------- retired MoonMind environment names
+
+
+@pytest.mark.parametrize(
+    ("alias", "replacement"),
+    [
+        ("MINIO_ACCESS_KEY", "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID"),
+        ("TEMPORAL_ARTIFACTS_ROOT", "TEMPORAL_ARTIFACT_ROOT"),
+        ("TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH", "remove it"),
+    ],
+)
+def test_retired_name_fails_api_and_worker_startup(
+    monkeypatch, alias: str, replacement: str
+) -> None:
+    """A deployment still using a retired name is told, not defaulted (#5341)."""
+
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setenv(alias, "deployment-value")
+    for check in (
+        _startup_guard(),
+        lambda: legacy_retirement.enforce_obsolete_configuration_at_startup(
+            worker_runtime.logger
+        ),
+    ):
+        with pytest.raises(ObsoleteConfigurationError, match=replacement):
+            check()
+
+
+def test_template_values_of_retired_settings_start_cleanly(monkeypatch) -> None:
+    """What ``.env-template`` shipped for these names neither warns nor fails."""
+
+    monkeypatch.setenv("MEMORY_LONG_TERM", "off")
+    monkeypatch.setenv("TEMPORAL_USER_WORKFLOW_CUTOVER_RECORD_PATH", "")
+    monkeypatch.setenv("TEMPORAL_USER_WORKFLOW_RELEASE_NOTES_PATH", "")
+    _startup_guard()()
