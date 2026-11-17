@@ -819,10 +819,11 @@ storage timeouts return `artifact_storage_unavailable`, and a full disk (MinIO
 denial, quarantine, expiry and integrity checks retain their own semantics.
 Failures never change artifact availability or grants. Activities retry
 unavailability within existing budgets; `artifact.create`,
-`artifact.write_complete` and `workspace.capture_checkpoint` keep retrying for
-75 minutes, because the shared disk frees space only at the next hourly storage
-cleanup. Permanent artifact errors stop. Lazy downloads open before response
-headers; later transport failures terminate the stream and retain their cause.
+`artifact.write_complete`, `workspace.capture_checkpoint` and the
+`step_checkpoint.create` activities keep retrying for 75 minutes, because the
+shared disk frees space only at the next hourly storage cleanup. Permanent
+artifact errors stop. Lazy downloads open before response headers; later
+transport failures terminate the stream and retain their cause.
 Unreadable publication decisions stop reconciliation rather than authorize
 replacement publication.
 
