@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from moonmind.workflows.temporal.runtime import terminal_bridge
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
     InMemoryPtyAdapter,
+    RetainedLoginPty,
     TerminalBridgeConnection,
     TerminalBridgeFrameError,
+    attach_login_pty,
     start_terminal_bridge_container,
     start_tmate_auth_runner_container,
 )
@@ -168,6 +173,152 @@ async def test_terminal_bridge_streams_output_to_async_callback() -> None:
 
     assert sent == [b"first", b"second"]
     assert bridge.output_event_count == 2
+
+
+@pytest.fixture
+def _login_ptys(monkeypatch: pytest.MonkeyPatch) -> dict[str, RetainedLoginPty]:
+    retained: dict[str, RetainedLoginPty] = {}
+    monkeypatch.setattr(terminal_bridge, "_retained_login_ptys", retained)
+    return retained
+
+
+async def _collect_output(pty: RetainedLoginPty) -> bytes:
+    output = b""
+    async for chunk in pty.output_chunks():
+        output += chunk
+    return output
+
+
+@pytest.mark.asyncio
+async def test_retained_login_pty_replays_recent_whole_lines() -> None:
+    adapter = InMemoryPtyAdapter(
+        output_chunks=[
+            b"old line\r\n",
+            b"visit: https://claude.com/auth\r\n",
+            b"Paste > ",
+        ]
+    )
+    pty = RetainedLoginPty(adapter, expires_at=None, max_output_bytes=40)
+
+    await pty.start()
+    replay = await _collect_output(pty)
+
+    assert replay == b"visit: https://claude.com/auth\r\nPaste > "
+    assert await _collect_output(pty) == replay
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_finished_login_is_replayed_instead_of_started_again(
+    _login_ptys: dict[str, RetainedLoginPty],
+) -> None:
+    created: list[InMemoryPtyAdapter] = []
+
+    def create_adapter() -> InMemoryPtyAdapter:
+        adapter = InMemoryPtyAdapter(output_chunks=[b"Login successful.\r\n"])
+        created.append(adapter)
+        return adapter
+
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    first = await attach_login_pty(
+        "oas_finished_login", expires_at=expires_at, create_adapter=create_adapter
+    )
+    assert await _collect_output(first) == b"Login successful.\r\n"
+
+    second = await attach_login_pty(
+        "oas_finished_login", expires_at=expires_at, create_adapter=create_adapter
+    )
+
+    assert second is first
+    assert len(created) == 1
+    assert await _collect_output(second) == b"Login successful.\r\n"
+    await second.resize(80, 24)
+    assert created[0].resizes == []
+    with pytest.raises(BrokenPipeError):
+        await second.write_bytes(b"code\r")
+
+
+@pytest.mark.asyncio
+async def test_expired_login_is_released_on_the_next_attach(
+    _login_ptys: dict[str, RetainedLoginPty],
+) -> None:
+    class _RunningAdapter(InMemoryPtyAdapter):
+        async def output_chunks(self):
+            await asyncio.Event().wait()
+            yield b""
+
+    expired = _RunningAdapter()
+    await attach_login_pty(
+        "oas_expired_login",
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        create_adapter=lambda: expired,
+    )
+    await asyncio.sleep(0)
+
+    await attach_login_pty(
+        "oas_next_login",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        create_adapter=InMemoryPtyAdapter,
+    )
+
+    assert expired.closed is True
+    assert set(_login_ptys) == {"oas_next_login"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attaches_release_each_expired_login_once(
+    _login_ptys: dict[str, RetainedLoginPty],
+) -> None:
+    class _RunningAdapter(InMemoryPtyAdapter):
+        async def output_chunks(self):
+            await asyncio.Event().wait()
+            yield b""
+
+    expired_adapters = [_RunningAdapter(), _RunningAdapter()]
+    for index, adapter in enumerate(expired_adapters):
+        expired = RetainedLoginPty(
+            adapter, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+        await expired.start()
+        _login_ptys[f"oas_expired_{index}"] = expired
+    await asyncio.sleep(0)
+
+    live_expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
+    await asyncio.gather(
+        attach_login_pty(
+            "oas_live_a", expires_at=live_expiry, create_adapter=InMemoryPtyAdapter
+        ),
+        attach_login_pty(
+            "oas_live_b", expires_at=live_expiry, create_adapter=InMemoryPtyAdapter
+        ),
+    )
+
+    assert all(adapter.closed for adapter in expired_adapters)
+    assert set(_login_ptys) == {"oas_live_a", "oas_live_b"}
+
+
+@pytest.mark.asyncio
+async def test_failed_login_connect_closes_adapter_and_allows_a_new_attach(
+    _login_ptys: dict[str, RetainedLoginPty],
+) -> None:
+    class _UnreachableAdapter(InMemoryPtyAdapter):
+        async def connect(self) -> None:
+            raise RuntimeError("auth runner is not ready")
+
+    unreachable = _UnreachableAdapter()
+    with pytest.raises(RuntimeError):
+        await attach_login_pty(
+            "oas_connect_retry", expires_at=None, create_adapter=lambda: unreachable
+        )
+
+    assert unreachable.closed is True
+    retried = await attach_login_pty(
+        "oas_connect_retry",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        create_adapter=lambda: InMemoryPtyAdapter(output_chunks=[b"ready\r\n"]),
+    )
+    assert await _collect_output(retried) == b"ready\r\n"
+
 
 class _FakeProcess:
     def __init__(

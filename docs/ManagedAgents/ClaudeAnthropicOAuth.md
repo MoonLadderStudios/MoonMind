@@ -142,8 +142,10 @@ The Claude OAuth ceremony is:
 
 During this ceremony, the OAuth session should remain in an operator-waiting
 state such as `awaiting_user` while the operator completes the external
-Anthropic sign-in step. The terminal must remain attached long enough for the
-operator to paste the returned token or code.
+Anthropic sign-in step. The returned code works only in the `claude auth login`
+process that printed the URL, so that process keeps running when the browser
+disconnects, as phones do while the operator signs in on another tab, and the
+terminal page reattaches to it (see `OAuthTerminal.md` sections 5.2 and 5.5).
 
 The pasted token or code is transient terminal input. MoonMind must not store it
 as a Managed Secret, return it through API responses, write it to artifacts, or

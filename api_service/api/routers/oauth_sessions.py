@@ -56,6 +56,7 @@ from moonmind.workflows.temporal.runtime.providers.registry import get_provider_
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
     TerminalBridgeConnection,
     TerminalBridgeFrameError,
+    attach_login_pty,
     create_docker_exec_pty_adapter,
 )
 
@@ -627,7 +628,6 @@ async def oauth_terminal_websocket(
     token: str,
 ):
     bridge: TerminalBridgeConnection | None = None
-    pty_adapter = None
     output_task: asyncio.Task | None = None
     close_reason = "client_disconnected"
     async with get_async_session_context() as db:
@@ -663,15 +663,22 @@ async def oauth_terminal_websocket(
             terminal_bridge_id=session_obj.terminal_bridge_id or "",
             owner_user_id=session_obj.requested_by_user_id,
         )
-        pty_adapter = _oauth_terminal_pty_adapter_factory(
-            container_name=session_obj.container_name,
-            runtime_id=session_obj.runtime_id,
-        )
+        container_name = session_obj.container_name
+        runtime_id = session_obj.runtime_id
+        expires_at = session_obj.expires_at
 
     await websocket.accept()
     try:
         try:
-            await pty_adapter.connect()
+            # Reconnects reach the login already running for this session.
+            pty_adapter = await attach_login_pty(
+                session_id,
+                expires_at=expires_at,
+                create_adapter=lambda: _oauth_terminal_pty_adapter_factory(
+                    container_name=container_name,
+                    runtime_id=runtime_id,
+                ),
+            )
         except Exception:
             close_reason = "pty_connect_failed"
             logger.warning(
@@ -726,11 +733,6 @@ async def oauth_terminal_websocket(
                 pass
             except Exception:
                 logger.debug("OAuth terminal output task failed", exc_info=True)
-        if pty_adapter is not None:
-            try:
-                await pty_adapter.close()
-            except Exception:
-                logger.debug("OAuth terminal PTY close failed", exc_info=True)
         await _persist_oauth_terminal_close_metadata(
             session_id,
             close_reason=close_reason,

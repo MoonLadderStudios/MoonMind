@@ -19,6 +19,7 @@ type MockTerminal = {
   write: ReturnType<typeof vi.fn>;
   writeln: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  reset: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
   onData: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
@@ -35,7 +36,7 @@ class MockWebSocket {
   readyState = MockWebSocket.OPEN;
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   send = vi.fn();
   close = vi.fn();
@@ -73,6 +74,7 @@ vi.mock('@xterm/xterm', () => ({
     dispose = vi.fn(() => {
       this.disposed = true;
     });
+    reset = vi.fn();
     getSelection = vi.fn(() => this.selection);
     onData = vi.fn((handler: TerminalDataHandler) => {
       this.dataHandler = handler;
@@ -611,6 +613,84 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     fireEvent.click(terminalSurface);
 
     expect(terminal.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('reattaches to the running login when a backgrounded phone drops the socket', async () => {
+    renderPage();
+    const firstSocket = await waitForSocket();
+    const terminal = currentTerminal();
+
+    // Mobile browsers close the socket while the operator signs in on another tab.
+    act(() => firstSocket.onclose?.(new CloseEvent('close', { code: 1006 })));
+    expect(await screen.findByText('Reconnecting terminal')).toBeTruthy();
+
+    await waitFor(() => expect(webSocketInstances).toHaveLength(2), { timeout: 3000 });
+    const secondSocket = webSocketInstances[1]!;
+    act(() => secondSocket.onopen?.());
+
+    // The server replays the login output, so the old copy is cleared first.
+    expect(terminal.reset).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Connected')).toBeTruthy();
+    const attachCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith('/terminal/attach'));
+    expect(attachCalls).toHaveLength(2);
+
+    fireEvent.change(screen.getByLabelText('Paste authentication code'), {
+      target: { value: 'code#state' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+    expect(secondSocket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'input', data: 'code#state\r' }),
+    );
+    expect(firstSocket.send).not.toHaveBeenCalledWith(
+      JSON.stringify({ type: 'input', data: 'code#state\r' }),
+    );
+  });
+
+  it('reattaches immediately when the operator returns to the tab', async () => {
+    renderPage();
+    const firstSocket = await waitForSocket();
+    act(() => firstSocket.onclose?.(new CloseEvent('close', { code: 1006 })));
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(webSocketInstances).toHaveLength(2), { timeout: 500 });
+  });
+
+  it('does not reattach after the server ends the terminal', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      const socket = await waitForSocket();
+      act(() => socket.onclose?.(new CloseEvent('close', { code: 1011 })));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(webSocketInstances).toHaveLength(1);
+      expect(screen.getByText('Closed')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a terminal that never connected', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(webSocketInstances).toHaveLength(1));
+      // Browsers report a rejected WebSocket handshake as an abnormal close.
+      act(() => webSocketInstances[0]!.onclose?.(new CloseEvent('close', { code: 1006 })));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(webSocketInstances).toHaveLength(1);
+      expect(screen.getByText('Closed')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the manually pasted authentication code when the terminal socket is not open', async () => {

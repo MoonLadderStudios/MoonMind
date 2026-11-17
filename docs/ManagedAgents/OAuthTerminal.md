@@ -244,6 +244,16 @@ The terminal bridge should:
 - close on workflow completion, cancellation, or expiry
 - persist metadata about connections, disconnections, and close reasons
 
+The provider login PTY belongs to the OAuth session, not to one WebSocket. The
+first attach starts the bootstrap command; later attaches reach the same process
+and first receive its recent output (up to 64 KiB, held in API memory only), so
+a reconnecting browser sees the login URL and prompt again. This matters for
+Claude: its sign-in code is accepted only by the `claude auth login` process
+that printed the URL, because that process holds the PKCE verifier. A session
+runs its login once. A finished login is replayed rather than restarted until
+the session expires; to try again, cancel and reconnect, which creates a new
+session. An API restart loses the PTY, and the next attach starts a new login.
+
 The bridge must not expose generic Docker exec access or ordinary workflow-run
 terminal attachment.
 
@@ -342,6 +352,15 @@ buffer with soft-wrapped lines rejoined, so mobile users can copy complete login
 URLs and codes using native text selection even without browser clipboard API
 permission. This snapshot stays in the page only. On narrow screens, the terminal
 uses the available page width without the dashboard card border or padding.
+
+Phones close the WebSocket while the operator signs in on another tab. When a
+connected socket closes without a deliberate server close (normal close, PTY
+failure, rejected frame, or rejected attach), the page reattaches with backoff,
+and at once when the tab becomes visible or the network returns. A first
+connection that never opens shows Closed instead of retrying. While the server
+still counts the dropped connection as active, attach returns 409 and the page
+keeps retrying. The paste field keeps an unsent code until the terminal
+reconnects.
 
 ## 6. Provider Profile Registration
 
