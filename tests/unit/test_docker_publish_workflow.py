@@ -173,7 +173,9 @@ def test_docker_publish_source_owner_checks_frontend_while_image_builds():
     workflow = _load_workflow()
     source = workflow["jobs"]["source-checks"]
     assert source["with"]["verification_phase"] == "source"
-    assert not source.get("needs")
+    # Only the reuse decision precedes it; image builds never do.
+    assert source.get("needs") == "source-reuse"
+    assert not workflow["jobs"]["source-reuse"].get("needs")
     assert not any(
         "npm run ui:test" in step.get("run", "")
         for step in workflow["jobs"]["build"]["steps"]
