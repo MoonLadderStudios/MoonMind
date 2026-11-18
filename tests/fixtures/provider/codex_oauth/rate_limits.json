@@ -1,0 +1,53 @@
+{
+  "_source": "account/rateLimits/read results recorded from codex-cli 0.170.0 app-server against a local fake backend; values synthetic. legacy omits the multi-bucket view as older protocols do.",
+  "multi_bucket": {
+    "ordinaryUsageAllowed": null,
+    "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1795020000},
+      "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1795500000},
+      "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex_bengalfox": {
+        "limitId": "codex_bengalfox",
+        "limitName": "GPT-5.3-Codex-Spark",
+        "normalModelSlug": null,
+        "primary": {"usedPercent": 3, "windowDurationMins": 300, "resetsAt": 1795020100},
+        "secondary": {"usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 1795500100},
+        "credits": null,
+        "individualLimit": null,
+        "spendControlReached": null,
+        "planType": "plus",
+        "rateLimitReachedType": null
+      },
+      "codex": {
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1795020000},
+        "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1795500000},
+        "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+        "individualLimit": null,
+        "spendControlReached": null,
+        "planType": "plus",
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitResetCredits": null,
+    "accountId": "acct-1111",
+    "rateLimitUpsell": null
+  },
+  "legacy": {
+    "rateLimits": {
+      "primary": {"usedPercent": 55.5, "windowDurationMins": 10080, "resetsAt": 1795500000},
+      "secondary": null
+    }
+  }
+}

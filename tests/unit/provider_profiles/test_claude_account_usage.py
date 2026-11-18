@@ -384,7 +384,9 @@ async def test_adapter_is_registered_for_anthropic_oauth_on_claude_code() -> Non
     adapter = registry.get("claude_code", "anthropic")
     assert isinstance(adapter, claude.ClaudeUsageCollector)
     assert registry.get("claude_code", "minimax") is None
-    assert registry.get("codex_cli", "openai") is None
+    assert not isinstance(
+        registry.get("codex_cli", "openai"), claude.ClaudeUsageCollector
+    )
     # Active owners answer through native telemetry; nothing reads twice.
     assert await adapter.request_from_owner(object()) is None
 

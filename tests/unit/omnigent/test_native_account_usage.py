@@ -221,3 +221,104 @@ async def test_a_storage_failure_never_reaches_the_event_stream(env) -> None:
         clock=clock,
     )
     assert await publisher.observe(_event(seven_day=_window(5, at=T0))) == "failed"
+
+
+# -- Native Codex owner (MoonLadderStudios/MoonMind#5364) ----------------------------
+
+
+def _codex_event(used=40, *, at=T0, account_id="acct-1111", **extra) -> dict:
+    bucket = {
+        "limit_id": "codex",
+        "limit_name": None,
+        "model": None,
+        "primary": {"used_percent": 5, "window_duration_mins": 300, "resets_at": None},
+        "secondary": {
+            "used_percent": used,
+            "window_duration_mins": 10080,
+            "resets_at": int((T0 + timedelta(days=3)).timestamp()),
+        },
+    }
+    return {
+        "type": "session.usage",
+        "conversation_id": "session-1",
+        "codex_account_usage": {
+            "observed_at": at.timestamp(),
+            "codex_version": "0.170.0",
+            "account": {
+                "type": "chatgpt",
+                "email": "person@example.com",
+                "plan_type": "plus",
+                "workspace_name": None,
+            },
+            "routing_account_id": account_id,
+            "account_id": account_id,
+            "rate_limits": bucket,
+            "rate_limits_by_limit_id": {"codex": bucket},
+            **extra,
+        },
+    }
+
+
+@pytest_asyncio.fixture
+async def codex_env(env):
+    sessions, clock, lease, publisher = env
+    await lease(profile_id="codex", runtime_id="codex_cli")
+
+    def codex_publisher(**authorization):
+        return publisher(providerProfileId="codex", **authorization)
+
+    async def row():
+        return await observation_row(sessions, "codex") or {}
+
+    return clock, codex_publisher, row
+
+
+async def test_codex_owner_read_is_a_full_snapshot_bound_to_its_account(
+    codex_env,
+) -> None:
+    clock, publisher, row = codex_env
+
+    assert await publisher().observe(_codex_event()) == "accepted"
+
+    stored = await row()
+    usage = stored["usage_json"]
+    assert usage["completeness"] == "full"
+    assert usage["primary_window_key"] == "codex.weekly"
+    assert usage["windows"]["codex.weekly"]["used_percent"] == 40
+    assert usage["windows"]["codex.weekly"]["source"] == "codex_rate_limits"
+    assert stored["identity_json"]["email"] == "person@example.com"
+    assert stored["bound_account_id"] == "acct-1111"
+
+
+async def test_codex_owner_reads_never_go_backwards_or_cross_accounts(
+    codex_env,
+) -> None:
+    clock, publisher, row = codex_env
+    native = publisher()
+    later = T0 + timedelta(minutes=2)
+    assert await native.observe(_codex_event(41, at=later)) == "accepted"
+    assert await native.observe(_codex_event(41, at=later)) == "duplicate"
+
+    # A late response from an earlier read cannot replace the newer snapshot.
+    assert await native.observe(_codex_event(10, at=T0)) == "out_of_order"
+    # A switched login reports another account: rejected, nothing written.
+    switched = _codex_event(90, at=later + timedelta(minutes=1), account_id="acct-2222")
+    assert await native.observe(switched) == "account_mismatch"
+    windows = (await row())["usage_json"]["windows"]
+    assert windows["codex.weekly"]["used_percent"] == 41
+
+
+async def test_codex_events_only_publish_for_a_codex_profile(codex_env, env) -> None:
+    _, publisher, row = codex_env
+    _, _, lease, claude_publisher = env
+    await lease(lease_id="lease-claude")
+
+    claude = claude_publisher(providerLeaseRef="provider-profile-lease:lease-claude")
+    assert await claude.observe(_codex_event()) == "not_supported"
+    assert await publisher().observe(_event(seven_day=_window(5, at=T0))) == (
+        "not_supported"
+    )
+    unreadable = _codex_event()
+    unreadable["codex_account_usage"]["observed_at"] = "soon"
+    assert await publisher().observe(unreadable) == "unreadable"
+    assert await row() == {} or (await row()).get("usage_json") is None

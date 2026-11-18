@@ -298,16 +298,17 @@ two-minute deadline, so a lost acknowledgment expires instead of staying
 running. OAuth success requests an initial collection after the session workflow
 releases enrollment ownership. The server never polls, and disabled or
 disconnected profiles never collect automatically. Each accepted attempt starts
-`MoonMind.ProviderAccountUsageCollection`. OAuth `claude_code` profiles have a
-collector ([ClaudeAnthropicOAuth.md §12](../ManagedAgents/ClaudeAnthropicOAuth.md));
-a runtime without a registered collector adapter reports `not_supported`.
+`MoonMind.ProviderAccountUsageCollection`. OAuth `claude_code` and `codex_cli`
+profiles have collectors ([ClaudeAnthropicOAuth.md §12](../ManagedAgents/ClaudeAnthropicOAuth.md),
+[CodexCliManagedSessions.md §10.1](../ManagedAgents/CodexCliManagedSessions.md));
+other runtimes report `not_supported`.
 Credentials are read only through their owner: while a generic host binding or
 ledger lease uses the home, the adapter asks that owner, and the attempt is
 deferred if it cannot answer. Otherwise the workflow takes a
 `usage_observation` grant (§9.3) and runs the adapter's bounded probe in the
 installed host image on the restricted egress network, mounting the home
-read-only unless the adapter's native token recovery must persist rotated
-state. Results are fenced on generation, grant, and attempt
+read-only unless the native runtime may renew and must persist rotated tokens.
+Results are fenced on generation, grant, and attempt
 before access and before persistence; failures change only observation state.
 
 Settings → Providers & Secrets renders the projection in each row's Provider

@@ -1,12 +1,15 @@
-"""Publish native status-line quota from an Omnigent session stream (#5365).
+"""Publish native account usage from an Omnigent session stream.
 
-The claude-native status-line capture forwards ``rate_limits`` on
-``session.usage``. This module binds that quota to the step's held Provider
-Profile ledger lease and hands it to ``ProviderAccountUsageService`` as a
-partial native-owner observation. The lease is looked up in the database from
-the admitted profile authorization, never taken from the event. Publishing
-never requests collection, reads credentials, or changes the run, and it is
-bounded so a slow database cannot hold up the event stream.
+Native harnesses relay account usage on ``session.usage``: the claude-native
+status-line capture forwards ``rate_limits`` (#5365), a partial observation,
+and the codex-native forwarder forwards ``codex_account_usage`` (#5364), a full
+snapshot from its own app-server read pair. This module binds that reading to
+the step's held Provider Profile ledger lease and hands it to
+``ProviderAccountUsageService`` as a native-owner observation. The lease is
+looked up in the database from the admitted profile authorization, never taken
+from the event, and the profile's collector must match the event's source.
+Publishing never requests collection, reads credentials, or changes the run,
+and it is bounded so a slow database cannot hold up the event stream.
 """
 
 from __future__ import annotations
@@ -20,6 +23,10 @@ from moonmind.provider_profiles.claude_account_usage import (
     ClaudeUsageCollector,
     status_line_report,
 )
+from moonmind.provider_profiles.codex_account_usage import (
+    CodexUsageCollector,
+    native_report,
+)
 from moonmind.provider_profiles.usage_collection import (
     bind_native_owner_event,
     default_usage_collectors,
@@ -29,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 PUBLISH_TIMEOUT_SECONDS = 5.0
 _LEASE_REF_PREFIX = "provider-profile-lease:"
+#: Event field -> (collector that owns it, translator to an owner report).
+_SOURCES = {
+    "rate_limits": (ClaudeUsageCollector, status_line_report),
+    "codex_account_usage": (CodexUsageCollector, native_report),
+}
 
 
 class NativeAccountUsagePublisher:
@@ -58,32 +70,38 @@ class NativeAccountUsagePublisher:
         self._session_id = session_id
         self._session_factory = session_factory
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._published: Any = None
+        self._published: dict[str, Any] = {}
 
     async def observe(self, event: Mapping[str, Any]) -> str | None:
-        """Publish quota carried by ``event``; return a bounded outcome label.
+        """Publish account usage carried by ``event``; return an outcome label.
 
-        Events without quota return ``None``. Nothing here raises: a failure
-        only loses this reading, which the next change or an idle read
-        replaces.
+        Events without account usage return ``None``. Nothing here raises: a
+        failure only loses this reading, which the next change or an idle
+        read replaces.
         """
 
-        rate_limits = event.get("rate_limits")
-        if event.get("type") != "session.usage" or not isinstance(rate_limits, Mapping):
+        if event.get("type") != "session.usage":
             return None
+        field = next(
+            (key for key in _SOURCES if isinstance(event.get(key), Mapping)), None
+        )
+        if field is None:
+            return None
+        payload = event[field]
         if event.get("conversation_id") != self._session_id:
-            # A child session's pane is not this profile's status line.
+            # A child session's reading is not this profile's owner.
             return "ignored"
         if not (self._profile_id and self._lease_id and self._generation):
             return "unbound"
-        if rate_limits == self._published:
+        if payload == self._published.get(field):
             return "duplicate"
-        report = status_line_report(rate_limits)
+        collector, translate = _SOURCES[field]
+        report = translate(payload)
         if report is None:
             return "unreadable"
         try:
             outcome = await asyncio.wait_for(
-                self._publish(report), timeout=PUBLISH_TIMEOUT_SECONDS
+                self._publish(report, collector), timeout=PUBLISH_TIMEOUT_SECONDS
             )
         except Exception as exc:
             logger.warning(
@@ -93,7 +111,7 @@ class NativeAccountUsagePublisher:
             )
             return "failed"
         if outcome == "accepted":
-            self._published = dict(rate_limits)
+            self._published[field] = dict(payload)
         return outcome
 
     def _sessions(self) -> Callable[[], Any]:
@@ -103,7 +121,7 @@ class NativeAccountUsagePublisher:
 
         return async_session_maker
 
-    async def _publish(self, report: Any) -> str:
+    async def _publish(self, report: Any, collector: type) -> str:
         from sqlalchemy import select
 
         from api_service.db.models import (
@@ -145,7 +163,7 @@ class NativeAccountUsagePublisher:
             adapter = default_usage_collectors().get(
                 profile.runtime_id, profile.provider_id
             )
-            if not isinstance(adapter, ClaudeUsageCollector):
+            if not isinstance(adapter, collector):
                 return "not_supported"
             observation = bind_native_owner_event(
                 owner_lease={

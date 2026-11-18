@@ -322,6 +322,49 @@ or individual usage window at 100 percent when no add-on credits are available.
 If retries are exhausted, summaries and diagnostics explicitly classify the
 rate-limit failure and set the canonical `AgentRunResult` metadata.
 
+### 10.1 Account usage
+
+Settings shows an OAuth `codex_cli` profile's email, weekly allowance, reset
+time and other limits through the shared account-usage service
+([ProviderProfiles.md §5.6](../Security/ProviderProfiles.md)). The collector
+(`moonmind/provider_profiles/codex_account_usage.py`) uses Codex's own
+app-server protocol: `account/read` with `refreshToken: false`,
+`account/rateLimits/read`, and a second `account/read`. A change between the
+two account reads means the pair straddled a login or workspace switch, so the
+reading is dropped.
+
+- **Mapping.** `rateLimitsByLimitId` wins over the legacy `rateLimits` bucket.
+  A window is weekly only when `windowDurationMins` is 10080, in either slot.
+  The `codex` limit is the general pool and supplies the headline; a pool with
+  `normalModelSlug` is model-scoped, and any other pool is reported as another
+  limit. Pools are never summed or substituted. `resetsAt` is Unix seconds.
+  The usage `accountId` binds the reading and the workspace-routing
+  `chatgptAccountId` binds the identity, so one email in two workspaces stays
+  two accounts; two different IDs are rejected as an account mismatch.
+- **During a session.** The native Codex forwarder reads on the session's
+  existing app-server connection after it connects and when Codex sends
+  `account/rateLimits/updated`. That notification is sparse, so it only
+  schedules a read: bursts coalesce into one read per minute, failures back
+  off, and a rejected token is renewed at most once per session. MoonMind binds
+  the relayed reading to the step's held lease as a full snapshot, and a
+  refresh request while the session runs defers to it. This needs a deployed
+  Omnigent server and host that include the forwarder change.
+- **Idle.** The collection workflow runs `codex app-server` over stdio in the
+  installed host image under the exclusive `usage_observation` grant, with the
+  enrolled home writable. Codex renews an expired access token when its
+  app-server starts and rotates the refresh token into `auth.json`; a read-only
+  home would lose that rotation, and Codex cannot start without writing its
+  state there. A token the provider still rejects requests recovery, which
+  asks Codex for one forced renewal (`refreshToken: true`) and reads once more.
+- **Failures.** API-key and other non-ChatGPT logins report
+  `usage_access_missing`, a home without `auth.json` reports
+  `reconnect_required`, and a token still rejected after recovery reports
+  `credential_refresh_unavailable`. HTTP 429 reports `rate_limited` and
+  unreadable values report `malformed_response`. Provider error text is never
+  kept. `tests/integration/provider_profiles/test_codex_cli_usage_probe.py`
+  re-qualifies the installed CLI against a local TLS backend whenever `codex`
+  is on the test path.
+
 ---
 
 ## 11. Container-job behavior
