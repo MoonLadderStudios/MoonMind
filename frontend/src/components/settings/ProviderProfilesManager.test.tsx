@@ -1093,24 +1093,18 @@ describe('ProviderProfilesManager form controls', () => {
     const labels = Array.from(profileRow?.querySelectorAll('td') ?? []).map((cell) =>
       cell.getAttribute('data-label'),
     );
-    expect(labels).toEqual([
-      'Profile',
-      'Harness',
-      'Provider',
-      'Credential',
-      'Status',
-      'Actions',
-    ]);
+    expect(labels).toEqual(['Profile', 'Weekly usage', 'Status', 'Actions']);
     expect(screen.getByRole('columnheader', { name: 'Profile' }).getAttribute('id')).toBe(
       'provider-profile-header-profile',
     );
     expect(profileRow?.querySelector('td[data-label="Profile"]')?.getAttribute('headers')).toBe(
       'provider-profile-header-profile',
-    );    // The Harness column names the agent implementation and keeps the stable
-    // runtime code available without presenting it as the label.
-    const harnessCell = profileRow?.querySelector('td[data-label="Harness"]');
-    expect(harnessCell?.textContent).toBe('Codex CLI');
-    expect(harnessCell?.getAttribute('title')).toBe('codex_cli');
+    );
+    // The profile's summary line names the agent implementation and keeps the
+    // stable runtime code available without presenting it as the label.
+    const harness = profileRow?.querySelector('[data-profile-harness]');
+    expect(harness?.textContent).toBe('Codex CLI');
+    expect(harness?.getAttribute('title')).toBe('codex_cli');
   });
 
   it('sends Harness default changes when updating an edited profile', async () => {
@@ -2220,25 +2214,28 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByText('Provider status: Waiting for provider capacity')).toBeNull();
   });
 
-  it('keeps capacity and readiness visible while credential internals sit in row Details', () => {
+  it('keeps the launch answer in the row while configuration sits one toggle away', () => {
     renderProviderProfilesManager([profileWithReadiness]);
 
-    const row = screen.getByText('codex-diagnostic').closest('tr');
-    expect(row).not.toBeNull();
-    const details = row?.querySelector<HTMLDetailsElement>('details.provider-profile-details');
-    expect(details).not.toBeNull();
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector('summary')?.textContent).toBe('Details');
+    const row = screen.getByText('codex-diagnostic').closest('tr')!;
+    const details = document.getElementById('provider-profile-details-codex-diagnostic')!;
+    const toggle = within(row).getByRole('button', { name: 'Show details for codex-diagnostic' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe(details.id);
+    expect(details.hidden).toBe(true);
 
-    // Operational facts stay in the default row view.
-    for (const visible of ['Readiness: Blocked', 'Concurrency: 3']) {
-      expect(details?.contains(screen.getByText(visible))).toBe(false);
+    // Whether the profile can launch stays in the default row view.
+    expect(within(row).getByText('Blocked')).toBeTruthy();
+    // Capacity and credential internals are one disclosure away.
+    for (const internal of ['Concurrency: 3', 'provider_api_key', 'Cooldown: 120s', 'db://openai-team-key']) {
+      expect(details.contains(screen.getByText(internal))).toBe(true);
     }
-    // Credential internals (source enum, cooldown, SecretRefs) are one disclosure away.
-    for (const internal of ['provider_api_key', 'Cooldown: 120s', 'db://openai-team-key']) {
-      expect(details?.contains(screen.getByText(internal))).toBe(true);
-    }
-    expect(row?.querySelector('td[data-label="Secret refs"]')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(details.hidden).toBe(false);
+    expect(
+      within(row).getByRole('button', { name: 'Hide details for codex-diagnostic' }).getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 
   it('opens the create form from an Add profile action instead of always showing it', () => {
@@ -2262,44 +2259,30 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByRole('heading', { name: 'Create Profile' })).toBeTruthy();
   });
 
-  it('condenses verbose status diagnostics behind a disclosure without losing detail', () => {
+  it('summarizes status as one pill and keeps the full diagnostics in the row details', () => {
     renderProviderProfilesManager([profileWithReadiness]);
 
-    const statusCell = document.querySelector('td[data-label="Status"]');
-    expect(statusCell).not.toBeNull();
+    const statusCell = document.querySelector<HTMLElement>('td[data-label="Status"]')!;
+    // One pill answers whether the profile can launch.
+    expect(within(statusCell).getByText('Blocked')).toBeTruthy();
+    expect(statusCell.querySelector('details')).toBeNull();
 
-    // The readiness pill stays in the compact, always-visible summary so the
-    // Status column no longer needs to render its full diagnostic stack inline.
-    const readinessPill = screen.getByText('Readiness: Blocked');
-
-    const disclosure = statusCell?.querySelector<HTMLDetailsElement>(
-      'details.provider-profile-status-details',
-    );
-    expect(disclosure).not.toBeNull();
-    // Collapsed by default to reduce width/height pressure.
-    expect(disclosure?.open).toBe(false);
-    // The pill is part of the visible summary, not buried in the disclosure.
-    expect(disclosure?.contains(readinessPill)).toBe(false);
-    // No information is lost: the dense diagnostics live inside the disclosure.
-    expect(disclosure?.textContent).toContain('Provider profile has launch blockers.');
-    expect(disclosure?.textContent).toContain('Validation failed');
+    // No information is lost: the dense diagnostics live in the collapsed details.
+    const diagnostics = document.querySelector<HTMLElement>(
+      '#provider-profile-details-codex-diagnostic .provider-profile-diagnostics',
+    )!;
+    expect(diagnostics.closest('tr')!.hidden).toBe(true);
+    expect(diagnostics.textContent).toContain('Readiness: Blocked');
+    expect(diagnostics.textContent).toContain('Provider profile has launch blockers.');
+    expect(diagnostics.textContent).toContain('Validation failed');
   });
 
-  it('omits the diagnostics disclosure for a healthy connected profile with no other details', () => {
+  it('shows a healthy profile as a single status pill with nothing else in the cell', () => {
     renderProviderProfilesManager([profile]);
 
-    const statusCell = document.querySelector('td[data-label="Status"]');
-    expect(statusCell).not.toBeNull();
-
-    // A fully healthy, connected profile resolves to a 'Connected' activation
-    // label and no other diagnostics. Rendering the disclosure here would only
-    // produce an empty "Diagnostics" dropdown containing the word "Connected",
-    // so the disclosure should be omitted entirely.
-    const disclosure = statusCell?.querySelector<HTMLDetailsElement>(
-      'details.provider-profile-status-details',
-    );
-    expect(disclosure).toBeNull();
-    expect(screen.queryByText('Diagnostics')).toBeNull();
+    const statusCell = document.querySelector<HTMLElement>('td[data-label="Status"]')!;
+    expect(statusCell.querySelector('.provider-profile-status')!.children).toHaveLength(1);
+    expect(statusCell.textContent).toBe('Enabled');
   });
 
   it('describes SecretRef role bindings without plaintext values', () => {
@@ -3550,8 +3533,8 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull();
     expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add tier' })).toBeNull();
-    // collection summary expansion is accessible without edit mode
-    expect(screen.getByText('Show tier mapping')).toBeTruthy();
+    // the full mapping is reachable without edit mode
+    expect(screen.getByRole('button', { name: 'Show details for tier-profile' })).toBeTruthy();
   });
 });
 
@@ -5780,6 +5763,7 @@ describe('Provider Profile row actions menu', () => {
     renderProviderProfilesManager([menuProfile]);
     const row = screen.getByText('codex-menu', { selector: 'td *' }).closest('tr')!;
     expect(within(row).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Show details for codex-menu',
       'Actions for codex-menu',
     ]);
     expect(trigger().getAttribute('aria-haspopup')).toBe('menu');

@@ -5,6 +5,8 @@ import { QueryClient, useMutation } from '@tanstack/react-query';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
 import { trapTabWithin } from '../../lib/focusTrap';
 import { formatStatusLabel } from '../../utils/formatters';
+import type { WorkflowActionMenuItem } from '../../lib/workflowActions';
+import { WorkflowActionsMenu } from '../WorkflowActionsMenu';
 
 const SECRET_DRAFT_ID = 'managed-secret-editor';
 
@@ -59,6 +61,32 @@ export function isBrokenReferenceStatus(status: string | undefined): boolean {
  * go through `onClose`, which protects an unsaved value; focus returns to the
  * control that opened the dialog.
  */
+const MORE_ACTIONS_ICON = (
+  <svg aria-hidden="true" className="td-workflow-actions-trigger-icon" viewBox="0 0 16 16" focusable="false">
+    <circle cx="3" cy="8" r="1.5" />
+    <circle cx="8" cy="8" r="1.5" />
+    <circle cx="13" cy="8" r="1.5" />
+  </svg>
+);
+
+const COPY_ICON = (
+  <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+    <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+  </svg>
+);
+
+/** Month and day, with the year only when it is not the current one. */
+function formatShortDate(date: Date): string {
+  if (Number.isNaN(date.getTime())) return '';
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+}
+
 function SecretDialog({
   titleId,
   title,
@@ -416,7 +444,7 @@ export function SecretManager({
 
     if (!usageLoaded) {
       return (
-        <Button variant="secondary" size="sm"
+        <Button variant="ghost" size="sm"
           type="button"
           onClick={() => loadUsage(secret.slug)}
           disabled={usageLoadingSlug === secret.slug}
@@ -457,125 +485,140 @@ export function SecretManager({
     );
   };
 
+  const secretActionItems = (secret: SecretMetadata): WorkflowActionMenuItem[] => [
+    { id: 'edit', label: 'Edit', onSelect: () => editSecret(secret.slug) },
+    {
+      id: 'rotate',
+      label: 'Rotate',
+      onSelect: () => {
+        setRotatePromptSlug(secret.slug);
+        setRotatePromptVal('');
+        setFormError(null);
+        setRotatePromptOpen(true);
+      },
+    },
+    {
+      id: 'delete',
+      label: 'Delete',
+      danger: true,
+      section: 'destructive',
+      confirmation: {
+        title: `Delete ${secret.slug}?`,
+        consequence: 'The stored value is removed. Anything that references this secret stops working.',
+        confirmLabel: 'Delete secret',
+      },
+      onSelect: () => deleteOp.mutate(secret.slug),
+    },
+  ];
+
   return (
-    <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-      <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
-        <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Managed Secrets</h3>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-          Store encrypted secret values in MoonMind and reference them from provider
-          profiles with values such as <code>db://OPENAI_API_KEY</code>.
-        </p>
+    <section
+      aria-labelledby="managed-secrets-heading"
+      className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 pb-3">
+        <div className="min-w-0 space-y-1">
+          <h3 id="managed-secrets-heading" className="m-0 text-lg font-semibold text-slate-900 dark:text-white">Managed Secrets</h3>
+          <p className="m-0 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            Encrypted values that provider profiles reference as <code>db://SLUG</code>.
+          </p>
+        </div>
+        <Button variant="secondary" type="button" className="text-sm" onClick={addSecret}>
+          Add secret
+        </Button>
       </div>
 
-      <section className="mt-6 rounded-3xl border border-slate-200 dark:border-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 px-5 py-4">
-            <h4 className="text-base font-semibold text-slate-900 dark:text-white">Stored secrets</h4>
-            <Button variant="primary" size="sm" type="button" onClick={addSecret}>
-              Add secret
-            </Button>
-          </div>
-          <div className="managed-secrets-table-wrap stacked-records-wrap overflow-x-auto px-5 py-4">
-            <table className="managed-secrets-table stacked-records w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800">
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Secret slug</th>
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">SecretRef</th>
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Status</th>
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Usage</th>
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Updated</th>
-                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {secrets.length === 0 ? (
-                  <tr>
-                    <td className="px-2 py-6 text-slate-500 dark:text-slate-400 italic" colSpan={6}>
-                      No secrets currently stored.
+      <div className="managed-secrets-table-wrap stacked-records-wrap overflow-x-auto">
+        <table className="managed-secrets-table settings-flat-table stacked-records w-full text-left text-sm">
+          <thead>
+            <tr>
+              <th className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400">Secret</th>
+              <th className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400">Used by</th>
+              <th className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400">Status</th>
+              <th className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400">Updated</th>
+              <th className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {secrets.length === 0 ? (
+              <tr>
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={5}>
+                  No secrets currently stored.
+                </td>
+              </tr>
+            ) : (
+              secrets.map((secret) => {
+                const secretRef = secret.secretRef ?? `db://${secret.slug}`;
+                const updated = new Date(secret.updatedAt ?? secret.createdAt);
+                return (
+                  <tr key={secret.slug} id={`managed-secret-${secret.slug}`} tabIndex={-1}>
+                    <td data-label="Secret" className="px-3 py-2.5">
+                      <div className="flex min-w-0 items-center gap-1">
+                        <span className="min-w-0 font-mono font-semibold text-slate-900 dark:text-white [overflow-wrap:anywhere]">
+                          {secret.slug}
+                        </span>
+                        <Button
+                          variant="icon"
+                          size="sm"
+                          type="button"
+                          className="shrink-0"
+                          onClick={() => copySecretRef(secretRef)}
+                          aria-label={`Copy SecretRef for ${secret.slug}`}
+                          title={`Copy ${secretRef}`}
+                        >
+                          {COPY_ICON}
+                        </Button>
+                      </div>
+                      {secretRef !== `db://${secret.slug}` ? (
+                        <code className="text-xs text-slate-500 dark:text-slate-400 [overflow-wrap:anywhere]">{secretRef}</code>
+                      ) : null}
+                    </td>
+                    <td data-label="Used by" className="px-3 py-2.5">{renderUsages(secret)}</td>
+                    <td data-label="Status" className="px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {renderStatus(secret.status)}
+                        {/* The one-step fix stays in the row, where a "Show secret" link lands. */}
+                        {secret.status === 'disabled' ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            type="button"
+                            onClick={() => setStatusOp.mutate({ slug: secret.slug, status: 'active' })}
+                            disabled={setStatusOp.isPending}
+                            aria-label={`Re-enable ${secret.slug}`}
+                          >
+                            Re-enable
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td data-label="Updated" className="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">
+                      <time dateTime={updated.toISOString()} title={updated.toLocaleString()}>
+                        {formatShortDate(updated)}
+                      </time>
+                    </td>
+                    <td data-label="Actions" className="px-3 py-2.5">
+                      <div className="managed-secrets-actions">
+                        <WorkflowActionsMenu
+                          items={secretActionItems(secret)}
+                          triggerContent={MORE_ACTIONS_ICON}
+                          triggerClassName="td-workflow-actions-trigger-compact"
+                          triggerAriaLabel={`Actions for ${secret.slug}`}
+                          menuAriaLabel={`${secret.slug} actions`}
+                          emptyMessage="No actions are available."
+                          subject={secret.slug}
+                        />
+                      </div>
                     </td>
                   </tr>
-                ) : (
-                  secrets.map((secret) => (
-                    <tr key={secret.slug} id={`managed-secret-${secret.slug}`} tabIndex={-1}>
-                      <td data-label="Secret slug" className="px-2 py-4 font-mono font-bold text-slate-900 dark:text-white">
-                        {secret.slug}
-                      </td>
-                      <td data-label="SecretRef" className="px-2 py-4">
-                        <code className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-100">
-                          {secret.secretRef ?? `db://${secret.slug}`}
-                        </code>
-                      </td>
-                      <td data-label="Status" className="px-2 py-4">{renderStatus(secret.status)}</td>
-                      <td data-label="Usage" className="px-2 py-4">{renderUsages(secret)}</td>
-                      <td data-label="Updated" className="px-2 py-4 text-xs text-slate-500 dark:text-slate-400">
-                        {secret.updatedAt
-                          ? new Date(secret.updatedAt).toLocaleString()
-                          : new Date(secret.createdAt).toLocaleString()}
-                      </td>
-                      <td data-label="Actions" className="px-2 py-4">
-                        <div className="managed-secrets-actions flex flex-wrap gap-2">
-                          <Button variant="ghost" size="sm"
-                            type="button"
-                            onClick={() => copySecretRef(secret.secretRef ?? `db://${secret.slug}`)}
-                            aria-label={`Copy SecretRef for ${secret.slug}`}
-                          >
-                            Copy
-                          </Button>
-                          <Button variant="ghost" size="sm"
-                            type="button"
-                            onClick={() => editSecret(secret.slug)}
-                          >
-                            Edit
-                          </Button>
-                          <Button variant="secondary" size="sm"
-                            type="button"
-                            onClick={() => {
-                              setRotatePromptSlug(secret.slug);
-                              setRotatePromptVal('');
-                              setFormError(null);
-                              setRotatePromptOpen(true);
-                            }}
-                          >
-                            Rotate
-                          </Button>
-                          {secret.status === 'disabled' ? (
-                            <Button variant="secondary" size="sm"
-                              type="button"
-                              onClick={() =>
-                                setStatusOp.mutate({
-                                  slug: secret.slug,
-                                  status: 'active',
-                                })
-                              }
-                              disabled={setStatusOp.isPending}
-                              aria-label={`Re-enable ${secret.slug}`}
-                            >
-                              Re-enable
-                            </Button>
-                          ) : null}
-                          <Button variant="danger" size="sm"
-                            type="button"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Are you sure you want to completely delete ${secret.slug}?`,
-                                )
-                              ) {
-                                deleteOp.mutate(secret.slug);
-                              }
-                            }}
-                            className="px-3 py-1.5 text-xs font-medium transition"
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-      </section>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {isAdding || isEditing ? (
         <SecretDialog
@@ -679,6 +722,6 @@ export function SecretManager({
           </form>
         </SecretDialog>
       ) : null}
-    </div>
+    </section>
   );
 }

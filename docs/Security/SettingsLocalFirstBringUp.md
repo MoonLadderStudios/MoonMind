@@ -26,7 +26,7 @@ Open **Settings → Providers & Secrets**:
 - For GitHub repository access, use **Source Control → Add token connection**.
   Saving sends the token to `POST /api/v1/repository-connections/pat`, which
   stores it as a managed secret and returns connection metadata. Assign an
-  `owner/repo` in the connection detail pane, choosing read-only or Publish
+  `owner/repo` on the opened connection, choosing read-only or Publish
   access. Assignments use `POST /api/v1/repository-connections/{id}/assignments`;
   saving a token alone does not assign a repository.
 - Use **Managed Secrets** when another consumer needs a named SecretRef.

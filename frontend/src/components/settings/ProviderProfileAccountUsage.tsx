@@ -40,7 +40,11 @@ interface ProviderProfileAccountUsageProps {
   usage: ProviderAccountUsage | null | undefined;
   /** Whether the profile authenticates with a provider subscription login. */
   oauth: boolean;
-  variant: 'compact' | 'full';
+  /**
+   * `summary` is the saved-profile row reading, `details` the account and
+   * every reported window for the row's expanded panel, `full` the editor.
+   */
+  variant: 'summary' | 'details' | 'full';
   refresh?: AccountUsageRefreshView | undefined;
   onRefresh?: (() => void) | undefined;
   /** The existing connection-flow action, offered when sign-in must be renewed. */
@@ -53,6 +57,13 @@ export interface DisplayTimeOptions {
 }
 
 const IN_FLIGHT_STATES = new Set(['queued', 'running']);
+
+const REFRESH_ICON = (
+  <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+    <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+    <path d="M13.5 2.5v2.75h-2.75" />
+  </svg>
+);
 
 const FAILURE_REASONS: Record<FailureCode, string> = {
   timeout: 'the provider did not respond in time',
@@ -246,10 +257,12 @@ export function ProviderProfileAccountUsage({
   if (usage === undefined) return null;
 
   const full = variant === 'full';
+  const summary = variant === 'summary';
+  const detailsOnly = variant === 'details';
   const frameClass = full
     ? 'min-w-0 max-w-full space-y-3 text-sm text-slate-700 dark:text-slate-300'
-    : 'mt-2 min-w-0 max-w-full space-y-1 rounded-lg border border-slate-200 dark:border-slate-800 p-2 text-xs text-slate-700 dark:text-slate-300';
-  const label = `Account and usage for ${subject}`;
+    : 'min-w-0 max-w-full space-y-1 text-xs text-slate-700 dark:text-slate-300 [&_p]:my-0';
+  const label = detailsOnly ? `Account and usage details for ${subject}` : `Account and usage for ${subject}`;
   const muted = 'text-slate-500 dark:text-slate-400';
 
   // Only subscription logins have weekly usage, whatever status is projected.
@@ -261,7 +274,9 @@ export function ProviderProfileAccountUsage({
         : 'Account and usage reporting is not available for this provider yet.';
     return (
       <div role="group" aria-label={label} className={frameClass}>
-        <p className={muted}>{message}</p>
+        <p className={muted}>
+          {detailsOnly ? 'No account or usage details are reported for this profile.' : message}
+        </p>
       </div>
     );
   }
@@ -324,140 +339,186 @@ export function ProviderProfileAccountUsage({
         ? `Available ${formatCountdown(retryAtMs - nowMs)}.`
         : null;
 
-  return (
-    <div role="group" aria-label={label} className={frameClass}>
-      {initial ? (
-        <p className="font-medium">Checking account and usage…</p>
-      ) : showReading ? (
-        <>
-          <div className="min-w-0">
-            <span className={muted}>Provider account: </span>
-            {account.email ? (
-              <span className="font-medium text-slate-900 dark:text-white [overflow-wrap:anywhere]">
-                {account.email}
-              </span>
-            ) : (
-              <span className={muted}>Email unavailable</span>
-            )}
-            {account.display_name ? (
-              <span className={`block [overflow-wrap:anywhere] ${muted}`}>
-                <span className="sr-only">Organization or workspace: </span>
-                {account.display_name}
-              </span>
-            ) : null}
-          </div>
-
-          {primary === null ? (
-            usage.status === 'usage_access_missing' || usage.status === 'reconnect_required' ? null : (
-              <p className="font-medium">Weekly usage not reported</p>
-            )
-          ) : primaryPassed ? (
-            <div>
-              <p className="font-medium">Reset time passed; checking…</p>
-              <p className={muted}>Last known before reset: {remainingText(primary)}</p>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className={`${full ? 'text-xl' : 'text-base'} font-semibold text-slate-900 dark:text-white`}>
-                  {remainingText(primary)}
-                </span>
-                <span className={muted}>weekly allowance</span>
-              </div>
-              {primary.remaining_percent != null ? (
-                <div
-                  role="meter"
-                  aria-label="Weekly allowance remaining"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.floor(Math.min(100, Math.max(0, primary.remaining_percent)))}
-                  aria-valuetext={remainingText(primary)}
-                  className="h-1.5 w-full max-w-48 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
-                >
-                  <div
-                    className="h-full rounded-full bg-emerald-600 dark:bg-emerald-400"
-                    style={{ width: `${Math.min(100, Math.max(0, primary.remaining_percent))}%` }}
-                  />
-                </div>
-              ) : null}
-              {primary.exhausted ? <p className="font-medium">Included weekly allowance used up.</p> : null}
-              <p>
-                {primary.reset_at ? (
-                  <>
-                    Resets {formatResetTime(primary.reset_at)}
-                    {full ? (
-                      <span className={muted}>
-                        {' '}
-                        ({formatCountdown((parseInstant(primary.reset_at) ?? nowMs) - nowMs)};{' '}
-                        <span className="font-mono">{formatExactInstant(primary.reset_at)}</span>)
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
-                  'Reset time unavailable'
-                )}
-              </p>
-            </div>
-          )}
-
-          {observedMs !== null ? (
-            <p className={muted}>
-              Updated {formatAge(nowMs - observedMs)}
-              {stale ? ' · Last known' : null}
-            </p>
-          ) : null}
-        </>
+  const accountBlock = (
+    <div className="min-w-0">
+      <span className={muted}>Provider account: </span>
+      {account.email ? (
+        <span className="font-medium text-slate-900 dark:text-white [overflow-wrap:anywhere]">
+          {account.email}
+        </span>
+      ) : (
+        <span className={muted}>Email unavailable</span>
+      )}
+      {account.display_name ? (
+        <span className={`block [overflow-wrap:anywhere] ${muted}`}>
+          <span className="sr-only">Organization or workspace: </span>
+          {account.display_name}
+        </span>
       ) : null}
+    </div>
+  );
+  const updatedLine =
+    observedMs !== null ? (
+      <p className={muted}>
+        Updated {formatAge(nowMs - observedMs)}
+        {stale ? ' · Last known' : null}
+      </p>
+    ) : null;
+  const windowLists = (
+    <div className="space-y-2">
+      <WindowList label="Weekly allowance" windows={primary ? [primary] : []} nowMs={nowMs} />
+      <WindowList label="Model-specific weekly limits" windows={modelWeekly} nowMs={nowMs} />
+      <WindowList label="Short-window limits" windows={shortWindows} nowMs={nowMs} />
+      <WindowList label="Other reported limits" windows={otherWindows} nowMs={nowMs} />
+      {account.plan ? <p>Plan: {account.plan}</p> : null}
+      {usage.refresh.last_failure && usage.refresh.last_failure_at ? (
+        <p>
+          Last failed check: {FAILURE_REASONS[usage.refresh.last_failure]} (
+          {formatAge(nowMs - (parseInstant(usage.refresh.last_failure_at) ?? nowMs))})
+        </p>
+      ) : null}
+    </div>
+  );
 
+  if (detailsOnly) {
+    return (
+      <div role="group" aria-label={label} className={`${frameClass} space-y-2`}>
+        {showReading ? accountBlock : <p className={muted}>No account or usage reported yet.</p>}
+        {showReading ? updatedLine : null}
+        {hasData ? windowLists : null}
+      </div>
+    );
+  }
+
+  const refreshButton = onRefresh ? (
+    <Button
+      variant={summary ? 'icon' : 'secondary'}
+      size="sm"
+      className={summary ? 'provider-usage-refresh shrink-0' : undefined}
+      aria-label={`Refresh account usage for ${subject}`}
+      onClick={onRefresh}
+      disabled={refreshDisabledReason !== null}
+      disabledReason={refreshDisabledReason}
+    >
+      {summary ? REFRESH_ICON : 'Refresh'}
+    </Button>
+  ) : null;
+  const reconnectButton =
+    usage.status === 'reconnect_required' && reconnect ? (
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={reconnect.onSelect}
+        disabled={Boolean(reconnect.disabledReason)}
+        disabledReason={reconnect.disabledReason}
+      >
+        {reconnect.label}
+      </Button>
+    ) : null;
+
+  const reading = initial ? (
+    <p className="font-medium">Checking account and usage…</p>
+  ) : showReading ? (
+    <>
+      {summary ? null : accountBlock}
+
+      {primary === null ? (
+        usage.status === 'usage_access_missing' || usage.status === 'reconnect_required' ? null : (
+          <p className="font-medium">Weekly usage not reported</p>
+        )
+      ) : primaryPassed ? (
+        <div>
+          <p className="font-medium">Reset time passed; checking…</p>
+          <p className={muted}>Last known before reset: {remainingText(primary)}</p>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className={`${full ? 'text-xl' : 'text-sm'} font-semibold text-slate-900 dark:text-white`}>
+              {remainingText(primary)}
+            </span>
+            {summary ? null : <span className={muted}>weekly allowance</span>}
+          </div>
+          {primary.remaining_percent != null ? (
+            <div
+              role="meter"
+              aria-label="Weekly allowance remaining"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.floor(Math.min(100, Math.max(0, primary.remaining_percent)))}
+              aria-valuetext={remainingText(primary)}
+              className={`h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700 ${summary ? '' : 'max-w-48'}`}
+            >
+              <div
+                className="h-full rounded-full bg-emerald-600 dark:bg-emerald-400"
+                style={{ width: `${Math.min(100, Math.max(0, primary.remaining_percent))}%` }}
+              />
+            </div>
+          ) : null}
+          {primary.exhausted ? <p className="font-medium">Included weekly allowance used up.</p> : null}
+          <p className={summary ? muted : undefined}>
+            {primary.reset_at ? (
+              <>
+                Resets {formatResetTime(primary.reset_at)}
+                {full ? (
+                  <span className={muted}>
+                    {' '}
+                    ({formatCountdown((parseInstant(primary.reset_at) ?? nowMs) - nowMs)};{' '}
+                    <span className="font-mono">{formatExactInstant(primary.reset_at)}</span>)
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              'Reset time unavailable'
+            )}
+          </p>
+        </div>
+      )}
+
+      {summary ? null : updatedLine}
+    </>
+  ) : null;
+
+  const status = (
+    <>
       {checking && !initial ? (
         <p role="status" className="font-medium">Checking for updated usage…</p>
       ) : null}
       {notices.map((notice) => (
         <p key={notice} className="[overflow-wrap:anywhere]">{notice}</p>
       ))}
+    </>
+  );
+
+  if (summary) {
+    // The row reading: allowance, reset and anything needing attention. The
+    // account and every other reported window live in the row's details.
+    return (
+      <div role="group" aria-label={label} className={`${frameClass} flex items-start gap-2`}>
+        <div className="min-w-0 flex-1 space-y-1">
+          {reading}
+          {status}
+          {reconnectButton}
+        </div>
+        {refreshButton}
+      </div>
+    );
+  }
+
+  return (
+    <div role="group" aria-label={label} className={frameClass}>
+      {reading}
+      {status}
 
       <div className="flex flex-wrap items-center gap-2">
-        {usage.status === 'reconnect_required' && reconnect ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={reconnect.onSelect}
-            disabled={Boolean(reconnect.disabledReason)}
-            disabledReason={reconnect.disabledReason}
-          >
-            {reconnect.label}
-          </Button>
-        ) : null}
-        {onRefresh ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            aria-label={`Refresh account usage for ${subject}`}
-            onClick={onRefresh}
-            disabled={refreshDisabledReason !== null}
-            disabledReason={refreshDisabledReason}
-          >
-            Refresh
-          </Button>
-        ) : null}
+        {reconnectButton}
+        {refreshButton}
       </div>
 
       {hasData ? (
         <details className="min-w-0">
           <summary className="cursor-pointer font-medium text-slate-600 dark:text-slate-400">Usage details</summary>
-          <div className="mt-2 space-y-2">
-            <WindowList label="Weekly allowance" windows={primary ? [primary] : []} nowMs={nowMs} />
-            <WindowList label="Model-specific weekly limits" windows={modelWeekly} nowMs={nowMs} />
-            <WindowList label="Short-window limits" windows={shortWindows} nowMs={nowMs} />
-            <WindowList label="Other reported limits" windows={otherWindows} nowMs={nowMs} />
-            {account.plan ? <p>Plan: {account.plan}</p> : null}
-            {usage.refresh.last_failure && usage.refresh.last_failure_at ? (
-              <p>
-                Last failed check: {FAILURE_REASONS[usage.refresh.last_failure]} (
-                {formatAge(nowMs - (parseInstant(usage.refresh.last_failure_at) ?? nowMs))})
-              </p>
-            ) : null}
-          </div>
+          <div className="mt-2">{windowLists}</div>
         </details>
       ) : null}
     </div>

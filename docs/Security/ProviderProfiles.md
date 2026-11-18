@@ -311,8 +311,9 @@ read-only unless the native runtime may renew and must persist rotated tokens.
 Results are fenced on generation, grant, and attempt
 before access and before persistence; failures change only observation state.
 
-Settings → Providers & Secrets renders the projection in each row's Provider
-cell and in a read-only **Account & usage** editor section, never in the profile
+Settings → Providers & Secrets renders the weekly reading in each row's Weekly
+usage column, the account and every reported window in that row's details, and
+all of it in a read-only **Account & usage** editor section, never in the profile
 draft. The provider-reported email and organization name are attribution from
 the provider, separate from the operator's `account_label`. Only the general
 weekly window is the weekly allowance; short, model-scoped, and other windows

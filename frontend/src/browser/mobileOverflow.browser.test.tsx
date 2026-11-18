@@ -706,9 +706,9 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
     await openProviders();
     await useLayout(width, height);
     // Long provider-reported account and limit names wrap inside the
-    // Provider cell with their details open (MoonMind#5366).
-    const usageDetails = (await screen.findByRole('group', { name: `Account and usage for ${LONG_ID}` })).querySelector('details')!;
-    usageDetails.open = true;
+    // profile's open details (MoonMind#5366).
+    await userEvent.click(await screen.findByRole('button', { name: `Show details for ${LONG_ID}` }));
+    const usageDetails = screen.getByRole('group', { name: `Account and usage details for ${LONG_ID}` });
     expect(within(usageDetails).getByText(new RegExp(`Reported model limit ${LONG_ID}`))).toBeTruthy();
     expectUsableLayout(`Providers & Secrets at ${width}x${height}`);
     if (width <= 720) {
@@ -720,7 +720,7 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
       // Tier names stay in the legend; tier actions have their own area.
       expect(document.querySelectorAll('.provider-tier-fieldset > legend button')).toHaveLength(0);
     }
-    // Stored secrets keep the full width; adding one opens a focused dialog.
+    // The secrets list keeps the full width; adding one opens a focused dialog.
     await userEvent.click(screen.getByRole('button', { name: 'Add secret' }));
     const secretDialog = await screen.findByRole('dialog', { name: 'Add secret' });
     const secretProblems = layoutProblems(secretDialog);

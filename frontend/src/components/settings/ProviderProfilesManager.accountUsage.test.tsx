@@ -182,6 +182,13 @@ function usageGroup(profileId: string): HTMLElement {
   return screen.getAllByRole('group', { name: `Account and usage for ${profileId}` })[0]!;
 }
 
+/** The account and every reported window, in the row's collapsed details. */
+function usageDetails(profileId: string): HTMLElement {
+  return document.querySelector<HTMLElement>(
+    `[id="provider-profile-details-${profileId}"] [aria-label="Account and usage details for ${profileId}"]`,
+  )!;
+}
+
 function text(element: Element): string {
   return (element.textContent ?? '').replace(/\s+/g, ' ');
 }
@@ -202,22 +209,23 @@ afterEach(() => {
 });
 
 describe('Provider Profile account usage in Settings', () => {
-  it('places the compact block inside the existing Provider cell without new columns', async () => {
+  it('gives the weekly reading its own column and keeps the account in the row details', async () => {
     const harness = renderLiveManager([oauthProfile('codex-oauth', {})]);
     await advance(10);
 
-    expect(screen.getAllByRole('columnheader')).toHaveLength(6);
-    const providerCell = document.querySelector('#provider-profile-codex-oauth td[data-label="Provider"]')!;
-    const group = within(providerCell as HTMLElement).getByRole('group', {
+    expect(screen.getAllByRole('columnheader')).toHaveLength(4);
+    const usageCell = document.querySelector('#provider-profile-codex-oauth td[data-label="Weekly usage"]')!;
+    const group = within(usageCell as HTMLElement).getByRole('group', {
       name: 'Account and usage for codex-oauth',
     });
-    expect(text(group)).toContain('personal@example.com');
     expect(within(group).getByText('36% remaining')).toBeTruthy();
-    expect(within(group).getByText('Usage details')).toBeTruthy();
+    expect(text(group)).not.toContain('personal@example.com');
+    const details = document.getElementById('provider-profile-details-codex-oauth')!;
+    expect(details.hidden).toBe(true);
+    expect(text(details)).toContain('personal@example.com');
     // Observation status sits beside, not instead of, connection and readiness.
     const statusCell = document.querySelector('#provider-profile-codex-oauth td[data-label="Status"]')!;
-    expect(text(statusCell)).toContain('Enabled');
-    expect(text(statusCell)).toContain('Readiness: Ready');
+    expect(text(statusCell)).toBe('Ready');
     // A fresh observation needs no collection.
     expect(harness.refreshRequests).toHaveLength(0);
   });
@@ -377,7 +385,7 @@ describe('Provider Profile account usage in Settings', () => {
     expect(within(group).getByRole('status').textContent).toBe('Checking for updated usage…');
     // Accepted is not completed: the cached reading and its real age stay.
     expect(within(group).getByText('36% remaining')).toBeTruthy();
-    expect(text(group)).toContain('Updated 10 minutes ago');
+    expect(text(usageDetails('codex-oauth'))).toContain('Updated 10 minutes ago');
 
     await advance(2_000);
     expect(harness.listFetches()).toBe(1);
@@ -538,8 +546,8 @@ describe('Provider Profile account usage in Settings', () => {
       }),
     ]);
     await advance(10);
-    expect(text(usageGroup('codex-oauth'))).toContain('work@example.com');
-    expect(text(usageGroup('codex-oauth'))).not.toContain('personal@example.com');
+    expect(text(usageDetails('codex-oauth'))).toContain('work@example.com');
+    expect(text(usageDetails('codex-oauth'))).not.toContain('personal@example.com');
 
     await act(async () => {
       answer([
@@ -636,13 +644,13 @@ describe('two-provider account usage delivery contract', () => {
     for (const profile of refreshed) {
       const group = usageGroup(profile.profile_id);
       const usage = profile.account_usage!;
-      expect(text(group)).toContain(usage.account.email!);
-      expect(text(group)).toContain(usage.account.display_name!);
+      expect(text(usageDetails(profile.profile_id))).toContain(usage.account.email!);
+      expect(text(usageDetails(profile.profile_id))).toContain(usage.account.display_name!);
       const primary = (usage.usage.windows ?? []).find((window) => window.key === usage.usage.primary_window_key)!;
       expect(within(group).getByRole('meter', { name: 'Weekly allowance remaining' }).getAttribute('aria-valuenow'))
         .toBe(String(primary.remaining_percent));
       expect(text(group)).toContain('Resets');
-      expect(text(group)).toContain('Updated');
+      expect(text(usageDetails(profile.profile_id))).toContain('Updated');
       expect(within(group).queryByRole('status')).toBeNull();
     }
     expect(refreshed.filter((profile) => profile.provider_id === 'openai')).toHaveLength(2);
@@ -673,12 +681,12 @@ describe('two-provider account usage delivery contract', () => {
     });
     await advance(10_000);
     const replacement = rebound.find((profile) => profile.profile_id === 'codex-a')!.account_usage!;
-    expect(text(usageGroup('codex-a'))).toContain(replacement.account.email!);
+    expect(text(usageDetails('codex-a'))).toContain(replacement.account.email!);
     expect(within(usageGroup('codex-a')).queryByRole('status')).toBeNull();
     expect(harness.listFetches()).toBe(0);
-    expect(text(usageGroup('claude-a'))).toContain(rebound.find((profile) => profile.profile_id === 'claude-a')!.account_usage!.account.email!);
+    expect(text(usageDetails('claude-a'))).toContain(rebound.find((profile) => profile.profile_id === 'claude-a')!.account_usage!.account.email!);
     for (const id of ['codex-b', 'claude-b']) {
-      expect(text(usageGroup(id))).toContain(refreshed.find((profile) => profile.profile_id === id)!.account_usage!.account.display_name!);
+      expect(text(usageDetails(id))).toContain(refreshed.find((profile) => profile.profile_id === id)!.account_usage!.account.display_name!);
     }
   });
 });

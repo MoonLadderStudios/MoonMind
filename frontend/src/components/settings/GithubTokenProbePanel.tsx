@@ -228,7 +228,7 @@ export function GithubTokenProbePanel({
   return (
     <section
       aria-label="Test connection"
-      className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4"
+      className="min-w-0"
     >
       <header className="space-y-1">
         <h4 className="text-base font-semibold text-slate-900 dark:text-white">Test connection</h4>
