@@ -25,6 +25,7 @@ def test_settings_load_without_unused_controls(monkeypatch, source):
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "MODEL_CACHE_REFRESH_INTERVAL_SECONDS",
             "MODEL_CACHE_REFRESH_INTERVAL", "WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_PORT",
             "ATLASSIAN_JIRA_FETCH_BATCH_SIZE", "ATLASSIAN_CONFLUENCE_ENABLED", "FASTAPI_RELOAD",
+            "WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_PREFIX", "STATSD_HOST", "STATSD_PORT",
         ):
             monkeypatch.setenv(key, "obsolete-value")
     settings = AppSettings(_env_file=None)

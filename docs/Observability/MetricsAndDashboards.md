@@ -14,8 +14,20 @@
 | Omnigent | `moonmind_omnigent_session_start_seconds`, `moonmind_omnigent_event_lag_seconds` | outcome/runtime_family | runtime | bridge/host dashboard |
 | artifacts/operator | `moonmind_artifact_operations`, `moonmind_observability_stream_lag_seconds` | outcome/component | artifacts/operator | artifact/Live Logs/Chat |
 | security | `moonmind_policy_decisions` | outcome | security | intervention dashboard |
+| workspace locators | `moonmind_workspace_locator_legacy_path_usage` | operation | workflows | workflow dashboard, compatibility window |
 
-Durations use seconds and deployments choose histogram buckets that contain the SLO boundary. Ratios range from zero to one. Existing StatsD names are migration inputs only. A rename requires a tombstone containing the old and replacement names, dual-emission release, dashboard-parity evidence, retention window, and removal release.
+Durations use seconds and deployments choose histogram buckets that contain the SLO boundary. Ratios range from zero to one. Renaming a registry metric requires a tombstone containing the old and replacement names, dual-emission release, dashboard-parity evidence, retention window, and removal release.
+
+OpenTelemetry is the only metrics path. The API and workers open no StatsD socket and ignore old `WORKFLOW_METRICS_*`, `STATSD_*`, `TASK_TEMPLATE_METRICS_*`, and `PRESET_METRICS_PREFIX` values. Only the workspace-locator counter had a documented operator consumer, so it moved to the registry; the other StatsD names were dropped:
+
+| Retired StatsD name | Disposition |
+| --- | --- |
+| `moonmind.workflow.workspace_locator.compatibility_path_usage` | migrated to `moonmind_workspace_locator_legacy_path_usage` |
+| `moonmind.workflow.livelogs.summary.*`, `livelogs.history.*`, `livelogs.stream.*` | dropped; FastAPI instrumentation records duration and status for these routes when telemetry is enabled |
+| `moonmind.workflow.temporal_workflow_editing.event` | dropped; `temporal_workflow_editing.submit_attempt`/`submit_result` logs carry the same fields |
+| `moonmind.workflow.capability_input_contract.event` | dropped; the `skill_input_contract_digest_mismatch` step diagnostic records each case |
+| `moonmind.workflow.llm_cost_estimate_usd_total` | dropped; the `moonmind.cost_estimate_usd` log remains |
+| `moonmind.presets.*` | dropped; `preset_catalog.*` logs record catalog operations |
 
 ## Provisional SLOs
 
@@ -50,4 +62,4 @@ The latest observed outcome determines objective success. `attemptOutcomes` reta
 
 The provisioned overview dashboard groups panels for overview, workflow/steps, Temporal/workers, providers/profiles/cost, Omnigent, artifacts/Live Logs/Chat, and security/intervention. Variables use bounded dimensions only. Drill-down links are server-owned templates to authorized Workflow Detail, trace, log, Temporal, and runbook views.
 
-Rollout freezes the legacy inventory, dual-emits via an adapter, validates registry/rules/dashboard/runbook references in CI, calibrates in non-production, promotes reviewed alerts, and removes legacy names after retention. Before production enablement operators record expected series count, backend storage/retention, exporter overhead, and rollback to disabled telemetry and non-paging rules.
+Rollout validates registry/rules/dashboard/runbook references in CI, calibrates in non-production, and promotes reviewed alerts. Before production enablement operators record expected series count, backend storage/retention, exporter overhead, and rollback to disabled telemetry and non-paging rules.

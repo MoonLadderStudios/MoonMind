@@ -6,12 +6,8 @@ import hashlib
 import json
 import logging
 import math
-import os
 import re
 import shlex
-import socket
-import threading
-import time
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -218,66 +214,6 @@ _CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES = frozenset(
     }
 )
 logger = logging.getLogger(__name__)
-
-
-class _StatsdEmitter:
-    """Best-effort StatsD counter emitter for template catalog activity."""
-
-    def __init__(self) -> None:
-        host = (
-            os.getenv("TASK_TEMPLATE_METRICS_HOST")
-            or os.getenv("WORKFLOW_METRICS_HOST")
-            or os.getenv("STATSD_HOST")
-            or ""
-        ).strip()
-        port_raw = (
-            os.getenv("TASK_TEMPLATE_METRICS_PORT")
-            or os.getenv("WORKFLOW_METRICS_PORT")
-            or os.getenv("STATSD_PORT")
-            or "8125"
-        ).strip()
-        prefix = (os.getenv("PRESET_METRICS_PREFIX") or "moonmind.presets").strip()
-        self._prefix = prefix.rstrip(".")
-        self._address: tuple[str, int] | None = None
-        self._socket: socket.socket | None = None
-        self._lock = threading.Lock()
-        self._enabled = False
-        self._disabled_until: float | None = None
-        self._backoff_seconds = 5.0
-        if host:
-            try:
-                self._address = (host, int(port_raw))
-                self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self._enabled = True
-            except Exception:
-                logger.warning("Preset metrics emitter disabled due to init failure.")
-                self._enabled = False
-
-    @property
-    def enabled(self) -> bool:
-        if not self._enabled or self._socket is None or self._address is None:
-            return False
-        if self._disabled_until is not None and time.monotonic() < self._disabled_until:
-            return False
-        return True
-
-    def increment(self, metric: str, value: int = 1) -> None:
-        if not self.enabled:
-            return
-        payload = f"{self._prefix}.{metric}:{int(value)}|c".encode("utf-8")
-        with self._lock:
-            if not self.enabled:
-                return
-            try:
-                assert self._socket is not None and self._address is not None
-                self._socket.sendto(payload, self._address)
-                self._backoff_seconds = 5.0
-            except OSError:
-                self._disabled_until = time.monotonic() + self._backoff_seconds
-                self._backoff_seconds = min(self._backoff_seconds * 2, 60.0)
-
-
-_METRICS = _StatsdEmitter()
 
 
 class PresetError(RuntimeError):
@@ -2342,7 +2278,6 @@ class PresetCatalogService:
                 "results": len(serialized),
             },
         )
-        _METRICS.increment("list")
         return serialized
 
     async def get_template(
@@ -2465,7 +2400,6 @@ class PresetCatalogService:
                     "slug": normalized_slug,
                 },
             )
-            _METRICS.increment("create")
         return _serialize_template(
             template=template,
             is_favorite=False,
@@ -3175,7 +3109,6 @@ class PresetCatalogService:
                 "steps": len(resolved_steps),
             },
         )
-        _METRICS.increment("expand")
         expanded_payload = {
             "steps": resolved_steps,
             "composition": composition,
@@ -3414,7 +3347,6 @@ class PresetCatalogService:
             await self._session.commit()
         else:
             await self._session.flush()
-        _METRICS.increment("favorite")
 
     async def clear_favorite(
         self,
@@ -3439,7 +3371,6 @@ class PresetCatalogService:
                 "slug": slug,
             },
         )
-        _METRICS.increment("unfavorite")
 
     async def record_recent(
         self,
@@ -3493,7 +3424,6 @@ class PresetCatalogService:
             "preset_catalog.recent",
             extra={"template_id": str(template_id)},
         )
-        _METRICS.increment("recent")
 
     async def soft_delete_template(
         self,
@@ -3513,7 +3443,6 @@ class PresetCatalogService:
                 "slug": slug,
             },
         )
-        _METRICS.increment("delete")
 
     async def deactivate_seed_templates(
         self,
@@ -3547,7 +3476,6 @@ class PresetCatalogService:
                     "slugs": changed_slugs,
                 },
             )
-            _METRICS.increment("delete", len(templates))
         return len(templates)
 
     async def set_release_status(
@@ -3572,7 +3500,6 @@ class PresetCatalogService:
                 "release_status": release_status.value,
             },
         )
-        _METRICS.increment("review")
         return _serialize_template(
             template=template,
             is_favorite=False,

@@ -514,10 +514,10 @@ async def test_workspace_locator_kinds_are_enforced_for_recovery_apply(
 async def test_legacy_workspace_path_usage_emits_compatibility_metric(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    emitter = Mock()
+    increment_counter = Mock()
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
-        lambda: emitter,
+        "moonmind.workflows.temporal.activity_runtime.increment_counter",
+        increment_counter,
     )
     store = InMemoryArtifactStore()
     root = _workspace_root(tmp_path)
@@ -526,19 +526,19 @@ async def test_legacy_workspace_path_usage_emits_compatibility_metric(
 
     await sandbox.workspace_classify_git_effect({"workspacePath": str(repo)})
 
-    emitter.increment.assert_called_once_with(
-        "workspace_locator.compatibility_path_usage",
-        tags={"operation": "classify_git_effect"},
+    increment_counter.assert_called_once_with(
+        "moonmind_workspace_locator_legacy_path_usage",
+        labels={"operation": "classify_git_effect"},
     )
 
 
 async def test_external_state_capture_counts_legacy_workspace_root_ref(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    emitter = Mock()
+    increment_counter = Mock()
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
-        lambda: emitter,
+        "moonmind.workflows.temporal.activity_runtime.increment_counter",
+        increment_counter,
     )
     sandbox = TemporalSandboxActivities(
         workspace_root=_workspace_root(tmp_path), artifact_store=InMemoryArtifactStore()
@@ -556,22 +556,19 @@ async def test_external_state_capture_counts_legacy_workspace_root_ref(
     )
 
     assert result["status"] == "captured"
-    emitter.increment.assert_called_once_with(
-        "workspace_locator.compatibility_path_usage",
-        tags={"operation": "capture_checkpoint"},
+    increment_counter.assert_called_once_with(
+        "moonmind_workspace_locator_legacy_path_usage",
+        labels={"operation": "capture_checkpoint"},
     )
 
 
 async def test_legacy_workspace_metric_failure_does_not_block_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail_metrics() -> object:
+    def fail_metrics(*args: object, **kwargs: object) -> object:
         raise ValueError("invalid metrics configuration")
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
-        fail_metrics,
-    )
+    monkeypatch.setattr("opentelemetry.metrics.get_meter", fail_metrics)
     root = _workspace_root(tmp_path)
     repo = _repo(root)
     sandbox = TemporalSandboxActivities(

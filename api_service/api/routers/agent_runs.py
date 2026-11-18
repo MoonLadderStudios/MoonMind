@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import time
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
@@ -42,7 +41,6 @@ from moonmind.schemas.temporal_artifact_models import (
     SessionResourceListResponse,
     SessionResourceModel,
 )
-from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
@@ -1314,28 +1312,6 @@ def _load_merged_journal_events(
 def _merged_journal_has_renderable_events(record: object, artifacts_root: Path) -> bool:
     return bool(_load_merged_journal_events(record, artifacts_root))
 
-def _emit_livelogs_metric_increment(
-    metric: str,
-    *,
-    value: int = 1,
-    tags: dict[str, object] | None = None,
-) -> None:
-    try:
-        get_metrics_emitter().increment(metric, value=value, tags=tags)
-    except Exception:
-        return
-
-def _emit_livelogs_metric_observe(
-    metric: str,
-    *,
-    value: float,
-    tags: dict[str, object] | None = None,
-) -> None:
-    try:
-        get_metrics_emitter().observe(metric, value=value, tags=tags)
-    except Exception:
-        return
-
 def _iter_artifact_fallback_content(
     stdout_path: Path | None,
     stderr_path: Path | None,
@@ -1415,51 +1391,42 @@ async def get_observability_summary(
 ) -> dict:
     """Fetch the observability summary for a agent run from the shared agent jobs volume."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    started = time.perf_counter()
-
-    try:
-        record = await _load_managed_run_record(store, id)
-        if not record:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Observability record not found for this agent run",
-            )
-        await _require_observability_access(record, _user)
-
-        run_status = getattr(record, "status", None)
-        is_terminal = run_status in _OBSERVABILITY_TERMINAL_STATUSES
-
-        raw_live_stream_capable = getattr(record, "live_stream_capable", None)
-        if is_terminal:
-            supports_live = False
-            live_stream_status = "ended"
-        elif raw_live_stream_capable is True:
-            supports_live = True
-            live_stream_status = "available"
-        else:  # Catches False and None
-            supports_live = False
-            live_stream_status = "unavailable"
-
-        base = record.model_dump(by_alias=True)
-        session_record = await asyncio.to_thread(_load_agent_run_session_record, str(id))
-        if session_record is not None:
-            base["sessionId"] = session_record.session_id
-            base["sessionEpoch"] = session_record.session_epoch
-            base["containerId"] = session_record.container_id
-            base["threadId"] = session_record.thread_id
-            base["activeTurnId"] = session_record.active_turn_id
-            base["sessionStatus"] = session_record.status
-        base["supportsLiveStreaming"] = supports_live
-        base["liveStreamStatus"] = live_stream_status
-        base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
-        base["interventionCapabilities"] = _build_intervention_capabilities(session_record)
-        return {"summary": base}
-    finally:
-        _emit_livelogs_metric_observe(
-            "livelogs.summary.latency",
-            value=time.perf_counter() - started,
-            tags={"stream": "livelogs"},
+    record = await _load_managed_run_record(store, id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Observability record not found for this agent run",
         )
+    await _require_observability_access(record, _user)
+
+    run_status = getattr(record, "status", None)
+    is_terminal = run_status in _OBSERVABILITY_TERMINAL_STATUSES
+
+    raw_live_stream_capable = getattr(record, "live_stream_capable", None)
+    if is_terminal:
+        supports_live = False
+        live_stream_status = "ended"
+    elif raw_live_stream_capable is True:
+        supports_live = True
+        live_stream_status = "available"
+    else:  # Catches False and None
+        supports_live = False
+        live_stream_status = "unavailable"
+
+    base = record.model_dump(by_alias=True)
+    session_record = await asyncio.to_thread(_load_agent_run_session_record, str(id))
+    if session_record is not None:
+        base["sessionId"] = session_record.session_id
+        base["sessionEpoch"] = session_record.session_epoch
+        base["containerId"] = session_record.container_id
+        base["threadId"] = session_record.thread_id
+        base["activeTurnId"] = session_record.active_turn_id
+        base["sessionStatus"] = session_record.status
+    base["supportsLiveStreaming"] = supports_live
+    base["liveStreamStatus"] = live_stream_status
+    base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
+    base["interventionCapabilities"] = _build_intervention_capabilities(session_record)
+    return {"summary": base}
 
 
 @router.get(
@@ -1753,59 +1720,42 @@ async def get_agent_run_observability_events(
             detail="Observability record not found for this agent run",
         )
     await _require_observability_access(record, _user)
-    started = time.perf_counter()
     stream_filters = set(stream or [])
     kind_filters = {item for item in (kind or []) if item}
     session_epoch_filters = set(session_epoch or [])
     thread_id_filters = {item.strip() for item in (thread_id or []) if item.strip()}
-    try:
-        session_record = await asyncio.to_thread(_load_agent_run_session_record, str(id))
-        events, source = await asyncio.to_thread(
-            _load_agent_run_observability_events,
-            record=record,
-            session_record=session_record,
-            limit=limit,
+    session_record = await asyncio.to_thread(_load_agent_run_session_record, str(id))
+    events, source = await asyncio.to_thread(
+        _load_agent_run_observability_events,
+        record=record,
+        session_record=session_record,
+        limit=limit,
+        since=since,
+        streams=stream_filters,
+        kinds=kind_filters,
+        session_epochs=session_epoch_filters,
+        thread_ids=thread_id_filters,
+    )
+    if source == "artifacts":
+        events = _filter_observability_events(
+            events,
             since=since,
             streams=stream_filters,
             kinds=kind_filters,
             session_epochs=session_epoch_filters,
             thread_ids=thread_id_filters,
         )
-        if source == "artifacts":
-            events = _filter_observability_events(
-                events,
-                since=since,
-                streams=stream_filters,
-                kinds=kind_filters,
-                session_epochs=session_epoch_filters,
-                thread_ids=thread_id_filters,
-            )
-        events.sort(key=_event_sort_key)
-        truncated = len(events) > limit
-        if truncated:
-            events = events[:limit]
+    events.sort(key=_event_sort_key)
+    truncated = len(events) > limit
+    if truncated:
+        events = events[:limit]
 
-        response = {
-            "events": events,
-            "truncated": truncated,
-            "sessionSnapshot": _build_session_snapshot(session_record)
-            or _build_record_session_snapshot(record),
-        }
-    except Exception:
-        _emit_livelogs_metric_increment(
-            "livelogs.history.error",
-            tags={"stream": "livelogs"},
-        )
-        raise
-    metric_tags = {"stream": "livelogs", "source": source}
-    _emit_livelogs_metric_observe(
-        "livelogs.history.latency",
-        value=time.perf_counter() - started,
-        tags=metric_tags,
-    )
-    _emit_livelogs_metric_increment("livelogs.history.source", tags=metric_tags)
-
-    return response
+    return {
+        "events": events,
+        "truncated": truncated,
+        "sessionSnapshot": _build_session_snapshot(session_record)
+        or _build_record_session_snapshot(record),
+    }
 
 @router.get(
     "/{id}/logs/stream",
@@ -1846,9 +1796,6 @@ async def stream_agent_run_live_logs(
             detail="Live streaming is not supported for this run.",
         )
 
-    tags = {"stream": "livelogs"}
-    _emit_livelogs_metric_increment("livelogs.stream.connect", tags=tags)
-
     # Use queries parameter 'since'
     since_sequence = since or 0
     start_at_end = since is None
@@ -1863,7 +1810,7 @@ async def stream_agent_run_live_logs(
     
     reader = SpoolLogReader(workspace_path=str(job_workspace))
 
-    async def _instrumented_generator():
+    async def _stream_chunks():
         try:
             # We yield lines encoded as JSON for SSE Transport
             async for chunk in reader.follow(
@@ -1880,17 +1827,11 @@ async def stream_agent_run_live_logs(
                 if is_terminal_agent_run_state(record.status):
                     # We continue generating until spool dries, then safely break
                     pass
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _emit_livelogs_metric_increment("livelogs.stream.error", tags=tags)
-            raise
         finally:
             reader.stop()
-            _emit_livelogs_metric_increment("livelogs.stream.disconnect", tags=tags)
 
     return StreamingResponse(
-        bounded_operator_stream(request, _user, _instrumented_generator()),
+        bounded_operator_stream(request, _user, _stream_chunks()),
         media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
