@@ -272,17 +272,16 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="settings",
     ),
     DashboardDestination(
-        key="settings-instance",
-        label="Instance",
-        icon_key="settings",
-        canonical_path="/settings/instance",
-        path_patterns=("/settings/instance",),
-        navigation_group="system",
-        page_classification="utility",
+        key="security",
+        label="Security",
+        icon_key="shield-check",
+        canonical_path="/security",
+        path_patterns=("/security", "/security/assessments", "/security/targets", "/security/reports"),
+        navigation_group="primary",
+        page_classification="workspace",
         capability_key="settingsInstance",
         endpoint_key="settings",
-        menu_group_key="configuration",
-        page="settings",
+        page="security",
     ),
     DashboardDestination(
         key="settings-operations",
@@ -1399,6 +1398,22 @@ async def task_workers_route(
     )
 
 
+@router.get("/security", response_class=HTMLResponse)
+@router.get("/security/assessments", response_class=HTMLResponse)
+@router.get("/security/targets", response_class=HTMLResponse)
+@router.get("/security/reports", response_class=HTMLResponse)
+async def security_workspace_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: OperatorAdmission = Depends(get_instance_access),
+) -> HTMLResponse:
+    """Reuse instance admission for the Security workspace and saved scope."""
+    return await _render_react_page(
+        request, "security", request.url.path, data_wide_panel=True,
+        session=session, user=_user,
+    )
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def task_settings_route(
     request: Request,
@@ -1430,16 +1445,8 @@ async def settings_spa_fallback_route(
     point. The client normalizes it the same way, so a direct load must resolve
     to the same page and boot payload rather than 404.
     """
-    normalized = (dashboard_path or "").strip("/")
-    # Retired account-scoped route (MoonMind#4353): existing
-    # `/settings/user-workspace` bookmarks redirect to the Instance
-    # replacement with stale human-scope params filtered. Permission-aware
-    # fallback applies when the operator cannot inspect Instance.
-    if normalized == "user-workspace" or normalized.startswith("user-workspace/"):
-        return RedirectResponse(
-            url=_settings_redirect_url(request, _user, "settings-instance"),
-            status_code=307,
-        )
+    # Legacy settings pages render the shell so the client can preserve and
+    # route fragment identifiers, which are not sent to the server.
     if dashboard_path and not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
     return await task_settings_route(request, session=session, _user=_user)

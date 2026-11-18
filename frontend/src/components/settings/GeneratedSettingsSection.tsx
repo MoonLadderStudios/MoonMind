@@ -350,10 +350,6 @@ function hasBrokenSecretRef(descriptor: SettingDescriptor): boolean {
   );
 }
 
-function showsSettingAudit(key: string): boolean {
-  return key !== 'workflow.default_runtime' && key !== 'workflow.default_provider_profile_ref';
-}
-
 export function canReset(descriptor: SettingDescriptor): boolean {
   return descriptor.source === 'instance_override';
 }
@@ -479,6 +475,8 @@ export function SettingAuditHistory({ descriptor, query }: {
 interface GeneratedSettingsSectionProps {
   /** Show only these settings, in this order, as one card without search or filters. */
   keys?: readonly string[];
+  /** Settings owned by a different destination. */
+  excludeKeys?: readonly string[];
   /** Heading for a keyed card. */
   title?: string;
   description?: ReactNode;
@@ -486,6 +484,7 @@ interface GeneratedSettingsSectionProps {
 
 export function GeneratedSettingsSection({
   keys,
+  excludeKeys,
   title = 'Generated settings',
   description,
 }: GeneratedSettingsSectionProps = {}) {
@@ -504,16 +503,16 @@ export function GeneratedSettingsSection({
   });
 
   const descriptors = useMemo(() => {
-    const all = flattenedDescriptors(catalogQuery.data).filter(descriptor => !['security.assessment_projects', 'security.assessment_authorizations'].includes(descriptor.key));
+    const all = flattenedDescriptors(catalogQuery.data).filter(descriptor => !['security.assessment_projects', 'security.assessment_authorizations', ...(excludeKeys ?? [])].includes(descriptor.key));
     return keys ? keys.flatMap((key) => all.filter((descriptor) => descriptor.key === key)) : all;
-  }, [catalogQuery.data, keys]);
+  }, [catalogQuery.data, keys, excludeKeys]);
   const selectedAuditDescriptor = descriptors.find(
-    (descriptor) => descriptor.key === selectedAuditKey && showsSettingAudit(descriptor.key),
+    (descriptor) => descriptor.key === selectedAuditKey,
   );
   const auditQuery = useQuery({
     queryKey: ['settings-audit', selectedAuditKey],
     queryFn: () => fetchSettingAudit(selectedAuditKey ?? ''),
-    enabled: selectedAuditKey !== null && showsSettingAudit(selectedAuditKey),
+    enabled: selectedAuditKey !== null,
   });
   const categories = useMemo(
     () => Array.from(new Set(descriptors.map((descriptor) => descriptor.category))).sort(),
@@ -898,7 +897,7 @@ export function GeneratedSettingsSection({
                     {renderControl(descriptor, currentValue, updatePending)}
                     <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
-                        {showsSettingAudit(descriptor.key) ? <Button variant="ghost"
+                        <Button variant="ghost"
                           type="button"
                           className="text-sm"
                           onClick={() => setSelectedAuditKey(descriptor.key)}
@@ -907,7 +906,7 @@ export function GeneratedSettingsSection({
                           aria-label={`View audit for ${descriptor.title}`}
                         >
                           View audit
-                        </Button> : null}
+                        </Button>
                         {canReset(descriptor) ? (
                           <Button variant="ghost"
                             type="button"

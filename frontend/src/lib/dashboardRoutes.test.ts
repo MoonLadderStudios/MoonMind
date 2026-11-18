@@ -18,11 +18,20 @@ import {
 } from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
+  it('routes Security and retains assessment bookmark detail', () => {
+    expect(resolveDashboardRoute('/security/targets')?.page).toBe('security');
+    expect(destinationForPath('/security')?.navigationGroup).toBe('primary');
+    expect(legacySettingsRedirect('/settings/instance', '', '#assessment-authorizations')).toBe('/security/targets#assessment-authorizations');
+    expect(legacySettingsRedirect('/settings/instance', '')).toBe('/settings/operations#advanced');
+    expect(legacySettingsRedirect('/settings/instance', '?authorizationRef=ref-1&scope=user', '#assessment-authorizations')).toBe('/security/targets?authorizationRef=ref-1#assessment-authorizations');
+    expect(DASHBOARD_DESTINATIONS.some(({ key }) => key === 'settings-instance')).toBe(false);
+  });
+
   it('keeps one canonical typed inventory for every major destination', () => {
     expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
       'workflows', 'create', 'recurring', 'skills',
       'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts',
-      'settings-providers-secrets', 'settings-instance', 'settings-operations',
+      'security', 'settings-providers-secrets', 'settings-operations',
     ]);
     expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(11);
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
@@ -40,7 +49,6 @@ describe('dashboard route resolution', () => {
       triggerIconKey: 'settings',
       destinationKeys: [
         'settings-providers-secrets',
-        'settings-instance',
         'settings-operations',
       ],
     });
@@ -58,17 +66,17 @@ describe('dashboard route resolution', () => {
     features.omnigentPolicies = false;
     const info = { features };
     expect(visiblePrimaryDestinations(info).map(({ key }) => key)).toEqual([
-      'workflows', 'create',
+      'workflows', 'create', 'security',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
       'recurring', 'skills', 'omnigent-agents', 'remediation', 'artifacts',
-      'settings-providers-secrets', 'settings-instance', 'settings-operations',
+      'settings-providers-secrets', 'settings-operations',
     ]);
   });
 
   it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
     expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
-      'workflows', 'create',
+      'workflows', 'create', 'security',
     ]);
     expect(visibleSystemDestinations(null)).toEqual([]);
   });
@@ -78,7 +86,6 @@ describe('dashboard route resolution', () => {
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
     ['/settings/providers-secrets', 'settings-providers-secrets'],
-    ['/settings/instance', 'settings-instance'],
     ['/settings/operations', 'settings-operations'],
     ['/schedules', 'recurring'],
     ['/schedules/nightly%3Abuild', 'recurring'],
@@ -175,7 +182,7 @@ describe('dashboard route resolution', () => {
   it.each([
     ['/settings', 'settings-entry'],
     ['/settings/providers-secrets', 'settings-providers-secrets'],
-    ['/settings/instance', 'settings-instance'],
+    ['/security', 'security'],
     ['/settings/operations', 'settings-operations'],
   ])('resolves the canonical Settings route %s to %s', (path, page) => {
     expect(resolveDashboardRoute(path)).toEqual({
@@ -299,11 +306,11 @@ describe('dashboard route resolution', () => {
     expect(legacySettingsRedirect('/secrets', '?unknown=1')).toBe('/settings/providers-secrets');
   });
 
-  it('redirects the retired /settings/user-workspace bookmark to /settings/instance dropping stale scope params', () => {
-    expect(legacySettingsRedirect('/settings/user-workspace', '')).toBe('/settings/instance');
-    expect(legacySettingsRedirect('/settings/user-workspace/', '')).toBe('/settings/instance');
-    expect(legacySettingsRedirect('/settings/user-workspace', '?scope=user&q=workflow&section=x')).toBe('/settings/instance');
-    expect(legacySettingsRedirect('/settings/user-workspace', '?runtime=codex')).toBe('/settings/instance');
+  it('redirects the retired /settings/user-workspace bookmark to Operations Advanced dropping stale scope params', () => {
+    expect(legacySettingsRedirect('/settings/user-workspace', '')).toBe('/settings/operations#advanced');
+    expect(legacySettingsRedirect('/settings/user-workspace/', '')).toBe('/settings/operations#advanced');
+    expect(legacySettingsRedirect('/settings/user-workspace', '?scope=user&q=workflow&section=x')).toBe('/settings/operations#advanced');
+    expect(legacySettingsRedirect('/settings/user-workspace', '?runtime=codex')).toBe('/settings/operations#advanced');
   });
 
   it('treats legacy redirects as internal URLs and preserves safe query strings', () => {
@@ -317,12 +324,12 @@ describe('dashboard route resolution', () => {
 
   it('exposes canonical Settings paths with correct destination metadata', () => {
     const providers = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-providers-secrets')!;
-    const instance = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-instance')!;
+    const security = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'security')!;
     const ops = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-operations')!;
     expect(providers.canonicalPath).toBe('/settings/providers-secrets');
-    expect(instance.canonicalPath).toBe('/settings/instance');
+    expect(security.canonicalPath).toBe('/security');
     expect(ops.canonicalPath).toBe('/settings/operations');
-    for (const dest of [providers, instance, ops]) {
+    for (const dest of [providers, ops]) {
       expect(dest.menuGroupKey).toBe('configuration');
       expect(dest.navigationGroup).toBe('system');
     }
@@ -332,7 +339,7 @@ describe('dashboard route resolution', () => {
     it.each([
       ['/settings/', 'settings-entry', '/settings'],
       ['/settings/providers-secrets/', 'settings-providers-secrets', '/settings/providers-secrets'],
-      ['/settings/instance/', 'settings-instance', '/settings/instance'],
+      ['/security/', 'security', '/security'],
       ['/settings/operations/', 'settings-operations', '/settings/operations'],
     ])('normalizes the trailing-slash Settings route %s to %s', (path, page, currentPath) => {
       expect(resolveDashboardRoute(path)).toEqual({
@@ -344,7 +351,7 @@ describe('dashboard route resolution', () => {
 
     it.each([
       ['/settings/providers-secrets/', 'settings-providers-secrets'],
-      ['/settings/instance/', 'settings-instance'],
+      ['/security/', 'security'],
       ['/settings/operations/', 'settings-operations'],
     ])('resolves the trailing-slash Settings route %s to the %s destination', (path, key) => {
       expect(destinationForPath(path)?.key).toBe(key);
@@ -376,7 +383,6 @@ describe('dashboard route resolution', () => {
       const origin = window.location.origin;
       for (const path of [
         '/settings/providers-secrets',
-        '/settings/instance',
         '/settings/operations',
       ]) {
         const url = new URL(`${origin}${path}?section=operations`);
@@ -398,6 +404,11 @@ describe('dashboard route resolution', () => {
         settingsOperations: true,
       },
     };
+
+    it('preserves assessment detail only when Security is authorized', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/settings/instance', '', allAuthorized, false, '#assessment-authorizations')).toEqual({status: 'redirect', target: '/security/targets#assessment-authorizations'});
+      expect(resolveAuthorizedLegacySettingsTarget('/settings/instance', '', {features: {settingsProvidersSecrets: true, settingsInstance: false}}, false, '#assessment-authorizations')).toEqual({status: 'redirect', target: '/settings/providers-secrets'});
+    });
 
     it('returns none for non-legacy paths', () => {
       expect(resolveAuthorizedLegacySettingsTarget('/workflows', '', allAuthorized, false)).toEqual({
@@ -445,7 +456,7 @@ describe('dashboard route resolution', () => {
         resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
       ).toEqual({
         status: 'redirect',
-        target: '/settings/instance',
+        target: '/security/targets',
       });
     });
 

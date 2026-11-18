@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { MemoryRouter } from 'react-router-dom';
 import { cleanup, renderWithClient, screen, waitFor } from '../utils/test-utils';
-import { InstanceSettingsPage } from '../entrypoints/settings';
+import SecurityPage from '../entrypoints/security';
 import { WorkflowStartPage } from '../entrypoints/workflow-start';
 import type { BootPayload } from '../boot/parseBootPayload';
 import '../styles/dashboard.css';
@@ -56,15 +56,15 @@ describe('assessment engagement browser journeys', () => {
     expect((screen.getByLabelText('Instructions') as HTMLTextAreaElement).value).toBe('Inspect a revised plan.');
   });
   it('preserves edited authorization scope when the Settings departure dialog is dismissed', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
-    renderWithClient(<MemoryRouter initialEntries={['/settings/instance']}><InstanceSettingsPage payload={payload} /><a href="/workflows/new">Go to Create</a></MemoryRouter>);
+    window.history.replaceState({}, '', '/security/targets');
+    renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={payload} /><a href="/workflows/new">Go to Create</a></MemoryRouter>);
     await screen.findByLabelText('Authorization name');
     await userEvent.clear(screen.getByLabelText('Authority source')); await userEvent.type(screen.getByLabelText('Authority source'), 'Updated authority reference');
     await page.getByRole('link', { name: 'Go to Create' }).click();
     await screen.findByRole('dialog'); await page.getByRole('button', { name: 'Stay', exact: true }).click();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect((screen.getByLabelText('Authority source') as HTMLInputElement).value).toBe('Updated authority reference');
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/security/targets');
     await page.screenshot({ path: '../../../artifacts/assessment-engagement-settings.png' });
   });
 });

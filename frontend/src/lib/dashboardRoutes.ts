@@ -10,7 +10,7 @@ export type DashboardPage =
   | 'settings-entry'
   | 'settings-operations'
   | 'settings-providers-secrets'
-  | 'settings-instance'
+  | 'security'
   | 'skills'
   | 'workflows-workspace';
 
@@ -74,7 +74,6 @@ export const DASHBOARD_DESTINATION_GROUPS: readonly DashboardDestinationGroup[] 
     triggerIconKey: 'settings',
     destinationKeys: [
       'settings-providers-secrets',
-      'settings-instance',
       'settings-operations',
     ],
   },
@@ -89,8 +88,8 @@ export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
   { key: 'omnigent-policies', label: 'Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
   { key: 'artifacts', label: 'Artifacts', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
+  { key: 'security', label: 'Security', iconKey: 'shield-check', canonicalPath: '/security', pathPatterns: ['/security', '/security/assessments', '/security/targets', '/security/reports'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'settingsInstance', endpointKey: 'settings', page: 'security', dataWidePanel: true },
   { key: 'settings-providers-secrets', label: 'Providers & Secrets', iconKey: 'settings', canonicalPath: '/settings/providers-secrets', pathPatterns: ['/settings/providers-secrets'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsProvidersSecrets', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-providers-secrets', dataWidePanel: true },
-  { key: 'settings-instance', label: 'Instance', iconKey: 'settings', canonicalPath: '/settings/instance', pathPatterns: ['/settings/instance'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsInstance', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-instance', dataWidePanel: true },
   { key: 'settings-operations', label: 'Operations', iconKey: 'settings', canonicalPath: '/settings/operations', pathPatterns: ['/settings/operations'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsOperations', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-operations', dataWidePanel: true },
 ];
 
@@ -269,19 +268,16 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
 const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   '/secrets': '/settings/providers-secrets',
   '/workers': '/settings/operations',
-  // Retired account-scoped route (MoonMind#4353): existing
-  // `/settings/user-workspace` bookmarks land on the Instance replacement
-  // with stale human-scope params filtered by the target allowlist below.
-  '/settings/user-workspace': '/settings/instance',
+  // Retained aliases are redirected client-side to preserve fragment detail.
+  '/settings/user-workspace': '/settings/operations',
+  '/settings/instance': '/settings/operations',
 };
 
-// Only preserve page-relevant filters per target. The Instance page keeps
-// no URL-owned filters: stale human-scope params (scope, q) are dropped
-// rather than reused after the account-free cutover.
+// Preserve page-relevant filters only; retired human-scope parameters are dropped.
 const SETTINGS_QUERY_ALLOWLIST_BY_TARGET: Record<string, Set<string>> = {
   '/settings/providers-secrets': new Set(['runtime']),
   '/settings/operations': new Set(['status']),
-  '/settings/instance': new Set([]),
+  '/security/targets': new Set(['authorizationRef']),
 };
 
 export function filterSettingsQueryForTarget(search: string, target: string): string {
@@ -300,23 +296,32 @@ export function filterSettingsQueryForTarget(search: string, target: string): st
   return query ? `${target}?${query}` : target;
 }
 
-export function legacySettingsRedirect(pathname: string, search: string): string | null {
+export function legacySettingsRedirect(pathname: string, search: string, hash = ''): string | null {
   const normalized = withoutTrailingSlash(pathname);
+  if (normalized === '/settings/instance' || normalized === '/settings/user-workspace') {
+    if (hash === '#assessment-authorizations' || hash === '#assessment-projects' || new URLSearchParams(search).has('authorizationRef')) {
+      return `${filterSettingsQueryForTarget(search, '/security/targets')}${hash}`;
+    }
+    if (hash === '#dashboard-preferences') return '/settings/operations#dashboard-preferences';
+    if (hash === '#new-work-defaults' || hash === '#new-work-defaults-advanced' || hash.startsWith('#workflow.')) {
+      return '/settings/providers-secrets#new-work-defaults-advanced';
+    }
+    return `${filterSettingsQueryForTarget(search, '/settings/operations')}${hash || '#advanced'}`;
+  }
   const canonical = LEGACY_SETTINGS_REDIRECTS[normalized];
   if (!canonical) return null;
-  if (!search) return canonical;
-  return filterSettingsQueryForTarget(search, canonical);
+  return `${filterSettingsQueryForTarget(search, canonical)}${hash}`;
 }
 
 const LEGACY_SETTINGS_CAPABILITY_BY_PATH: Record<string, string> = {
   '/settings/providers-secrets': 'settingsProvidersSecrets',
-  '/settings/instance': 'settingsInstance',
+  '/security/targets': 'settingsInstance',
   '/settings/operations': 'settingsOperations',
 };
 
 const LEGACY_SETTINGS_FALLBACK_ORDER: readonly string[] = [
   '/settings/providers-secrets',
-  '/settings/instance',
+  '/security/targets',
   '/settings/operations',
 ];
 
@@ -330,13 +335,14 @@ export function resolveAuthorizedLegacySettingsTarget(
   search: string,
   uiInfo: DashboardUiInfo | null,
   isUiInfoPending: boolean,
+  hash = '',
 ): LegacySettingsTarget {
-  const rawTarget = legacySettingsRedirect(pathname, search);
+  const rawTarget = legacySettingsRedirect(pathname, search, hash);
   if (!rawTarget) return { status: 'none' };
   // Permission-aware fallback: never land on an unauthorized destination.
   // Mimics the backend _settings_redirect_path ordering.
   if (uiInfo && !isUiInfoPending) {
-    const canonicalPath = rawTarget.split('?')[0] ?? rawTarget;
+    const canonicalPath = rawTarget.split(/[?#]/)[0] ?? rawTarget;
     const preferredCapability = LEGACY_SETTINGS_CAPABILITY_BY_PATH[canonicalPath];
     const isShown = (key: string) => uiInfo.features?.[key] === true;
     if (preferredCapability && !isShown(preferredCapability)) {

@@ -77,7 +77,7 @@ export function AssessmentProjectPicker({ value, onChange, onStatusChange }: {
     setProjectId(''); setEnvironmentId(''); setSelection(null); onChange(null); onStatusChange(null);
   }
   return <section className="card stack" aria-label="Assessment context">
-    <div><h2>Assessment context</h2><p className="small">Reuse a saved system and environment, or continue without one. Saved context grants no credentials, permissions, or network access. <a href="/settings/instance">Manage saved context in Settings</a>.</p></div>
+    <div><h2>Assessment context</h2><p className="small">Reuse a saved system and environment, or continue without one. Saved context grants no credentials, permissions, or network access. <a href="/security/targets">Manage saved context in Settings</a>.</p></div>
     {value ? <div className="stack" aria-label="Frozen assessment context">
       <p><strong>Frozen assessment context:</strong> {value.projectName} / {value.environmentName} (version {value.sourceVersion})</p>
       <p className="small">{value.purpose} · Boundaries: {value.boundaries}</p>

@@ -26,7 +26,7 @@ import {
   useNavigationType,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery } from '@tanstack/react-query';
-import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
+import { PanelLeft, Plus, Rows3, ScrollText, ShieldCheck, Square } from 'lucide-react';
 import {
   RocketIcon,
   type RocketIconHandle,
@@ -99,9 +99,7 @@ const PAGE_IMPORTS = {
   'settings-providers-secrets': async () => ({
     default: (await import('./settings')).ProvidersSecretsSettingsPage,
   }),
-  'settings-instance': async () => ({
-    default: (await import('./settings')).InstanceSettingsPage,
-  }),
+  security: () => import('./security'),
   skills: () => import('./skills'),
   'workflows-workspace': () => import('./workflows-workspace'),
 } satisfies Record<DashboardPage, PageImport>;
@@ -672,6 +670,12 @@ function DashboardNavigation({
                 Create
               </AnimatedRouteNavLink>
             ) : null}
+            {visiblePrimaryKeys.has('security') ? (
+              <NavLink to="/security" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+                <ShieldCheck className="route-nav-icon" size={NAV_ICON_SIZE} aria-hidden="true" />
+                Security
+              </NavLink>
+            ) : null}
           </div>
           <DashboardSystemMenu
             uiInfo={uiInfo}
@@ -918,6 +922,7 @@ function RoutedDashboardPage({
     location.search,
     uiInfo,
     isUiInfoPending,
+    location.hash,
   );
   const legacyPending = legacyResolution.status === 'pending';
   const legacyTarget = legacyResolution.status === 'redirect' ? legacyResolution.target : null;
@@ -1317,8 +1322,7 @@ function RoutedDashboardPage({
     );
   }
   if (legacyTarget) {
-    const targetHash = location.hash || '';
-    return <Navigate to={`${legacyTarget}${targetHash}`} replace />;
+    return <Navigate to={legacyTarget} replace />;
   }
   if (unknownSettingsAliasTarget) {
     return <Navigate to={unknownSettingsAliasTarget} replace />;

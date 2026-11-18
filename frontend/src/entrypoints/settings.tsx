@@ -1,5 +1,3 @@
-import { AssessmentAuthorizationsSettings } from "../components/settings/AssessmentAuthorizationsSettings";
-import { AssessmentProjectsSettings } from '../components/settings/AssessmentProjectsSettings';
 import { Button } from '../components/Button';
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -36,6 +34,8 @@ import {
 import { responseError } from '../lib/api/client';
 import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
+
+const NEW_WORK_DEFAULT_KEYS = ['workflow.default_runtime', 'workflow.default_publish_mode', 'workflow.default_provider_profile_ref'] as const;
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
 
@@ -79,6 +79,12 @@ function SettingsPageFrame({
   description: string;
   children: ReactNode;
 }) {
+  const { hash } = useLocation();
+  useEffect(() => {
+    const target = document.getElementById(hash.slice(1));
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    target?.scrollIntoView?.({ block: 'start' });
+  }, [hash]);
   return (
     <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <PageHeader eyebrow="Configuration" title={title} description={description} />
@@ -235,6 +241,9 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       )}
 
       <NewWorkDefaultsCard />
+      <AdvancedSettings id="new-work-defaults-advanced" label="Advanced new work defaults, reset and audit">
+        <GeneratedSettingsSection keys={NEW_WORK_DEFAULT_KEYS} title="New Work Defaults" description="Inspect resolved values, reset overrides, and review changes. Defaults apply to new work, not retained runs." />
+      </AdvancedSettings>
 
       {secretsQuery.isLoading ? (
         <LoadingPlaceholder surface="settings" region="managed secrets" variant="table" density="compact" preserveContext />
@@ -263,51 +272,28 @@ export function ProvidersSecretsSettingsPage({ payload }: { payload: BootPayload
   );
 }
 
-function InstanceSettingsContent() {
-  const [notice, setNotice] = useState<Notice | null>(null);
-
-  return (
-    <SettingsPageFrame
-      title="Instance"
-      description="Review instance configuration and defaults, including validation and application diagnostics."
-    >
-      <NoticeBanner notice={notice} />
-      <AssessmentProjectsSettings />
-      <AssessmentAuthorizationsSettings />
-      <GeneratedSettingsSection />
-      <p className="text-xs text-slate-500 dark:text-slate-400">
-        This page edits instance-wide settings. The guarded upgrade reconciles
-        per-user overrides retained from an account installation.
-      </p>
-
-      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-        <h3 className="text-base font-semibold text-slate-900 dark:text-white">
-          Dashboard preferences
-        </h3>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-          Clear browser-local list layouts, selected workflows and recurring schedules, and other dashboard choices.
-        </p>
-        <Button variant="ghost"
-          type="button"
-          className="mt-4 text-sm"
-          onClick={() => {
-            resetDashboardPreferences();
-            setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
-          }}
-        >
-          Reset dashboard preferences
-        </Button>
-      </section>
-    </SettingsPageFrame>
-  );
+function AdvancedSettings({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  const { hash } = useLocation();
+  const [opened, setOpened] = useState(hash === `#${id}`);
+  const [loaded, setLoaded] = useState(opened);
+  useEffect(() => { if (hash === `#${id}`) { setOpened(true); setLoaded(true); } }, [hash, id]);
+  return <details id={id} open={opened} onToggle={event => { setOpened(event.currentTarget.open); if (event.currentTarget.open) setLoaded(true); }} className="rounded-3xl border border-mm-border/80 p-6">
+    <summary className="cursor-pointer font-semibold">{label}</summary>
+    {loaded ? children : null}
+  </details>;
 }
 
-export function InstanceSettingsPage(_props: { payload: BootPayload }) {
-  return (
-    <SettingsDraftGuardProvider>
-      <InstanceSettingsContent />
-    </SettingsDraftGuardProvider>
-  );
+function DashboardPreferencesSettings() {
+  const [notice, setNotice] = useState<Notice | null>(null);
+  return <section id="dashboard-preferences" className="rounded-3xl border border-mm-border/80 p-6">
+    <h3 className="font-semibold">Dashboard preferences</h3>
+    <p>Clear browser-local list layouts, selected workflows and recurring schedules, and other dashboard choices. Saved server configuration is unchanged.</p>
+    <Button variant="ghost" onClick={() => {
+      resetDashboardPreferences();
+      setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
+    }}>Reset dashboard preferences</Button>
+    <NoticeBanner notice={notice} />
+  </section>;
 }
 
 export function OperationsSettingsPage({ payload }: { payload: BootPayload }) {
@@ -320,6 +306,10 @@ export function OperationsSettingsPage({ payload }: { payload: BootPayload }) {
         description="Inspect worker, queue, runtime, deployment, and maintenance state and run operational commands."
       >
         <OperationsSettingsSection workerPauseConfig={workerPauseConfig} />
+        <AdvancedSettings id="advanced" label="Advanced">
+          <GeneratedSettingsSection excludeKeys={NEW_WORK_DEFAULT_KEYS} title="Advanced settings" description="Skill policy, canary rollout and other advanced controls. Each control retains its diagnostics, reset and audit history." />
+        </AdvancedSettings>
+        <DashboardPreferencesSettings />
       </SettingsPageFrame>
     </SettingsDraftGuardProvider>
   );

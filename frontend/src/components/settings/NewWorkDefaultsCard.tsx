@@ -223,7 +223,7 @@ export function NewWorkDefaultsCard() {
       <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Defaults for new work</h3>
       <p className="text-sm text-slate-600 dark:text-slate-400">Used when a launch doesn&apos;t choose a harness or profile.</p>
       {cardIssues.map(({ key, message }, index) => <p role="alert" key={`${key}-${index}`} className="text-sm text-rose-700 dark:text-rose-400">
-        {settingLabel(key)}: {issueMessage(key, message)} <a href="/settings/instance" className="underline">View Instance settings</a>
+        {settingLabel(key)}: {issueMessage(key, message)} <a href="/settings/providers-secrets#new-work-defaults-advanced" className="underline">View advanced new work defaults</a>
       </p>)}
       {catalogQuery.isLoading ? <p role="status">Loading defaults…</p> : catalogQuery.isError ? <p role="alert">{catalogQuery.error.message}</p> :
         <div data-setting-row className="space-y-2">
@@ -248,7 +248,7 @@ export function NewWorkDefaultsCard() {
             {[...(validation?.signature === signature ? validation.issues[descriptor.key] ?? [] : []), ...(errors[descriptor.key] ?? [])]
               .map((message, index) => <p role="alert" key={`${index}-${message}`} className="text-sm text-rose-700 dark:text-rose-400">{issueMessage(descriptor.key, message)}</p>)}
           </div>)}
-          <a href="/settings/instance" className="text-sm underline">Advanced default settings and reset</a>
+          <a href="/settings/providers-secrets#new-work-defaults-advanced" className="text-sm underline">Advanced default settings and reset</a>
         </div>}
       {dirty ? <div className="border-t border-mm-border pt-3" aria-label="Unsaved defaults">
         <p className="text-sm">Default for new work: {selectionLabel(savedRuntime, savedProfile)} → {selectionLabel(runtimeValue, profileValue)}</p>
