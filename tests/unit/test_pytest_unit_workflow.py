@@ -1949,7 +1949,6 @@ def test_preflight_wait_keeps_existing_supersession_groups_isolated():
     assert triggers["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
 
 
-
 def test_pull_request_triggers_cover_candidates_without_duplicate_runs():
     types = _workflow_triggers(_load_workflow())["pull_request"]["types"]
     # No job reads the draft flag, so a draft push already gets the full
