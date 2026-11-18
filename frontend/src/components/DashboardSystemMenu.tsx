@@ -151,6 +151,7 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const pointerInside = useRef(false);
   const location = useLocation();
   const unknown = availabilityUnknown && !uiInfo;
   const destinations = unknown
@@ -177,10 +178,19 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
   useEffect(() => {
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      pointerInside.current = Boolean(rootRef.current?.contains(event.target as Node));
+      if (!pointerInside.current) setOpen(false);
     };
+    const releasePointer = () => { pointerInside.current = false; };
     document.addEventListener('pointerdown', closeOutside);
-    return () => document.removeEventListener('pointerdown', closeOutside);
+    document.addEventListener('pointerup', releasePointer);
+    document.addEventListener('pointercancel', releasePointer);
+    return () => {
+      pointerInside.current = false;
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('pointerup', releasePointer);
+      document.removeEventListener('pointercancel', releasePointer);
+    };
   }, [open]);
 
   if (destinations.length === 0) return null;
@@ -223,6 +233,10 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
         ref={rootRef}
         className="dashboard-system-menu"
         onBlur={(event) => {
+          // WebKit may blur without focusing a pointer-selected menu link.
+          // Keep that link mounted through its click; genuine focus departures
+          // and outside pointer presses still dismiss the menu.
+          if (!event.relatedTarget && pointerInside.current) return;
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
         }}
       >

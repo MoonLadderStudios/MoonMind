@@ -91,7 +91,9 @@ describe('Recurring layout and navigation', () => {
           // The shared panel briefly translates on entry; check its settled layout.
           await waitFor(() => expect(Math.abs(header.getBoundingClientRect().top - masthead.getBoundingClientRect().bottom)).toBeLessThan(1));
           expect(Math.abs(slab.getBoundingClientRect().left)).toBeLessThan(1);
-          expect(Math.abs(slab.getBoundingClientRect().right - width)).toBeLessThan(1);
+          // Non-overlay scrollbars occupy part of the requested viewport.
+          const contentWidth = document.documentElement.clientWidth;
+          expect(Math.abs(slab.getBoundingClientRect().right - contentWidth)).toBeLessThan(1);
           expect(getComputedStyle(slab).borderTopWidth).toBe('0px');
           expect(getComputedStyle(slab).borderRadius).toBe('0px');
           expect(getComputedStyle(header).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');

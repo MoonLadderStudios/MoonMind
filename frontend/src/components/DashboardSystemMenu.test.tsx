@@ -32,6 +32,28 @@ describe('DashboardSystemMenu without UI info', () => {
     }
   });
 
+  it('keeps a pointer-selected link mounted when WebKit blurs without a related target', () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={null} availabilityUnknown mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    const skills = screen.getByRole('menuitem', { name: /Skills/ });
+    // WebKit can blur the trigger without focusing the clicked link.
+    fireEvent.pointerDown(skills);
+    fireEvent.blur(trigger, { relatedTarget: null });
+    expect(screen.getByRole('menuitem', { name: /Skills/ })).toBe(skills);
+    fireEvent.pointerUp(skills);
+    fireEvent.click(skills);
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
+    fireEvent.blur(screen.getByRole('menuitem', { name: /Skills/ }), { relatedTarget: null });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('offers the same fallback in the mobile drawer', () => {
     renderWithClient(
       <MemoryRouter initialEntries={['/workflows']}>
