@@ -170,6 +170,9 @@ async def compile_step_execution_plans(
             # null/default; successors use only their already frozen handoff.
             publication = task.get("publish")
             publication = publication if isinstance(publication, Mapping) else {}
+            message = publication.get("commitMessage", initial_parameters.get("commitMessage"))
+            if isinstance(message, str) and message.strip():
+                parameters["commitMessage"] = message.strip()
             for candidate in (
                 publication.get("prBaseBranch"), publication.get("baseBranch"),
                 initial_parameters.get("publishBaseBranch"),
@@ -194,6 +197,15 @@ async def compile_step_execution_plans(
             if frozen and saved.get("publishBaseBranch") != resolution["stepPublicationBaseBranch"]:
                 raise ValueError("Selected step publication base conflicts with its admitted inputs")
             parameters["publishBaseBranch"] = copy.deepcopy(resolution["stepPublicationBaseBranch"])
+        message = parameters.get("commitMessage")
+        if message is not None and not isinstance(message, str):
+            raise ValueError("Selected step commit message must be a string or null")
+        if not frozen and (defaults or explicit):
+            resolution["stepCommitMessage"] = copy.deepcopy(message)
+        if "stepCommitMessage" in resolution:
+            if frozen and saved.get("commitMessage") != resolution["stepCommitMessage"]:
+                raise ValueError("Selected step commit message conflicts with its admitted inputs")
+            parameters["commitMessage"] = copy.deepcopy(resolution["stepCommitMessage"])
         parameters.update(model=model, effort=effort, modelSource=resolution.get("modelSource"))
         # The original snapshot remains unchanged. Resolved selection is the
         # same canonical metadata used by ordinary admission and the adapter.

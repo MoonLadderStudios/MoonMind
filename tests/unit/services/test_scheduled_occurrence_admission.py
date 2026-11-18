@@ -1862,3 +1862,117 @@ async def test_specialized_freezes_authored_publication_alias_before_tier_defaul
     )
     assert admitted["disposition"] == "admitted"
     assert admitted["omnigentStepExecutionPlans"]["specialized"]["publishBaseBranch"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["tier", "top", "publication", "explicit"])
+@pytest.mark.parametrize("message", ["selected message", "", None])
+async def test_specialized_commit_message_reaches_run_after_successor(monkeypatch, compiler, source, message):
+    from temporalio import workflow
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"commitMessage": message if source == "tier" else "tier message"}}]
+    provider.default_model_tier = 1
+    runtime = {"mode": "omnigent", "modelTier": 1}
+    initial = {}
+    expected = message
+    if source == "top":
+        initial["commitMessage"] = message
+    if source == "publication":
+        initial["workflow"] = {"publish": {"commitMessage": message}}
+        expected = message if message else "tier message"
+    if source == "explicit":
+        initial["workflow"] = {"publish": {"commitMessage": "authored fallback"}}
+        runtime["parameters"] = {"commitMessage": message}
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider, initial_parameters=initial,
+        steps=[{"id": "specialized", "runtime": runtime}],
+    )
+    provider.model_tiers[0]["parameters"]["commitMessage"] = "changed Profile"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts),
+    )
+    assert admitted["disposition"] == "admitted"
+    step = admitted["omnigentStepExecutionPlans"]["specialized"]
+    assert step["commitMessage"] == expected
+    assert step["modelTierResolution"]["stepCommitMessage"] == expected
+    monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(namespace="default", workflow_id="mm:test", run_id="run-1", parent=None))
+    monkeypatch.setattr(workflow, "patched", lambda _: True)
+    request = MoonMindRunWorkflow()._build_agent_execution_request(
+        node_inputs={"runtime": {"mode": "omnigent", "parameters": {"commitMessage": "generated"}}},
+        node_id="specialized", tool_name="auto", workflow_parameters={**parameters, **admitted},
+    )
+    assert request.parameters["commitMessage"] == expected
+    assert request.parameters["runtime"]["parameters"]["commitMessage"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("inherited", [None, "root message"])
+async def test_specialized_successor_preserves_absent_or_legacy_message(
+    monkeypatch, compiler, legacy, inherited
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"publishBaseBranch": "admitted"}}]
+    provider.default_model_tier = 1
+    compile_plan = plan_service.compile_and_persist_execution_plan
+
+    async def legacy_compile(**kwargs):
+        # Produce the pre-field plan/handoff before the root binds its digest,
+        # rather than modifying an already admitted map or bypassing its checks.
+        if kwargs.get("_compile_step_plans") is False:
+            kwargs["model_tier_resolution"].pop("stepCommitMessage", None)
+            if inherited is None:
+                kwargs["initial_parameters"].pop("commitMessage", None)
+        return await compile_plan(**kwargs)
+
+    if legacy:
+        monkeypatch.setattr(plan_service, "compile_and_persist_execution_plan", legacy_compile)
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider,
+        initial_parameters={} if inherited is None else {"commitMessage": inherited},
+        steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}],
+    )
+    step = parameters["omnigentStepExecutionPlans"]["specialized"]
+    monkeypatch.setattr(plan_service, "compile_and_persist_execution_plan", compile_plan)
+    if legacy:
+        assert step.get("commitMessage") == inherited
+        if inherited is None:
+            assert "commitMessage" not in step
+        assert "stepCommitMessage" not in step["modelTierResolution"]
+    else:
+        assert step["commitMessage"] == inherited
+    provider.model_tiers[0]["parameters"]["commitMessage"] = "later Profile message"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts)
+    )
+    assert admitted["disposition"] == "admitted"
+    successor_step = admitted["omnigentStepExecutionPlans"]["specialized"]
+    if legacy:
+        assert successor_step.get("commitMessage") == inherited
+        if inherited is None:
+            assert "commitMessage" not in successor_step
+        assert "stepCommitMessage" not in successor_step["modelTierResolution"]
+    else:
+        assert successor_step["commitMessage"] == inherited
+        assert successor_step["modelTierResolution"]["stepCommitMessage"] == inherited
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, 42, [], {}])
+async def test_specialized_rejects_malformed_commit_message(monkeypatch, compiler, value):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"commitMessage": value}}]
+    provider.default_model_tier = 1
+    with pytest.raises(ValueError, match="commit message must be a string or null"):
+        await _schedule_parameters(_ArtifactService(), provider=provider,
+            steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}])
