@@ -878,31 +878,6 @@ async def test_r6_scheduled_source_gate_behavior_without_user_service(tmp_path: 
                 await temporal.read_scheduled_execution_source(projection)
 
 
-def test_r1b_workflow_run_instance_access_without_owner():
-    """R1: codex run access no longer gates on human ownership.
-
-    The admitted operator inspects any instance run; legacy
-    created_by/requested_by_user_id values persist as provenance.
-    """
-    from fastapi import HTTPException as _HTTPException
-
-    from api_service.api.routers import workflows as workflows_router
-
-    run_id = uuid4()
-    foreign_run = SimpleNamespace(
-        id=run_id, created_by=uuid4(), requested_by_user_id=uuid4()
-    )
-    operator = SimpleNamespace(id=uuid4(), is_superuser=False)
-
-    assert (
-        workflows_router._assert_run_access(foreign_run, run_id, operator)
-        is foreign_run
-    )
-    # Unknown runs still surface not-found.
-    with pytest.raises(_HTTPException):
-        workflows_router._assert_run_access(None, run_id, operator)
-
-
 def test_r1c_execution_instance_visibility_and_principal():
     """R1: execution list/describe scope is instance-wide; principals fall back."""
     from api_service.api.routers import executions as executions_router

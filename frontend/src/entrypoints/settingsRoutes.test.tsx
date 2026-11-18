@@ -90,7 +90,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       if (url === '/api/system/worker-pause') {
         return Promise.resolve(response({ system: { workersPaused: false }, metrics: {}, commands: [] }));
       }
-      if (url === '/api/v1/operations/codex/shards') return Promise.resolve(response({ shards: [] }));
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
         return Promise.resolve(response({
           stack: 'moonmind',
@@ -174,7 +173,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
         workerPause: {
           get: '/api/system/worker-pause',
           post: '/api/system/worker-pause',
-          shardHealth: '/api/v1/operations/codex/shards',
         },
       },
     } as BootPayload);

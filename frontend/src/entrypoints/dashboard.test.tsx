@@ -339,7 +339,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     workerPause: {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
-      shardHealth: '/api/workflows/codex/shards',
     },
     ...overrides,
   };

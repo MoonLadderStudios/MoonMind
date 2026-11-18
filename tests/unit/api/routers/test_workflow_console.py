@@ -376,7 +376,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
-        "shardHealth": "/api/v1/operations/codex/shards",
     }
     assert "initialPath" not in payload["dashboardConfig"]
 

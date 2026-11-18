@@ -414,7 +414,6 @@ export function payloadForDashboardRoute(
     initialData.workerPause = objectValue(uiInfo?.workerPause) ?? initialData.workerPause ?? {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
-      shardHealth: '/api/workflows/codex/shards',
     };
     initialData.runtimeConfig = initialData.runtimeConfig ?? nextDashboardConfig;
   }
