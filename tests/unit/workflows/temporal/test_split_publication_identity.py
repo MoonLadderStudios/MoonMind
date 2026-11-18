@@ -19,8 +19,12 @@ from moonmind.workflows.temporal.activities import (
     "commit_message", [None, "", " \t ", "  Admitted commit message  "],
     ids=["absent", "empty", "whitespace", "admitted"],
 )
+@pytest.mark.parametrize(
+    "publish_base_branch", [None, "", " \t ", "  release/admitted  "],
+    ids=["base-absent", "base-empty", "base-whitespace", "base-admitted"],
+)
 async def test_split_session_publication_keeps_admitted_identity(
-    monkeypatch, remediation, commit_message
+    monkeypatch, remediation, commit_message, publish_base_branch
 ):
     identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
     from tests.helpers.publication_identity import recorded_publication_identity
@@ -51,6 +55,8 @@ async def test_split_session_publication_keeps_admitted_identity(
     )
     if commit_message is not None:
         request.parameters["commitMessage"] = commit_message
+    if publish_base_branch is not None:
+        request.parameters["publishBaseBranch"] = publish_base_branch
     expected_locator = dict(request.workspace_spec["workspaceLocator"])
     if remediation:
         expected_locator = {
@@ -123,5 +129,8 @@ async def test_split_session_publication_keeps_admitted_identity(
     assert observed.get("commit_message") == commit_message
     assert observed["workspace_locator"] == expected_locator
     assert observed["publish_mode"] == "pr"
+    # Checkout identity stays separate from the admitted PR target. The
+    # publisher, not this Activity, owns normalization and existing-PR checks.
     assert observed["base_branch"] == "main"
+    assert observed.get("publish_base_branch") == publish_base_branch
     assert request.parameters == original_parameters

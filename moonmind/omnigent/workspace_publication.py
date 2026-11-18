@@ -797,6 +797,7 @@ class OmnigentWorkspacePublicationService:
         repository: str,
         github_token: str | None,
         commit_message: str | None = None,
+        publish_base_branch: str | None = None,
         accepted_published_head: Mapping[str, Any] | None = None,
         bound_credential: Any | None = None,
         github_endpoint: str = "https://github.com",
@@ -959,6 +960,52 @@ class OmnigentWorkspacePublicationService:
                     "repository default branch could not be resolved; select a branch explicitly",
                     code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
                 )
+        checkout_base = normalized_base
+        # Checkout identity also identifies an accepted candidate. A PR target
+        # must not replace that identity before candidate recovery is selected.
+        candidate_authored_base = (
+            _owned_candidate_authored_base(
+                accepted_published_head,
+                current_workflow_id=current_workflow_id,
+                repository=repository,
+                candidate_branch=normalized_base,
+            )
+            if normalized_mode == "pr" else None
+        )
+        explicit_pr_base = (
+            publish_base_branch.strip()
+            if normalized_mode == "pr" and isinstance(publish_base_branch, str)
+            else ""
+        )
+        if explicit_pr_base:
+            if isinstance(accepted_published_head, Mapping):
+                recorded_base = str(accepted_published_head.get("baseBranch") or "").strip()
+                if (
+                    accepted_published_head.get("workflowId") != current_workflow_id
+                    or accepted_published_head.get("repository") != repository
+                    or (recorded_base and recorded_base != explicit_pr_base)
+                ):
+                    raise HarnessPlatformError(
+                        "publication base conflicts with accepted candidate evidence",
+                        code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                    )
+                if not recorded_base:
+                    # Retained handoffs predate the recorded PR base. Preserve
+                    # their checkout-based reconciliation, not a newly inferred
+                    # target; the existing PR must still match that old base.
+                    explicit_pr_base = ""
+            if candidate_authored_base is None and explicit_pr_base:
+                normalized_base = explicit_pr_base
+        elif (
+            normalized_mode == "pr"
+            and candidate_authored_base is None
+            and isinstance(accepted_published_head, Mapping)
+            and accepted_published_head.get("workflowId") == current_workflow_id
+            and accepted_published_head.get("repository") == repository
+        ):
+            # A restored workspace can still name its original checkout while
+            # its accepted candidate already has a different authored PR base.
+            normalized_base = str(accepted_published_head.get("baseBranch") or "").strip() or normalized_base
         await run_command(["git", "check-ref-format", "--branch", normalized_base])
         await run_command(
             [
@@ -975,7 +1022,7 @@ class OmnigentWorkspacePublicationService:
                     "git",
                     "symbolic-ref",
                     "refs/remotes/origin/HEAD",
-                    f"refs/remotes/origin/{normalized_base}",
+                    f"refs/remotes/origin/{checkout_base}",
                 ]
             )
         published = None
@@ -984,16 +1031,7 @@ class OmnigentWorkspacePublicationService:
         # That candidate is the publication destination, never its own base:
         # fast-forward it and keep comparing against the authored base it was
         # first published over, so the PR targets that base instead of a stack.
-        authored_base = (
-            _owned_candidate_authored_base(
-                accepted_published_head,
-                current_workflow_id=current_workflow_id,
-                repository=repository,
-                candidate_branch=normalized_base,
-            )
-            if normalized_mode == "pr"
-            else None
-        )
+        authored_base = candidate_authored_base
         if authored_base is not None:
             accepted_sha = str(accepted_published_head.get("headSha") or "").strip()
             candidate_tip = await run_command(
@@ -1479,6 +1517,7 @@ class OmnigentWorkspacePublicationService:
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     commit_message=parameters.get("commitMessage"),
+                    publish_base_branch=parameters.get("publishBaseBranch"),
                     repository=identity.display_name,
                     github_token=token,
                     bound_credential=bound,
@@ -1498,6 +1537,7 @@ class OmnigentWorkspacePublicationService:
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 commit_message=parameters.get("commitMessage"),
+                publish_base_branch=parameters.get("publishBaseBranch"),
                 repository=repository,
                 github_token=str(github_credential.token or "").strip() or None,
                 accepted_published_head=parameters.get("acceptedPublishedHead"),
