@@ -1090,6 +1090,8 @@ async def _reconstruct_plan_bound_request(
     planned_resolution = getattr(plan.payload.modelConfig, "tierResolution", None)
     if isinstance(planned_resolution, Mapping) and "stepPublicationBaseBranch" in planned_resolution:
         authored_parameters["publishBaseBranch"] = planned_resolution["stepPublicationBaseBranch"]
+    if isinstance(planned_resolution, Mapping) and "stepCommitMessage" in planned_resolution:
+        authored_parameters["commitMessage"] = planned_resolution["stepCommitMessage"]
     instruction = str(selected_workflow.get("instructions") or "").strip()
     if not instruction:
         instruction = str(workflow.get("instructions") or "").strip()

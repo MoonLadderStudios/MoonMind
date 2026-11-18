@@ -885,6 +885,7 @@ RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
     "run-omnigent-execution-plan-binding-authority-v1"
 )
 RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH = "run-omnigent-step-execution-plans-v1"
+RUN_STEP_COMMIT_MESSAGE_PATCH = "run-step-commit-message-v1"
 RUN_STEP_PUBLICATION_BASE_PATCH = "run-step-publication-base-v1"
 RUN_OMNIGENT_REMEDIATION_STEP_PLANS_PATCH = "run-omnigent-remediation-step-plans-v1"
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
@@ -24094,6 +24095,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             runtime_parameters["parameters"] = {
                 **(runtime_parameters.get("parameters") or {}),
                 "publishBaseBranch": admitted_step["publishBaseBranch"],
+            }
+            parameters["runtime"] = runtime_parameters
+        if (
+            isinstance(admitted_step, Mapping)
+            and "commitMessage" in admitted_step
+            and "stepCommitMessage" in (admitted_step.get("modelTierResolution") or {})
+            and self._workflow_patch_enabled(RUN_STEP_COMMIT_MESSAGE_PATCH)
+        ):
+            # Only newly frozen preferences override generated launch inputs.
+            # Replay and retained plans without the marker keep their payload.
+            parameters["commitMessage"] = admitted_step["commitMessage"]
+            runtime_parameters = dict(parameters.get("runtime") or {})
+            runtime_parameters["parameters"] = {
+                **(runtime_parameters.get("parameters") or {}),
+                "commitMessage": admitted_step["commitMessage"],
             }
             parameters["runtime"] = runtime_parameters
         remediation_context_enabled = self._workflow_patch_enabled(
