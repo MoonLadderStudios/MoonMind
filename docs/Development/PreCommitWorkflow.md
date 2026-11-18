@@ -20,7 +20,6 @@ The Windows-oriented PowerShell wrappers still run `pre-commit` before they star
 
 - `tools/test-unit.ps1`
 - `tools/test-integration.ps1`
-- `tools/test-e2e.ps1`
 
 Each script starts with:
 
@@ -212,7 +211,7 @@ python tools/verify_test_shard_ownership.py
 
 A bare `./tools/test_unit.sh` invocation is for a deliberate broad local unit run. Use `./tools/test_integration.sh` for a deliberate host-side hermetic integration reproduction. Changes to Docker, compose, migrations, integration tests, or runtime infrastructure normally receive their broader verification from the selected CI integration jobs, not a mandatory local integration suite.
 
-The Windows wrappers `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already run repository-wide `pre-commit` hooks. That implementation detail does not make their broader test flows a required pre-PR step.
+The Windows wrappers `tools/test-unit.ps1` and `tools/test-integration.ps1` already run repository-wide `pre-commit` hooks. That implementation detail does not make their broader test flows a required pre-PR step.
 
 ## Manual Commands
 
@@ -253,4 +252,3 @@ The wrapper can select its Docker-backed fallback when a human WSL session lacks
 - `tools/generate_openapi_types.py`
 - `tools/test-unit.ps1`
 - `tools/test-integration.ps1`
-- `tools/test-e2e.ps1`

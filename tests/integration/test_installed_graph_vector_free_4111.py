@@ -50,6 +50,7 @@ def test_installed_image_has_no_local_agent_toolchain() -> None:
     "module_name",
     [
         "typer",
+        "click",
         "fastapi",
         "temporalio",
         "httpx",
@@ -67,3 +68,8 @@ def test_installed_image_has_no_local_agent_toolchain() -> None:
 )
 def test_surviving_library_imports_on_installed_image_graph(module_name: str) -> None:
     assert importlib.import_module(module_name) is not None
+
+
+def test_installed_image_has_no_retired_python_test_plugins() -> None:
+    names = {name.lower().replace("_", "-") for name in _installed_distribution_names()}
+    assert names.isdisjoint({"pytest-mock", "playwright"})

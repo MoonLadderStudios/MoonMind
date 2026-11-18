@@ -408,10 +408,18 @@ async def _run_fleet3949(
                             await asyncio.sleep(0.1)
                         else:
                             pytest.fail("activity cancellation was not recorded")
-                        assert FLEET3949_RELEASE_MARK_RUNNING is not None
-                        FLEET3949_RELEASE_MARK_RUNNING.set()
-                    with pytest.raises(WorkflowFailureError):
-                        await handle.result()
+                    try:
+                        with pytest.raises(WorkflowFailureError):
+                            await handle.result()
+                    finally:
+                        if cancel_at_activity_entry:
+                            # The canceled result proves terminal persistence
+                            # committed. SQLite ignores SELECT FOR UPDATE, so
+                            # do not overlap its writes with the late handoff;
+                            # the PostgreSQL journey below owns that race.
+                            # Also unblock worker teardown if result() fails.
+                            assert FLEET3949_RELEASE_MARK_RUNNING is not None
+                            FLEET3949_RELEASE_MARK_RUNNING.set()
                     for _attempt in range(200):
                         if any(name == "terminal" for name, *_rest in FLEET3949_CALLS):
                             break
