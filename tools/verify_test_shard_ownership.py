@@ -100,7 +100,9 @@ def hermetic_phase_nodes(script_path: Path) -> frozenset[str]:
         if line.lstrip().startswith(
             ('"pytest ', '"python tools/ci/write_backend_matrix_summary.py run -- ')
         ):
-            nodes.update(re.findall(r"tests/integration/[^\s\"']+\.py::[^\s\"']+", line))
+            nodes.update(
+                re.findall(r"tests/integration/[^\s\"']+\.py::[^\s\"']+", line)
+            )
     return frozenset(nodes)
 
 
@@ -287,7 +289,14 @@ def verify_audited_test_domains(
     return errors
 
 
-def collect_group_node_ids(group: int, *, durations_args: list[str]) -> set[str]:
+def collect_group_node_ids(
+    group: int,
+    *,
+    durations_args: list[str],
+    prefix: str = RELIABILITY_PREFIX,
+    marker: str = RELIABILITY_MARKER_EXPR,
+    count: int = RELIABILITY_SHARD_COUNT,
+) -> set[str]:
     """Collect one pytest-split group through the actual plugin CLI.
 
     Uses the same flags as the CI reliability rows. Raises
@@ -299,15 +308,15 @@ def collect_group_node_ids(group: int, *, durations_args: list[str]) -> set[str]
         sys.executable,
         "-m",
         "pytest",
-        RELIABILITY_PREFIX,
+        prefix,
         "--collect-only",
         "-q",
         "-p",
         "no:cacheprovider",
         "-m",
-        RELIABILITY_MARKER_EXPR,
+        marker,
         "--splits",
-        str(RELIABILITY_SHARD_COUNT),
+        str(count),
         "--group",
         str(group),
         "--splitting-algorithm",
@@ -338,9 +347,7 @@ def verify_physical_partitions(
     for group in sorted(groups):
         for nodeid in sorted(groups[group]):
             if nodeid in covered:
-                errors.append(
-                    f"{nodeid}: selected by multiple reliability groups"
-                )
+                errors.append(f"{nodeid}: selected by multiple reliability groups")
             covered.add(nodeid)
     for nodeid in sorted(universe - covered):
         errors.append(
@@ -387,6 +394,37 @@ def verify_physical_reliability_partitions(
     return (verify_physical_partitions(universe, groups), False)
 
 
+def verify_physical_hermetic_partitions(
+    nodes: list[CollectedNode],
+) -> tuple[list[str], bool]:
+    """Exercise the same plugin and hints as both hermetic execution rows."""
+    from tools.ci.hermetic_shards import durations_args
+
+    universe = {
+        node.nodeid
+        for node in nodes
+        if node.path.startswith("tests/integration/")
+        and "integration_ci" in node.markers
+    }
+    if not universe:
+        return [], False
+    try:
+        groups = {
+            group: collect_group_node_ids(
+                group,
+                durations_args=durations_args(),
+                prefix="tests/integration",
+                marker="integration_ci",
+                count=2,
+            )
+            for group in (1, 2)
+        }
+    except PluginUnavailable as exc:
+        print(f"warning: physical hermetic partition check skipped: {exc}")
+        return [], True
+    return verify_physical_partitions(universe, groups), False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path)
@@ -421,6 +459,17 @@ def main() -> int:
         for error in physical_errors:
             print(f"  - {error}")
         return 1
+
+    hermetic_errors, hermetic_skipped = verify_physical_hermetic_partitions(
+        collector.nodes
+    )
+    if hermetic_errors:
+        print("Hermetic physical partition verification failed:")
+        for error in hermetic_errors:
+            print(f"  - {error}")
+        return 1
+    if hermetic_skipped:
+        print("Physical hermetic partition check skipped (pytest-split unavailable).")
 
     eligible_count = sum(_eligible(node) for node in collector.nodes)
     if args.manifest:
@@ -463,7 +512,9 @@ def main() -> int:
         )
     print(f"Verified exactly one CI owner for {eligible_count} provider-free nodes.")
     if skipped:
-        print("Physical reliability partition check skipped (pytest-split unavailable).")
+        print(
+            "Physical reliability partition check skipped (pytest-split unavailable)."
+        )
     else:
         print(
             "Verified the four pytest-split reliability groups partition "

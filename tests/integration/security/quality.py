@@ -21,7 +21,9 @@ from tools.ci.redact_diagnostics import redact_text
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "tests/fixtures/security_review/quality-cases.json"
-OUTPUT = ROOT / "artifacts/integration-ci/security-quality"
+OUTPUT = ROOT / os.environ.get(
+    "MOONMIND_SECURITY_QUALITY_OUTPUT", "artifacts/integration-ci/security-quality"
+)
 
 
 def observation_digest(observed):
@@ -241,6 +243,12 @@ class QualityRun:
                 "runIdentity": os.environ.get(
                     "PYTEST_XDIST_TESTRUNUID", str(os.getpid())
                 ),
+                "executionIdentity": {
+                    "revision": os.environ.get("MOONMIND_CI_REVISION", ""),
+                    "runId": os.environ.get("GITHUB_RUN_ID", ""),
+                    "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                    "suite": os.environ.get("MOONMIND_CI_SUITE", ""),
+                },
                 "case": case,
                 "manifestDigest": "sha256:"
                 + hashlib.sha256(manifest_bytes).hexdigest(),
@@ -292,11 +300,24 @@ class QualityRun:
         return result
 
 
-def summarize(directory=OUTPUT, manifest_path=MANIFEST):
+def summarize(
+    directory=OUTPUT,
+    manifest_path=MANIFEST,
+    *,
+    execution_identities=None,
+    case_ids=None,
+):
     """Recheck corpus completeness and retained bytes in the existing CI lane."""
     raw = manifest_path.read_bytes()
     cases = json.loads(raw)["cases"]
     missing, failed, results = [], [], []
+    if case_ids is not None:
+        # Partial owners retain the digest of the full canonical corpus. The
+        # aggregate still requires a separate complete-corpus validation.
+        known = {case["id"] for case in cases}
+        if set(case_ids) - known:
+            failed.append("unknown_security_case")
+        cases = [case for case in cases if case["id"] in case_ids]
     for case in cases:
         path = directory / case["id"] / "result.json"
         if not path.exists():
@@ -335,8 +356,20 @@ def summarize(directory=OUTPUT, manifest_path=MANIFEST):
         except (OSError, ValueError, KeyError, TypeError):
             failed.append(case["id"])
     run_ids = {result.get("runIdentity") for result in results}
-    if len(run_ids) != 1 or None in run_ids:
-        failed.append("mixed_or_missing_execution_identity")
+    if execution_identities is None:
+        if len(run_ids) != 1 or None in run_ids:
+            failed.append("mixed_or_missing_execution_identity")
+    else:
+        # The aggregate owner admits these identities only after validating each
+        # physical shard receipt. Never substitute a shared synthetic xdist UID.
+        for result in results:
+            identity = result.get("executionIdentity", {})
+            key = tuple(
+                identity.get(field)
+                for field in ("revision", "runId", "attempt", "suite")
+            ) + (result.get("runIdentity"),)
+            if not all(key) or key not in execution_identities:
+                failed.append("unverified_shard_execution_identity")
     return {
         "schemaVersion": "security-quality-summary/v1",
         "passed": not missing and not failed,

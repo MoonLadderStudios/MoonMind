@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from tools.ci.write_backend_matrix_summary import (
     environment_fingerprint,
@@ -138,32 +137,7 @@ def test_owner_receipts_require_current_complete_collected_coverage(
         assert results[0]["nodeIds"] == [nodeid]
         assert results[0]["ownerReceiptRefs"]
         if owner == "integration-hermetic":
-            jobs = yaml.safe_load(
-                (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
-            )["jobs"]
-            download = next(
-                step
-                for step in jobs["omnigent-deterministic-conformance"]["steps"]
-                if step["name"] == "Download hermetic owner receipts and logs"
-            )
-            producer_attempt = (
-                jobs["integration-hermetic"].get("outputs", {}).get("attempt", "")
-            ).replace("${{ github.run_attempt }}", "2")
-            upload = next(
-                step
-                for step in jobs["integration-hermetic"]["steps"]
-                if step["name"] == "Upload row-owned integration report and diagnostics"
-            )
-            assert download["with"]["name"].replace(
-                "${{ needs.integration-hermetic.outputs.attempt }}", producer_attempt
-            ) == upload["with"]["name"].replace(
-                "${{ matrix.suite }}", "hermetic"
-            ).replace(
-                "${{ github.run_attempt }}", "2"
-            )
-            retained = tmp_path / download["with"]["path"].replace(
-                "${{ needs.integration-hermetic.outputs.attempt }}", producer_attempt
-            )
+            retained = tmp_path / "integration-ci-hermetic-attempt-2"
         else:
             retained = tmp_path / "pytest-unit-fast-attempt-2"
         retained.mkdir(parents=True)
@@ -700,3 +674,110 @@ def test_failed_layer_diagnostics_are_readable_without_artifact_downloads(
     assert evidence["evidenceScans"]["logs"]["status"] == (
         "failed" if secret else "passed"
     )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [None, "missing", "overlap", "suite", "future", "source", "latest-incomplete"],
+)
+def test_hermetic_physical_receipts_are_complete_distinct_and_current(
+    tmp_path, monkeypatch, damage
+):
+    runner = _load_runner()
+    path = "tests/integration/omnigent/test_witness.py"
+    nodes = [path + "::test_one", path + "::test_two"]
+    identity = dict(revision="a" * 40, runId="123", attempt="2")
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "moonmind.test-ownership/v1",
+                **identity,
+                "nodes": [
+                    {
+                        "nodeid": node,
+                        "path": path,
+                        "eligible": True,
+                        "owners": ["integration-ci"],
+                    }
+                    for node in (
+                        nodes[:1] if damage in {"missing", "overlap"} else nodes
+                    )
+                ],
+            }
+        )
+    )
+    environment = observed_environment()
+    fingerprint = environment_fingerprint(environment)
+
+    def write(shard, attempt, node, *, incomplete=False):
+        suite = f"integration-hermetic-shard-{shard}"
+        root = tmp_path / f"integration-ci-hermetic-shard-{shard}-attempt-{attempt}"
+        root.mkdir()
+        receipt_path = root / "main.receipt.json"
+        current = {**identity, "attempt": str(attempt)}
+        receipt = {
+            "schema": "moonmind.pytest-verification/v1",
+            **current,
+            "suite": suite,
+            "status": "incomplete" if incomplete else "passed",
+            "exitCode": 0,
+            "errors": [],
+            **environment,
+            "arguments": [path],
+            "environmentFingerprint": fingerprint,
+            "expectedNodeIds": [node],
+            "cases": [
+                {
+                    "nodeid": node,
+                    "outcome": "passed",
+                    "phases": {
+                        phase: {"outcome": "passed", "seconds": 0.01}
+                        for phase in ("setup", "call", "teardown")
+                    },
+                }
+            ],
+        }
+        if damage == "suite" and shard == 2:
+            receipt["suite"] = "integration-hermetic-shard-1"
+        if damage == "source" and shard == 2:
+            receipt["revision"] = "b" * 40
+        receipt_path.write_text(json.dumps(receipt))
+        environment_path(receipt_path).write_text(
+            json.dumps(
+                {
+                    "schema": "moonmind.pytest-environment/v1",
+                    **current,
+                    "suite": suite,
+                    "environment": environment,
+                    "fingerprint": fingerprint,
+                    "expectedPython": f"{sys.version_info.major}.{sys.version_info.minor}",
+                    "pytestArguments": [path],
+                }
+            )
+        )
+
+    write(1, 1, nodes[0])  # Successful sibling retained from the prior attempt.
+    if damage != "missing":
+        write(
+            2,
+            3 if damage == "future" else 2,
+            nodes[0] if damage == "overlap" else nodes[1],
+        )
+    if damage == "latest-incomplete":
+        write(1, 2, nodes[0], incomplete=True)
+    monkeypatch.setattr(runner, "COMMANDS", ((sys.executable, "-m", "pytest", path),))
+    kwargs = dict(revision=identity["revision"], run_id="123", attempt="2")
+    if damage:
+        with pytest.raises(
+            ValueError,
+            match={
+                "missing": "Missing main receipt",
+                "overlap": "Duplicate receipt coverage",
+            }.get(damage, ".*"),
+        ):
+            runner.owner_receipt_commands(tmp_path, manifest_path, **kwargs)
+    else:
+        result = runner.owner_receipt_commands(tmp_path, manifest_path, **kwargs)
+        assert result[0]["nodeIds"] == nodes
+        assert len(result[0]["ownerReceiptRefs"]) == 2

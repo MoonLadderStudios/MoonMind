@@ -335,7 +335,7 @@ def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
                         check=False,
                         timeout=30,
                     )
-                    evidence_dir = Path("artifacts/integration-ci/scoped-egress")
+                    evidence_dir = Path(os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci")) / "scoped-egress"
                     evidence_dir.mkdir(parents=True, exist_ok=True)
                     (evidence_dir / "browser.stderr").write_bytes(browser.stderr)
                     assert (

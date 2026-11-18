@@ -105,7 +105,7 @@ class DockerLab:
             [],
             [],
         )
-        self.artifacts = root / "artifacts/integration-ci/scoped-egress" / self.prefix
+        self.artifacts = root / os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci") / "scoped-egress" / self.prefix
         self.artifacts.mkdir(parents=True)
 
     async def runner(self, args):

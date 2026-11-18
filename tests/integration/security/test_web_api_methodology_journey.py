@@ -18,6 +18,7 @@ from tests.integration.security import test_application_access_jobs as access_jo
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security import test_web_assessment_jobs as web
 from tests.integration.security.test_admitted_assessment_journeys import finish
+from tests.integration.security.quality import OUTPUT as QUALITY_OUTPUT
 from tests.unit.security import test_application_access_target as http_fixture
 from tests.unit.security.test_web_api_methodology import (
     PACK_PATH,
@@ -332,7 +333,7 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
         if gap == "asset":
             procedure["assets"].append(missing_asset)
     retained = []
-    evidence_dir = Path("artifacts/integration-ci/security-quality") / (
+    evidence_dir = QUALITY_OUTPUT / (
         "methodology-uncovered-" + gap
     )
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -482,9 +483,7 @@ async def test_primary_report_preserves_objective_states_and_redacts_credentials
         ],
     )
     summary = await primary_report(service, outputs)
-    evidence_dir = Path(
-        "artifacts/integration-ci/security-quality/methodology-presentation"
-    )
+    evidence_dir = QUALITY_OUTPUT / "methodology-presentation"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / (state + "-report.md")).write_text(summary)
     (evidence_dir / (state + "-coverage.json")).write_text(json.dumps(report))
@@ -744,9 +743,7 @@ async def test_reporting_retry_preserves_completed_native_work_and_reuses_covera
     assert failed["methodologyStatus"] == "unavailable"
     assert failed["scanOutcome"] == "completed"
     failed_summary = await primary_report(service, failed)
-    evidence_dir = Path(
-        "artifacts/integration-ci/security-quality/methodology-report-retry"
-    )
+    evidence_dir = QUALITY_OUTPUT / "methodology-report-retry"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / "unavailable-report.md").write_text(failed_summary)
     assert failed_summary.splitlines()[2] == "Coverage: partial. Baseline: initial."

@@ -16,6 +16,7 @@ from tools.verify_test_shard_ownership import (
     owners,
     verify,
     verify_physical_partitions,
+    verify_physical_hermetic_partitions,
     verify_physical_reliability_partitions,
     verify_audited_test_domains,
 )
@@ -154,10 +155,13 @@ def test_host_owned_integration_nodes_have_their_actual_runner_owner() -> None:
     assert verify([_node("tests/integration/host_update/test_new.py", "integration")])
 
 
-@pytest.mark.parametrize("name", [
-    "test_seed_migrated_saved_inputs",
-    "test_retrieve_migrated_saved_inputs_after_restart",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "test_seed_migrated_saved_inputs",
+        "test_retrieve_migrated_saved_inputs_after_restart",
+    ],
+)
 def test_hermetic_restart_phases_keep_the_actual_runner_owner(name) -> None:
     path = "tests/integration/temporal/test_storage_restart.py"
     node = CollectedNode(f"{path}::{name}", path, frozenset({"integration", "asyncio"}))
@@ -167,12 +171,14 @@ def test_hermetic_restart_phases_keep_the_actual_runner_owner(name) -> None:
 
 def test_hermetic_phase_selection_follows_the_executable_wrapper(tmp_path) -> None:
     script = tmp_path / "integration.sh"
-    script.write_text('''# pytest tests/integration/test_comment.py::test_unused
+    script.write_text("""# pytest tests/integration/test_comment.py::test_unused
 run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \\
   "pytest -q tests/integration/test_changed.py::test_seed --timeout 90"
 echo "tests/integration/test_echo.py::test_unused"
-''')
-    assert hermetic_phase_nodes(script) == {"tests/integration/test_changed.py::test_seed"}
+""")
+    assert hermetic_phase_nodes(script) == {
+        "tests/integration/test_changed.py::test_seed"
+    }
 
 
 def test_controller_selection_follows_the_executable_workflow_command(tmp_path) -> None:
@@ -383,9 +389,7 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
     (tmp_path / "test_hist_a.py").write_text(
         "def test_one():\n    pass\ndef test_two():\n    pass\n"
     )
-    (tmp_path / "test_brand_new.py").write_text(
-        "def test_brand_new():\n    pass\n"
-    )
+    (tmp_path / "test_brand_new.py").write_text("def test_brand_new():\n    pass\n")
     base = [sys.executable, "-m", "pytest"]
     probe = _real_run_collection_command(base + ["--help"])
     if "--splits" not in (probe.stdout + probe.stderr):
@@ -396,15 +400,11 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
         cwd=tmp_path,
     )
     assert proc.returncode in (0, 5), proc.stderr[-500:]
-    universe = {
-        line.strip() for line in proc.stdout.splitlines() if "::" in line
-    }
+    universe = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
     assert len(universe) == 3
     new_node = next(node for node in universe if "test_brand_new" in node)
     # Hints cover only the pre-existing nodes; the new node has no history.
-    hints = {
-        node: 10.0 for node in sorted(universe) if node != new_node
-    }
+    hints = {node: 10.0 for node in sorted(universe) if node != new_node}
     durations_path = tmp_path / "durations.json"
     durations_path.write_text(json.dumps(hints), encoding="utf-8")
     groups: dict[int, set[str]] = {}
@@ -475,21 +475,59 @@ def test_plugin_cli_partitions_with_measured_stale_and_missing_hints(tmp_path) -
         proc = _real_run_collection_command(
             base
             + [
-                "--collect-only", "-q", "-p", "no:cacheprovider",
-                "--splits", "4", "--group", str(group),
-                "--splitting-algorithm", "least_duration",
-                "--durations-path", str(durations_path),
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--splits",
+                "4",
+                "--group",
+                str(group),
+                "--splitting-algorithm",
+                "least_duration",
+                "--durations-path",
+                str(durations_path),
             ],
             cwd=tmp_path,
         )
         assert proc.returncode in (0, 5), proc.stderr[-500:]
-        groups[group] = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
+        groups[group] = {
+            line.strip() for line in proc.stdout.splitlines() if "::" in line
+        }
     assert verify_physical_partitions(universe, groups) == []
     slow_groups = {
-        group
-        for group, nodes in groups.items()
-        for node in nodes
-        if "[slow-" in node
+        group for group, nodes in groups.items() for node in nodes if "[slow-" in node
     }
     assert len(slow_groups) == 2, groups
     assert json.loads(durations_path.read_text(encoding="utf-8")) == hints
+
+
+def test_hermetic_physical_groups_use_exact_marker_universe(monkeypatch):
+    nodes = [
+        _node("tests/integration/a.py::test_a", "integration_ci"),
+        _node("tests/integration/b.py::test_b", "integration_ci"),
+    ]
+    calls = []
+
+    def collect(group, **kwargs):
+        calls.append(kwargs)
+        return {nodes[group - 1].nodeid}
+
+    monkeypatch.setattr(
+        "tools.verify_test_shard_ownership.collect_group_node_ids", collect
+    )
+    assert verify_physical_hermetic_partitions(nodes) == ([], False)
+    assert len(calls) == 2
+    assert all(
+        c["prefix"] == "tests/integration"
+        and c["marker"] == "integration_ci"
+        and c["count"] == 2
+        for c in calls
+    )
+    monkeypatch.setattr(
+        "tools.verify_test_shard_ownership.collect_group_node_ids",
+        lambda *a, **kw: {nodes[0].nodeid},
+    )
+    errors, _ = verify_physical_hermetic_partitions(nodes)
+    assert any("multiple" in error for error in errors)
+    assert any("missing" in error for error in errors)
