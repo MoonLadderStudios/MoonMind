@@ -103,9 +103,8 @@ try {
     await visit("/settings", () =>
       page.getByRole("heading", { name: "Providers & Secrets", exact: true }).waitFor({ state: "visible" }),
     );
-    await visit("/settings/instance", async () => {
-      await page.getByRole("heading", { name: "Instance", exact: true }).waitFor({ state: "visible" });
-      // A page response can lose its Chromium body during document navigation.
+    await visit("/settings/operations#advanced", async () => {
+      await page.getByRole("heading", { name: "Operations", exact: true }).waitFor({ state: "visible" });
       // Read expected data through the same browser context, then check the UI.
       const catalogResponse = await page.request.get(base + "/api/v1/settings/catalog");
       if (!catalogResponse.ok()) {
@@ -113,11 +112,22 @@ try {
       }
       const catalog = await catalogResponse.json();
       const descriptors = Object.values(catalog.categories || {}).flat();
-      if (!descriptors.length) throw new Error("Instance settings catalog is empty");
-      await page.getByText(descriptors[0].title, { exact: true }).first().waitFor({ state: "visible" });
+      const canary = descriptors.find((item) => item.key === "skills.canary_percent");
+      if (!canary) throw new Error("Advanced settings catalog is missing Skills Canary Percent");
+      await page.getByText(canary.title, { exact: true }).first().waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Reset dashboard preferences", exact: true }).waitFor({ state: "visible" });
       if (await page.getByLabel("Settings scope", { exact: true }).count()) {
-        throw new Error("Instance settings still has a human-scope selector");
+        throw new Error("Advanced settings still has a human-scope selector");
       }
+    });
+    await visit("/settings/providers-secrets#new-work-defaults-advanced", async () => {
+      await page.getByRole("heading", { name: "Providers & Secrets", exact: true }).waitFor({ state: "visible" });
+      await page.getByLabel("Default Harness", { exact: true }).waitFor({ state: "visible" });
+    });
+    await visit("/security/targets", async () => {
+      await page.getByRole("heading", { name: "Security", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("region", { name: "Reusable assessment authorizations", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("heading", { name: "Reusable assessment context", exact: true }).waitFor({ state: "visible" });
     });
     const info = await page.request.get(base + "/api/ui/info");
     if (!info.ok() || "settingsPermissions" in await info.json()) {

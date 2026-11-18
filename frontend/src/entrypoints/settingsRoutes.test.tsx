@@ -7,7 +7,6 @@ import {
   OperationsSettingsPage,
   ProvidersSecretsSettingsPage,
   SettingsEntryPage,
-  InstanceSettingsPage,
 } from './settings';
 
 function renderRoute(Page: typeof ProvidersSecretsSettingsPage, payload: BootPayload) {
@@ -141,39 +140,16 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(screen.getByRole('radio', { name: 'Default tier' })).toBeTruthy();
   });
 
-  it('mounts only Instance primary data', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
-    renderRoute(InstanceSettingsPage, {
-      page: 'settings-instance',
-      apiBase: '/api',
-      initialData: { },
-    } as BootPayload);
-
-    expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
-    await waitFor(() => {
-      expect(requestedUrls).toContain(
-        '/api/v1/settings/catalog?section=user-workspace',
-      );
-    });
-    expect(requestedUrls).not.toContain('/me');
-    expect(requestedUrls).not.toContain('/api/v1/provider-profiles');
-    expect(requestedUrls).not.toContain('/api/v1/secrets');
-    expect(requestedUrls).not.toContain('/api/system/worker-pause');
-    expect(screen.queryByRole('heading', { name: 'Provider Profiles' })).toBeNull();
-    expect(screen.queryByLabelText('Worker Operations')).toBeNull();
-    expect(screen.queryByLabelText('Settings scope')).toBeNull();
-    expect(screen.getByRole('button', { name: /View audit for/ })).toBeTruthy();
-  });
-
-  it('loads Instance audit on demand for the admitted operator', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
-    renderRoute(InstanceSettingsPage, {
-      page: 'settings-instance',
+  it('loads new-work defaults audit on demand for the admitted operator', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
+    renderRoute(ProvidersSecretsSettingsPage, {
+      page: 'settings-providers-secrets',
       apiBase: '/api',
       initialData: {
       },
     } as BootPayload);
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     const auditButton = await screen.findByRole('button', {
       name: 'View audit for Default Publish Mode',
     });

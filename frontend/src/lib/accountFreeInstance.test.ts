@@ -11,16 +11,16 @@ import {
 // MoonMind account setup, member administration, owner filters,
 // role-dependent navigation, or personal/global catalog controls.
 describe('account-free instance cutover', () => {
-  it('exposes an Instance destination instead of User / Workspace', () => {
-    const instance = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-instance');
+  it('exposes Security without introducing accounts', () => {
+    const instance = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'security');
     expect(instance).toMatchObject({
-      label: 'Instance',
-      canonicalPath: '/settings/instance',
+      label: 'Security',
+      canonicalPath: '/security',
       capabilityKey: 'settingsInstance',
-      page: 'settings-instance',
-      menuGroupKey: 'configuration',
+      page: 'security',
+      navigationGroup: 'primary',
     });
-    expect(instance?.pathPatterns).toEqual(['/settings/instance']);
+    expect(instance?.pathPatterns).toContain('/security/targets');
   });
 
   it('keeps no user identity or human scope in destination metadata', () => {
@@ -32,24 +32,23 @@ describe('account-free instance cutover', () => {
     const group = DASHBOARD_DESTINATION_GROUPS.find(({ key }) => key === 'configuration');
     expect(group?.destinationKeys).toEqual([
       'settings-providers-secrets',
-      'settings-instance',
       'settings-operations',
     ]);
   });
 
-  it('resolves the canonical Instance route and rejects the retired account path', () => {
-    expect(resolveDashboardRoute('/settings/instance')).toEqual({
-      page: 'settings-instance',
+  it('resolves the canonical Security route and rejects the retired account path', () => {
+    expect(resolveDashboardRoute('/security')).toEqual({
+      page: 'security',
       dataWidePanel: true,
-      currentPath: '/settings/instance',
+      currentPath: '/security',
     });
     expect(resolveDashboardRoute('/settings/user-workspace')).toBeNull();
   });
 
-  it('drops stale human-scope params when targeting the Instance page', () => {
-    expect(filterSettingsQueryForTarget('?scope=user&q=team&section=user-workspace', '/settings/instance'))
-      .toBe('/settings/instance');
-    expect(filterSettingsQueryForTarget('?scope=workspace', '/settings/instance'))
-      .toBe('/settings/instance');
+  it('drops stale human-scope params when targeting Security', () => {
+    expect(filterSettingsQueryForTarget('?scope=user&q=team&section=user-workspace', '/security'))
+      .toBe('/security');
+    expect(filterSettingsQueryForTarget('?scope=workspace', '/security'))
+      .toBe('/security');
   });
 });

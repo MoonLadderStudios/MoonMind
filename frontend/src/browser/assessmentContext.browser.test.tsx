@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { MemoryRouter } from 'react-router-dom';
 import { cleanup, renderWithClient, screen, waitFor } from '../utils/test-utils';
-import { InstanceSettingsPage } from '../entrypoints/settings';
+import SecurityPage from '../entrypoints/security';
 import { WorkflowStartPage } from '../entrypoints/workflow-start';
 import { createAssessmentEnvironment, type AssessmentProjectSnapshot, type AssessmentProjects } from '../lib/assessmentProjects';
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -74,8 +74,8 @@ describe('reusable assessment context browser journeys', () => {
     await page.screenshot({ path: '../../../artifacts/create-assessment-opt-in.png' });
   });
   it('edits and copies nested Settings, saves, and dismisses the departure guard without losing the draft', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
-    renderWithClient(<MemoryRouter initialEntries={['/settings/instance']}><InstanceSettingsPage payload={payload} /><a href="/workflows/new">Go to Create</a></MemoryRouter>);
+    window.history.replaceState({}, '', '/security/targets');
+    renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={payload} /><a href="/workflows/new">Go to Create</a></MemoryRouter>);
     await screen.findByLabelText('System name');
     const purpose = screen.getByLabelText('Purpose');
     await userEvent.clear(purpose); await userEvent.type(purpose, 'Browser-verified evidence review');
@@ -92,7 +92,7 @@ describe('reusable assessment context browser journeys', () => {
     await screen.findByRole('dialog');
     await page.getByRole('button', { name: 'Stay', exact: true }).click();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/security/targets');
     expect(screen.getAllByLabelText('System name')).toHaveLength(2);
     expect((screen.getAllByLabelText('Evidence model delivery')[0] as HTMLSelectElement).value).toBe('local_only');
     expect((screen.getAllByLabelText('Permitted Provider Profile references (optional)')[0] as HTMLTextAreaElement).value).toBe('review-private');

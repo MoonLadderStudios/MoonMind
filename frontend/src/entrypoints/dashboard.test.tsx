@@ -305,7 +305,6 @@ vi.mock('./settings', () => {
     SettingsEntryPage: MockSettingsPage,
     OperationsSettingsPage: MockSettingsPage,
     ProvidersSecretsSettingsPage: MockSettingsPage,
-    InstanceSettingsPage: MockSettingsPage,
   };
 });
 
@@ -437,7 +436,7 @@ describe('Dashboard shared entry', () => {
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
     const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
     expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
-      'Workflows', 'Create',
+      'Workflows', 'Create', 'Security',
     ]);
     expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
@@ -455,7 +454,7 @@ describe('Dashboard shared entry', () => {
     const configuration = screen.getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
     expect(within(configuration as HTMLElement).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual([
-      'Providers & Secrets', 'Instance', 'Operations',
+      'Providers & Secrets', 'Operations',
     ]);
     expect(screen.getAllByText('Configuration')).toHaveLength(1);
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
@@ -547,7 +546,6 @@ describe('Dashboard shared entry', () => {
     ['/artifacts/example', 'Artifacts'],
     ['/observability/example', 'Artifacts'],
     ['/settings/providers-secrets', 'Settings'],
-    ['/settings/instance', 'Settings'],
     ['/settings/operations', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
@@ -578,9 +576,7 @@ describe('Dashboard shared entry', () => {
       const activeLink = screen.getByRole('menuitem', {
         name: path.endsWith('providers-secrets')
           ? 'Providers & Secrets'
-          : path.endsWith('instance')
-            ? 'Instance'
-            : 'Operations',
+          : 'Operations',
       });
       expect(activeLink.getAttribute('aria-current')).toBe('page');
       expect(activeLink.classList.contains('active')).toBe(true);
@@ -639,8 +635,8 @@ describe('Dashboard shared entry', () => {
     );
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Instance' }));
-    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/instance');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Providers & Secrets' }));
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/providers-secrets');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
 
     fireEvent.click(trigger);
@@ -662,7 +658,7 @@ describe('Dashboard shared entry', () => {
     const configuration = within(inline).getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
     expect(within(configuration as HTMLElement).getAllByRole('link').map((link) => link.textContent?.trim())).toEqual([
-      'Providers & Secrets', 'Instance', 'Operations',
+      'Providers & Secrets', 'Operations',
     ]);
     expect(within(configuration as HTMLElement).getByRole('link', { name: 'Operations' }).getAttribute('aria-current')).toBe('page');
     // Recurring and Skills render as normal inline links, not a nested popover.
@@ -674,18 +670,16 @@ describe('Dashboard shared entry', () => {
 
   it('MoonLadderStudios/MoonMind#3817 scopes the Configuration group to exposed children', () => {
     const features: Record<string, boolean> = { ...uiInfo().features };
-    delete features.settingsProvidersSecrets;
     delete features.settingsOperations;
     renderWithClient(
-      <MemoryRouter initialEntries={['/settings/instance']}>
+      <MemoryRouter initialEntries={['/settings/providers-secrets']}>
         <DashboardSystemMenu uiInfo={uiInfo({ features })} mobileDrawerOpen={false} />
       </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(screen.getAllByText('Configuration')).toHaveLength(1);
-    expect(screen.queryByRole('menuitem', { name: 'Providers & Secrets' })).toBeNull();
-    expect(screen.getByRole('menuitem', { name: 'Instance' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Providers & Secrets' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Operations' })).toBeNull();
   });
 
@@ -862,7 +856,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(3);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(4);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -2006,7 +2000,6 @@ describe('Dashboard shared entry', () => {
   it.each([
     '/settings/',
     '/settings/providers-secrets/',
-    '/settings/instance/',
     '/settings/operations/',
   ])(
     'MoonLadderStudios/MoonMind#3816 mounts the route-owned Settings page for the trailing-slash direct load %s',
@@ -2021,6 +2014,21 @@ describe('Dashboard shared entry', () => {
       expect(window.location.pathname).toBe(path);
     },
   );
+
+  it.each(['/settings/instance', '/settings/user-workspace'])('preserves authorization detail through retired %s', async (path) => {
+    window.history.replaceState({}, '', `${path}?authorizationRef=auth-123&scope=user#assessment-authorizations`);
+    renderWithClient(<DashboardApp payload={{page: 'dashboard', apiBase: '/api'}} />);
+    await waitFor(() => expect(window.location.pathname).toBe('/security/targets'));
+    expect(window.location.search).toBe('?authorizationRef=auth-123');
+    expect(window.location.hash).toBe('#assessment-authorizations');
+  });
+
+  it.each(['/settings/instance', '/settings/user-workspace'])('redirects retired %s to advanced controls', async (path) => {
+    window.history.replaceState({}, '', path);
+    renderWithClient(<DashboardApp payload={{page: 'dashboard', apiBase: '/api'}} />);
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+    expect(window.location.hash).toBe('#advanced');
+  });
 
   it('MoonLadderStudios/MoonMind#3816 sends an unknown Settings alias back to the entry point', async () => {
     window.history.replaceState({}, '', '/settings/provider-profiles/?runtime=codex');

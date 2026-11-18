@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import workflow_console as workflow_console_router
@@ -211,7 +211,7 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/schedules",
         "/skills",
         "/settings/providers-secrets",
-        "/settings/instance",
+        "/security",
         "/settings/operations",
         "/omnigent/agents",
         "/omnigent/policies",
@@ -350,7 +350,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     ]
     assert [item["key"] for item in configuration_destinations] == [
         "settings-providers-secrets",
-        "settings-instance",
         "settings-operations",
     ]
     skills_destination = next(
@@ -367,7 +366,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         for item in payload["destinations"]
         if item["navigationGroup"] == "primary"
     ]
-    assert primary_keys == ["workflows", "create"]
+    assert primary_keys == ["workflows", "create", "security"]
     assert payload["endpoints"]["workflows"] == "/api/executions"
     # No route serves a workflow update/event stream, so none is advertised;
     # each dashboard query owns its own polling.
@@ -698,20 +697,34 @@ def test_canonical_settings_routes_tolerate_a_trailing_slash(
         assert "moonmind-ui-boot" not in response.text
 
 
-def test_retired_user_workspace_route_redirects_to_instance() -> None:
-    """MoonMind#4353: the retired `/settings/user-workspace` bookmark redirects
-    to the `/settings/instance` replacement with stale scope params dropped."""
+def test_retired_settings_routes_preserve_fragment_routing_in_client() -> None:
+    # Fragments never reach the server; render the shell so the browser can
+    # select the current owner of an assessment/defaults bookmark.
     with _client_with_mock_service() as (client, _mock_service):
-        response = client.get("/settings/user-workspace", follow_redirects=False)
-        assert response.status_code == 307
-        assert response.headers["location"] == "/settings/instance"
+        for path in ("/settings/instance", "/settings/user-workspace"):
+            response = client.get(path, follow_redirects=False)
+            assert response.status_code == 200
+            assert "moonmind-ui-boot" in response.text
 
-        scoped = client.get(
-            "/settings/user-workspace?scope=user&q=workflow&section=x",
-            follow_redirects=False,
-        )
-        assert scoped.status_code == 307
-        assert scoped.headers["location"] == "/settings/instance"
+
+def test_security_workspace_routes_render_existing_operator_shell() -> None:
+    with _client_with_mock_service() as (client, _mock_service):
+        for path in ("/security", "/security/assessments", "/security/targets", "/security/reports"):
+            response = client.get(path, follow_redirects=False)
+            assert response.status_code == 200
+            assert _extract_boot_payload(response.text)["page"] == "dashboard"
+
+
+def test_security_workspace_requires_existing_instance_admission() -> None:
+    def deny_access():
+        raise HTTPException(status_code=403, detail="Operator access required")
+
+    with _client_with_mock_service() as (client, _mock_service):
+        client.app.dependency_overrides[workflow_console_router.get_instance_access] = deny_access
+        for path in ("/security", "/security/assessments", "/security/targets", "/security/reports"):
+            response = client.get(path, follow_redirects=False)
+            assert response.status_code == 403
+            assert "moonmind-ui-boot" not in response.text
 
 
 def test_settings_entry_serves_the_spa_shell_without_honoring_section(

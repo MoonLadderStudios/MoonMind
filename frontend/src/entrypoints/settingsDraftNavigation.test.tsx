@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../utils/test-utils';
-import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
+import { ProvidersSecretsSettingsPage } from './settings';
 import { profileAction } from '../components/settings/profileActionsTestHelpers';
 
 const generatedDescriptor = {
@@ -114,12 +114,12 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
   });
 
   it('keeps a generated-settings draft on Stay and discards it before route navigation', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
+    window.history.replaceState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
-        <InstanceSettingsPage
+        <ProvidersSecretsSettingsPage
           payload={{
-            page: 'settings-instance',
+            page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
             },
@@ -128,8 +128,11 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     const control = await screen.findByLabelText('Default Publish Mode') as HTMLSelectElement;
     fireEvent.change(control, { target: { value: 'branch' } });
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
+    expect(control.value).toBe('branch');
     expect(window.dispatchEvent(new Event('beforeunload', { cancelable: true }))).toBe(false);
 
     const link = destinationLink('/settings/operations');
@@ -137,7 +140,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
     expect((screen.getByLabelText('Default Publish Mode') as HTMLSelectElement).value).toBe('branch');
 
     fireEvent.click(link);
@@ -146,13 +149,13 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     expect((screen.getByLabelText('Default Publish Mode') as HTMLSelectElement).value).toBe('pr');
   });
 
-  it('renders the Instance catalog without a human-scope switcher or scope history', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
+  it('renders the defaults catalog without a human-scope switcher or scope history', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
-        <InstanceSettingsPage
+        <ProvidersSecretsSettingsPage
           payload={{
-            page: 'settings-instance',
+            page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
             },
@@ -161,6 +164,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     await screen.findByLabelText('Default Publish Mode');
     expect(screen.queryByLabelText('Settings scope')).toBeNull();
     expect(screen.queryByRole('button', { name: 'User' })).toBeNull();
@@ -233,12 +237,12 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
   });
 
   it('keeps the unsaved-changes dialog keyboard-modal and restores focus on Escape', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
+    window.history.replaceState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
-        <InstanceSettingsPage
+        <ProvidersSecretsSettingsPage
           payload={{
-            page: 'settings-instance',
+            page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
             },
@@ -247,6 +251,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     fireEvent.change(await screen.findByLabelText('Default Publish Mode'), {
       target: { value: 'branch' },
     });
@@ -267,16 +272,16 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull());
     expect(document.activeElement).toBe(link);
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
   });
 
-  it('keeps the Instance draft guarded across Back and Forward navigation', async () => {
-    window.history.replaceState({}, '', '/settings/instance');
+  it('keeps the defaults draft guarded across Back and Forward navigation', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
-        <InstanceSettingsPage
+        <ProvidersSecretsSettingsPage
           payload={{
-            page: 'settings-instance',
+            page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: { },
           } as BootPayload}
@@ -284,24 +289,25 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     await screen.findByLabelText('Default Publish Mode');
     expect(screen.queryByLabelText('Settings scope')).toBeNull();
 
     act(() => window.history.back());
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
     act(() => window.history.forward());
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
     expect(window.location.search).toBe('');
   });
 
   it('guards browser Back navigation and preserves the active draft when the user stays', async () => {
-    window.history.replaceState({}, '', '/settings/providers-secrets');
-    window.history.pushState({}, '', '/settings/instance');
+    window.history.replaceState({}, '', '/settings/operations');
+    window.history.pushState({}, '', '/settings/providers-secrets');
     renderWithClient(
       <BrowserRouter>
-        <InstanceSettingsPage
+        <ProvidersSecretsSettingsPage
           payload={{
-            page: 'settings-instance',
+            page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
             },
@@ -310,23 +316,24 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
     const control = await screen.findByLabelText('Default Publish Mode') as HTMLSelectElement;
     fireEvent.change(control, { target: { value: 'branch' } });
     act(() => window.history.back());
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
 
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
     expect(control.value).toBe('branch');
-    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
 
     act(() => window.history.back());
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
-    await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
 
     act(() => window.history.forward());
-    await waitFor(() => expect(window.location.pathname).toBe('/settings/instance'));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
   });
 
   it('restores the Harness filter across Back and Forward navigation', async () => {

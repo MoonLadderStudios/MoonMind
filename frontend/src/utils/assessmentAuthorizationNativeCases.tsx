@@ -2,7 +2,7 @@ import inputSchema from '../runtime/fixtures/assessment-authorization-scope.json
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, renderWithClient, screen, waitFor, within } from './test-utils';
-import { InstanceSettingsPage } from '../entrypoints/settings';
+import SecurityPage from '../entrypoints/security';
 import type { BootPayload } from '../boot/parseBootPayload';
 export function assessmentAuthorizationNativeCases(user: {
   click: (element: HTMLElement) => Promise<unknown>;
@@ -20,7 +20,7 @@ it.each(['cloud', 'web', 'dns'])('authors native %s authorization from the actua
     }
     return new Response(JSON.stringify({ categories: { Security: [{ key, input_schema: inputSchema, effective_value: { authorizations: [] }, value_version: 9, read_only: false }] } }));
   });
-  renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+  renderWithClient(<MemoryRouter initialEntries={["/security/targets"]}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
   await user.click(await screen.findByRole('button', { name: 'Add authorization' }));
   const fill = async (label: string, value: string) => {
     const element = screen.getByLabelText(content => content.toLowerCase() === label.toLowerCase());

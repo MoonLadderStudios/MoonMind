@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '../Button';
 import { SchemaCapabilityFields, schemaProperties } from '../SchemaCapabilityFields';
@@ -6,6 +6,8 @@ import { responseError } from '../../lib/api/client';
 import { ASSESSMENT_AUTHORIZATIONS_KEY, createAssessmentAuthorization, readAssessmentAuthorizations, type AssessmentAuthorization } from '../../lib/assessmentEngagement';
 import { fetchCatalog, fetchSettingAudit, SettingAuditHistory } from './GeneratedSettingsSection';
 import { useSettingsDraftRegistration } from './SettingsDraftGuard';
+
+import { authorizationStatus } from '../../lib/assessmentAuthorizationStatus';
 
 const fieldClass = 'mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white';
 type Draft = { records: AssessmentAuthorization[]; scopeTexts: string[]; version: number };
@@ -57,6 +59,8 @@ function AuthorizedScopeFields({ text, schema, disabled, onChange }: {
 
 export function AssessmentAuthorizationsSettings({ authorizationRef }: { authorizationRef?: string } = {}) {
   const client = useQueryClient();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
   const catalog = useQuery({ queryKey: ['settings-catalog'], queryFn: fetchCatalog });
   const descriptor = Object.values(catalog.data?.categories ?? {}).flat().find(item => item.key === ASSESSMENT_AUTHORIZATIONS_KEY);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -108,6 +112,7 @@ export function AssessmentAuthorizationsSettings({ authorizationRef }: { authori
     {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     <fieldset disabled={saving || descriptor.read_only} className="space-y-4">
       {records.map((record, index) => authorizationRef && record.ref !== authorizationRef ? null : <fieldset key={index} className="space-y-3 rounded-xl border border-mm-border p-4"><legend className="px-2 font-semibold">{record.name || `Authorization ${index + 1}`}</legend>
+        <p className="text-sm">Validity: <strong>{authorizationStatus(record, now)}</strong>. Current validity is not permission to run: exact scope and remaining budgets are checked at admission.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Authorization reference" value={record.ref} onChange={ref => updateRecord(index, { ref })} />
           <Field label="Authorization name" value={record.name} onChange={name => updateRecord(index, { name })} />

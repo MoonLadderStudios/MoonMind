@@ -36,7 +36,6 @@ import { DashboardApp } from './dashboard-app';
 import {
   OperationsSettingsPage,
   ProvidersSecretsSettingsPage,
-  InstanceSettingsPage,
 } from './settings';
 
 vi.mock('lucide-animated', async () => {
@@ -66,12 +65,6 @@ const CANONICAL_SETTINGS_ROUTES = [
     heading: 'Providers & Secrets',
     title: 'Providers & Secrets | MoonMind',
     menuItem: 'Providers & Secrets',
-  },
-  {
-    path: '/settings/instance',
-    heading: 'Instance',
-    title: 'Instance | MoonMind',
-    menuItem: 'Instance',
   },
   {
     path: '/settings/operations',
@@ -328,13 +321,13 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
   });
 
   describe('dirty-draft departure after save outcomes', () => {
-    function renderInstance() {
-      window.history.replaceState({}, '', '/settings/instance');
+    function renderDefaults() {
+      window.history.replaceState({}, '', '/settings/providers-secrets');
       renderWithClient(
         <BrowserRouter>
-          <InstanceSettingsPage
+          <ProvidersSecretsSettingsPage
             payload={{
-              page: 'settings-instance',
+              page: 'settings-providers-secrets',
               apiBase: '/api',
               initialData: {
               },
@@ -367,7 +360,8 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         return Promise.resolve(settingsFetch(url) ?? notFound());
       });
 
-      renderInstance();
+      renderDefaults();
+      fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
       const control = (await screen.findByLabelText('Default Publish Mode')) as HTMLSelectElement;
       fireEvent.change(control, { target: { value: 'branch' } });
 
@@ -384,7 +378,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
       expect(fireEvent.click(link)).toBe(false);
       expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
-      expect(window.location.pathname).toBe('/settings/instance');
+      expect(window.location.pathname).toBe('/settings/providers-secrets');
       expect(control.value).toBe('branch');
 
       fireEvent.click(link);
@@ -401,7 +395,8 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         return Promise.resolve(settingsFetch(url) ?? notFound());
       });
 
-      renderInstance();
+      renderDefaults();
+      fireEvent.click(screen.getByText('Advanced new work defaults, reset and audit'));
       const control = (await screen.findByLabelText('Default Publish Mode')) as HTMLSelectElement;
       fireEvent.change(control, { target: { value: 'branch' } });
 
@@ -422,10 +417,9 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
   describe('architecture guards', () => {
     it.each([
       ['Providers & Secrets', ProvidersSecretsSettingsPage, 'settings-providers-secrets'],
-      ['Instance', InstanceSettingsPage, 'settings-instance'],
       ['Operations', OperationsSettingsPage, 'settings-operations'],
     ])(
-      'never re-exposes the three destinations as local tabs or radios on %s',
+      'never re-exposes the destinations as local tabs or radios on %s',
       async (heading, Page, page) => {
         window.history.replaceState({}, '', `/${page.replace('settings-', 'settings/')}`);
         renderWithClient(
@@ -455,7 +449,6 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         );
         expect(destinationLabels).toEqual([
           'Providers & Secrets',
-          'Instance',
           'Operations',
         ]);
 

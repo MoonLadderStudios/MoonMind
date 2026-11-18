@@ -2,7 +2,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, renderWithClient, screen, waitFor } from '../../utils/test-utils';
 import { AssessmentAuthorizationsSettings } from './AssessmentAuthorizationsSettings';
-import { InstanceSettingsPage } from '../../entrypoints/settings';
+import SecurityPage from '../../entrypoints/security';
 import type { BootPayload } from '../../boot/parseBootPayload';
 
 const key = 'security.assessment_authorizations';
@@ -36,8 +36,18 @@ function setup(status = 200, readOnly = false, records: typeof authorization[] =
 }
 afterEach(() => vi.restoreAllMocks());
 describe('assessment authorization Settings', () => {
+  it('shows current and expired validity independently of permission to run', async () => {
+    setup(200, false, [
+      { ...authorization, validFrom: '2000-01-01T00:00:00Z', validUntil: '2999-01-01T00:00:00Z' },
+      { ...authorization, ref: 'old', name: 'Old grant', validFrom: '2000-01-01T00:00:00Z', validUntil: '2001-01-01T00:00:00Z' },
+    ]);
+    renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
+    expect(await screen.findByText('Current')).toBeTruthy();
+    expect(screen.getByText('Expired')).toBeTruthy();
+    expect(screen.getAllByText(/Current validity is not permission to run/)).toHaveLength(2);
+  });
   it('preserves server generation and saves edited records with the original setting version', async () => {
-    const fetch = setup(); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    const fetch = setup(); renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.change(await screen.findByLabelText('Authorization name'), { target: { value: 'Payments updated' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
@@ -47,7 +57,7 @@ describe('assessment authorization Settings', () => {
     expect(screen.queryByLabelText('Generation')).toBeNull();
   });
   it('retains invalid scope JSON without saving it', async () => {
-    const fetch = setup(); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    const fetch = setup(); renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.change(await screen.findByLabelText('Authorized scope JSON'), { target: { value: '{"targets": [' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     expect((await screen.findByRole('alert')).textContent).toContain('valid JSON');
@@ -55,7 +65,7 @@ describe('assessment authorization Settings', () => {
     expect(fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0);
   });
   it('keeps the draft and optimistic version after a rejected save and refresh', async () => {
-    const fetch = setup(409); const { queryClient } = renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    const fetch = setup(409); const { queryClient } = renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.change(await screen.findByLabelText('Authorization name'), { target: { value: 'Unsaved name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     await screen.findByText(/Concurrent update/);
@@ -66,7 +76,7 @@ describe('assessment authorization Settings', () => {
     for (const [, init] of fetch.mock.calls.filter(([, init]) => init?.method === 'PATCH')) expect(JSON.parse(String(init?.body)).expected_versions[key]).toBe(9);
   });
   it('respects read-only settings and provides no alternate generic editor', async () => {
-    setup(200, true); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    setup(200, true); renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     expect((await screen.findByLabelText('Authorization name')).matches(':disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Save assessment authorizations' }).matches(':disabled')).toBe(true);
     expect(screen.queryByPlaceholderText('key=value')).toBeNull();
@@ -74,7 +84,7 @@ describe('assessment authorization Settings', () => {
     expect(screen.getByRole('button', { name: 'Add Targets item' }).matches(':disabled')).toBe(true);
   });
   it('requires explicit timezone-bearing validity without losing authored text', async () => {
-    const fetch = setup(); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    const fetch = setup(); renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.change(await screen.findByLabelText('Valid until (ISO time with timezone)'), { target: { value: '2026-12-01T00:00:00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     expect((await screen.findByRole('alert')).textContent).toContain('including timezones');
@@ -83,7 +93,7 @@ describe('assessment authorization Settings', () => {
 
   it.each(['cloud', 'web'])('authors a fresh %s scope and credential references without JSON', async (kind) => {
     const fetch = setup(200, false, []);
-    renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Add authorization' }));
     const fill = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
     fill('Authorization reference', `${kind}-review`); fill('Authorization name', `${kind} review`);
@@ -118,7 +128,7 @@ describe('assessment authorization Settings', () => {
   it('preserves old unknown scope fields while structured edits can be retried or discarded', async () => {
     const original = { ...authorization, scope: { ...authorization.scope, futureExtension: { retained: true } } };
     const fetch = setup(409, false, [original]);
-    renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.change(await screen.findByLabelText('Evidence intent'), { target: { value: 'Revised intent' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assessment authorizations' }));
     await screen.findByText(/Concurrent update/);
@@ -135,7 +145,7 @@ describe('assessment authorization Settings', () => {
   });
 
   it('saves explicit recurring limits and revocation without resetting aggregate scope', async () => {
-    const fetch = setup(); renderWithClient(<MemoryRouter><InstanceSettingsPage payload={{} as BootPayload} /></MemoryRouter>);
+    const fetch = setup(); renderWithClient(<MemoryRouter initialEntries={['/security/targets']}><SecurityPage payload={{} as BootPayload} /></MemoryRouter>);
     fireEvent.click(await screen.findByLabelText('Bound recurring assessments'));
     fireEvent.change(screen.getByLabelText('Maximum occurrences'), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: 'Revoke authorization' }));

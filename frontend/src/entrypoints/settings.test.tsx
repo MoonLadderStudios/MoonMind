@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
-import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
+import { ProvidersSecretsSettingsPage, OperationsSettingsPage } from './settings';
 import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { profileAction } from '../components/settings/profileActionsTestHelpers';
 
@@ -12,8 +12,8 @@ const renderProvidersPage = (payload: BootPayload) => renderWithClient(
   <BrowserRouter><ProvidersSecretsSettingsPage payload={payload} /></BrowserRouter>,
 );
 
-const renderInstancePage = (payload: BootPayload) => renderWithClient(
-  <BrowserRouter><InstanceSettingsPage payload={payload} /></BrowserRouter>,
+const renderOperationsPage = (payload: BootPayload) => renderWithClient(
+  <BrowserRouter><OperationsSettingsPage payload={payload} /></BrowserRouter>,
 );
 
 describe('Settings Entrypoint', () => {
@@ -37,14 +37,14 @@ describe('Settings Entrypoint', () => {
   });
 
   it('MM-1185 resets collection layouts and remembered identities from Settings', () => {
-    window.history.replaceState({}, 'Settings', '/settings/instance');
+    window.history.replaceState({}, 'Settings', '/settings/operations');
     updateDashboardPreferences({
       workflowListDisplayMode: 'hidden',
       lastSelectedWorkflowId: 'workflow-one',
       recurringListDisplayMode: 'hidden',
       lastSelectedDefinitionId: 'schedule-one',
     });
-    renderInstancePage(mockPayload);
+    renderOperationsPage(mockPayload);
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset dashboard preferences' }));
 

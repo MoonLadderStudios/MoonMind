@@ -10,7 +10,7 @@ export function AssessmentAuthorizationPicker({ value, onChange }: { value: stri
   const records = readAssessmentAuthorizations(descriptor?.effective_value);
   return <section className="card stack" aria-label="Assessment authorization selection">
     <h2>Assessment authorization</h2>
-    <p className="small">Choose a saved authorization to review exact rules of engagement before starting. Selecting a record or loading assessment context does not start work or grant access. <a href="/settings/instance#assessment-authorizations">Manage authorizations in Settings</a>.</p>
+    <p className="small">Choose a saved authorization to review exact rules of engagement before starting. Selecting a record or loading assessment context does not start work or grant access. <a href="/security/targets#assessment-authorizations">Manage authorizations in Settings</a>.</p>
     <label>Assessment authorization<select value={value} onChange={event => onChange(event.target.value)}>
       <option value="">No assessment authorization</option>
       {value && !records.some(record => record.ref === value) ? <option value={value}>{value} (historical or unavailable)</option> : null}

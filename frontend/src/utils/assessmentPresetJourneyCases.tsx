@@ -283,7 +283,7 @@ it('links missing authorization setup to Settings without silently abandoning a 
     await waitFor(() => expect(within(select).getByRole('option', { name: preset.title })).toBeTruthy());
     await userEvent.selectOptions(select, preset.slug);
     const setup = await screen.findByRole('link', { name: 'Manage authorizations in Settings' });
-    expect(setup.getAttribute('href')).toBe('/settings/instance#assessment-authorizations');
+    expect(setup.getAttribute('href')).toBe('/security/targets#assessment-authorizations');
     await userEvent.click(setup);
     expect(confirmation).toHaveBeenCalledWith('Leave Create? Unsaved workflow draft changes may be lost.');
     expect(window.location.pathname).toBe('/workflows/new');
@@ -291,7 +291,7 @@ it('links missing authorization setup to Settings without silently abandoning a 
     confirmation.mockClear().mockReturnValue(true);
     const pushState = vi.spyOn(window.history, 'pushState');
     await userEvent.click(setup);
-    await expect.poll(() => window.location.pathname).toBe('/settings/instance');
+    await expect.poll(() => window.location.pathname).toBe('/security/targets');
     expect(window.location.hash).toBe('#assessment-authorizations');
     expect(confirmation).toHaveBeenCalledTimes(1);
     expect(pushState).toHaveBeenCalledTimes(1);
