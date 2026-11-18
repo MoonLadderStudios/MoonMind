@@ -89,7 +89,6 @@ from api_service.api.routers.repository_connections import (
     router as repository_connections_router,
 )
 from api_service.api.routers.secrets import router as secrets_router
-from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.settings import router as settings_router
 from api_service.api.routers.system_operations import (
     router as system_operations_router,
@@ -1142,7 +1141,6 @@ app.include_router(automation_router)
 
 app.include_router(recurring_workflows_router)
 app.include_router(agent_runs_router, prefix="/api")
-app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
 app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
 app.include_router(
