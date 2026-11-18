@@ -16,6 +16,7 @@ from tools.verify_test_shard_ownership import (
     owners,
     verify,
     verify_physical_partitions,
+    verify_physical_hermetic_partitions,
     verify_physical_reliability_partitions,
     verify_audited_test_domains,
 )
@@ -502,8 +503,6 @@ def test_plugin_cli_partitions_with_measured_stale_and_missing_hints(tmp_path) -
 
 
 def test_hermetic_physical_groups_use_exact_marker_universe(monkeypatch):
-    import tools.verify_test_shard_ownership as owner
-
     nodes = [
         _node("tests/integration/a.py::test_a", "integration_ci"),
         _node("tests/integration/b.py::test_b", "integration_ci"),
@@ -514,8 +513,10 @@ def test_hermetic_physical_groups_use_exact_marker_universe(monkeypatch):
         calls.append(kwargs)
         return {nodes[group - 1].nodeid}
 
-    monkeypatch.setattr(owner, "collect_group_node_ids", collect)
-    assert owner.verify_physical_hermetic_partitions(nodes) == ([], False)
+    monkeypatch.setattr(
+        "tools.verify_test_shard_ownership.collect_group_node_ids", collect
+    )
+    assert verify_physical_hermetic_partitions(nodes) == ([], False)
     assert len(calls) == 2
     assert all(
         c["prefix"] == "tests/integration"
@@ -524,8 +525,9 @@ def test_hermetic_physical_groups_use_exact_marker_universe(monkeypatch):
         for c in calls
     )
     monkeypatch.setattr(
-        owner, "collect_group_node_ids", lambda *a, **kw: {nodes[0].nodeid}
+        "tools.verify_test_shard_ownership.collect_group_node_ids",
+        lambda *a, **kw: {nodes[0].nodeid},
     )
-    errors, _ = owner.verify_physical_hermetic_partitions(nodes)
+    errors, _ = verify_physical_hermetic_partitions(nodes)
     assert any("multiple" in error for error in errors)
     assert any("missing" in error for error in errors)
