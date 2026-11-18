@@ -26,7 +26,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 def state_dir():
-    path = Path("artifacts/integration-ci/storage-restart")
+    path = Path(os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci")) / "storage-restart"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

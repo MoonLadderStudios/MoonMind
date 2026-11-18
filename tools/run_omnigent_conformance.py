@@ -213,16 +213,19 @@ def owner_receipt_commands(
                 r"pytest-([a-z0-9-]+)-attempt-([1-9][0-9]*)", parent.name
             )
             hermetic = re.fullmatch(
-                r"integration-ci-hermetic-attempt-([1-9][0-9]*)", parent.name
+                r"integration-ci-(hermetic(?:-shard-[12])?)-attempt-([1-9][0-9]*)",
+                parent.name,
             )
             if match or hermetic:
-                expected_attempt = admitted(match[2] if match else hermetic[1])
-                expected_suite = match[1] if match else "integration-hermetic"
+                expected_attempt = admitted(match[2] if match else hermetic[2])
+                expected_suite = match[1] if match else "integration-" + hermetic[1]
                 root = parent
                 break
         key = (expected_suite, path.name)
         if key not in selected or int(expected_attempt) > int(selected[key][1]):
             selected[key] = (path, expected_attempt, expected_suite, root)
+    hermetic_suites = {"integration-hermetic-shard-1", "integration-hermetic-shard-2"}
+    sharded_receipts = set()
     for path, expected_attempt, expected_suite, root in selected.values():
         receipt = validate_receipt(
             path, revision=revision, run_id=run_id, attempt=expected_attempt
@@ -232,7 +235,9 @@ def owner_receipt_commands(
         owner = receipt["suite"]
         if owner.startswith("reliability-shard-"):
             owner = "reliability-matrix"
-        if owner == "integration-hermetic":
+        if owner in hermetic_suites:
+            sharded_receipts.add((owner, path.name))
+        if owner == "integration-hermetic" or owner in hermetic_suites:
             owner = "integration-ci"
         for case in receipt["cases"]:
             node = inventory.get(case["nodeid"])
@@ -240,9 +245,17 @@ def owner_receipt_commands(
                 continue
             if owner not in node["owners"]:
                 raise ValueError(f"Wrong receipt owner for {case['nodeid']}")
+            if case["nodeid"] in covered:
+                raise ValueError(f"Duplicate receipt coverage for {case['nodeid']}")
             covered[case["nodeid"]] = case["outcome"]
         receipt_refs.append(_artifact_ref(path))
         artifact_roots.add(root)
+    if (
+        sharded_receipts
+        and not {(suite, "main.receipt.json") for suite in hermetic_suites}
+        <= sharded_receipts
+    ):
+        raise ValueError("Missing main receipt for a hermetic shard")
     if require_full_source:
         source_owners = {
             "unit-fast",
@@ -508,7 +521,9 @@ def main() -> int:
             "status": (
                 "pending"
                 if name in PENDING_EVIDENCE_GROUPS and paths_passed
-                else "passed" if paths_passed else "failed"
+                else "passed"
+                if paths_passed
+                else "failed"
             ),
             "paths": path_results,
         }

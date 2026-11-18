@@ -1359,8 +1359,53 @@ def digest_main(argv: list[str]) -> int:
     return 0
 
 
+
+INTEGRATION_PHASES = {
+    "storage-up", "storage-port", "main-pytest", "storage-images",
+    "storage-seed", "storage-restart", "storage-health", "storage-verify",
+    "quality-summary", "evidence-cleanup", "compose-down",
+}
+
+
+def phase_timing_main(argv: list[str]) -> int:
+    """Append one host-observed phase; never include executed commands."""
+    parser = argparse.ArgumentParser(description="Record integration phase wall time")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--phase", choices=sorted(INTEGRATION_PHASES), required=True)
+    parser.add_argument("--start", type=float, required=True)
+    parser.add_argument("--exit-code", type=int, required=True)
+    args = parser.parse_args(argv)
+    end = time.monotonic()
+    if not math.isfinite(args.start) or args.start < 0 or args.start > end:
+        parser.error("phase start must be a preceding finite monotonic timestamp")
+    record = {
+        "schema": "moonmind.integration-phase-timing/v1",
+        "phase": args.phase,
+        "startMonotonic": args.start,
+        "endMonotonic": end,
+        "elapsedSeconds": end - args.start,
+        "exitCode": args.exit_code,
+        "revision": os.environ.get("MOONMIND_CI_REVISION", ""),
+        "runId": os.environ.get("GITHUB_RUN_ID", ""),
+        "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+        "suite": os.environ.get("MOONMIND_CI_SUITE", ""),
+    }
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"warning: cannot retain integration phase timing: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
 if __name__ == "__main__":
     command = sys.argv[1:2]
+    if command == ["phase-clock"]:
+        print(time.monotonic())
+        raise SystemExit(0)
+    if command == ["phase-timing"]:
+        raise SystemExit(phase_timing_main(sys.argv[2:]))
     if command == ["run"]:
         raise SystemExit(run_verified_pytest(sys.argv[2:]))
     raise SystemExit(digest_main(sys.argv[2:]) if command == ["digest"] else main())
