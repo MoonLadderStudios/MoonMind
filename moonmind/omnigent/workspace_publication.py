@@ -983,13 +983,18 @@ class OmnigentWorkspacePublicationService:
                 if (
                     accepted_published_head.get("workflowId") != current_workflow_id
                     or accepted_published_head.get("repository") != repository
-                    or recorded_base != explicit_pr_base
+                    or (recorded_base and recorded_base != explicit_pr_base)
                 ):
                     raise HarnessPlatformError(
                         "publication base conflicts with accepted candidate evidence",
                         code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
                     )
-            if candidate_authored_base is None:
+                if not recorded_base:
+                    # Retained handoffs predate the recorded PR base. Preserve
+                    # their checkout-based reconciliation, not a newly inferred
+                    # target; the existing PR must still match that old base.
+                    explicit_pr_base = ""
+            if candidate_authored_base is None and explicit_pr_base:
                 normalized_base = explicit_pr_base
         elif (
             normalized_mode == "pr"

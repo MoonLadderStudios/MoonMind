@@ -163,6 +163,8 @@ async def test_failed_git_command_reports_remote_outage_as_transient(
     ("accepted", "observation"),
     [
         (True, "matched"),
+        (True, "legacy_explicit_base"),
+        (True, "legacy_other_explicit_base"),
         (False, "matched"),
         (False, "other_local_branch"),
         (False, "large_inventory"),
@@ -253,6 +255,9 @@ async def test_checkpoint_restore_reconciles_existing_pr_publication(
         "relativePath": "repo",
     }
     request = AgentExecutionRequest.model_validate(payload)
+    if observation in {"legacy_explicit_base", "legacy_other_explicit_base"}:
+        assert "baseBranch" not in request.parameters["acceptedPublishedHead"]
+        request.parameters["publishBaseBranch"] = "main" if observation == "legacy_explicit_base" else "release"
     if observation == "explicit_base_conflict":
         request.parameters["publishBaseBranch"] = "release"
         git("push", "origin", "main:release", cwd=source)
