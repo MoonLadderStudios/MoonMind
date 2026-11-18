@@ -413,6 +413,7 @@ function settingsResponse(url: URL): Response | null {
 
 const settingsUiInfo = {
   ...uiInfo,
+  workerPause: { get: '/api/workers', post: '/api/worker-action', pollIntervalMs: 60_000 },
 };
 
 interface ApiState {
