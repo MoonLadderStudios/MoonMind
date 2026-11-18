@@ -98,4 +98,4 @@ The `result` shape is tool-specific. Errors use HTTP status codes with a structu
 
 Point clients at the MoonMind API base URL, for example `http://localhost:7000` from the host or `http://api:8000` from another Compose service. Operator clients use the admitted operator path for the deployment's `AUTH_PROVIDER`; managed runtimes send their scoped capability headers.
 
-The API container advertises the MCP endpoint using `MODEL_CONTEXT_PROTOCOL_ENABLED`, `MODEL_CONTEXT_PROTOCOL_PORT`, and `MODEL_CONTEXT_PROTOCOL_HOST` in the canonical Compose file.
+The MCP router is mounted on the API unconditionally and uses the API service’s existing listener and access controls.

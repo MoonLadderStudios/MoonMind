@@ -63,9 +63,6 @@ services:
       - FASTAPI_RELOAD=${FASTAPI_RELOAD:-false}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - MODEL_CONTEXT_PROTOCOL_ENABLED=true
-      - MODEL_CONTEXT_PROTOCOL_PORT=8000
-      - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       # MoonLadderStudios/MoonMind#4115: the native Qdrant backend is retired.
       # The vector-free release wires no QDRANT_URL; a stale QDRANT_URL in an
       # old .env is ignored. Exact-container retirement of a pre-cutover
@@ -550,7 +547,6 @@ services:
       - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
       - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
-      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
       - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
@@ -647,7 +643,6 @@ services:
       - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
       - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
-      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
       - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
