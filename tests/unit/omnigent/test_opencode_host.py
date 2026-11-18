@@ -480,20 +480,18 @@ def test_shared_image_installs_all_supported_harnesses_and_offline_plugin_cache(
     content = dockerfile.read_text()
     assert '"@openai/codex@${CODEX_CLI_VERSION}"' in content
     assert '"@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"' in content
-    assert '"opencode-ai@${OPENCODE_VERSION}"' in content
+    assert '"@opencode/cli@${OPENCODE_VERSION}"' in content
     # Should verify opencode version
-    assert "1.18.11" in content
-    # OpenCode installs `@opencode-ai/plugin@<version>` into each fresh config
-    # directory on its first `serve`; the image warms exactly that closure at
-    # build time and proves it resolves offline so no launch downloads from npm.
+    assert "2.0.32" in content
+    # SDK-backed directory plugins resolve the current SDK closure offline.
     assert "ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache" in content
-    assert '{"dependencies":{"@opencode-ai/plugin":"%s"}}' in content
+    assert '{"dependencies":{"@opencode/plugin":"%s"}}' in content
     assert (
         '--cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --offline'
         in content
     )
     assert (
-        'test -f "${verify}/node_modules/@opencode-ai/plugin/package.json"' in content
+        'test -f "${verify}/node_modules/@opencode/plugin/package.json"' in content
     )
     assert 'chown -R 1000:1000 "${OPENCODE_PLUGIN_NPM_CACHE}"' in content
     assert (

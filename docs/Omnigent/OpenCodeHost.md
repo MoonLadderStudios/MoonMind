@@ -27,6 +27,14 @@
 
 ### Current supported implementation
 
+The repository integrates released Omnigent v0.22.0 and OpenCode 2.0.32.
+New images use the v2 native harness. Previously admitted immutable v1 hosts
+retain their own catalog helper based on the observed runtime, never as a
+fallback after a v2 failure. This compatibility path can retire when no v1
+host/session remains resumable. The existing staged
+`auth.json` format remains an import input for the isolated v2 credential
+store; do not rewrite or delete the original credential source.
+
 OpenCode currently uses:
 
 ```text
@@ -43,11 +51,11 @@ Conceptually:
 
 ```dockerfile
 FROM ghcr.io/omnigent-ai/omnigent-host@sha256:<base-digest>
-RUN npm install -g --no-audit --no-fund 'opencode-ai@1.18.11'
+RUN npm install -g --no-audit --no-fund '@opencode/cli@2.0.32'
 RUN opencode --version
 # Warm the OpenCode plugin SDK closure and prove it resolves offline.
-RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode-ai/plugin@1.18.11' \
-    && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode-ai/plugin@1.18.11'
+RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode/plugin@1.18.11' \
+    && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode/plugin@1.18.11'
 ```
 
 ### Shared-image implementation
@@ -106,7 +114,7 @@ declaredHarnessImplementations:
     implementationRef: omnigent-harness-implementation:sha256:...
     runtimeDependencies:
       - name: opencode
-        version: 1.18.11
+        version: 2.0.32
         digest: sha256:...
 integrationModes:
   - native-server
@@ -143,7 +151,7 @@ harnessId: opencode-native
 providerRuntimeId: opencode
 binary:
   command: opencode
-  version: 1.18.11
+  version: 2.0.32
 credentialMaterializers:
   - opencode-auth-json@1
   - none@1
@@ -165,16 +173,17 @@ The runtime pack is deployment-owned. Workflows cannot author its commands, path
 
 ### OpenCode plugin SDK cache
 
-The first `opencode serve` in a config directory writes
-`package.json` = `{"dependencies": {"@opencode-ai/plugin": "<opencode version>"}}`
-next to `opencode.json` and runs `npm install` there. Omnigent gives every
-session a fresh per-session `XDG_CONFIG_HOME`, and MoonMind gives every
-on-demand host a fresh tmpfs home, so a host without a warm cache downloads the
-whole closure (about 60 MB) from `registry.npmjs.org` through the restricted
-egress proxy while the first user message is blocked on the native-terminal
-ensure. That download is not bounded by MoonMind's dispatch budget and was the
-cause of the `Omnigent transport error: ReadTimeout` failures replayed by
-`tests/integration/reliability/replays/omnigent-opencode-cold-plugin-install/`.
+OpenCode 2 uses directory plugins (`package.json` plus `server.js`) configured
+under `plugins`. The Omnigent policy plugin is self-contained; SDK-backed
+plugins use `@opencode/plugin`. The image warms that SDK closure and the
+release smoke explicitly installs it offline into a fresh plugin directory,
+starts an authenticated v2 server, and waits for the plugin's setup marker and
+active `/api/plugin` status. A listening port, 401/404, or `/api/info` response
+alone does not qualify the image.
+
+The original v1 cold-install timeout replay remains historical evidence;
+its expected contract now names the v2 SDK. No workflow downloads dependencies
+from the registry to overcome a missing image cache.
 
 The contract is therefore split across the image and the MoonMind entrypoint:
 
@@ -191,7 +200,7 @@ host launch:   test -d /opt/moonmind/opencode-npm-cache || exit 78
                  fund=false
                  update-notifier=false
 release CI:    services/omnigent/moonmind-host/verify-warm-plugin-cache.sh <digest>
-               (opencode serve becomes ready with --network none)
+               (SDK-backed v2 plugin becomes active with --network none)
 ```
 
 npm reads `$HOME/.npmrc`, and `HOME` is one of the few variables Omnigent
@@ -202,6 +211,39 @@ the host's memory limit. A host image without the seed fails the launch with an
 explicit message in the captured host log instead of degrading to the cold
 registry install; a pinned `OMNIGENT_SHARED_HOST_IMAGE_REF` must name a digest
 built with the warm cache.
+
+### Provider checks and upgrades
+
+Enrollment observes the selected image’s CLI version before discovery. Retained
+v1 images stage the selected key in a disposable writable home and use
+`opencode models --refresh`; this reports catalog availability, not verified
+credentials. V2 launches a short-lived isolated server and reads `/api/model`,
+returning only selected-provider model IDs. Raw catalog settings can contain
+API keys and must never be stored as evidence. Catalog availability and
+`/api/integration/<provider>/connect/key` do not prove that a key is valid:
+the latter only stores it. Go and OpenRouter enrollment separately perform
+the provider's authenticated, non-generation check (usage or key information).
+Other registered API-key providers use v2's native integration key connection
+and model discovery without a fabricated external verification endpoint. Their
+keys are explicitly unverified, with authentication enforced when the provider
+executes the request; catalog readiness is not account authentication. Rotation
+resets that distinction, while a catalog refresh preserves verified evidence
+for the same credential generation. A 401 from a provider check rejects the
+credential; redirects, malformed responses,
+WAF blocks, rate limits and transport failures leave verification unavailable,
+not falsely valid or permanently invalid. The exact-host catalog observation
+reuses the isolated probe without repeating enrollment's credential verdict.
+
+Publish both architectures through the default shared-image workflow and verify
+that no temporary base override still selects a pre-v2 image. Retain normal
+readiness and offline-plugin gates. Publication requires OpenCode v2; bootstrap
+selects the functional v1 or v2 plugin smoke from the actual immutable image's
+CLI version, so retained v1 images can still recover without bypassing the
+offline gate. Remove that branch only after retained v1 hosts are drained. After deployment, a genuine existing
+provider-profile session must verify successful model use, policy approval,
+streaming and cleanup. An offline smoke pass alone is not that acceptance.
+Original credential materializations and recorded prior sessions remain intact;
+the per-session v2 database is separate from the source authentication file.
 
 ## 5. Credential materializer: `opencode-auth-json@1`
 

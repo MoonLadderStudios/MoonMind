@@ -87,12 +87,14 @@ class _FakeDockerBackend:
             if EFFECTIVE_IMAGE in argv:
                 return 0, b"sha256:" + b"b" * 64 + b"\n", b""
             return 1, b"", b"Error: No such image"
-        if "models --refresh" in text:
+        if "integration/{provider}/connect/key" in text:
             self.catalog_calls += 1
             if self.catalog_calls == 1:
                 return 1, b"", b"dial tcp: connection refused"
             return 0, f"{ZEN_FREE_QUALIFIED}\n".encode(), b""
-        return 0, b"1.18.11\n", b""
+        if "opencode" in argv and "--version" in argv:
+            return 0, b"2.0.32\n", b""
+        return 0, b"0.22.0\n", b""
 
 
 class _FakeArtifacts:
@@ -129,7 +131,6 @@ async def test_opencode_reliability_journey_uses_compatible_image_and_recovers(
     """A-unavailable/B-installed plus transient-then-recovery, end to end."""
 
     from moonmind.omnigent import opencode_runtime_validation as validation_module
-    from moonmind.omnigent.bootstrap import provider_revalidation
     from moonmind.omnigent.bootstrap.provider_revalidation import (
         REVALIDATION_FAILURE_KEY,
         evidence_is_current,
@@ -255,27 +256,28 @@ async def test_opencode_reliability_journey_uses_compatible_image_and_recovers(
             )
             is True
         )
-        assert (
-            evidence_is_current(row, image_ref=REQUESTED_IMAGE, env={}) is False
-        )
+        assert evidence_is_current(row, image_ref=REQUESTED_IMAGE, env={}) is False
 
     # Every Docker probe ran the effective image; the stale digest was never
     # pulled or executed, and no duplicate launch occurred.
     catalog_probes = [
-        argv for argv in backend.commands if "models --refresh" in " ".join(argv)
+        argv
+        for argv in backend.commands
+        if "integration/{provider}/connect/key" in " ".join(argv)
     ]
     assert len(catalog_probes) == 2
     for probe in catalog_probes:
         assert EFFECTIVE_IMAGE in probe
         assert REQUESTED_IMAGE not in probe
     version_probes = [argv for argv in backend.commands if "--version" in argv]
-    assert len(version_probes) == 2
+    # Each revalidation attempt selects its protocol from the actual runtime
+    # before catalog discovery, including the failed first attempt.
+    assert len(version_probes) == 4
     for probe in version_probes:
         assert EFFECTIVE_IMAGE in probe
         assert REQUESTED_IMAGE not in probe
     assert backend.catalog_calls == 2
     assert releases == [PROFILE_ID, PROFILE_ID]
     assert not any(
-        argv[1:2] == ["pull"] and REQUESTED_IMAGE in argv
-        for argv in backend.commands
+        argv[1:2] == ["pull"] and REQUESTED_IMAGE in argv for argv in backend.commands
     )

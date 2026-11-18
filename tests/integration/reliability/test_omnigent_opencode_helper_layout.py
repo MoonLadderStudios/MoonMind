@@ -106,6 +106,8 @@ async def test_admitted_host_layout_preserves_shell_and_model_probes(
         container_name="replay-host",
         omnigent_host_id="replay-host",
         harness_id="opencode-native",
+        selected_model="replay/model",
+        runtime_version="1.18.11",
     )
     assert result == {"models": [{"id": "replay/model", "layout": layout}]}
     assert source == EXPECTED["modelSource"]
@@ -146,5 +148,7 @@ async def test_broken_selected_layout_never_uses_other_helpers(
                 container_name="replay-host",
                 omnigent_host_id="replay-host",
                 harness_id="opencode-native",
+                selected_model="replay/model",
+                runtime_version="1.18.11",
             )
     assert excinfo.value.code == EXPECTED["failureCode"]

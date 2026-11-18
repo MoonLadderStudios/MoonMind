@@ -13,8 +13,10 @@
   "missingSeedExitCode": 78,
   "hostStart": "exec omnigent host --server \"$1\" --non-interactive",
   "dockerfileCacheArg": "ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache",
-  "dockerfilePackageJson": "{\"dependencies\":{\"@opencode-ai/plugin\":\"%s\"}}",
+  "dockerfilePackageJson": "{\"dependencies\":{\"@opencode/plugin\":\"%s\"}}",
   "dockerfileOfflineVerify": "--cache \"${OPENCODE_PLUGIN_NPM_CACHE}\" --no-audit --no-fund --offline",
   "releaseVerifyScript": "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh",
-  "releaseWorkflow": ".github/workflows/docker-publish-moonmind-host.yml"
+  "releaseWorkflow": ".github/workflows/docker-publish-moonmind-host.yml",
+  "currentRuntimeVersion": "2.0.32",
+  "currentPluginPackage": "@opencode/plugin"
 }

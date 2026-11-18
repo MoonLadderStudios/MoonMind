@@ -1139,6 +1139,9 @@ class BootstrapController:
                 candidate_generation = int(prof.credential_generation) + (
                     1 if mapping.secret_role in (prof.secret_refs or {}) else 0
                 )
+                verification_status = (
+                    validation_evidence.get("credentialVerification") or {}
+                ).get("status", "unverified")
                 # For opencode, we already have validation evidence; now upsert secret
                 await _upsert_managed_secret(
                     session=session,
@@ -1150,7 +1153,11 @@ class BootstrapController:
                         "provider_id": prof.provider_id,
                         "auth_strategy": mapping.auth_strategy,
                         "secret_role": mapping.secret_role,
-                        "last_validated_at": validated_at.isoformat(),
+                        "last_validated_at": (
+                            validated_at.isoformat()
+                            if verification_status == "verified"
+                            else None
+                        ),
                     },
                 )
                 _apply_api_key_setup_to_profile(
@@ -1160,6 +1167,7 @@ class BootstrapController:
                     account_label=None,
                     validated_at=validated_at,
                     enabled=True,
+                    credential_verification=verification_status,
                 )
                 prof.credential_generation = candidate_generation
                 prof.default_model = qualified_model

@@ -34,6 +34,14 @@ let apiReads = [];
 let submissionKeys = [];
 const acceptedSubmissions = new Set();
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Use one render deadline for both cold navigation and reload, below the
+// product's 60s startup deadline. The slow fixture takes 16s per items read:
+// v0.22 aborts its first read at 15s, then retries with a 30s read deadline.
+// A healthy retry therefore takes >31s; the generic 30s interaction timeout
+// cannot cover it. Keep the delay and require the actual transcript to render.
+const waitForTranscript = (native) => native.getByRole('log')
+  .getByText('Captured fixture response survives cleanup.', { exact: true })
+  .waitFor({ timeout: 55000 });
 const transcript = [{
   id: 'item-fixture-1', type: 'message', status: 'completed',
   response_id: 'turn-fixture', created_at: 1,
@@ -131,8 +139,7 @@ try {
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto(origin + test.path);
     const native = test.embedded ? page.frameLocator('iframe') : page;
-    await native.getByRole('log').waitFor({ timeout: 55000 });
-    await native.getByRole('log').getByText('Captured fixture response survives cleanup.', { exact: true }).waitFor();
+    await waitForTranscript(native);
     assert.equal(await native.getByText('Page not found', { exact: true }).count(), 0);
     assert.ok(apiReads.includes(`/v1/sessions/${binding}/items`), 'Transcript read must actually succeed');
     assert.ok(!apiReads.includes('/v1/sessions'), 'Hosted mode must suppress the global session catalog request');
@@ -154,7 +161,7 @@ try {
       await native.getByRole('button', { name: 'Open sidebar', exact: true }).click();
       assert.equal(await shell.getAttribute('data-sidebar-open'), 'true', 'Manual expansion remains available');
       await page.reload();
-      await native.getByRole('log').getByText('Captured fixture response survives cleanup.', { exact: true }).waitFor();
+      await waitForTranscript(native);
       if (test.embedded) {
         await page.waitForFunction(() => document.querySelector('#state').textContent.includes('chat.ready'));
       }

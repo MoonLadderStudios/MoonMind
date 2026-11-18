@@ -84,7 +84,7 @@ When the bound session changes state, for example when it ends while open, the n
 
 MoonMind must not add a second composer, transcript toolbar, approval tray, file rail, or session-control panel around the native UI.
 
-Embedded chat starts with Omnigent's global conversation sidebar collapsed using `sidebar=closed`. The native toggle can reopen it; session-specific controls and the workspace rail remain available when the effective capability projection permits them. Full-page **Open in Omnigent** drops the embed presentation flags and uses the native defaults.
+Embedded chat starts with Omnigent's global conversation sidebar collapsed using `sidebar=closed`. The product image applies `tools/native-ui/apply-sidebar-presentation.mjs` before compiling the pinned v0.22.0 UI, restoring the explicit-closed initializer from the previous upstream revision. It fails the build if the upstream source no longer matches. For a manual native UI build, run `node tools/native-ui/apply-sidebar-presentation.mjs omnigent/web/src/shell/AppShell.tsx` first; standalone upstream builds do not include this compatibility patch. The native toggle can reopen it; session-specific controls and the workspace rail remain available when the effective capability projection permits them. Full-page **Open in Omnigent** drops the embed presentation flags and uses the native defaults.
 
 On mobile, the native chat application fills the Workflow Detail content region and uses its own responsive behavior.
 

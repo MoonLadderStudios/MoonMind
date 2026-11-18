@@ -850,6 +850,21 @@ class NativeDocker(CodexDocker):
                     if item["name"] == argv[3]
                 )
                 return 0, dependency["version"], ""
+            if argv[3:5] == ["python3", "-c"]:
+                from moonmind.omnigent.opencode_runtime_validation import (
+                    opencode_catalog_probe_argv,
+                )
+
+                assert self.server.harness == "opencode-native"
+                provider = self.server.model.split("/", 1)[0]
+                assert argv[3:] == opencode_catalog_probe_argv(
+                    provider_id=provider,
+                    credential_target=(
+                        None if provider == "opencode" else "/home/app/.local/share/opencode"
+                    ),
+                    verify_credentials=False,
+                )
+                return 0, json.dumps([self.server.model, *self.server.additional_models]), ""
             if "list_opencode_cli_model_options" in " ".join(argv):
                 return 0, json.dumps({"models": [{"id": model} for model in [self.server.model, *self.server.additional_models]]}), ""
             if argv[3:6] in (

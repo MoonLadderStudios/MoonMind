@@ -273,7 +273,7 @@ register_runtime_pack(
         vendor_name="opencode",
         version_command=("opencode", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        pinned_version="1.18.11",
+        pinned_version="2.0.32",
         credential_target="/home/app/.local/share/opencode",
         environment={
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
@@ -294,7 +294,7 @@ register_runtime_pack(
         vendor_name="codex",
         version_command=("codex", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        pinned_version="0.165.0",
+        pinned_version="0.170.0",
         credential_target="/home/app/.codex",
         forbidden=_SHARED_OAUTH_FORBIDDEN
         + ("CODEX_ACCESS_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"),

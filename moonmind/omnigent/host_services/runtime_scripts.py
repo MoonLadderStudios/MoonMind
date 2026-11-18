@@ -21,17 +21,11 @@ OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 
-# OpenCode installs its plugin SDK (``@opencode-ai/plugin@<opencode version>``)
-# with ``npm install`` inside each fresh per-session config directory the first
-# time ``opencode serve`` starts. The pinned host image warms exactly that
-# dependency closure into an image-owned npm cache at build time (see
-# services/omnigent/moonmind-host/Dockerfile). The entrypoint copies the seed
-# into the run-owned state volume and points npm at it through the runtime
-# home's ``.npmrc``: npm reads ``$HOME/.npmrc`` and ``HOME`` is one of the few
-# variables Omnigent forwards to the OpenCode server, so no ``npm_config_*``
-# environment has to cross the host -> runner -> server hops. The launch then
-# only copies files; it never downloads from registry.npmjs.org while the first
-# user message is blocked on the native-terminal ensure.
+# Plugin dependency installs resolve from an image-owned npm cache. OpenCode 2
+# uses @opencode/plugin and directory plugins; built-in Omnigent policy plugins
+# need no SDK import. Keep the cache for SDK-backed plugins and verify one in
+# the release smoke. Seeding it before host start preserves offline startup
+# without forwarding npm_config_* through the host/runner/server boundary.
 _OPENCODE_PLUGIN_NPM_CACHE_SEED = "/opt/moonmind/opencode-npm-cache"
 _OPENCODE_PLUGIN_NPM_CACHE = "/home/app/.omnigent/moonmind/opencode-npm-cache"
 _OPENCODE_NPMRC = "/home/app/.npmrc"

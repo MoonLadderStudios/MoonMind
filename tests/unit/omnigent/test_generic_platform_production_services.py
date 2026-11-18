@@ -175,16 +175,7 @@ async def test_opencode_exact_host_model_options_use_portable_cli_helper() -> No
             calls.append((list(argv), dict(kwargs)))
             return (
                 0,
-                json.dumps(
-                    {
-                        "models": [
-                            {
-                                "id": "opencode-go/muse-spark-1.2-contributor",
-                                "providerID": "opencode-go",
-                            }
-                        ]
-                    }
-                ),
+                json.dumps(["opencode-go/muse-spark-1.2-contributor"]),
                 "",
             )
 
@@ -198,19 +189,41 @@ async def test_opencode_exact_host_model_options_use_portable_cli_helper() -> No
         container_name="mm-host-opencode",
         omnigent_host_id="host-opencode",
         harness_id="opencode-native",
+        selected_model="opencode-go/muse-spark-1.2-contributor",
+        runtime_version="opencode v2.0.32",
     )
 
-    assert result["models"][0]["id"] == "opencode-go/muse-spark-1.2-contributor"
-    assert source == "exact-host-opencode-cli"
+    assert result["models"][0] == "opencode-go/muse-spark-1.2-contributor"
+    assert source == "exact-host-opencode-api"
     argv, kwargs = calls[0]
     assert argv[:4] == [
         "docker",
         "exec",
         "mm-host-opencode",
-        "/opt/venv/bin/python",
+        "python3",
     ]
-    assert "list_opencode_cli_model_options" in argv[-1]
-    assert kwargs == {"timeout_seconds": 45.0, "check": False}
+    assert "opencode" in argv[5]
+    assert argv[-3:] == ["opencode-go", "/home/app/.local/share/opencode", "catalog"]
+    assert kwargs == {"timeout_seconds": 110.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_retained_v1_image_uses_its_own_catalog_not_v2_server():
+    calls = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append(argv)
+            return 0, json.dumps({"models": [{"id": "opencode/retained"}]}), ""
+
+    result, _ = await _read_exact_host_model_options(
+        backend=Backend(), client=None, container_name="retained-host",
+        omnigent_host_id="retained", harness_id="opencode-native",
+        selected_model="opencode/retained", runtime_version="1.18.11",
+    )
+    assert result["models"][0]["id"] == "opencode/retained"
+    assert "list_opencode_cli_model_options" in calls[0][-1]
+    assert "--stdio" not in calls[0][-1]
 
 
 @pytest.mark.asyncio
@@ -435,6 +448,8 @@ async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_d
                 container_name="mm-host-opencode",
                 omnigent_host_id="host-opencode",
                 harness_id="opencode-native",
+                selected_model="opencode/retained",
+                runtime_version="1.18.11",
             ),
             "OpenCode model catalog",
         ),
@@ -552,6 +567,8 @@ async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics
             container_name="mm-host-opencode",
             omnigent_host_id="host-opencode",
             harness_id="opencode-native",
+            selected_model="opencode/model",
+            runtime_version="opencode v2.0.32",
         )
 
     assert str(exc.value) == expected_message
