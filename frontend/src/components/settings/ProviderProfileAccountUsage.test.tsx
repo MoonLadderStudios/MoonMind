@@ -240,6 +240,20 @@ describe('ProviderProfileAccountUsage', () => {
     expect(text(region)).toContain('Usage temporarily unavailable: the provider did not respond in time.');
   });
 
+  it('gives update or reconnect guidance when idle sign-in renewal is unsupported', () => {
+    renderUsage(
+      projection({
+        status: 'unavailable',
+        windows: [usageWindow({ freshness: 'stale', last_known: true })],
+        refresh: { last_failure: 'credential_recovery_unsupported', last_failure_at: '2026-11-18T20:39:00Z' },
+      }),
+    );
+
+    expect(text(usageRegion())).toContain(
+      'Usage temporarily unavailable: the installed runtime cannot renew the stored sign-in while idle; update MoonMind or reconnect this profile.',
+    );
+  });
+
   it('reports an unavailable first reading without inventing an empty one', () => {
     renderUsage(
       projection({

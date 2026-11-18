@@ -147,6 +147,9 @@ class AccountUsageFailureCode(StrEnum):
     #: action could renew it while idle. This does not claim the login is
     #: invalid; that is decided only by the authentication lifecycle.
     CREDENTIAL_REFRESH_UNAVAILABLE = "credential_refresh_unavailable"
+    #: The installed runtime has no native idle recovery action; updating
+    #: the runtime or reconnecting the profile restores idle reads.
+    CREDENTIAL_RECOVERY_UNSUPPORTED = "credential_recovery_unsupported"
     ATTEMPT_ABANDONED = "attempt_abandoned"
     INTERNAL_ERROR = "internal_error"
 
