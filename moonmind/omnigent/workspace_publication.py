@@ -796,6 +796,7 @@ class OmnigentWorkspacePublicationService:
         base_branch: str | None,
         repository: str,
         github_token: str | None,
+        commit_message: str | None = None,
         accepted_published_head: Mapping[str, Any] | None = None,
         bound_credential: Any | None = None,
         github_endpoint: str = "https://github.com",
@@ -1031,6 +1032,7 @@ class OmnigentWorkspacePublicationService:
             extended = await PublishService().publish(
                 job_id=uuid5(NAMESPACE_URL, publication_identity),
                 instruction="Publish completed Omnigent repository work",
+                commit_message=commit_message,
                 # Retain the admitted tip through the publisher's remote read
                 # and lease, including a move after the admission check above.
                 publish_mode="branch",
@@ -1254,6 +1256,7 @@ class OmnigentWorkspacePublicationService:
             published = await PublishService().publish(
                 job_id=uuid5(NAMESPACE_URL, publication_identity),
                 instruction="Publish completed Omnigent repository work",
+                commit_message=commit_message,
                 # PR creation remains owned by the durable parent workflow.
                 publish_mode="branch",
                 publish_base_branch=normalized_base,
@@ -1475,6 +1478,7 @@ class OmnigentWorkspacePublicationService:
                     ),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
+                    commit_message=parameters.get("commitMessage"),
                     repository=identity.display_name,
                     github_token=token,
                     bound_credential=bound,
@@ -1493,6 +1497,7 @@ class OmnigentWorkspacePublicationService:
                 ),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
+                commit_message=parameters.get("commitMessage"),
                 repository=repository,
                 github_token=str(github_credential.token or "").strip() or None,
                 accepted_published_head=parameters.get("acceptedPublishedHead"),

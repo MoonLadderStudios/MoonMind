@@ -338,6 +338,9 @@ Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, including commit-message
 tier defaults with explicit step parameters taking precedence. Successors retain
 those admitted launch selections; fresh scheduled occurrences resolve current defaults.
+Both shared publication paths use the admitted commit message only for new commits,
+leaving existing commits and verified publication retries intact. Blank messages keep
+the default subject without changing the original task instruction.
 Model-only steps retain their existing readmission drift checks and cannot adopt
 new launch defaults during recovery.
 Repository-authority changes and other untranslated native options keep their adapter. These plans are linked

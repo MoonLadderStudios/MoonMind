@@ -1871,3 +1871,55 @@ async def test_same_content_from_another_author_is_not_adopted(
             current_step_execution_id=second.step_execution.step_execution_id,
         )
     assert git("rev-parse", f"refs/heads/{branch}", cwd=origin) == foreign
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["  Admitted commit subject\n\nDetailed body  ", "   ", None, 0])
+@pytest.mark.parametrize("agent_committed", [False, True])
+async def test_admitted_commit_message_reaches_shared_publication_without_rewriting_commits(
+    tmp_path, monkeypatch, message, agent_committed,
+):
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    request, workspace = _attempt_request(tmp_path, ordinal=1)
+    request.parameters["publishMode"] = "branch"
+    if message is not None:
+        request.parameters["commitMessage"] = message
+    workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(workspace), cwd=tmp_path)
+    (workspace / "work.txt").write_text("base\n")
+    git("add", ".", cwd=workspace)
+    git("commit", "-m", "Original base", cwd=workspace)
+    git("push", "origin", "main", cwd=workspace)
+    (workspace / "work.txt").write_text("completed work\n")
+    if agent_committed:
+        git("commit", "-am", "Agent-authored message", cwd=workspace)
+    previous_head = git("rev-parse", "HEAD", cwd=workspace)
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    kwargs = dict(request=request, current_workflow_id="workflow-4627",
+                  current_step_execution_id=request.step_execution.step_execution_id)
+    result = await publisher.publish_request_workspace(**kwargs)
+    assert result["push_status"] == "pushed"
+    expected = (
+        "Agent-authored message" if agent_committed else
+        message.strip() if isinstance(message, str) and message.strip() else
+        "Publish completed Omnigent repository work"
+    )
+    assert git("log", "-1", "--format=%B", cwd=origin) == expected
+    head = git("rev-parse", "HEAD", cwd=origin)
+    assert (head == previous_head) is agent_committed
+    assert result["push_head_sha"] == head
+    assert result["remote_verified"] is True
+    replay = await publisher.publish_request_workspace(**kwargs)
+    assert replay["push_status"] == "no_commits"
+    assert replay["push_head_sha"] == head
+    assert git("rev-parse", "HEAD", cwd=origin) == head
+    assert git("rev-list", "--count", "HEAD", cwd=origin) == "2"

@@ -303,3 +303,27 @@ async def test_publish_pr_gh_fallback_rejects_ambient_auth_without_token(
     assert not any(
         call["command"][:3] == [sys.executable, "pr", "create"] for call in calls
     )
+
+
+async def test_explicit_commit_message_does_not_replace_original_pr_instruction(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_TOKEN", "publish-token")
+    calls = []
+    created = {}
+
+    async def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stderr="", stdout=" M file.py\n" if command[:3] == ["git", "status", "--porcelain"] else "")
+
+    async def create_pr(**kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(created=True, url="https://github.com/owner/repo/pull/1")
+
+    await PublishService(github_create_pull_request=create_pr).publish(
+        job_id=uuid4(), instruction="Original task instruction", commit_message="Explicit commit subject",
+        publish_mode="pr", publish_base_branch="main", runtime_mode="omnigent",
+        repo_dir=tmp_path, run_command=run, repo="owner/repo",
+    )
+    assert ["git", "commit", "-m", "Explicit commit subject"] in calls
+    assert created["title"] == "Original task instruction"
+    assert "Original task instruction" in created["body"]
+    assert "Explicit commit subject" not in created["body"]

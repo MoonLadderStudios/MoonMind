@@ -273,12 +273,15 @@ class PublishService:
         publication_branch_name: str | None = None,
         verify_remote: bool = False,
         expected_remote_head_sha: str | None = None,
+        commit_message: str | None = None,
     ) -> PublishResult | None:
         """Publish the changes to a branch or a pull request.
 
         Args:
             job_id: The job identifier.
             instruction: The original instruction for the task.
+            commit_message: Optional message for a new commit; blank uses the task default.
+                Existing commits are never rewritten.
             publish_mode: The publish mode ("none", "branch", "pr").
             publish_base_branch: Base branch to target for PRs (default: main).
             runtime_mode: The runtime that generated the changes (e.g. "codex", "claude").
@@ -323,9 +326,12 @@ class PublishService:
                 [self._git_binary, "add", "-A"],
                 cwd=repo_dir,
             )
-            commit_message = self._derive_default_publish_subject(
-                instruction=instruction,
-                max_chars=72,
+            commit_message = (
+                commit_message.strip()
+                if isinstance(commit_message, str) and commit_message.strip()
+                else self._derive_default_publish_subject(
+                    instruction=instruction, max_chars=72,
+                )
             )
             await run_command(
                 [

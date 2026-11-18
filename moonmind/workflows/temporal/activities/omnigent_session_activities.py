@@ -4915,6 +4915,7 @@ async def omnigent_publish_workspace_activity(
             publication_identity=logical_publication_identity(agent_request),
             publish_mode=publish_mode,
             base_branch=base_branch,
+            commit_message=(agent_request.parameters or {}).get("commitMessage"),
             repository=str(
                 (agent_request.parameters or {}).get("repository") or ""
             ).strip(),
