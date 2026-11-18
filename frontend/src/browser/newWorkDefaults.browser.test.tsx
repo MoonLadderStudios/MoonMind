@@ -178,10 +178,10 @@ describe('new-work default control presentation', () => {
     expect(requests.some((request) => request.method === 'PATCH' || request.url.includes('/audit'))).toBe(false);
   });
 
-  it.each([1280, 390])('keeps Instance default resets without default audit access at %i px', async (width) => {
+  it.each([1280, 390])('keeps advanced new work default resets and on-demand audit access at %i px', async (width) => {
     await page.viewport(width, 1000);
     const { queryClient } = renderWithClient(<MemoryRouter><SettingsDraftGuardProvider>
-      <GeneratedSettingsSection title="Instance settings" />
+      <GeneratedSettingsSection keys={[runtimeKey, profileKey, publishKey]} title="New Work Defaults" />
     </SettingsDraftGuardProvider></MemoryRouter>, { container: panel });
     await screen.findByLabelText('Default Harness');
     await screen.findByRole('option', { name: /codex-team/ });
@@ -194,7 +194,7 @@ describe('new-work default control presentation', () => {
         expect(parseFloat(getComputedStyle(wrapper).borderTopWidth)).toBe(0);
         expect(parseFloat(getComputedStyle(wrapper).borderLeftWidth)).toBe(0);
       }
-      expect(within(row).queryByRole('button', { name: /audit|history/i })).toBeNull();
+      expect(within(row).getByRole('button', { name: `View audit for ${title}` })).toBeTruthy();
       expect(within(row).getByRole('button', { name: `Reset ${title}` })).toBeTruthy();
       expect(screen.queryByRole('region', { name: `Audit history for ${title}` })).toBeNull();
     }
@@ -203,7 +203,7 @@ describe('new-work default control presentation', () => {
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
     for (const [title, slug] of [['Default Harness', 'harness'], ['Default Provider Profile', 'profile'], ['Default Publish Mode', 'publish']]) {
       const row = screen.getByLabelText(title!).closest<HTMLElement>('[data-setting-key]')!;
-      await captureVisibleRegion(row, `new-work-default-instance-${width}-${slug}`);
+      await captureVisibleRegion(row, `new-work-default-advanced-${width}-${slug}`);
     }
 
     await page.getByRole('button', { name: 'Reset Default Harness', exact: true }).click();
@@ -214,7 +214,7 @@ describe('new-work default control presentation', () => {
     // position before sending the next native pointer interaction in WebKit.
     await captureVisibleRegion(
       screen.getByLabelText('Default Provider Profile').closest<HTMLElement>('[data-setting-key]')!,
-      `new-work-default-instance-${width}-profile-before-reset`,
+      `new-work-default-advanced-${width}-profile-before-reset`,
     );
     await page.getByRole('button', { name: 'Reset Default Provider Profile', exact: true }).click();
     await screen.findByText('Default Provider Profile reset.');
@@ -230,16 +230,20 @@ describe('new-work default control presentation', () => {
     const auditRequests = requests.filter((request) => request.url.includes('/audit'));
     expect(auditRequests.length).toBeGreaterThan(0);
     expect(auditRequests.every((request) => new URL(request.url, window.location.origin).searchParams.get('key') === publishKey)).toBe(true);
-    await captureVisibleRegion(screen.getByRole('region', { name: 'Audit history for Default Publish Mode' }), `new-work-default-instance-${width}-other-audit`);
+    await captureVisibleRegion(screen.getByRole('region', { name: 'Audit history for Default Publish Mode' }), `new-work-default-advanced-${width}-other-audit`);
     await page.getByRole('button', { name: 'Close audit history for Default Publish Mode', exact: true }).click();
+    await page.getByRole('button', { name: 'View audit for Default Harness', exact: true }).click();
+    await screen.findByRole('region', { name: 'Audit history for Default Harness' });
+    expect(requests.some((request) => request.url.includes('/audit') && new URL(request.url, window.location.origin).searchParams.get('key') === runtimeKey)).toBe(true);
+    await page.getByRole('button', { name: 'Close audit history for Default Harness', exact: true }).click();
     descriptors = descriptors.map((descriptor) => descriptor.key === runtimeKey
       ? { ...descriptor, read_only: true, read_only_reason: 'Harness managed by deployment policy' } : descriptor);
     await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] });
     await screen.findByText('Harness managed by deployment policy');
     expect((screen.getByRole('combobox', { name: 'Default Harness' }) as HTMLSelectElement).disabled).toBe(true);
     expect(screen.getByRole('combobox', { name: 'Default Provider Profile' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'View audit for Default Harness' })).toBeNull();
-    await captureVisibleRegion(screen.getByRole('combobox', { name: 'Default Harness' }).closest<HTMLElement>('[data-setting-key]')!, `new-work-default-instance-${width}-locked`);
+    expect(screen.getByRole('button', { name: 'View audit for Default Harness' })).toBeTruthy();
+    await captureVisibleRegion(screen.getByRole('combobox', { name: 'Default Harness' }).closest<HTMLElement>('[data-setting-key]')!, `new-work-default-advanced-${width}-locked`);
   }, 20000);
 
 });

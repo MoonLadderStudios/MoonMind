@@ -79,11 +79,11 @@ There is no Settings landing page, because the dropdown already is the configura
 | Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` | `Providers & Secrets \| MoonMind` |
 | Operations | `/settings/operations` | `settings-operations` | `Operations \| MoonMind` |
 
-All three use the dashboard's utility-page classification. They may share one bundle with three route-owned components; the user-visible result is three distinct pages.
+Both use the dashboard's utility-page classification and share a bundle with separate route-owned components. Security is a top-level workspace, not a Configuration page.
 
 ### 5.2 Default entry point
 
-`/settings` resolves to Providers & Secrets with replacement history, keeping approved page-local filters. Protected operator admission is shared by all three Configuration pages; no account permission list selects a destination.
+`/settings` resolves to Providers & Secrets with replacement history, keeping approved page-local filters. Protected operator admission is shared by both Configuration pages; no account permission list selects a destination.
 
 ### 5.3 `section` query parameter
 
@@ -132,7 +132,7 @@ The header shows an optional `Configuration` overline, page title, short descrip
 | Operations → Advanced | overrides, pending application, locked settings, validation diagnostics |
 | Operations | worker state, drain or pause status, queue and runtime health, pending commands |
 
-Pages do not load all three datasets to build a global health summary on every route; a compact cross-configuration alert would use a dedicated aggregate endpoint.
+Pages do not load unrelated datasets to build a global health summary on every route; a compact cross-configuration alert would use a dedicated aggregate endpoint.
 
 ### 6.1 Unsaved changes
 

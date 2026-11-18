@@ -8,8 +8,10 @@ import type { SettingDescriptor } from './GeneratedSettingsSection';
 const runtimeKey = 'workflow.default_runtime';
 const profileKey = 'workflow.default_provider_profile_ref';
 const offCardSettings = [
-  { key: 'workflow.default_publish_mode', title: 'Publish mode', inCatalog: true },
-  { key: 'integrations.github.token_ref', title: 'Other setting', inCatalog: false },
+  { key: 'security.assessment_projects', title: 'Other setting', inCatalog: false, href: '/security/targets#assessment-projects', linkLabel: 'View assessment targets' },
+  { key: 'security.assessment_authorizations', title: 'Other setting', inCatalog: false, href: '/security/targets#assessment-authorizations', linkLabel: 'View assessment authorizations' },
+  { key: 'workflow.default_publish_mode', title: 'Publish mode', inCatalog: true, href: '/settings/providers-secrets#new-work-defaults-advanced', linkLabel: 'View advanced new work defaults' },
+  { key: 'integrations.github.token_ref', title: 'Other setting', inCatalog: false, href: '/settings/operations#advanced', linkLabel: 'View advanced operations settings' },
 ];
 function catalog(): { section: string; categories: { Workflow: SettingDescriptor[] } } {
   const common = {
@@ -37,7 +39,7 @@ const respond = (body: unknown, status = 200) => new Response(JSON.stringify(bod
 let fetchSpy: MockInstance<typeof window.fetch>;
 function renderCard() {
   return renderWithClient(<MemoryRouter><SettingsDraftGuardProvider>
-    <NewWorkDefaultsCard /><a href="/settings/instance">Instance</a>
+    <NewWorkDefaultsCard /><a href="/settings/operations">Operations</a>
   </SettingsDraftGuardProvider></MemoryRouter>);
 }
 const changeHarness = () => fireEvent.change(screen.getByLabelText('Default for new work'), { target: { value: 'runtime:claude_code' } });
@@ -78,7 +80,7 @@ describe('NewWorkDefaultsCard', () => {
     expect(picker.closest('fieldset')).toBeNull();
     const card = screen.getByRole('region', { name: 'Defaults for new work' });
     expect(card.textContent).not.toMatch(/history|audit/i);
-    expect(within(card).getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/instance');
+    expect(within(card).getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/providers-secrets#new-work-defaults-advanced');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/audit'))).toBe(false);
   });
   it('offers one default picker and protects both values when only runtime changes', async () => {
@@ -566,20 +568,20 @@ describe('NewWorkDefaultsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(patches()).toHaveLength(0);
   });
-  it.each(offCardSettings)('labels off-card validation for $key without exposing the key or silently PATCHing', async ({ key, title, inCatalog }) => {
+  it.each(offCardSettings)('labels off-card validation for $key without exposing the key or silently PATCHing', async ({ key, title, inCatalog, href, linkLabel }) => {
     if (inCatalog) current.categories.Workflow.push({ ...current.categories.Workflow[0]!, key, title });
     issues = { [key]: [{ message: `${key} is unavailable` }] };
     renderCard(); await screen.findByLabelText('Default for new work'); changeHarness();
     const error = await screen.findByText(`${title}: ${title} is unavailable`);
     expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
     expect(error.closest('[data-setting-row]')).toBeNull();
-    expect(within(error).getByRole('link', { name: 'View Instance settings' }).getAttribute('href')).toBe('/settings/instance');
+    expect(within(error).getByRole('link', { name: linkLabel }).getAttribute('href')).toBe(href);
     expect(screen.getByRole('region', { name: 'Defaults for new work' }).textContent).not.toContain(key);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(patches()).toHaveLength(0);
     expect((screen.getByLabelText('Default for new work') as HTMLSelectElement).value).toBe('runtime:claude_code');
   });
-  it.each(offCardSettings.flatMap((setting) => [400, 423].map((status) => ({ ...setting, status }))))('labels off-card PATCH errors for $key and HTTP $status', async ({ key, title, inCatalog, status }) => {
+  it.each(offCardSettings.flatMap((setting) => [400, 423].map((status) => ({ ...setting, status }))))('labels off-card PATCH errors for $key and HTTP $status', async ({ key, title, inCatalog, status, href, linkLabel }) => {
     if (inCatalog) current.categories.Workflow.push({ ...current.categories.Workflow[0]!, key, title });
     renderCard(); await screen.findByLabelText('Default for new work'); changeHarness();
     patchResponse = respond(status === 400 ? {
@@ -592,7 +594,7 @@ describe('NewWorkDefaultsCard', () => {
     const error = await screen.findByText(`${title}: ${status === 400 ? 'Managed secret is missing' : `${title} is locked by deployment`}`);
     expect(error.closest('[aria-label="Defaults for new work"]')).toBeTruthy();
     expect(error.closest('[data-setting-row]')).toBeNull();
-    expect(within(error).getByRole('link', { name: 'View Instance settings' }).getAttribute('href')).toBe('/settings/instance');
+    expect(within(error).getByRole('link', { name: linkLabel }).getAttribute('href')).toBe(href);
     expect(screen.getByRole('region', { name: 'Defaults for new work' }).textContent).not.toContain(key);
     expect(patches()).toHaveLength(1);
     if (status === 400) {
@@ -627,13 +629,13 @@ describe('NewWorkDefaultsCard', () => {
   });
   it('links to advanced defaults and reset without offering a non-atomic reset', async () => {
     renderCard(); await screen.findByLabelText('Default for new work');
-    expect(screen.getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/instance');
+    expect(screen.getByRole('link', { name: 'Advanced default settings and reset' }).getAttribute('href')).toBe('/settings/providers-secrets#new-work-defaults-advanced');
     expect(screen.queryByRole('button', { name: /actions/ })).toBeNull();
     expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
   });
   it('protects a dirty draft on departure', async () => {
     renderCard(); await screen.findByLabelText('Default for new work'); changeHarness();
-    fireEvent.click(screen.getByRole('link', { name: 'Instance' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Operations' }));
     expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
     expect((screen.getByLabelText('Default for new work') as HTMLSelectElement).value).toBe('runtime:claude_code');

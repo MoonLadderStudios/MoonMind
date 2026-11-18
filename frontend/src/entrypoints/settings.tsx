@@ -35,7 +35,7 @@ import { responseError } from '../lib/api/client';
 import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
-const NEW_WORK_DEFAULT_KEYS = ['workflow.default_runtime', 'workflow.default_publish_mode', 'workflow.default_provider_profile_ref'] as const;
+import { NEW_WORK_DEFAULT_KEYS } from '../lib/settingsDestinations';
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
 

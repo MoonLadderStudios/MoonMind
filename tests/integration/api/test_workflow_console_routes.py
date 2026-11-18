@@ -196,8 +196,6 @@ async def test_settings_entry_ignores_retired_section_page_identity(
     (
         ("/secrets", "/settings/providers-secrets"),
         ("/workers", "/settings/operations"),
-        ("/settings/user-workspace", "/settings/instance"),
-        ("/settings/user-workspace/", "/settings/instance"),
     ),
 )
 async def test_legacy_settings_paths_redirect_and_strip_retired_section(
@@ -213,6 +211,24 @@ async def test_legacy_settings_paths_redirect_and_strip_retired_section(
 
     assert response.status_code == 307
     assert response.headers["location"] == expected_location
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/settings/instance", "/settings/instance/", "/settings/user-workspace", "/settings/user-workspace/"),
+)
+async def test_retired_settings_paths_leave_detail_for_client_redirect(
+    async_client: AsyncClient, path: str,
+) -> None:
+    # Fragments are not sent to the server. Keep the original URL and ref so
+    # the SPA can route authorization/defaults bookmarks to their new owner.
+    response = await async_client.get(
+        f"{path}?authorizationRef=auth-123&section=user-workspace",
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert "location" not in response.headers
+    assert _extract_boot_payload(response.text) == {"page": "dashboard", "apiBase": "/api"}
 
 
 async def test_ui_info_endpoint_exposes_spa_capabilities_and_endpoints(

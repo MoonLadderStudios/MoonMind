@@ -298,7 +298,7 @@ const enrollmentProfiles = [
   },
 ];
 
-// Instance and Operations settings: the generated workspace catalog with
+// Operations settings and advanced controls: the generated workspace catalog with
 // every ordinary control type, a failing diagnostic and long values, plus the
 // worker, shard and deployment state the Operations cards read.
 function settingDescriptor(overrides: Record<string, unknown>) {
@@ -953,18 +953,18 @@ describe('Provider enrollment drawers in the dashboard shell (MoonMind#4559)', (
   }
 });
 
-describe('Instance and Operations settings in the dashboard shell (MoonMind#4559)', () => {
+describe('Operations and advanced settings in the dashboard shell (MoonMind#4559)', () => {
   const SETTINGS_LAYOUTS = [LAYOUTS[0], LAYOUTS[1], LAYOUTS[2]] as const;
 
-  it.each(SETTINGS_LAYOUTS)('keeps Instance settings controls, diagnostics and audit usable on a $name ($width x $height)', async ({ width, height }) => {
+  it.each(SETTINGS_LAYOUTS)('keeps Operations advanced controls, diagnostics and audit usable on a $name ($width x $height)', async ({ width, height }) => {
     api.uiInfo = settingsUiInfo;
-    window.history.replaceState({}, '', '/settings/instance');
+    window.history.replaceState({}, '', '/settings/operations#advanced');
     renderDashboard();
     await screen.findByText('Skills Canary Percent');
     await screen.findByText('The stored override is outside the allowed range.');
     await screen.findByRole('button', { name: 'Reset dashboard preferences' });
     await useLayout(width, height);
-    expectUsableLayout(`Instance settings at ${width}x${height}`);
+    expectUsableLayout(`Operations advanced settings at ${width}x${height}`);
   });
 
   it.each(SETTINGS_LAYOUTS)('keeps Operations worker, shard and update cards usable on a $name ($width x $height)', async ({ width, height }) => {

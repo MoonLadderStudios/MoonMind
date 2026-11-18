@@ -149,7 +149,7 @@ def test_frontend_and_server_destination_registries_agree_exactly(
     assert json.dumps(server, indent=2) == json.dumps(expected, indent=2)
 
 
-def test_configuration_group_membership_matches_the_three_canonical_destinations(
+def test_configuration_group_membership_excludes_standalone_security(
     dashboard_routes_source: str,
 ) -> None:
     group_literals = _object_literals(
@@ -163,7 +163,6 @@ def test_configuration_group_membership_matches_the_three_canonical_destinations
     assert _scalar(group, "triggerIconKey") == "settings"
     assert _string_list(group, "destinationKeys") == [
         "settings-providers-secrets",
-        "settings-instance",
         "settings-operations",
     ]
 
@@ -174,9 +173,12 @@ def test_configuration_group_membership_matches_the_three_canonical_destinations
     ]
     assert server_configuration == [
         "settings-providers-secrets",
-        "settings-instance",
         "settings-operations",
     ]
+    security = next(item for item in DASHBOARD_DESTINATIONS if item.key == "security")
+    assert security.navigation_group == "primary"
+    assert security.menu_group_key is None
+    assert security.capability_key == "settingsInstance"
     for destination in DASHBOARD_DESTINATIONS:
         if destination.menu_group_key != "configuration":
             continue

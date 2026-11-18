@@ -2028,6 +2028,14 @@ describe('Dashboard shared entry', () => {
     },
   );
 
+  it.each(['/settings/instance', '/settings/user-workspace'])('preserves authorization detail through retired %s', async (path) => {
+    window.history.replaceState({}, '', `${path}?authorizationRef=auth-123&scope=user#assessment-authorizations`);
+    renderWithClient(<DashboardApp payload={{page: 'dashboard', apiBase: '/api'}} />);
+    await waitFor(() => expect(window.location.pathname).toBe('/security/targets'));
+    expect(window.location.search).toBe('?authorizationRef=auth-123');
+    expect(window.location.hash).toBe('#assessment-authorizations');
+  });
+
   it.each(['/settings/instance', '/settings/user-workspace'])('redirects retired %s to advanced controls', async (path) => {
     window.history.replaceState({}, '', path);
     renderWithClient(<DashboardApp payload={{page: 'dashboard', apiBase: '/api'}} />);
