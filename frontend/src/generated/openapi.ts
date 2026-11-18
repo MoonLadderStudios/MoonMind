@@ -11222,6 +11222,29 @@ export interface components {
              */
             last_known: boolean;
         };
+        /** ProviderApiKeyReadiness */
+        ProviderApiKeyReadiness: {
+            /** Connected */
+            connected: boolean;
+            /** Last Validated At */
+            last_validated_at?: string | null;
+            /** Backing Secret Exists */
+            backing_secret_exists: boolean;
+            /** Launch Ready */
+            launch_ready: boolean;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Credential Verification
+             * @default verified
+             */
+            credential_verification: string;
+            /**
+             * Observation
+             * @default confirmed
+             */
+            observation: string;
+        };
         /** ProviderApiKeySetupRequest */
         ProviderApiKeySetupRequest: {
             /** Api Key */
@@ -11245,7 +11268,7 @@ export interface components {
             status: string;
             /** Status Label */
             status_label: string;
-            readiness: components["schemas"]["ClaudeManualAuthReadiness"];
+            readiness: components["schemas"]["ProviderApiKeyReadiness"];
             /** Profile Id */
             profile_id: string;
             /** Secret Ref */
