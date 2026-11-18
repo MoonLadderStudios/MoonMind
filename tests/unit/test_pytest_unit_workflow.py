@@ -72,7 +72,7 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
 
     jobs = workflow["jobs"]
     integration_job = jobs["integration-hermetic-shards"]
-    assert integration_job["needs"] == "select-test-suites"
+    assert set(integration_job["needs"]) == {"select-test-suites", "preflight-policy"}
     assert (
         integration_job["if"]
         == "needs.select-test-suites.outputs.integration_hermetic == 'true'"
@@ -332,7 +332,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
         "suite"
     ] == ["hermetic", "fresh-journey", "upgrade-journey", "controller-journey"]
     hermetic, journeys = jobs["integration-hermetic-shards"], jobs["integration-ci"]
-    assert hermetic["needs"] == "select-test-suites"
+    assert set(hermetic["needs"]) == {"select-test-suites", "preflight-policy"}
     assert "prepare-app-image" not in hermetic["needs"]
     assert "prepare-app-image" in journeys["needs"]
     assert hermetic["strategy"]["matrix"] == {"include": [
@@ -1093,7 +1093,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     ):
         assert removed not in workflow["jobs"], removed
     job = workflow["jobs"]["backend-matrix"]
-    assert job["needs"] == "select-test-suites"
+    assert set(job["needs"]) == {"select-test-suites", "preflight-policy"}
     # Runs when any primary backend suite is selected; empty selection skips
     # the matrix intentionally without instantiating tests.
     job_if = job["if"]
@@ -1792,3 +1792,171 @@ def test_hermetic_physical_rows_own_qualifications_and_isolated_receipts():
     assert run["env"]["MOONMIND_CI_SUITE"] == "integration-${{ matrix.suite }}"
     assert "github.run_id" in run["env"]["MOONMIND_TEST_COMPOSE_PROJECT_NAME"]
     assert "github.run_attempt" in run["env"]["MOONMIND_TEST_COMPOSE_PROJECT_NAME"]
+
+
+HEAVY_PREFLIGHT_OWNERS = (
+    "backend-matrix",
+    "integration-hermetic-shards",
+    "prepare-app-image",
+    "integration-ci",
+    "prepare-recovery-images",
+    "omnigent-host-recovery",
+    "omnigent-exact-artifact",
+)
+
+
+def _admitted_job(
+    job,
+    *,
+    preflight="success",
+    phase="full",
+    selected=True,
+    cancelled=False,
+    candidate_image="",
+    recovery_images="",
+    selector="success",
+):
+    """Evaluate the small Actions expression subset used by these actual jobs."""
+    needs = job.get("needs", [])
+    needs = [needs] if isinstance(needs, str) else needs
+    results = {name: "success" for name in needs}
+    results["preflight-policy"] = preflight
+    results["select-test-suites"] = selector
+    if candidate_image:
+        results["prepare-app-image"] = "skipped"
+    if recovery_images:
+        results["prepare-recovery-images"] = "skipped"
+    expression = job.get("if", "true")
+    # Actions applies success() unless a status check overrides it.
+    if not re.search(r"\b(?:always|cancelled|success|failure)\(\)", expression):
+        if cancelled or any(results[name] != "success" for name in needs):
+            return False
+
+    def replace(match):
+        path = match.group(0)
+        if path.startswith("inputs."):
+            return repr(
+                {
+                    "verification_phase": phase,
+                    "candidate_image": candidate_image,
+                    "recovery_images_artifact": recovery_images,
+                }.get(path[7:], "")
+            )
+        owner, field = path[6:].split(".", 1)
+        if field == "result":
+            return repr(results.get(owner, ""))
+        assert field.startswith("outputs.")
+        return repr("true" if selected else "false")
+
+    expression = re.sub(r"(?:needs|inputs)\.[A-Za-z0-9_.-]+", replace, expression)
+    expression = expression.replace("cancelled()", repr(cancelled)).replace(
+        "always()", "True"
+    )
+    expression = expression.replace("&&", " and ").replace("||", " or ")
+    expression = re.sub(r"!(?!=)", " not ", expression).strip()
+    return bool(eval(expression, {"__builtins__": {}}, {}))
+
+
+@pytest.mark.parametrize("owner", HEAVY_PREFLIGHT_OWNERS)
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", ""])
+def test_selected_heavy_jobs_cannot_start_before_successful_preflight(owner, result):
+    job = _load_workflow()["jobs"][owner]
+    assert "preflight-policy" in job["needs"]
+    assert not _admitted_job(job, preflight=result)
+    assert _admitted_job(job)
+
+
+@pytest.mark.parametrize("owner", HEAVY_PREFLIGHT_OWNERS)
+def test_heavy_admission_preserves_selection_and_cancellation(owner):
+    job = _load_workflow()["jobs"][owner]
+    assert not _admitted_job(job, selected=False)
+    assert not _admitted_job(job, cancelled=True)
+    assert not _admitted_job(job, selector="failure")
+
+
+@pytest.mark.parametrize("phase", ["artifact", "recovery"])
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "integration-ci",
+        "prepare-recovery-images",
+        "omnigent-host-recovery",
+        "omnigent-exact-artifact",
+    ],
+)
+def test_image_phase_intentional_source_skip_does_not_deadlock(owner, phase):
+    job = _load_workflow()["jobs"][owner]
+    assert _admitted_job(
+        job, preflight="skipped", phase=phase, candidate_image="image@sha256:test"
+    )
+    for result in ("failure", "cancelled", ""):
+        assert not _admitted_job(
+            job, preflight=result, phase=phase, candidate_image="image@sha256:test"
+        )
+    for invalid_phase in ("", "full", "source", "unknown"):
+        assert not _admitted_job(
+            job,
+            preflight="skipped",
+            phase=invalid_phase,
+            candidate_image="image@sha256:test",
+        )
+
+
+@pytest.mark.parametrize(
+    "event",
+    ["pull_request", "merge_group", "workflow_dispatch", "schedule", "workflow_call"],
+)
+def test_preflight_admission_has_no_draft_or_event_deferral(event):
+    jobs = _load_workflow()["jobs"]
+    selected = select_suites(
+        [".github/workflows/pytest-unit-tests.yml"], event_name=event
+    )
+    assert selected.as_outputs()["integration_hermetic"] == "true"
+    for owner in HEAVY_PREFLIGHT_OWNERS:
+        assert "github.event" not in jobs[owner]["if"]
+        assert "draft" not in jobs[owner]["if"]
+        assert _admitted_job(jobs[owner])
+    for fast in ("frontend-static", "run-generated-contracts"):
+        assert jobs[fast]["needs"] == "select-test-suites"
+
+
+@pytest.mark.parametrize("preflight", ["failure", "cancelled", "skipped"])
+def test_preflight_rejection_never_turns_selected_skipped_work_green(
+    tmp_path, preflight
+):
+    selection = select_suites(
+        [".github/workflows/pytest-unit-tests.yml"], event_name="pull_request"
+    ).as_outputs()
+    selection["generated_contracts"] = "true"
+    result = _run_required_gate(
+        tmp_path, outputs=selection, results={"preflight-policy": preflight}
+    )
+    assert result.returncode != 0
+    assert "was selected but ended with result=skipped" in result.stdout
+
+
+def test_preflight_wait_keeps_existing_supersession_groups_isolated():
+    workflow = _load_workflow()
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] is True
+    group = concurrency["group"]
+    assert "github.event.pull_request.number || github.ref" in group
+    assert "inputs.verification_phase && github.run_id" in group
+    assert "inputs.candidate_image && github.run_id" in group
+    triggers = _workflow_triggers(workflow)
+    assert triggers["merge_group"]["types"] == ["checks_requested"]
+    # Draft pushes are real candidates; no ready-only or draft-only admission.
+    assert triggers["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
+
+
+def test_pull_request_triggers_cover_candidates_without_duplicate_runs():
+    types = _workflow_triggers(_load_workflow())["pull_request"]["types"]
+    # No job reads the draft flag, so a draft push already gets the full
+    # candidate result; ready_for_review would only cancel and repeat it.
+    assert "pull_request.draft" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "ready_for_review" not in types
+    # `edited` also fires for title/body edits, whose skipped jobs would replace
+    # the head's real ci-required result. A base retarget reruns through the
+    # next push or a reopen, which select against the new base.
+    assert "edited" not in types
+    assert {"synchronize", "reopened"} <= set(types)

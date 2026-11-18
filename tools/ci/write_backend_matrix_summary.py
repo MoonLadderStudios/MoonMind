@@ -408,48 +408,53 @@ def write_frontend_receipt(report: Path, receipt: Path) -> None:
     )
 
 
+def interval_seconds(start, end):
+    if not start or not end:
+        return None
+    return max(
+        0,
+        (
+            datetime.fromisoformat(end.replace("Z", "+00:00"))
+            - datetime.fromisoformat(start.replace("Z", "+00:00"))
+        ).total_seconds(),
+    )
+
+
+def job_allocated(job: dict) -> bool:
+    # GitHub can set started_at while a job is still queued. An executed
+    # step witnesses that the interval began; a placeholder is not usage.
+    return any(
+        step.get("started_at") and step.get("conclusion") != "skipped"
+        for step in job.get("steps", [])
+    )
+
+
+def observed_job_seconds(job: dict) -> tuple[float | None, float | None]:
+    """Return a job's (queue, allocated runner) seconds, or None when unknown."""
+    if job_allocated(job):
+        return (
+            interval_seconds(job.get("created_at"), job.get("started_at")),
+            interval_seconds(job.get("started_at"), job.get("completed_at")),
+        )
+    if job["status"] != "completed":
+        return None, None
+    if job.get("conclusion") == "skipped":
+        return 0, 0
+    if (
+        job.get("conclusion") == "cancelled"
+        and "runner_id" in job
+        and job["runner_id"] in (None, 0)
+    ):
+        return interval_seconds(job.get("created_at"), job.get("completed_at")), 0
+    return None, None
+
+
 def summarize_workflow_jobs(pages: list[dict], output: Path, summary: Path) -> dict:
     """Keep queue/runner/step observations separate from estimated savings."""
-
-    def seconds(start, end):
-        if not start or not end:
-            return None
-        return max(
-            0,
-            (
-                datetime.fromisoformat(end.replace("Z", "+00:00"))
-                - datetime.fromisoformat(start.replace("Z", "+00:00"))
-            ).total_seconds(),
-        )
-
-    def job_times(job):
-        # GitHub can set started_at while a job is still queued. An executed
-        # step witnesses that the interval began; a placeholder is not usage.
-        allocated = any(
-            step.get("started_at") and step.get("conclusion") != "skipped"
-            for step in job.get("steps", [])
-        )
-        if allocated:
-            return (
-                seconds(job.get("created_at"), job.get("started_at")),
-                seconds(job.get("started_at"), job.get("completed_at")),
-            )
-        if job["status"] != "completed":
-            return None, None
-        if job.get("conclusion") == "skipped":
-            return 0, 0
-        if (
-            job.get("conclusion") == "cancelled"
-            and "runner_id" in job
-            and job["runner_id"] in (None, 0)
-        ):
-            return seconds(job.get("created_at"), job.get("completed_at")), 0
-        return None, None
-
     jobs = []
     for page in pages:
         for job in page["jobs"]:
-            queue_seconds, runner_seconds = job_times(job)
+            queue_seconds, runner_seconds = observed_job_seconds(job)
             jobs.append(
                 {
                     "name": job["name"],
@@ -463,7 +468,7 @@ def summarize_workflow_jobs(pages: list[dict], output: Path, summary: Path) -> d
                         {
                             "name": step["name"],
                             "conclusion": step.get("conclusion"),
-                            "seconds": seconds(
+                            "seconds": interval_seconds(
                                 step.get("started_at"), step.get("completed_at")
                             ),
                         }

@@ -893,7 +893,7 @@ def test_older_release_rerun_cannot_cancel_current_candidate_qualification(owner
     "owner", ["pytest-unit-tests.yml", "alembic-migration-gate.yml"]
 )
 @pytest.mark.parametrize(
-    "event", ["pull_request", "push", "schedule", "workflow_dispatch"]
+    "event", ["pull_request", "merge_group", "push", "schedule", "workflow_dispatch"]
 )
 def test_ordinary_ci_keeps_latest_run_cancellation_within_its_existing_owner(
     owner, event
@@ -907,6 +907,7 @@ def test_ordinary_ci_keeps_latest_run_cancellation_within_its_existing_owner(
             {
                 "github": {
                     "workflow": config["name"],
+                    "event_name": event,
                     "ref": ref,
                     "run_id": run,
                     "event": {"pull_request": {"number": number}}
@@ -922,6 +923,30 @@ def test_ordinary_ci_keeps_latest_run_cancellation_within_its_existing_owner(
         assert group("same-run", number=73) != group("same-run", number=74)
     else:
         assert group("same-run") != group("same-run", ref="refs/heads/another")
+
+
+def test_manual_and_scheduled_ci_never_cancel_each_other():
+    config = _workflow("pytest-unit-tests.yml")
+
+    def group(event, run):
+        return _concurrency_value(
+            config["concurrency"]["group"],
+            {
+                "github": {
+                    "workflow": config["name"],
+                    "event_name": event,
+                    "ref": "refs/heads/main",
+                    "run_id": run,
+                    "event": {},
+                },
+                "inputs": {},
+            },
+        )
+
+    # A manual comparison and the nightly sweep test different things on the
+    # same ref; each still supersedes an older run of its own kind.
+    assert group("workflow_dispatch", "manual") != group("schedule", "nightly")
+    assert group("schedule", "older") == group("schedule", "newer")
 
 
 def test_release_source_checks_start_before_assembly_and_only_once():
@@ -970,7 +995,9 @@ def test_release_image_consumers_wait_only_for_their_own_inputs():
 CONSUMERS = ("integration-ci", "omnigent-exact-artifact", "omnigent-host-recovery")
 
 
-def _consumer_context(candidate, producer, *, selected="true"):
+def _consumer_context(
+    candidate, producer, *, selected="true", preflight="success", phase="full"
+):
     selection = {
         key: selected
         for key in (
@@ -984,9 +1011,11 @@ def _consumer_context(candidate, producer, *, selected="true"):
     return {
         "inputs": {
             "candidate_image": candidate,
+            "verification_phase": phase,
             "recovery_images_artifact": "recovery-images-1-1" if candidate else "",
         },
         "needs": {
+            "preflight-policy": {"result": preflight},
             "select-test-suites": {"result": "success", "outputs": selection},
             "prepare-app-image": {"result": producer},
             "prepare-recovery-images": {
@@ -1029,6 +1058,30 @@ def test_supplied_image_runs_each_consumer_without_a_pass_through_job(name):
     assert _evaluate(consumer["env"]["CANDIDATE_ARCHIVE"], supplied) == ""
     assert _evaluate(consumer["env"]["CANDIDATE_IMAGE"], built) == local
     assert _evaluate(consumer["env"]["CANDIDATE_ARCHIVE"], built) == "app-image-1-1"
+
+
+@pytest.mark.parametrize("name", CONSUMERS)
+@pytest.mark.parametrize(
+    "phase,preflight,accepted",
+    [
+        ("full", "success", True),
+        ("full", "skipped", False),
+        ("source", "skipped", False),
+        ("artifact", "skipped", True),
+        ("recovery", "skipped", True),
+        ("artifact", "failure", False),
+        ("recovery", "cancelled", False),
+        ("artifact", "", False),
+    ],
+)
+def test_supplied_image_consumer_preserves_source_preflight_gate(
+    name, phase, preflight, accepted
+):
+    job = _workflow("pytest-unit-tests.yml")["jobs"][name]
+    context = _consumer_context(
+        CANDIDATE, "skipped", preflight=preflight, phase=phase
+    )
+    assert _job_runs(job, context) is accepted
 
 
 def _pull_step(job):

@@ -2,6 +2,10 @@ name: CI / Test Suite
 
 on:
   pull_request:
+    # Draft pushes already get full validation, so ready_for_review would only
+    # repeat the same head. `edited` also fires for body edits, whose skipped
+    # jobs would replace real required results; a base retarget reruns on the
+    # next push or a reopen.
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
@@ -58,7 +62,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.verification_phase }}-${{ inputs.verification_phase && github.run_id || inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
+  # A newer run supersedes only its own PR, merge group or event kind on a ref:
+  # a manual dispatch and the nightly schedule never cancel each other.
+  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.verification_phase }}-${{ github.event_name }}-${{ inputs.verification_phase && github.run_id || inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -162,8 +168,8 @@ jobs:
           print('matrix=' + json.dumps({'suite': [lane for lane in lanes if lane != 'hermetic']}, separators=(',', ':')))
           PY_LANES
   preflight-policy:
-    # Static repository policy checks run in parallel with test selection so they
-    # are off the serial tail of required CI (MoonLadderStudios/MoonMind#3326).
+    # Source policy runs beside selection and gates expensive selected jobs.
+    # Static frontend and generated-contract feedback stays independent.
     # MoonSpec projection stays unconditional. Real shard-ownership collection
     # runs when its inputs change, without adding another runner.
     runs-on: ubuntu-latest
@@ -395,7 +401,7 @@ jobs:
     # for API/component and Temporal. Justified slow cases use the installed
     # pytest-timeout per-test marker. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
-    needs: select-test-suites
+    needs: [select-test-suites, preflight-policy]
     if: >-
       needs.select-test-suites.outputs.unit_fast == 'true' ||
       needs.select-test-suites.outputs.api_component == 'true' ||
@@ -1055,14 +1061,14 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-    needs: select-test-suites
+    needs: [select-test-suites, preflight-policy]
     # A caller-supplied immutable image goes straight to its consumers.
     if: inputs.candidate_image == '' && (needs.select-test-suites.outputs.exact_artifact == 'true' || needs.select-test-suites.outputs.host_recovery == 'true' || needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true')
   integration-hermetic-shards:
     env:
       MOONMIND_INTEGRATION_REPORT_PATH: artifacts/integration-ci-${{ matrix.suite }}
     # Two isolated physical owners feed the required logical aggregate below.
-    needs: select-test-suites
+    needs: [select-test-suites, preflight-policy]
     if: needs.select-test-suites.outputs.integration_hermetic == 'true'
     outputs:
       attempt: ${{ github.run_attempt }}
@@ -1299,9 +1305,14 @@ jobs:
     # instantiates only affected rows; shared/unknown inputs retain all four. Like backend-matrix, native fail-fast cancels siblings after a
     # definitive failure except on schedules, which keep collecting evidence.
     needs:
+      - preflight-policy
       - select-test-suites
       - prepare-app-image
-    if: "!cancelled() && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true')"
+    if: >-
+      !cancelled() &&
+      needs.select-test-suites.result == 'success' &&
+      (needs.preflight-policy.result == 'success' || ((inputs.verification_phase == 'artifact' || inputs.verification_phase == 'recovery') && needs.preflight-policy.result == 'skipped')) &&
+      (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true')
     env:
       CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
       CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
@@ -1575,15 +1586,24 @@ jobs:
           retention-days: 7
 
   prepare-recovery-images:
-    needs: select-test-suites
-    if: needs.select-test-suites.outputs.host_recovery == 'true' && inputs.recovery_images_artifact == ''
+    needs: [select-test-suites, preflight-policy]
+    if: >-
+      !cancelled() &&
+      needs.select-test-suites.result == 'success' &&
+      (needs.preflight-policy.result == 'success' || ((inputs.verification_phase == 'artifact' || inputs.verification_phase == 'recovery') && needs.preflight-policy.result == 'skipped')) &&
+      needs.select-test-suites.outputs.host_recovery == 'true' && inputs.recovery_images_artifact == ''
     uses: ./.github/workflows/prepare-recovery-images.yml
   omnigent-host-recovery:
     needs:
+      - preflight-policy
       - select-test-suites
       - prepare-app-image
       - prepare-recovery-images
-    if: "!cancelled() && needs.select-test-suites.outputs.host_recovery == 'true' && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (inputs.recovery_images_artifact != '' || needs.prepare-recovery-images.result == 'success')"
+    if: >-
+      !cancelled() &&
+      needs.select-test-suites.result == 'success' &&
+      (needs.preflight-policy.result == 'success' || ((inputs.verification_phase == 'artifact' || inputs.verification_phase == 'recovery') && needs.preflight-policy.result == 'skipped')) &&
+      needs.select-test-suites.outputs.host_recovery == 'true' && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && (inputs.recovery_images_artifact != '' || needs.prepare-recovery-images.result == 'success')
     env:
       CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
       CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
@@ -1786,9 +1806,14 @@ jobs:
     # scheduled-soak outage never flips this gate closed.  Runs on the standard
     # Docker-enabled ubuntu-latest merge infrastructure.
     needs:
+      - preflight-policy
       - select-test-suites
       - prepare-app-image
-    if: "!cancelled() && (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && needs.select-test-suites.outputs.exact_artifact == 'true'"
+    if: >-
+      !cancelled() &&
+      needs.select-test-suites.result == 'success' &&
+      (needs.preflight-policy.result == 'success' || ((inputs.verification_phase == 'artifact' || inputs.verification_phase == 'recovery') && needs.preflight-policy.result == 'skipped')) &&
+      (needs.prepare-app-image.result == 'success' || (inputs.candidate_image != '' && needs.prepare-app-image.result == 'skipped')) && needs.select-test-suites.outputs.exact_artifact == 'true'
     env:
       CANDIDATE_IMAGE: ${{ inputs.candidate_image || needs.prepare-app-image.outputs.image_ref }}
       CANDIDATE_ARCHIVE: ${{ inputs.candidate_oci_artifact || needs.prepare-app-image.outputs.artifact_name }}
