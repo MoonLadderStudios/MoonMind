@@ -75,7 +75,7 @@ async def test_real_scoped_launch_connections_and_owned_lifecycle(monkeypatch):
         nonlocal publication_sequence
         publication_sequence += 1
         artifacts[name] = json.loads(body)
-        evidence = root / "artifacts/integration-ci/scoped-egress"
+        evidence = root / os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci") / "scoped-egress"
         evidence.mkdir(parents=True, exist_ok=True)
         artifact = evidence / f"{publication_sequence:03d}-{name.replace(':', '-')}"
         artifact.write_bytes(body)
@@ -147,7 +147,7 @@ async def test_real_scoped_launch_connections_and_owned_lifecycle(monkeypatch):
         _, state, state_error = await runner(
             ("inspect", "--format", "{{json .State}}", name)
         )
-        evidence = root / "artifacts/integration-ci/scoped-egress"
+        evidence = root / os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci") / "scoped-egress"
         evidence.mkdir(parents=True, exist_ok=True)
         diagnostic = {
             "fixture": name,
@@ -503,7 +503,7 @@ print(json.dumps({'crossAssessmentPeerChecks':peer_checks}))
         assert observed.terminal_state == "succeeded" and observed.exit_code == 0
         await backend.remove_container(offline)
         assert (await backend.cleanup(offline)).cleanup_succeeded is True
-        evidence = root / "artifacts/integration-ci/scoped-egress/connections.json"
+        evidence = root / os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", "artifacts/integration-ci") / "scoped-egress/connections.json"
         evidence.write_text(
             json.dumps(
                 {

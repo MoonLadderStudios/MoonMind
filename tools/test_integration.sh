@@ -11,6 +11,22 @@ COMPOSE_CMD=()
 # The JUnit report, streamed log and failure diagnostics land on the host
 # here, also when Compose runs from a temporary copy of the checkout.
 REPORT_PATH="artifacts/integration-ci"
+HERMETIC_SHARD="${MOONMIND_HERMETIC_SHARD:-}"
+case "$HERMETIC_SHARD" in
+  "") ;;
+  1|2)
+    TEST_COMPOSE_PROJECT_NAME+="-hermetic-$HERMETIC_SHARD"
+    REPORT_PATH="artifacts/integration-ci-hermetic-shard-$HERMETIC_SHARD"
+    export MOONMIND_CI_SUITE="integration-hermetic-shard-$HERMETIC_SHARD"
+    export MOONMIND_CI_RECEIPT="$REPORT_PATH/main.receipt.json"
+    ;;
+  *)
+    echo "Error: MOONMIND_HERMETIC_SHARD must be 1 or 2 when set." >&2
+    exit 2
+    ;;
+esac
+export MOONMIND_INTEGRATION_REPORT_PATH="$REPORT_PATH"
+export MOONMIND_SECURITY_QUALITY_OUTPUT="$REPORT_PATH/security-quality"
 REPORT_DIR="$REPO_ROOT/$REPORT_PATH"
 JUNIT_NAME="pytest-integration-ci.xml"
 # Each teardown or diagnostics command gets this many seconds before it is
@@ -176,6 +192,12 @@ if [[ ! "$INTEGRATION_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 pytest_args="tests/integration -m 'integration_ci' -p tools.ci.write_backend_matrix_summary --tb=short --timeout 120 --timeout-method=thread --durations=10 -n $INTEGRATION_WORKERS --dist loadfile --junitxml=$REPORT_PATH/$JUNIT_NAME"
+if [[ -n "$HERMETIC_SHARD" ]]; then
+  # The shared helper validates optional observations; absent/stale hints
+  # change balancing only, never the collected corpus.
+  durations_args="$(python3 "$SCRIPT_DIR/ci/hermetic_shards.py" durations-args)"
+  pytest_args+=" --splits 2 --group $HERMETIC_SHARD --splitting-algorithm least_duration $durations_args"
+fi
 if [[ "${MOONMIND_INTEGRATION_FAIL_FAST:-0}" == "1" ]]; then
   pytest_args+=" --maxfail=1"
 fi
@@ -208,7 +230,11 @@ run_phase() {
 mkdir -p "$REPORT_DIR"
 rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/storage-restart-*.xml \
   "$REPORT_DIR/storage-images.json" "$REPORT_DIR/storage-public-port.txt" \
-  "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt
+  "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt \
+  "$REPORT_DIR"/*.receipt.json "$REPORT_DIR"/*.environment.json
+# Partial corpus output must come from this execution, not an earlier attempt.
+# Keep qualification logs written by the independent pre-wrapper phases.
+rm -rf "$REPORT_DIR/security-quality"
 
 # Presigned downloads cross the same host-published port boundary as an
 # operator's browser. Never fall back to a possibly installed localhost store
@@ -233,24 +259,32 @@ run_phase "" "${pipeline_compose[@]}" run --rm \
   pytest \
   bash -lc "python tools/ci/write_backend_matrix_summary.py run -- $pytest_args"
 
-# Persist saved inputs, remove their worker workspace, restart the real store,
-# then retrieve historical bytes and independent claims through the adapter.
-run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
-run_phase "" "${pipeline_compose[@]}" run --rm \
-  -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-seed.receipt.json}" \
-  pytest bash -lc \
-  "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
-run_phase "" "${pipeline_compose[@]}" restart minio
-run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
-run_phase "" "${pipeline_compose[@]}" run --rm \
-  -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-verify.receipt.json}" \
-  pytest bash -lc \
-  "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
+# Only the first shard owns the ordered restart journey. Both shards above
+# still provision their own ordinary artifact store and public-port boundary.
+if [[ "$HERMETIC_SHARD" != "2" ]]; then
+  # Persist saved inputs, remove their worker workspace, restart the real store,
+  # then retrieve historical bytes and independent claims through the adapter.
+  run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
+  run_phase "" "${pipeline_compose[@]}" run --rm \
+    -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-seed.receipt.json}" \
+    pytest bash -lc \
+    "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
+  run_phase "" "${pipeline_compose[@]}" restart minio
+  run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
+  run_phase "" "${pipeline_compose[@]}" run --rm \
+    -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-verify.receipt.json}" \
+    pytest bash -lc \
+    "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
 
-# Write the corpus summary as the same container user that owns its evidence,
-# before teardown exports any temporary checkout to the host.
-run_phase "" "${pipeline_compose[@]}" run --rm --no-deps \
-  pytest python -m tests.integration.security.quality
+fi
+
+# Sharded executions retain partial evidence for the required aggregate gate.
+if [[ -z "$HERMETIC_SHARD" ]]; then
+  # Write the corpus summary as the same container user that owns its evidence,
+  # before teardown exports any temporary checkout to the host.
+  run_phase "" "${pipeline_compose[@]}" run --rm --no-deps \
+    pytest python -m tests.integration.security.quality
+fi
 
 if (( TEST_STATUS != 0 )); then
   compose "$CLEANUP_TIMEOUT" ps -a > "$REPORT_DIR/compose-ps.txt" 2>&1 \

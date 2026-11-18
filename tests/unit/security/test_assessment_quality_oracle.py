@@ -246,3 +246,85 @@ def test_gaming_reproducibility_includes_gaps_and_fixes(observed):
         changed = copy.deepcopy(observed)
         changed[key] = ["different"]
         assert observation_digest(changed) != observation_digest(observed)
+
+
+@pytest.mark.asyncio
+async def test_sharded_quality_requires_receipt_verified_execution_identities(
+    tmp_path, monkeypatch, case, observed
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {"cases": [{"id": name, "expected": case} for name in ("one", "two")]}
+        )
+    )
+    monkeypatch.setattr(quality, "MANIFEST", manifest)
+    monkeypatch.setattr(quality, "OUTPUT", tmp_path / "output")
+    verified = set()
+    for index, name in enumerate(("one", "two"), 1):
+        identity = (
+            "abc",
+            "123",
+            "1",
+            f"integration-hermetic-shard-{index}",
+            f"uid-{index}",
+        )
+        for env, value in zip(
+            (
+                "MOONMIND_CI_REVISION",
+                "GITHUB_RUN_ID",
+                "GITHUB_RUN_ATTEMPT",
+                "MOONMIND_CI_SUITE",
+                "PYTEST_XDIST_TESTRUNUID",
+            ),
+            identity,
+        ):
+            monkeypatch.setenv(env, value)
+        await quality.QualityRun().finish(
+            SimpleNamespace(read=AsyncMock(return_value=(None, b"{}"))),
+            name,
+            observed,
+            ["native"],
+            provenance={},
+        )
+        verified.add(identity)
+    assert not summarize(quality.OUTPUT, manifest)["passed"]
+    assert summarize(quality.OUTPUT, manifest, execution_identities=verified)["passed"]
+    assert not summarize(
+        quality.OUTPUT, manifest, execution_identities={next(iter(verified))}
+    )["passed"]
+
+
+@pytest.mark.asyncio
+async def test_partial_shard_quality_validates_full_manifest_digest(
+    tmp_path, monkeypatch, case, observed
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {"cases": [{"id": name, "expected": case} for name in ("one", "two")]}
+        )
+    )
+    monkeypatch.setattr(quality, "MANIFEST", manifest)
+    monkeypatch.setattr(quality, "OUTPUT", tmp_path / "output")
+    await quality.QualityRun().finish(
+        SimpleNamespace(read=AsyncMock(return_value=(None, b"{}"))),
+        "one",
+        observed,
+        ["native"],
+        provenance={},
+    )
+    assert not summarize(quality.OUTPUT, manifest)["passed"]
+    assert summarize(quality.OUTPUT, manifest, case_ids={"one"})["passed"]
+    assert not summarize(quality.OUTPUT, manifest, case_ids={"unknown"})["passed"]
+    result = quality.OUTPUT / "one/result.json"
+    value = json.loads(result.read_text())
+    value["observed"]["outcome"] = "wrong"
+    result.write_text(json.dumps(value))
+    assert not summarize(quality.OUTPUT, manifest, case_ids={"one"})["passed"]

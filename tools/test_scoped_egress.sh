@@ -5,13 +5,14 @@ set -euo pipefail
 # they never receive this socket or run nested Docker.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:ci}"
-mkdir -p "$root/artifacts/integration-ci/scoped-egress"
+report_path="${MOONMIND_INTEGRATION_REPORT_PATH:-artifacts/integration-ci}"
+mkdir -p "$root/$report_path/scoped-egress"
 # The dependency-only CI image lacks production source. This disposable overlay
 # copies only the exact stdlib gateway under test; production uses its installed
 # runtime image without bind-mounted or injected source.
 native_image="moonmind-test-native-egress:$$"
 inventory_image="moonmind-test-service-inventory:$$"
-overlay="$(mktemp -d "$root/artifacts/integration-ci/scoped-egress/overlay.XXXXXX")"
+overlay="$(mktemp -d "$root/$report_path/scoped-egress/overlay.XXXXXX")"
 cleanup_native_image() {
   docker image rm "$native_image" "$inventory_image" >/dev/null 2>&1 || true
   rm -rf "$overlay"
@@ -44,6 +45,7 @@ docker run --rm --user root \
   --workdir "$root" \
   --env "PYTHONPATH=$root" \
   --env MOONMIND_RUN_SCOPED_EGRESS_DOCKER=1 \
+  --env "MOONMIND_INTEGRATION_REPORT_PATH=$report_path" \
   --env "MOONMIND_SCOPED_TEST_IMAGE=$image" \
   --env "MOONMIND_NATIVE_TEST_IMAGE=$native_image" \
   --env "MOONMIND_INVENTORY_TEST_IMAGE=$inventory_image" \
@@ -55,4 +57,4 @@ docker run --rm --user root \
   tests/integration/security/test_service_inventory_admission.py \
   tests/integration/security/test_service_inventory_docker.py \
   -q --tb=short --timeout=180 \
-  --junitxml=artifacts/integration-ci/pytest-scoped-egress.xml
+  --junitxml="$report_path/pytest-scoped-egress.xml"

@@ -1403,3 +1403,9 @@ def test_assessment_admission_paths_select_integration_ci(changed_path: str) -> 
     outputs = _outputs([changed_path])
     assert outputs["integration_ci"] == "true", changed_path
     assert outputs["integration_hermetic"] == "true", changed_path
+
+
+def test_hermetic_only_selection_requires_aggregate_ownership_manifest():
+    result = _outputs(["moonmind/container_job_cli.py"])
+    assert result["integration_hermetic"] == "true"
+    assert result["ownership_full"] == "true"

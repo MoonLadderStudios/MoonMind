@@ -35,7 +35,7 @@ if command[:1] == ["port"]:
     raise SystemExit(0)
 if command[:1] == ["run"]:
     if command[-1] == "tests.integration.security.quality":
-        quality = directory / "artifacts/integration-ci/security-quality"
+        quality = directory / os.environ.get("MOONMIND_SECURITY_QUALITY_OUTPUT", "artifacts/integration-ci/security-quality")
         assert (quality / "sample/native.txt").is_file()
         status = config.get("quality_status", 0)
         (quality / "summary.json").write_text(json.dumps({"passed": status == 0}))
@@ -50,7 +50,7 @@ if command[:1] == ["run"]:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"<testsuite failures='{int(status != 0)}'/>")
         if config.get("write_quality", True):
-            quality = directory / "artifacts/integration-ci/security-quality/sample"
+            quality = directory / os.environ.get("MOONMIND_SECURITY_QUALITY_OUTPUT", "artifacts/integration-ci/security-quality") / "sample"
             quality.mkdir(parents=True, exist_ok=True)
             (quality / "native.txt").write_text("actual retained fixture observation")
         raise SystemExit(status)
@@ -58,6 +58,7 @@ if command[:1] == ["run"]:
     signal.signal(signal.SIGINT, lambda *_: report(2))
     print("collected 3 items", flush=True)
     print("public storage endpoint: " + os.environ.get("MOONMIND_TEST_S3_PUBLIC_ENDPOINT", ""), flush=True)
+    print("owned report root: " + os.environ.get("MOONMIND_INTEGRATION_REPORT_PATH", ""), flush=True)
     print("tests/integration/test_example.py::test_case FAILED", flush=True)
     Path(os.environ["WRAPPER_TEST_STARTED"]).write_text("started")
     time.sleep(config.get("run_sleep", 0))
@@ -122,6 +123,8 @@ def _make_wrapper(tmp_path: Path, repo: Path) -> Wrapper:
     helper.write_text((SCRIPT.parent / helper.name).read_text())
     helper.chmod(0o755)
     (tools / "test_worker_count.py").write_text("print(4)\n")
+    (tools / "ci").mkdir()
+    (tools / "ci/hermetic_shards.py").write_text("# Optional hints absent.\n")
     (repo / "docker-compose.test.yaml").write_text("services: {}\n")
     (repo / ".env-template").write_text("TEMPLATE=1\n")
     binaries = tmp_path / "bin"
@@ -458,3 +461,125 @@ def test_missing_timeout_preserves_only_unbounded_host_mode(wrapper: Wrapper, bu
         assert status == 125
         assert "GNU coreutils timeout is required" in output
         assert not wrapper.calls_path.exists()
+
+@pytest.mark.parametrize("shard", ["0", "3", "1 --maxfail=0", "all"])
+def test_invalid_hermetic_shard_rejected_before_resources(wrapper, shard):
+    wrapper.env["MOONMIND_HERMETIC_SHARD"] = shard
+    status, output, _ = wrapper.run()
+    assert status == 2
+    assert "MOONMIND_HERMETIC_SHARD" in output
+    assert not wrapper.calls_path.exists()
+
+
+@pytest.mark.parametrize("shard", ["1", "2"])
+def test_physical_shards_isolate_projects_reports_and_phase_ownership(wrapper, shard):
+    wrapper.env["MOONMIND_HERMETIC_SHARD"] = shard
+    status, output, _ = wrapper.run()
+    assert status == 0
+    assert f"owned report root: artifacts/integration-ci-hermetic-shard-{shard}" in output
+    command = wrapper.pytest_command()
+    assert f"--splits 2 --group {shard} --splitting-algorithm least_duration" in command
+    report = wrapper.repo / f"artifacts/integration-ci-hermetic-shard-{shard}"
+    assert (report / "pytest-integration-ci.xml").is_file()
+    assert (report / "security-quality/sample/native.txt").is_file()
+    assert not (wrapper.repo / REPORT).exists()
+    assert all(
+        call[call.index("--project-name") + 1] == f"moonmind-test-wrapper-unit-hermetic-{shard}"
+        for call in wrapper.calls() if "--project-name" in call
+    )
+    commands = wrapper.compose_commands()
+    assert not any(command[-1] == "tests.integration.security.quality" for command in commands)
+    assert any(command[0] == "restart" for command in commands) == (shard == "1")
+    assert (report / "storage-restart-seed.xml").exists() == (shard == "1")
+    assert (report / "storage-restart-verify.xml").exists() == (shard == "1")
+    assert wrapper.downs() == 1
+
+
+def test_concurrent_shards_keep_failure_and_cancellation_cleanup_separate(wrapper, tmp_path):
+    first = wrapper
+    first.env["MOONMIND_HERMETIC_SHARD"] = "1"
+    second_env = dict(first.env, MOONMIND_HERMETIC_SHARD="2")
+    second = Wrapper(
+        first.repo, tmp_path / "second-config.json", tmp_path / "second-calls.jsonl",
+        tmp_path / "second-started", second_env,
+    )
+    second.env.update(
+        WRAPPER_TEST_CONFIG=str(second.config), WRAPPER_TEST_CALLS=str(second.calls_path),
+        WRAPPER_TEST_STARTED=str(second.started),
+    )
+    cancelled = second.start(run_sleep=120)
+    deadline = time.monotonic() + 20
+    try:
+        while not second.started.exists():
+            assert time.monotonic() < deadline, "second shard never started"
+            time.sleep(0.05)
+        status, _, _ = first.run(run_status=7)
+        assert status == 7
+        assert cancelled.poll() is None
+        cancelled.send_signal(signal.SIGTERM)
+        cancelled.communicate(timeout=30)
+        assert cancelled.returncode == 143
+    finally:
+        if cancelled.poll() is None:
+            cancelled.kill()
+            cancelled.communicate(timeout=10)
+    for shard, owner in ((1, first), (2, second)):
+        assert owner.downs() == 1
+        assert all(
+            call[call.index("--project-name") + 1] == f"moonmind-test-wrapper-unit-hermetic-{shard}"
+            for call in owner.calls() if "--project-name" in call
+        )
+        report = wrapper.repo / f"artifacts/integration-ci-hermetic-shard-{shard}"
+        assert "test_case FAILED" in (report / "pytest-integration-ci.log").read_text()
+    assert "failures='1'" in (
+        wrapper.repo / "artifacts/integration-ci-hermetic-shard-1/pytest-integration-ci.xml"
+    ).read_text()
+
+
+def test_shard_temporary_checkout_retains_partial_evidence_on_failure(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env.update(
+        MOONMIND_HERMETIC_SHARD="2",
+        MOONMIND_AGENT_RUNTIME_STORE=str(tmp_path / "agent_jobs"),
+    )
+    status, _, _ = wrapper.run(run_status=1)
+    assert status == 1
+    report = wrapper.repo / "artifacts/integration-ci-hermetic-shard-2"
+    assert (report / "pytest-integration-ci.xml").exists()
+    assert (report / "security-quality/sample/native.txt").is_file()
+    assert not any(command[0] == "restart" for command in wrapper.compose_commands())
+
+
+def test_shard_run_clears_only_its_stale_receipts_and_security_evidence(wrapper):
+    wrapper.env["MOONMIND_HERMETIC_SHARD"] = "2"
+    own = wrapper.repo / "artifacts/integration-ci-hermetic-shard-2"
+    sibling = wrapper.repo / "artifacts/integration-ci-hermetic-shard-1"
+    for directory in (own, sibling):
+        (directory / "security-quality/old-case").mkdir(parents=True)
+        (directory / "security-quality/old-case/result.json").write_text("stale")
+        (directory / "main.receipt.json").write_text("stale")
+        (directory / "main.environment.json").write_text("stale")
+        (directory / "qualification.json").write_text("current independent phase")
+    status, _, _ = wrapper.run(run_status=7, write_junit=False, write_quality=False)
+    assert status == 7
+    assert not (own / "security-quality").exists()
+    assert not (own / "main.receipt.json").exists()
+    assert not (own / "main.environment.json").exists()
+    assert (own / "qualification.json").exists()
+    assert (sibling / "security-quality/old-case/result.json").read_text() == "stale"
+    assert (sibling / "main.receipt.json").read_text() == "stale"
+    assert (sibling / "main.environment.json").read_text() == "stale"
+
+
+@pytest.mark.parametrize("report_path", [None, "artifacts/integration-ci-hermetic-shard-1"])
+def test_storage_restart_state_uses_owned_report_directory(tmp_path, monkeypatch, report_path):
+    from tests.integration.temporal.test_storage_restart import state_dir
+
+    monkeypatch.chdir(tmp_path)
+    if report_path is None:
+        monkeypatch.delenv("MOONMIND_INTEGRATION_REPORT_PATH", raising=False)
+    else:
+        monkeypatch.setenv("MOONMIND_INTEGRATION_REPORT_PATH", report_path)
+    expected = Path(report_path or "artifacts/integration-ci") / "storage-restart"
+    assert state_dir() == expected
+    assert expected.is_dir()

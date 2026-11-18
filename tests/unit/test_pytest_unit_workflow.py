@@ -71,7 +71,7 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
     assert "schedule" in triggers
 
     jobs = workflow["jobs"]
-    integration_job = jobs["integration-hermetic"]
+    integration_job = jobs["integration-hermetic-shards"]
     assert integration_job["needs"] == "select-test-suites"
     assert (
         integration_job["if"]
@@ -112,13 +112,13 @@ def test_required_integration_job_uses_submodule_free_checkout() -> None:
 
 def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     workflow = _load_workflow()
-    for owner in ("integration-hermetic", "integration-ci"):
+    for owner in ("integration-hermetic-shards", "integration-ci"):
         job = workflow["jobs"][owner]
         assert job["runs-on"] == "ubuntu-latest"
         steps = {step["name"]: step for step in job["steps"]}
         collect = steps["Collect row-owned integration report and diagnostics"]
         assert collect["if"] == "always()"
-        if owner == "integration-hermetic":
+        if owner == "integration-hermetic-shards":
             assert "artifacts/integration-ci" in collect["run"]
             assert "not zero tests" in collect["run"]
         else:
@@ -229,7 +229,7 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     }
     hermetic = next(
         step
-        for step in _load_workflow()["jobs"]["integration-hermetic"]["steps"]
+        for step in _load_workflow()["jobs"]["integration-hermetic-shards"]["steps"]
         if step["name"] == "Run hermetic integration CI suite"
     )
     assert hermetic["env"]["MOONMIND_INTEGRATION_FAIL_FAST"] == (
@@ -265,7 +265,7 @@ def _integration_row_timeout_minutes(value: int | str, suite: str) -> int:
 
 @pytest.mark.parametrize("cache_hit", [False, True])
 def test_hermetic_job_reserves_bounded_setup_execution_and_reporting(cache_hit) -> None:
-    job = _load_workflow()["jobs"]["integration-hermetic"]
+    job = _load_workflow()["jobs"]["integration-hermetic-shards"]
     run_index = next(
         i
         for i, step in enumerate(job["steps"])
@@ -309,7 +309,7 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting(cache_hit) 
 
 
 def test_hermetic_job_reports_a_timing_digest_on_every_outcome() -> None:
-    job = _load_workflow()["jobs"]["integration-hermetic"]
+    job = _load_workflow()["jobs"]["integration-hermetic-shards"]
     collect = next(
         step
         for step in job["steps"]
@@ -323,7 +323,7 @@ def test_hermetic_job_reports_a_timing_digest_on_every_outcome() -> None:
     assert "python3 tools/ci/write_backend_matrix_summary.py digest" in command
     assert '--summary "$GITHUB_STEP_SUMMARY"' in command
     for receipt in ("main", "storage-seed", "storage-verify"):
-        assert f"artifacts/integration-ci/{receipt}.receipt.json" in command
+        assert f"artifacts/integration-ci-${{{{ matrix.suite }}}}/{receipt}.receipt.json" in command
 
 
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
@@ -331,11 +331,14 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
         "suite"
     ] == ["hermetic", "fresh-journey", "upgrade-journey", "controller-journey"]
-    hermetic, journeys = jobs["integration-hermetic"], jobs["integration-ci"]
+    hermetic, journeys = jobs["integration-hermetic-shards"], jobs["integration-ci"]
     assert hermetic["needs"] == "select-test-suites"
     assert "prepare-app-image" not in hermetic["needs"]
     assert "prepare-app-image" in journeys["needs"]
-    assert hermetic["strategy"]["matrix"] == {"suite": ["hermetic"]}
+    assert hermetic["strategy"]["matrix"] == {"include": [
+        {"suite": "hermetic-shard-1", "shard": 1},
+        {"suite": "hermetic-shard-2", "shard": 2},
+    ]}
     for job in (hermetic, journeys):
         assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
     assert hermetic["timeout-minutes"] == 70
@@ -721,7 +724,7 @@ def test_rotating_seed_sweep_fails_without_a_matching_recorded_result() -> None:
 
 def test_image_building_jobs_share_a_layer_cache() -> None:
     jobs = _load_workflow()["jobs"]
-    integration_steps = jobs["integration-hermetic"]["steps"]
+    integration_steps = jobs["integration-hermetic-shards"]["steps"]
     build = next(
         step
         for step in integration_steps
@@ -1729,3 +1732,63 @@ def test_source_receipt_runs_after_intentional_skips_without_accepting_failure()
     assert "inputs.verification_phase == 'source'" in condition
     for dependency in job["needs"]:
         assert f"needs.{dependency}.result == 'success'" in condition
+
+
+def test_hermetic_aggregate_requires_both_successful_owners_and_actual_collection(tmp_path):
+    import os
+    import subprocess
+
+    jobs = _load_workflow()["jobs"]
+    aggregate = jobs["integration-hermetic"]
+    assert set(aggregate["needs"]) == {
+        "select-test-suites", "preflight-policy", "integration-hermetic-shards"
+    }
+    assert aggregate["if"] == "always() && needs.select-test-suites.outputs.integration_hermetic == 'true'"
+    steps = {step["name"]: step for step in aggregate["steps"]}
+    gate = steps["Require successful physical owners and collection"]
+    assert gate["env"] == {
+        "SHARDS": "${{ needs.integration-hermetic-shards.result }}",
+        "COLLECTION": "${{ needs.preflight-policy.result }}",
+    }
+    for shards in ("success", "failure", "cancelled", "skipped", ""):
+        for collection in ("success", "failure", "cancelled", "skipped", ""):
+            result = subprocess.run(
+                ["bash", "-c", gate["run"]], cwd=tmp_path,
+                env=dict(os.environ, SHARDS=shards, COLLECTION=collection),
+            )
+            assert (result.returncode == 0) == (shards == collection == "success")
+    download = steps["Download isolated hermetic evidence"]["with"]
+    assert download == {
+        "pattern": "integration-ci-hermetic-shard-*-attempt-*",
+        "path": "artifacts/hermetic-owners", "merge-multiple": False,
+    }
+    assert steps["Download actual ownership collection"]["with"] == {
+        "name": "${{ needs.preflight-policy.outputs.artifact }}",
+        "path": "artifacts/hermetic-ownership",
+    }
+    command = steps["Verify exact corpus, phase ownership, and security evidence"]["run"]
+    assert "tools/ci/hermetic_shards.py aggregate" in command
+    assert "--root artifacts/hermetic-owners" in command
+    assert "--ownership-manifest artifacts/hermetic-ownership/test-ownership.json" in command
+    assert "--ownership-attempt '${{ needs.preflight-policy.outputs.attempt }}'" in command
+    assert "integration-hermetic" in jobs["ci-required"]["needs"]
+    assert "integration-hermetic" in jobs["omnigent-deterministic-conformance"]["needs"]
+    conformance_downloads = [
+        step["with"] for step in jobs["omnigent-deterministic-conformance"]["steps"]
+        if step.get("with", {}).get("pattern") == "integration-ci-hermetic-shard-*-attempt-*"
+    ]
+    assert len(conformance_downloads) == 1
+    assert conformance_downloads[0].get("merge-multiple", False) is False
+
+
+def test_hermetic_physical_rows_own_qualifications_and_isolated_receipts():
+    steps = {step["name"]: step for step in _load_workflow()["jobs"]["integration-hermetic-shards"]["steps"]}
+    for name in ("Verify isolated Docker socket proxy", "Verify real scoped egress connections and owned cleanup"):
+        assert steps[name]["if"] == "matrix.shard == 1"
+        assert "artifacts/integration-ci-${{ matrix.suite }}/" in steps[name]["run"]
+    run = steps["Run hermetic integration CI suite"]
+    assert run["env"]["MOONMIND_HERMETIC_SHARD"] == "${{ matrix.shard }}"
+    assert run["env"]["MOONMIND_CI_RECEIPT"] == "artifacts/integration-ci-${{ matrix.suite }}/main.receipt.json"
+    assert run["env"]["MOONMIND_CI_SUITE"] == "integration-${{ matrix.suite }}"
+    assert "github.run_id" in run["env"]["MOONMIND_TEST_COMPOSE_PROJECT_NAME"]
+    assert "github.run_attempt" in run["env"]["MOONMIND_TEST_COMPOSE_PROJECT_NAME"]
