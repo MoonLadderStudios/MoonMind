@@ -164,7 +164,6 @@ jobs:
       - name: Run the exact-image concurrency rows
         env:
           MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE: ${{ steps.images.outputs.host }}
-          MOONMIND_OMNIGENT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
           # The exact hosts register against the deployment's own Omnigent
           # server endpoint. Without it the layer publishes `unavailable` rows
           # rather than launching hosts that can never register.

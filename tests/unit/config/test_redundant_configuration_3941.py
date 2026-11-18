@@ -51,7 +51,7 @@ def test_env_template_memory_block_matches_code_default() -> None:
 
     values = dict(_template_assignments())
 
-    assert values["MEMORY_CONTEXT_BUDGET_TOKENS"].strip('"') == str(
+    assert values["MOONMIND_MEMORY_CONTEXT_BUDGET_TOKENS"].strip('"') == str(
         DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS
     )
     assert DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS == 4096
