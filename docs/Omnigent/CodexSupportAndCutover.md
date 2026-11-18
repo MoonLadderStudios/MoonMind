@@ -119,8 +119,9 @@ and removal condition; it never terminates workflows, erases evidence, or
 deletes credential volumes. `moonmind drain-inventory` runs it once over
 PostgreSQL (one read-only transaction) and Temporal visibility for recorded
 `codex-profile-bound@1` plans, queued starts and retries, recorded
-`omnigent-opencode@1` plans and explicit Host Class requests, and open
-workflows on the legacy `TEMPORAL_WORKFLOW_TASK_QUEUE`, and exits 1 unless
+`omnigent-opencode@1` plans and explicit Host Class requests, open
+workflows on the legacy `TEMPORAL_WORKFLOW_TASK_QUEUE`, and open
+`MoonMind.ControlStopContinuation` executions, and exits 1 unless
 every item is clean. An enabled schedule keeps its recorded plan active,
 because each refresh and occurrence loads that plan. A read that waits past
 its statement timeout, for example behind a migration lock, reports its

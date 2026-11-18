@@ -110,12 +110,6 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
 from moonmind.security.operator_admission import OperatorAdmission
-from moonmind.services.control_stop_continuation import (
-    ControlStopContinuationReservation,
-)
-from moonmind.workflows.executions.control_stop_continuation import (
-    ContinuationBudgetGrant,
-)
 from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
@@ -18547,19 +18541,8 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
             "controlStopId": "verify:control-stop:6",
             "remainingWorkRef": "artifact://remaining/final",
             "workspaceHeadRef": "artifact://workspace/final",
-            "sourceBudget": {
-                "maxAttempts": 6,
-                "consumedAttempts": 6,
-                "exhaustedDimension": "remediation_attempts",
-            },
-            "continuationBudgetGrant": {
-                "grantId": "grant-1",
-                "maxAttempts": 3,
-                "maxConsecutiveNoProgressAttempts": 2,
-            },
-            "destinationWorkflowId": "control-stop-continuation-digest",
-            "restorationEvidenceRef": "artifact://restore/evidence",
-            "hostSessionLifecycle": {"activityCleanupCompleted": True},
+            # A record written before #5340 may still claim admission; the
+            # retired control-stop continuation is never offered for it.
             "metrics": {"remediationAdmitted": True},
             "auxiliaryOutcomes": {
                 "gitPublication": {
@@ -18619,27 +18602,17 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
     actions = _serialize_execution(record).actions.model_dump(by_alias=True)
 
     assert actions["canFullRetry"] is True
-    assert actions["canContinueRemediation"] is True
     assert actions["canRetryPublication"] is True
     assert actions["canRetryFromStep"] is True
-    assert actions["actionEvidence"]["continueRemediation"] == {
+    assert "canContinueRemediation" not in actions
+    assert "canContinueRemediation" not in actions["disabledReasons"]
+    consumed_refs = {
         "candidateRef": "artifact://workspace/final",
         "remainingWorkRef": "artifact://remaining/final",
-        "controlStopId": "verify:control-stop:6",
-        "sourceBudget": {
-            "maxAttempts": 6,
-            "consumedAttempts": 6,
-            "exhaustedDimension": "remediation_attempts",
-        },
-        "continuationBudget": {
-            "grantId": "grant-1",
-            "maxAttempts": 3,
-            "maxConsecutiveNoProgressAttempts": 2,
-        },
-        "destinationWorkflowId": "control-stop-continuation-digest",
-        "restorationEvidenceRef": "artifact://restore/evidence",
-        "hostSessionLifecycle": {"activityCleanupCompleted": True},
     }
+    assert actions["actionEvidence"]["editForRerun"] == consumed_refs
+    assert actions["actionEvidence"]["fullRetry"] == consumed_refs
+    assert "continueRemediation" not in actions["actionEvidence"]
 
 
 def _publication_recovery_record() -> SimpleNamespace:
@@ -18727,9 +18700,6 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
     app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
-    monkeypatch.setattr(
-        settings.feature_flags, "publication_recovery_generation", "canary-1"
-    )
 
     with TestClient(app) as test_client:
         first = test_client.post("/api/executions/mm:wf-1/retry-publication")
@@ -18739,7 +18709,7 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
     assert duplicate.status_code == 201
     assert first.json() == duplicate.json()
     assert first.json()["workflowId"] == destination_id
-    assert first.json()["rolloutGeneration"] == "canary-1"
+    assert "rolloutGeneration" not in first.json()
     assert adapter.start_workflow.await_count == 2
     for call_args in adapter.start_workflow.await_args_list:
         assert call_args.kwargs["workflow_id"] == destination_id
@@ -18755,6 +18725,7 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
         assert "Original task input was not retained" in body
         assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
         assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
+        assert "publication_recovery_generation" not in call_args.kwargs["memo"]
         assert call_args.kwargs["memo"][
             "publication_no_implementation_rerun"
         ] is True
@@ -19293,31 +19264,21 @@ def test_saved_work_publication_uses_the_existing_rollout_admission(
 @pytest.mark.parametrize(
     ("flags", "submit_enabled", "reason"),
     [
-        # An operator who turns the rollout gate off keeps it off.
+        # An operator who turns publication recovery off keeps it off.
         (
             {"publication_recovery_enabled": False},
             True,
             "publication_recovery_disabled",
         ),
         (
-            {"publication_recovery_shadow": True},
-            True,
-            "publication_recovery_shadow_only",
-        ),
-        (
             {"publication_recovery_allowed_modes": ""},
             True,
             "publication_mode_not_allowed",
         ),
-        (
-            {"publication_recovery_canary_owner_ids": "someone-else"},
-            True,
-            "publication_recovery_not_in_canary",
-        ),
         ({}, False, "temporal_submit_disabled"),
     ],
 )
-def test_saved_work_publication_availability_is_projected_from_the_rollout_policy(
+def test_saved_work_publication_availability_is_projected_from_the_policy(
     monkeypatch: pytest.MonkeyPatch,
     flags: dict[str, Any],
     submit_enabled: bool,
@@ -19385,17 +19346,14 @@ def test_saved_work_publication_is_available_on_a_default_installation(
         "allowedModes": ["pr", "draft_pr", "branch"]
     }
     assert published.status_code == 201, published.json()
-    assert published.json()["rolloutGeneration"] != "disabled"
     adapter.start_workflow.assert_awaited_once()
     assert (
-        adapter.start_workflow.await_args.kwargs["memo"][
-            "publication_recovery_generation"
-        ]
-        != "disabled"
+        "publication_recovery_generation"
+        not in adapter.start_workflow.await_args.kwargs["memo"]
     )
 
 
-def test_saved_work_publication_availability_survives_an_invalid_rollout_setting(
+def test_saved_work_publication_availability_survives_an_invalid_mode_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
@@ -19423,7 +19381,7 @@ def test_saved_work_publication_availability_survives_an_invalid_rollout_setting
 def test_saved_work_publication_availability_reports_destination_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app, adapter, _record, user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
     _override_temporal_client(app)
     adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
         workflow_id=kwargs["workflow_id"], run_id="publication-run"
@@ -19435,39 +19393,19 @@ def test_saved_work_publication_availability_reports_destination_limits(
     )
 
     with TestClient(app) as test_client:
-        unlimited = test_client.get("/api/executions/mm:wf-1").json()["actions"]
-        monkeypatch.setattr(
-            settings.feature_flags,
-            "publication_recovery_canary_repositories",
-            "Dest/Repo, Other/Repo",
-        )
-        canary = test_client.get("/api/executions/mm:wf-1").json()["actions"]
+        actions = test_client.get("/api/executions/mm:wf-1").json()["actions"]
         admitted = test_client.post(
             "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
         )
-        monkeypatch.setattr(
-            settings.feature_flags,
-            "publication_recovery_canary_owner_ids",
-            str(user.id),
-        )
-        canary_owner = test_client.get("/api/executions/mm:wf-1").json()["actions"]
 
-    assert unlimited["canPublishSavedWork"] is True
-    assert "canPublishSavedWork" not in unlimited["disabledReasons"]
-    assert unlimited["actionEvidence"]["publishSavedWork"] == {
+    assert actions["canPublishSavedWork"] is True
+    assert "canPublishSavedWork" not in actions["disabledReasons"]
+    # The mode allowlist is the only destination limit; no repository or
+    # owner cohort narrows it (#5340).
+    assert actions["actionEvidence"]["publishSavedWork"] == {
         "allowedModes": ["pr", "branch"]
-    }
-    # A repository canary limits destinations without hiding the action.
-    assert canary["canPublishSavedWork"] is True
-    assert canary["actionEvidence"]["publishSavedWork"] == {
-        "allowedModes": ["pr", "branch"],
-        "canaryRepositories": ["Dest/Repo", "Other/Repo"],
     }
     assert admitted.status_code == 201, admitted.json()
-    # A canary owner may publish to any repository.
-    assert canary_owner["actionEvidence"]["publishSavedWork"] == {
-        "allowedModes": ["pr", "branch"]
-    }
 
 
 @pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
@@ -19487,7 +19425,6 @@ def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
     actions = _serialize_execution(record).actions.model_dump(by_alias=True)
 
     assert actions["canFullRetry"] is True
-    assert actions["canContinueRemediation"] is False
     assert actions["canRetryPublication"] is False
 
 
@@ -19511,17 +19448,12 @@ def test_workflow_gate_actions_expose_action_specific_disabled_reasons(
 
     actions = _serialize_execution(record).actions.model_dump(by_alias=True)
 
-    assert actions["canContinueRemediation"] is False
-    assert (
-        actions["disabledReasons"]["canContinueRemediation"]
-        == "remediation_not_admitted"
-    )
     assert actions["canRetryPublication"] is False
     assert (
         actions["disabledReasons"]["canRetryPublication"]
         == "publication_not_failed"
     )
-    assert actions["actionEvidence"]["continueRemediation"] == {
+    assert actions["actionEvidence"]["fullRetry"] == {
         "candidateRef": "artifact://workspace/final",
         "remainingWorkRef": "artifact://remaining/final",
     }
@@ -19830,155 +19762,24 @@ def test_action_endpoints_allow_operator_and_validate_effects(
     service.cancel_execution.assert_awaited()
 
 
-def test_continue_remediation_returns_same_destination_for_duplicate_requests(
+def test_retired_continue_remediation_route_is_not_served(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    test_client, service, user = client
-    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    service.describe_execution.return_value = _build_execution_record(
-        state=MoonMindWorkflowState.FAILED,
-        owner_id=str(user.id),
-    )
-    reservations = [
-        ControlStopContinuationReservation(
-            destination_workflow_id="control-stop-continuation-digest",
-            source_workflow_id="mm:wf-1",
-            source_run_id="run-2",
-            control_stop_id="verify:control-stop:6",
-            workspace_head_ref="artifact://checkpoint/head-6",
-            remaining_work_ref="artifact://verify/remaining-6",
-            created=created,
-        )
-        for created in (True, False)
-    ]
-    admit = AsyncMock(side_effect=reservations)
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.admit_control_stop_continuation",
-        admit,
-    )
-    authorized_budget = ContinuationBudgetGrant(
-        grantId="grant-1",
-        maxAttempts=2,
-        maxConsecutiveNoProgressAttempts=1,
-    )
-    repository = SimpleNamespace(
-        load_source_identity=AsyncMock(
-            return_value=(
-                "verify:control-stop:6",
-                SimpleNamespace(contract_payload={"authoritative": True}),
-            )
-        )
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.SqlControlStopContinuationRepository",
-        lambda _session: repository,
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.ControlStopContinuationContract.model_validate",
-        lambda _payload: SimpleNamespace(continuation_budget=authorized_budget),
-    )
-
-    first = test_client.post(
-        "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "proposedContinuationBudget": {
-                "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
-            }
-        },
-    )
-    duplicate = test_client.post(
-        "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "proposedContinuationBudget": {
-                "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
-            }
-        },
-    )
-
-    assert first.status_code == 202
-    assert duplicate.status_code == 202
-    assert first.json()["destinationWorkflowId"] == duplicate.json()[
-        "destinationWorkflowId"
-    ]
-    assert first.json()["created"] is True
-    assert duplicate.json()["created"] is False
-    assert admit.await_count == 2
-    assert repository.load_source_identity.await_count == 2
-    for invocation in admit.await_args_list:
-        assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
-        assert invocation.kwargs["source_run_id"] == "run-2"
-        assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
-        assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
-        assert invocation.kwargs["continuation_budget"].max_attempts == 1
-        assert invocation.kwargs["instruction_changes_ref"] is None
-
-
-def test_continue_remediation_admits_operator_before_effect_checks(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Single-user (#4351): the admitted operator passes the ownership gate;
-    # continuation still requires terminal-source evidence and budget
-    # admission at their owning boundaries.
+    # #5340 removed control-stop continuation: a stale client request is
+    # rejected by routing and never reaches the execution service.
     test_client, service, _user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    source = _build_execution_record(
-        state=MoonMindWorkflowState.FAILED,
-        owner_id="other-user",
-    )
-    service.describe_execution.return_value = source
-    admit = AsyncMock(
-        return_value=ControlStopContinuationReservation(
-            destination_workflow_id="control-stop-continuation-digest",
-            source_workflow_id="mm:wf-1",
-            source_run_id="run-2",
-            control_stop_id="verify:control-stop:6",
-            workspace_head_ref="artifact://checkpoint/head-6",
-            remaining_work_ref="artifact://verify/remaining-6",
-            created=True,
-        )
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.admit_control_stop_continuation",
-        admit,
-    )
-    authorized_budget = ContinuationBudgetGrant(
-        grantId="grant-1",
-        maxAttempts=2,
-        maxConsecutiveNoProgressAttempts=1,
-    )
-    repository = SimpleNamespace(
-        load_source_identity=AsyncMock(
-            return_value=(
-                "verify:control-stop:6",
-                SimpleNamespace(contract_payload={"authoritative": True}),
-            )
-        )
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.SqlControlStopContinuationRepository",
-        lambda _session: repository,
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.executions.ControlStopContinuationContract.model_validate",
-        lambda _payload: SimpleNamespace(continuation_budget=authorized_budget),
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED
     )
 
     response = test_client.post(
-        "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "proposedContinuationBudget": {
-                "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
-            }
-        },
+        "/api/executions/mm:wf-1/actions/continue-remediation", json={}
     )
 
-    assert response.status_code == 202, response.json()
-    admit.assert_awaited()
+    assert response.status_code in {404, 405}
+    service.describe_execution.assert_not_awaited()
 
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:

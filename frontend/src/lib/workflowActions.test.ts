@@ -19,7 +19,6 @@ function noopHandlers(): WorkflowActionHandlers {
     onCompareRun: vi.fn(),
     onRerun: vi.fn(),
     onRetryFromStep: vi.fn(),
-    onContinueRemediation: vi.fn(),
     onRetryPublication: vi.fn(),
     onPause: vi.fn(),
     onResume: vi.fn(),
@@ -226,36 +225,6 @@ describe('buildWorkflowActionMenuItems', () => {
     expect(
       eligible.find((item) => item.id === 'create-remediation-task')?.disabledReason,
     ).toBeUndefined();
-  });
-
-  it('exposes admitted control-stop continuation and its disabled reason', () => {
-    const handlers = noopHandlers();
-    const available = buildWorkflowActionMenuItems(
-      buildParams({
-        actions: { canContinueRemediation: true },
-        handlers,
-      }),
-    );
-    expect(available.map((item) => item.id)).toEqual(['continue-remediation']);
-    available[0]?.onSelect?.();
-    expect(handlers.onContinueRemediation).toHaveBeenCalledOnce();
-
-    const unavailable = buildWorkflowActionMenuItems(
-      buildParams({
-        actions: {
-          canContinueRemediation: false,
-          disabledReasons: {
-            canContinueRemediation: 'deployment canary disabled',
-          },
-        },
-        disabledReason: (key) =>
-          key === 'canContinueRemediation' ? 'deployment canary disabled' : null,
-      }),
-    );
-    expect(unavailable[0]).toMatchObject({
-      id: 'continue-remediation',
-      disabledReason: 'deployment canary disabled',
-    });
   });
 
   it('offers retry from the failed step without requiring task editing', () => {

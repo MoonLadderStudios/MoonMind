@@ -127,6 +127,10 @@ generated table keeps distinct; they are not a second inventory.
   retain the type string; the current release never registers, starts, or
   updates it. [Section 11.2](#112-moonmindmanifestingest-lifecycle-retired)
   preserves old-release retirement and upgrade guidance.
+  `MoonMind.ControlStopContinuation` is retired the same way. It never had a
+  production producer, so `moonmind drain-inventory` should report its
+  category clean; any execution it lists still needs an old-release worker.
+  Its `control_stop_continuations` table and rows are kept.
 - **Current routing is not historical routing.** The workflow-queue lane in
   the generated reference separates the current handler lane from
   historical-only handlers retained for pre-cutover histories; module

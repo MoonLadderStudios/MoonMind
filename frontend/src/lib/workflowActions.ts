@@ -19,7 +19,6 @@ export const ExecutionActionsSchema = z
     canPause: z.boolean().optional(),
     canResume: z.boolean().optional(),
     canRetryFromStep: z.boolean().optional(),
-    canContinueRemediation: z.boolean().optional(),
     canRetryPublication: z.boolean().optional(),
     canPublishSavedWork: z.boolean().optional(),
     canFullRetry: z.boolean().optional(),
@@ -28,23 +27,6 @@ export const ExecutionActionsSchema = z
       z.object({
         candidateRef: z.string().nullable().optional(),
         remainingWorkRef: z.string().nullable().optional(),
-        controlStopId: z.string().nullable().optional(),
-        sourceBudget: z.object({
-          maxAttempts: z.number().int().positive(),
-          consumedAttempts: z.number().int().nonnegative(),
-          exhaustedDimension: z.string(),
-        }).passthrough().optional(),
-        continuationBudget: z.object({
-          grantId: z.string(),
-          maxAttempts: z.number().int().positive(),
-          maxConsecutiveNoProgressAttempts: z.number().int().positive(),
-          consumedAttempts: z.number().int().nonnegative().optional(),
-          consecutiveNoProgressAttempts: z.number().int().nonnegative().optional(),
-        }).passthrough().optional(),
-        destinationWorkflowId: z.string().nullable().optional(),
-        restorationEvidenceRef: z.string().nullable().optional(),
-        restorationEvidenceDigest: z.string().nullable().optional(),
-        hostSessionLifecycle: z.record(z.string(), z.unknown()).nullable().optional(),
       }).passthrough(),
     ).optional(),
     canCancel: z.boolean().optional(),
@@ -101,8 +83,6 @@ const DISABLED_REASON_SENTENCES: Record<string, string> = {
   temporal_workflow_editing_disabled: 'Workflow editing is turned off on this deployment.',
   original_task_input_snapshot_missing: "The workflow's original inputs were not saved.",
   temporal_submit_disabled: 'Workflow submission is turned off on this deployment.',
-  remediation_not_admitted: 'No remediation was admitted for this failure.',
-  control_stop_not_available: 'There is no saved stopping point to continue from.',
   publication_retry_not_applicable: 'This workflow has no publication to retry.',
   publication_not_failed: 'Publication did not fail, so there is nothing to retry.',
   publication_retry_not_eligible: 'The failed publication cannot be retried.',
@@ -149,7 +129,6 @@ export type WorkflowActionHandlers = {
   onCompareRun: () => void;
   onRerun: () => void;
   onRetryFromStep: () => void;
-  onContinueRemediation: () => void;
   onRetryPublication: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -345,13 +324,6 @@ export function buildWorkflowActionMenuItems(
     onSelect: handlers.onCreateRemediation,
   });
   addButton({
-    id: 'continue-remediation',
-    label: 'Continue remediation',
-    available: Boolean(actions.canContinueRemediation),
-    disabledReason: disabledReason('canContinueRemediation'),
-    onSelect: handlers.onContinueRemediation,
-  });
-  addButton({
     id: 'retry-publication',
     label: 'Retry publication',
     available: Boolean(actions.canRetryPublication),
@@ -441,7 +413,6 @@ const PRIMARY_WORKFLOW_ACTION_PRIORITY = [
   'approve',
   'resume',
   'retry-from-failed-step',
-  'continue-remediation',
   'retry-publication',
   'rerun',
   'pause',

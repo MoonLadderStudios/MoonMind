@@ -374,7 +374,6 @@ def test_retained_manifest_strings_are_guards_history_or_excluded() -> None:
         "saved_work",
         "checkpoint",
         "prepared_context",
-        "control_stop_continuation",
         "remediation_tool",
         "skills_on_demand",
         "skill_materialization",

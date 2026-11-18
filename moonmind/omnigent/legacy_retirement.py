@@ -38,7 +38,14 @@ import os
 from enum import Enum
 from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from moonmind.omnigent.retirement_surfaces import (
     discover_legacy_surfaces,
@@ -488,8 +495,9 @@ class ObsoleteConfiguration(BaseModel):
     guidance: str = ""
     # The value .env-template and Compose shipped. It selects exactly what
     # omitting the variable selects, so an untouched .env neither warns nor
-    # fails startup, during the window or after removal.
-    shipped_default: str = Field("", alias="shippedDefault")
+    # fails startup, during the window or after removal. A boolean when settings
+    # parsed the variable as one, so every spelling of that value matches.
+    shipped_default: str | bool = Field("", alias="shippedDefault")
 
     @model_validator(mode="after")
     def _validate(self) -> "ObsoleteConfiguration":
@@ -529,6 +537,58 @@ _REJECTED_FOR_ONE_RELEASE = (
 _ARTIFACT_ALIAS_GUIDANCE = (
     "The alias is no longer read, so the artifact store would otherwise fall "
     "back to its default. Rename it in the deployment's .env."
+)
+
+_PUBLICATION_RECOVERY_COHORT_GUIDANCE = (
+    "Publication recovery has no shadow mode, canary cohort, or generation; "
+    "PUBLICATION_RECOVERY_ENABLED turns it on or off and "
+    "PUBLICATION_RECOVERY_ALLOWED_MODES limits destination modes."
+)
+_CONTROL_STOP_CONTINUATION_GUIDANCE = (
+    "Control-stop continuation was removed; it never had a production " "producer."
+)
+# Rollout controls a single-operator product does not have. Rejecting a kept
+# non-default value stops it from changing behavior silently: a shadow or
+# canary setting would otherwise turn into live publication. The previous
+# default selects what omitting the variable now selects.
+_RETIRED_ROLLOUT_CONTROLS: tuple[tuple[str, str | bool, str], ...] = (
+    *(
+        (f"PUBLICATION_RECOVERY_{name}", default, _PUBLICATION_RECOVERY_COHORT_GUIDANCE)
+        for name, default in (
+            ("SHADOW", False),
+            ("CANARY_REPOSITORIES", ""),
+            ("CANARY_OWNER_IDS", ""),
+            ("GENERATION", "default"),
+        )
+    ),
+    *(
+        (
+            f"CONTROL_STOP_CONTINUATION_{name}",
+            default,
+            _CONTROL_STOP_CONTINUATION_GUIDANCE,
+        )
+        for name, default in (
+            ("ENABLED", False),
+            ("SHADOW", False),
+            ("CANARY_OWNER_IDS", ""),
+            ("ALLOWED_PROVIDER_PROFILE_IDS", ""),
+            ("ALLOWED_EXECUTION_PROFILE_REFS", ""),
+            ("ALLOWED_LAUNCH_POLICY_REFS", ""),
+            ("GENERATION", "disabled"),
+        )
+    ),
+    (
+        "LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+        "off",
+        "The Live Logs session timeline was removed; Live Logs shows the line "
+        "viewer for every run.",
+    ),
+    (
+        "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+        True,
+        "Live Logs always loads structured history and falls back to the "
+        "merged log only when history is unavailable.",
+    ),
 )
 
 # Every obsolete configuration identity: the API and every worker warn about it
@@ -620,6 +680,18 @@ OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
             "No provider replaces them."
         ),
         shippedDefault="off",
+    ),
+    *(
+        ObsoleteConfiguration(
+            variable=f"{prefix}{variable}",
+            removalCondition=_REJECTED_FOR_ONE_RELEASE,
+            deprecated=True,
+            removed=True,
+            guidance=guidance,
+            shippedDefault=previous_default,
+        )
+        for variable, previous_default, guidance in _RETIRED_ROLLOUT_CONTROLS
+        for prefix in ("", "FEATURE_FLAGS__")
     ),
 )
 
@@ -850,6 +922,20 @@ def assert_inventory_is_complete(
         )
 
 
+_BOOLEAN = TypeAdapter(bool)
+
+
+def _selects_shipped_default(entry: ObsoleteConfiguration, value: str) -> bool:
+    if isinstance(entry.shipped_default, bool):
+        # Settings parsed the former variable as a boolean, so 0, off and no
+        # selected false just as false did.
+        try:
+            return _BOOLEAN.validate_python(value) is entry.shipped_default
+        except ValidationError:
+            return False
+    return value.casefold() == entry.shipped_default.casefold()
+
+
 def assert_obsolete_configuration(
     env: Mapping[str, str],
     *,
@@ -861,7 +947,8 @@ def assert_obsolete_configuration(
     operator warning naming its replacement. After removal the same variable is
     rejected outright instead of being silently ignored. A blank value or the
     shipped default is treated as omitted. Names and the shipped default match
-    case-insensitively, as settings read them.
+    case-insensitively, and a boolean default matches every spelling of it, as
+    settings read them.
     """
 
     if configuration is None:
@@ -874,9 +961,8 @@ def assert_obsolete_configuration(
     warnings: list[str] = []
     rejected: list[str] = []
     for entry in configuration:
-        default = entry.shipped_default.casefold()
         if all(
-            value.casefold() == default
+            _selects_shipped_default(entry, value)
             for value in supplied.get(entry.variable.upper(), ())
         ):
             continue

@@ -994,7 +994,7 @@ Current runtime env/config name:
 Default:
 - `true`
 
-A separate UI flag may be used if a staged rollout of the richer session-aware timeline is required.
+It is the only Live Logs switch: structured history always loads first, and the merged tail serves only when history is unavailable or empty.
 
 ---
 

@@ -4377,9 +4377,6 @@ async def test_main_async_workflow_fleet(
         persist_checkpoint_branch_turn_terminal,
         persist_checkpoint_branch_turn_terminal_rejection,
     )
-    from moonmind.workflows.temporal.workflows.control_stop_continuation import (
-        MoonMindControlStopContinuationWorkflow,
-    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import (
         MoonMindOAuthCredentialValidationWorkflow,
@@ -4413,7 +4410,6 @@ async def test_main_async_workflow_fleet(
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
         MoonMindContainerJobWorkflow,
-            MoonMindControlStopContinuationWorkflow,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,
         MoonMindManagedSessionReconcileWorkflow,

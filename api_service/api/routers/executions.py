@@ -130,10 +130,6 @@ from api_service.services.checkpoint_branch_turn_execution import (
     get_checkpoint_branch_artifact_service,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
-from api_service.services.control_stop_continuation import (
-    SqlControlStopContinuationRepository,
-    TemporalControlStopContinuationStarter,
-)
 from api_service.services.linked_continuation import (
     CONTINUATION_EVIDENCE_MAX_BYTES,
     RELATIONSHIP_TYPE_LINKED_CONTINUATION,
@@ -253,7 +249,6 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.security.workload_profiles import AdmittedAssessmentScope
-from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -267,11 +262,6 @@ from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_te
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
-from moonmind.workflows.executions.control_stop_continuation import (
-    ContinuationBudgetGrant,
-    ControlStopContinuationContract,
-    ControlStopContinuationError,
-)
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     WorkflowInputAttachmentRef,
@@ -379,7 +369,7 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
 )
 from moonmind.workflows.temporal.publication_recovery import (
     PublicationRecoveryContract,
-    PublicationRecoveryRolloutPolicy,
+    PublicationRecoveryPolicy,
     SavedWorkPublicationContract,
     SavedWorkPublicationDestination,
     publication_action_eligibility,
@@ -1097,7 +1087,6 @@ class PublicationRecoveryResponse(BaseModel):
     workflowId: str
     runId: str
     publicationIdempotencyKey: str
-    rolloutGeneration: str
 
 
 class SavedWorkPublicationRequest(BaseModel):
@@ -2637,14 +2626,6 @@ def _enum_value(value: object | None) -> str | None:
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
-
-
-def get_control_stop_continuation_starter(
-    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
-) -> TemporalControlStopContinuationStarter:
-    """Compose the production continuation starter from the shared Temporal adapter."""
-
-    return TemporalControlStopContinuationStarter(adapter)
 
 
 async def get_temporal_client(
@@ -7705,8 +7686,6 @@ def _build_action_capabilities(
         else None
     )
     control_stop = control_stop if isinstance(control_stop, Mapping) else {}
-    metrics = control_stop.get("metrics")
-    metrics = metrics if isinstance(metrics, Mapping) else {}
     auxiliary_outcomes = control_stop.get("auxiliaryOutcomes")
     auxiliary_outcomes = (
         auxiliary_outcomes if isinstance(auxiliary_outcomes, Mapping) else {}
@@ -7829,8 +7808,6 @@ def _build_action_capabilities(
     git_publication = auxiliary_outcomes.get("gitPublication")
     if raw_state == "failed":
         enabled = enabled | {"can_full_retry"}
-        if bool(metrics.get("remediationAdmitted")):
-            enabled = enabled | {"can_continue_remediation"}
         publication_contract = (
             git_publication.get("recoveryContract")
             if isinstance(git_publication, Mapping)
@@ -7846,21 +7823,19 @@ def _build_action_capabilities(
         ):
             enabled = enabled | {"can_retry_publication"}
     # Saved-work publication is independent of compute state; it reports the
-    # same submission gate and rollout admission its publication-only route
+    # same submission gate and policy admission its publication-only route
     # applies, so the result view never offers a publication that cannot start.
     try:
         publication_policy = _publication_recovery_policy()
     except ValueError:
-        # A malformed rollout setting disables publication, not the read.
+        # A malformed mode setting disables publication, not the read.
         publication_policy = None
     if not settings.temporal_dashboard.submit_enabled:
         saved_work_publication_reason = "temporal_submit_disabled"
     elif publication_policy is None:
         saved_work_publication_reason = "publication_recovery_policy_invalid"
     else:
-        saved_work_publication_reason = publication_policy.availability_reason(
-            owner_id=_owner_id(user)
-        )
+        saved_work_publication_reason = publication_policy.availability_reason()
     if saved_work_publication_reason is None:
         enabled = enabled | {"can_publish_saved_work"}
     historical = is_historical_workflow_type(workflow_type_value)
@@ -7876,7 +7851,6 @@ def _build_action_capabilities(
         "can_pause": "canPause",
         "can_resume": "canResume",
         "can_retry_from_step": "canRetryFromStep",
-        "can_continue_remediation": "canContinueRemediation",
         "can_retry_publication": "canRetryPublication",
         "can_publish_saved_work": "canPublishSavedWork",
         "can_full_retry": "canFullRetry",
@@ -7924,13 +7898,6 @@ def _build_action_capabilities(
         if field_name == "can_pause" and is_operator_paused:
             disabled_reasons[alias] = "already_paused"
             continue
-        if field_name == "can_continue_remediation" and raw_state == "failed":
-            disabled_reasons[alias] = (
-                "remediation_not_admitted"
-                if control_stop.get("kind") == "workflow_gate"
-                else "control_stop_not_available"
-            )
-            continue
         if field_name == "can_retry_publication" and raw_state == "failed":
             git_publication = auxiliary_outcomes.get("gitPublication")
             if not isinstance(git_publication, Mapping):
@@ -7949,38 +7916,14 @@ def _build_action_capabilities(
             disabled_reasons[alias] = saved_work_publication_reason
             continue
         disabled_reasons[alias] = "state_not_eligible"
-    common_control_stop_evidence = {
+    control_stop_evidence = {
         "candidateRef": control_stop.get("workspaceHeadRef"),
         "remainingWorkRef": control_stop.get("remainingWorkRef"),
     }
-    continuation_evidence = {
-        **common_control_stop_evidence,
-        **{
-            destination: control_stop[source]
-            for source, destination in (
-                ("controlStopId", "controlStopId"),
-                ("sourceBudget", "sourceBudget"),
-                ("continuationBudgetGrant", "continuationBudget"),
-                ("destinationWorkflowId", "destinationWorkflowId"),
-                ("restorationEvidenceRef", "restorationEvidenceRef"),
-                ("restorationEvidenceDigest", "restorationEvidenceDigest"),
-                ("hostSessionLifecycle", "hostSessionLifecycle"),
-            )
-            if source in control_stop
-        },
-    }
     action_evidence = {
         **{
-            action: (
-                continuation_evidence
-                if action == "continueRemediation"
-                else common_control_stop_evidence
-            )
-            for action in (
-                "editForRerun",
-                "fullRetry",
-                "continueRemediation",
-            )
+            action: control_stop_evidence
+            for action in ("editForRerun", "fullRetry")
             if control_stop
         },
         **(
@@ -8007,9 +7950,7 @@ def _build_action_capabilities(
         ),
     }
     if publication_policy is not None and "can_publish_saved_work" in enabled:
-        action_evidence["publishSavedWork"] = publication_policy.destination_limits(
-            owner_id=_owner_id(user)
-        )
+        action_evidence["publishSavedWork"] = publication_policy.destination_limits()
     if workflow_type_value == "MoonMind.PublicationRecoveryV1":
         action_evidence["publicationRecovery"] = {
             "sourceWorkflowId": memo.get("source_workflow_id"),
@@ -8030,7 +7971,6 @@ def _build_action_capabilities(
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
         can_retry_from_step="can_retry_from_step" in enabled,
-        can_continue_remediation="can_continue_remediation" in enabled,
         can_retry_publication="can_retry_publication" in enabled,
         can_publish_saved_work="can_publish_saved_work" in enabled,
         can_full_retry="can_full_retry" in enabled,
@@ -20554,151 +20494,6 @@ async def list_execution_continuations(
     return LinkedContinuationLinksResponseModel(direction=direction, items=items)
 
 
-class ContinueRemediationBudgetProposal(BaseModel):
-    """Operator-selected limits bounded by the server-owned grant."""
-
-    model_config = {"populate_by_name": True, "extra": "forbid"}
-
-    max_attempts: int = Field(alias="maxAttempts", ge=1)
-    max_consecutive_no_progress_attempts: int = Field(
-        alias="maxConsecutiveNoProgressAttempts", ge=1
-    )
-
-
-class ContinueRemediationRequest(BaseModel):
-    """Select the frozen control-stop evidence owned by the source execution."""
-
-    model_config = {"populate_by_name": True, "extra": "forbid"}
-
-    proposed_continuation_budget: ContinueRemediationBudgetProposal | None = Field(
-        None, alias="proposedContinuationBudget"
-    )
-    instruction_changes_ref: str | None = Field(
-        None, alias="instructionChangesRef", min_length=1
-    )
-    instruction_changes_digest: str | None = Field(
-        None, alias="instructionChangesDigest", min_length=1
-    )
-
-    @model_validator(mode="after")
-    def _paired_instruction_changes(self) -> "ContinueRemediationRequest":
-        if bool(self.instruction_changes_ref) != bool(
-            self.instruction_changes_digest
-        ):
-            raise ValueError(
-                "instruction changes require both a reference and digest"
-            )
-        return self
-
-
-class ContinueRemediationResponse(BaseModel):
-    """Stable linked destination returned for both first and duplicate submissions."""
-
-    model_config = {"populate_by_name": True}
-
-    source_workflow_id: str = Field(alias="sourceWorkflowId")
-    source_run_id: str = Field(alias="sourceRunId")
-    control_stop_id: str = Field(alias="controlStopId")
-    destination_workflow_id: str = Field(alias="destinationWorkflowId")
-    workspace_head_ref: str = Field(alias="workspaceHeadRef")
-    remaining_work_ref: str = Field(alias="remainingWorkRef")
-    created: bool
-
-
-@router.post(
-    "/{workflow_id}/actions/continue-remediation",
-    response_model=ContinueRemediationResponse,
-    response_model_exclude_none=True,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def continue_remediation(
-    workflow_id: str,
-    payload: ContinueRemediationRequest,
-    service: TemporalExecutionService = Depends(_get_service),
-    session: AsyncSession = Depends(get_async_session),
-    user: OperatorAdmission = Depends(get_instance_access),
-    starter: TemporalControlStopContinuationStarter = Depends(
-        get_control_stop_continuation_starter
-    ),
-    _actions_enabled: None = Depends(_ensure_actions_enabled),
-) -> ContinueRemediationResponse:
-    """Admit one deterministic continuation from authoritative frozen evidence."""
-
-    continuation_metrics = get_metrics_emitter()
-    continuation_metrics.increment(
-        "control_stop_continuation.admission_total",
-        tags={"outcome": "attempt"},
-    )
-    source = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
-    )
-    source_run_id = str(getattr(source, "run_id", "") or "").strip()
-    if not source_run_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "control_stop_source_run_missing",
-                "message": "The source execution has no authoritative run identity.",
-            },
-        )
-
-    try:
-        repository = SqlControlStopContinuationRepository(session)
-        control_stop_id, evidence = await repository.load_source_identity(
-            source_workflow_id=source.workflow_id,
-            source_run_id=source_run_id,
-        )
-        contract = ControlStopContinuationContract.model_validate(
-            dict(evidence.contract_payload)
-        )
-        selected_budget = contract.continuation_budget
-        if payload.proposed_continuation_budget is not None:
-            selected_budget = ContinuationBudgetGrant(
-                grantId=contract.continuation_budget.grant_id,
-                maxAttempts=payload.proposed_continuation_budget.max_attempts,
-                maxConsecutiveNoProgressAttempts=(
-                    payload.proposed_continuation_budget
-                    .max_consecutive_no_progress_attempts
-                ),
-            )
-        reservation = await admit_control_stop_continuation(
-            source_workflow_id=source.workflow_id,
-            source_run_id=source_run_id,
-            control_stop_id=control_stop_id,
-            continuation_budget=selected_budget,
-            instruction_changes_ref=payload.instruction_changes_ref,
-            instruction_changes_digest=payload.instruction_changes_digest,
-            repository=repository,
-            starter=starter,
-        )
-    except (ControlStopContinuationError, ValidationError) as exc:
-        continuation_metrics.increment(
-            "control_stop_continuation.admission_total",
-            tags={"outcome": "rejected"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "control_stop_continuation_rejected",
-                "message": str(exc),
-            },
-        ) from exc
-
-    continuation_metrics.increment(
-        "control_stop_continuation.admission_total",
-        tags={"outcome": "created" if reservation.created else "reconciled"},
-    )
-    return ContinueRemediationResponse(
-        sourceWorkflowId=reservation.source_workflow_id,
-        sourceRunId=reservation.source_run_id,
-        controlStopId=reservation.control_stop_id,
-        destinationWorkflowId=reservation.destination_workflow_id,
-        workspaceHeadRef=reservation.workspace_head_ref,
-        remainingWorkRef=reservation.remaining_work_ref,
-        created=reservation.created,
-    )
-
-
 @router.post(
     "/{workflow_id}/update",
     response_model=UpdateExecutionResponse,
@@ -21576,17 +21371,11 @@ def _csv_setting(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
-def _publication_recovery_policy() -> PublicationRecoveryRolloutPolicy:
+def _publication_recovery_policy() -> PublicationRecoveryPolicy:
     flags = settings.feature_flags
-    return PublicationRecoveryRolloutPolicy(
+    return PublicationRecoveryPolicy(
         enabled=flags.publication_recovery_enabled,
-        shadow=flags.publication_recovery_shadow,
-        canaryRepositories=_csv_setting(
-            flags.publication_recovery_canary_repositories
-        ),
-        canaryOwnerIds=_csv_setting(flags.publication_recovery_canary_owner_ids),
         allowedModes=_csv_setting(flags.publication_recovery_allowed_modes),
-        generation=flags.publication_recovery_generation,
     )
 
 
@@ -21998,18 +21787,15 @@ async def _start_saved_work_publication(
             "The destination is the review projection of a Lore repository; "
             "publish through its authoritative Lore owner.",
         )
-    policy = _publication_recovery_policy()
-    reason = policy.admission_reason(
-        repository=contract.destination.repository,
-        owner_id=_owner_id(user),
-        mode=contract.destination.objective,
+    reason = _publication_recovery_policy().admission_reason(
+        mode=contract.destination.objective
     )
     if reason is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "publication_retry_not_admitted",
-                "message": "Publication is not admitted by current rollout policy.",
+                "message": "Publication is not admitted by the publication policy.",
                 "reason": reason,
             },
         )
@@ -22029,7 +21815,6 @@ async def _start_saved_work_publication(
             "source_workflow_id": contract.source_workflow_id,
             "source_run_id": contract.source_run_id,
             "publication_idempotency_key": contract.publication_idempotency_key,
-            "publication_recovery_generation": policy.generation,
             "publication_semantic_context": "saved_work",
             "publication_recovery_phase": "contract_validation",
             "publication_no_implementation_rerun": True,
@@ -22044,7 +21829,6 @@ async def _start_saved_work_publication(
         workflowId=started.workflow_id,
         runId=started.run_id,
         publicationIdempotencyKey=contract.publication_idempotency_key,
-        rolloutGeneration=policy.generation,
     )
 
 
@@ -22100,18 +21884,13 @@ async def retry_execution_publication(
                 "reason": "publication_source_mismatch",
             },
         )
-    policy = _publication_recovery_policy()
-    reason = policy.admission_reason(
-        repository=contract.intent.repository,
-        owner_id=_owner_id(user),
-        mode=contract.intent.mode,
-    )
+    reason = _publication_recovery_policy().admission_reason(mode=contract.intent.mode)
     if reason is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "publication_retry_not_admitted",
-                "message": "Publication recovery is not admitted by current rollout policy.",
+                "message": "Publication recovery is not admitted by the publication policy.",
                 "reason": reason,
             },
         )
@@ -22146,7 +21925,6 @@ async def retry_execution_publication(
             "publication_idempotency_key": (
                 contract.continuation.publication_idempotency_key
             ),
-            "publication_recovery_generation": policy.generation,
             "publication_semantic_context": contract.target.semantic_context,
             "publication_recovery_phase": "contract_validation",
             "publication_no_implementation_rerun": True,
@@ -22161,7 +21939,6 @@ async def retry_execution_publication(
         publicationIdempotencyKey=(
             contract.continuation.publication_idempotency_key
         ),
-        rolloutGeneration=policy.generation,
     )
 
 

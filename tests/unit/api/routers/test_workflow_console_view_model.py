@@ -1271,71 +1271,24 @@ def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> Non
     config = dashboard_view_model.build_runtime_config("/workflows")
     assert config["features"]["logStreamingEnabled"] is False
 
-def test_build_runtime_config_session_timeline_rollout_defaults_off(monkeypatch) -> None:
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_session_timeline_rollout",
-        "off",
-    )
+def test_build_live_logs_feature_config_has_no_timeline_or_history_switches(
+    monkeypatch,
+) -> None:
+    """#5340: structured history always loads and the session timeline was
+    removed, so log streaming is the only Live Logs switch."""
 
-    config = dashboard_view_model.build_runtime_config("/workflows")
-
-    assert config["features"]["liveLogsSessionTimelineEnabled"] is False
-    assert config["features"]["liveLogsSessionTimelineRollout"] == "off"
-
-def test_build_runtime_config_session_timeline_rollout_is_exposed(monkeypatch) -> None:
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_session_timeline_rollout",
-        "codex_managed",
-    )
-
-    config = dashboard_view_model.build_runtime_config("/workflows")
-
-    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
-    assert config["features"]["liveLogsSessionTimelineRollout"] == "codex_managed"
-
-def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_session_timeline_rollout",
-        "internal",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_structured_history_enabled",
-        False,
-    )
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["features"]["logStreamingEnabled"] is True
-    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
-    assert config["features"]["liveLogsSessionTimelineRollout"] == "internal"
-    assert config["features"]["liveLogsStructuredHistoryEnabled"] is False
-
-def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch) -> None:
-    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_session_timeline_rollout",
-        "all_managed",
-    )
-    monkeypatch.setattr(
-        settings.feature_flags,
-        "live_logs_structured_history_enabled",
-        True,
-    )
-
-    feature_config = dashboard_view_model.build_live_logs_feature_config()
-
-    assert feature_config == {
+    assert dashboard_view_model.build_live_logs_feature_config() == {
         "logStreamingEnabled": True,
-        "liveLogsSessionTimelineEnabled": True,
-        "liveLogsSessionTimelineRollout": "all_managed",
-        "liveLogsStructuredHistoryEnabled": True,
     }
+    assert not {
+        "liveLogsSessionTimelineEnabled",
+        "liveLogsSessionTimelineRollout",
+        "liveLogsStructuredHistoryEnabled",
+    } & set(config["features"])
 
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
     config = dashboard_view_model.build_runtime_config("/workflows")

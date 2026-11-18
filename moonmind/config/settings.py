@@ -1576,26 +1576,9 @@ class FeatureFlagsSettings(BaseSettings):
             "FEATURE_FLAGS__PUBLICATION_RECOVERY_ENABLED",
             "PUBLICATION_RECOVERY_ENABLED",
         ),
-    )
-    publication_recovery_shadow: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__PUBLICATION_RECOVERY_SHADOW",
-            "PUBLICATION_RECOVERY_SHADOW",
-        ),
-    )
-    publication_recovery_canary_repositories: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
-            "PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
-        ),
-    )
-    publication_recovery_canary_owner_ids: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
-            "PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
+        description=(
+            "Admit publication-only recovery and saved-work publication. On by "
+            "default; false turns both off."
         ),
     )
     publication_recovery_allowed_modes: str = Field(
@@ -1604,61 +1587,10 @@ class FeatureFlagsSettings(BaseSettings):
             "FEATURE_FLAGS__PUBLICATION_RECOVERY_ALLOWED_MODES",
             "PUBLICATION_RECOVERY_ALLOWED_MODES",
         ),
-    )
-    publication_recovery_generation: str = Field(
-        "default",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__PUBLICATION_RECOVERY_GENERATION",
-            "PUBLICATION_RECOVERY_GENERATION",
-        ),
-    )
-    control_stop_continuation_enabled: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ENABLED",
-            "CONTROL_STOP_CONTINUATION_ENABLED",
-        ),
-    )
-    control_stop_continuation_shadow: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_SHADOW",
-            "CONTROL_STOP_CONTINUATION_SHADOW",
-        ),
-    )
-    control_stop_continuation_canary_owner_ids: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
-            "CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
-        ),
-    )
-    control_stop_continuation_allowed_provider_profile_ids: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
-            "CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
-        ),
-    )
-    control_stop_continuation_allowed_execution_profile_refs: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
-            "CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
-        ),
-    )
-    control_stop_continuation_allowed_launch_policy_refs: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
-            "CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
-        ),
-    )
-    control_stop_continuation_generation: str = Field(
-        "disabled",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION",
-            "CONTROL_STOP_CONTINUATION_GENERATION",
+        description=(
+            "Comma-separated destination modes publication recovery may use "
+            "(pr, draft_pr, branch). A deployment policy, for example "
+            "pr,draft_pr to forbid direct branch pushes; defaults to all."
         ),
     )
     omnigent_session_supervisor_rollback_mode: str = Field(
@@ -1666,33 +1598,6 @@ class FeatureFlagsSettings(BaseSettings):
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
             "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
-        ),
-    )
-    live_logs_session_timeline_rollout: Literal[
-        "off",
-        "internal",
-        "codex_managed",
-        "all_managed",
-    ] = Field(
-        "off",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
-            "LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
-        ),
-        description=(
-            "Rollout scope for the session-aware Live Logs timeline contract. "
-            "Allowed values: off, internal, codex_managed, all_managed."
-        ),
-    )
-    live_logs_structured_history_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
-            "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
-        ),
-        description=(
-            "Enable structured historical Live Logs loading through "
-            "/observability/events. Disable to force merged-tail rollback."
         ),
     )
     preset_catalog: bool = Field(
@@ -1722,12 +1627,6 @@ class FeatureFlagsSettings(BaseSettings):
         return bool(
             self.preset_catalog and not self.disable_preset_catalog
         )
-
-    @property
-    def live_logs_session_timeline_enabled(self) -> bool:
-        """Return whether the session-aware timeline contract is enabled."""
-
-        return self.live_logs_session_timeline_rollout != "off"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,

@@ -282,6 +282,36 @@ async def test_open_legacy_queue_workflow_and_unrecorded_holders_gate_the_drain(
 
 
 @pytest.mark.asyncio
+async def test_open_control_stop_continuation_gates_the_drain(monkeypatch):
+    # #5340 retired MoonMind.ControlStopContinuation; the release registers no
+    # worker for it, so an execution still open must keep the drain active.
+    client = _Client(
+        [
+            _Execution(
+                "control-stop-1",
+                "MoonMind.ControlStopContinuation",
+                "mm.workflow.operator",
+            )
+        ]
+    )
+    report, _ = await _report(
+        monkeypatch, _state(plans={}, holders={}, executions=[]), client
+    )
+
+    assert report["deletable"] is False
+    assert report["states"]["active"] == 1
+    assert report["items"]["control_stop_continuation_workflows"] == [
+        {
+            "id": "control-stop-1",
+            "state": "active",
+            "workflowType": "MoonMind.ControlStopContinuation",
+            "taskQueue": "mm.workflow.operator",
+            "parentWorkflowId": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_unreachable_sources_report_unknown_never_clean(monkeypatch):
     report, _ = await _report(
         monkeypatch,

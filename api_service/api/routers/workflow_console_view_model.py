@@ -1479,15 +1479,6 @@ def build_live_logs_feature_config() -> dict[str, object]:
 
     return {
         "logStreamingEnabled": bool(WorkflowSettings(_env_file=None).log_streaming_enabled),
-        "liveLogsSessionTimelineEnabled": bool(
-            settings.feature_flags.live_logs_session_timeline_enabled
-        ),
-        "liveLogsSessionTimelineRollout": str(
-            settings.feature_flags.live_logs_session_timeline_rollout
-        ),
-        "liveLogsStructuredHistoryEnabled": bool(
-            settings.feature_flags.live_logs_structured_history_enabled
-        ),
     }
 
 def _build_dashboard_system_metadata() -> dict[str, str | None]:

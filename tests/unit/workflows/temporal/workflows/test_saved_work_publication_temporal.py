@@ -501,6 +501,9 @@ async def test_recorded_v1_admission_recovers_protected_inputs_without_operator_
             "source_run_id": parsed.source_run_id,
             "publication_idempotency_key": parsed.publication_idempotency_key,
             "saved_work_digest": parsed.saved_work_digest,
+            # Admissions before #5340 also recorded the retired rollout
+            # generation; an in-flight run carrying it still completes.
+            "publication_recovery_generation": "default",
         }
         if production_proxy:
             from sqlalchemy.ext.asyncio import async_sessionmaker

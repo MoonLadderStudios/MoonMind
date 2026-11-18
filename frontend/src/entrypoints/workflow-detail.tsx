@@ -122,17 +122,12 @@ type DashboardConfig = {
       workspaceShellEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
-    liveLogsSessionTimelineEnabled?: boolean;
-    liveLogsSessionTimelineRollout?: string;
-    liveLogsStructuredHistoryEnabled?: boolean;
   };
   sources?: {
     temporal?: Record<string, string>;
     agentRuns?: Record<string, string>;
   };
 };
-
-type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
@@ -161,55 +156,9 @@ function useWorkflowWorkspaceDesktop(): boolean {
   return isDesktop;
 }
 
-function normalizeLiveLogsSessionTimelineRollout(
-  value: string | null | undefined,
-): LiveLogsSessionTimelineRollout | null {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (
-    normalized === 'off'
-    || normalized === 'internal'
-    || normalized === 'codex_managed'
-    || normalized === 'all_managed'
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
 function isCodexManagedRuntime(runtimeId: string | null | undefined): boolean {
   const normalized = String(runtimeId || '').trim().toLowerCase();
   return normalized === 'codex' || normalized === 'codex_cli';
-}
-
-function shouldEnableSessionTimelineViewer({
-  config,
-  targetRuntime,
-  agentRunId,
-}: {
-  config: DashboardConfig | undefined;
-  targetRuntime: string | null | undefined;
-  agentRunId: string | null | undefined;
-}): boolean {
-  const rollout = normalizeLiveLogsSessionTimelineRollout(
-    config?.features?.liveLogsSessionTimelineRollout,
-  );
-  if (rollout === 'off') {
-    return false;
-  }
-  if (rollout === 'internal') {
-    return true;
-  }
-  if (rollout === 'codex_managed') {
-    return isCodexManagedRuntime(targetRuntime);
-  }
-  if (rollout === 'all_managed') {
-    return Boolean(String(agentRunId || '').trim());
-  }
-  return config?.features?.liveLogsSessionTimelineEnabled === true;
-}
-
-function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolean {
-  return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
 type SegmentedNavItem<T extends string> = {
@@ -3412,8 +3361,6 @@ function optimisticMessagesToChatSeeds(
   }));
 }
 
-const NO_CHAT_BLOCKS: ProjectedChatBlock[] = [];
-
 export function reduceTimelineRowsToChatBlocks(
   rows: TimelineRow[],
   agentRunId = '',
@@ -4692,16 +4639,12 @@ function StepWorkloadDetails({
 function StepObservabilityGroup({
   apiBase,
   logStreamingEnabled,
-  sessionTimelineEnabled,
-  structuredHistoryEnabled,
   row,
   workflowId,
   routes,
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
-  sessionTimelineEnabled: boolean;
-  structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   workflowId: string;
   routes: AgentRunRouteTemplates;
@@ -4782,8 +4725,6 @@ function StepObservabilityGroup({
         autoExpand
         disclosure={false}
         routes={routes}
-        sessionTimelineEnabled={sessionTimelineEnabled}
-        structuredHistoryEnabled={structuredHistoryEnabled}
       />
       <StaticLogPanel
         apiBase={apiBase}
@@ -5852,8 +5793,6 @@ function StepExecutionHistory({
 function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
-  sessionTimelineEnabled,
-  structuredHistoryEnabled,
   row,
   workflowId,
   runId,
@@ -5868,8 +5807,6 @@ function StepLedgerRowCard({
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
-  sessionTimelineEnabled: boolean;
-  structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   workflowId: string;
   runId: string;
@@ -5964,8 +5901,6 @@ function StepLedgerRowCard({
               <StepObservabilityGroup
                 apiBase={apiBase}
                 logStreamingEnabled={logStreamingEnabled}
-                sessionTimelineEnabled={sessionTimelineEnabled}
-                structuredHistoryEnabled={structuredHistoryEnabled}
                 row={row}
                 workflowId={workflowId}
                 routes={routes}
@@ -6003,9 +5938,6 @@ function LiveLogsPanel({
   autoExpand = false,
   disclosure = true,
   routes,
-  sessionTimelineEnabled,
-  structuredHistoryEnabled,
-  optimisticMessages = [],
 }: {
   apiBase: string;
   agentRunId: string;
@@ -6016,9 +5948,6 @@ function LiveLogsPanel({
   // existing heading, e.g. the step's "Logs & Diagnostics" section).
   disclosure?: boolean;
   routes: AgentRunRouteTemplates;
-  sessionTimelineEnabled: boolean;
-  structuredHistoryEnabled: boolean;
-  optimisticMessages?: OptimisticChatSessionMessage[];
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -6032,17 +5961,6 @@ function LiveLogsPanel({
   const esRef = useRef<EventSource | null>(null);
   const isTerminalRef = useRef(isTerminal);
   const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
-  const [rawTimelineExpanded, setRawTimelineExpanded] = useState(false);
-  // Only the session timeline renders chat blocks; the default line viewer
-  // skips re-projecting the whole log on every streamed event.
-  const chatBlocks = useMemo(
-    () => (
-      sessionTimelineEnabled
-        ? reduceTimelineRowsToChatBlocks(logContent, agentRunId, optimisticMessages)
-        : NO_CHAT_BLOCKS
-    ),
-    [agentRunId, logContent, optimisticMessages, sessionTimelineEnabled],
-  );
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -6054,7 +5972,6 @@ function LiveLogsPanel({
     setLogContent([]);
     lastSeqRef.current = null;
     setViewerState('starting');
-    setRawTimelineExpanded(false);
   }, [agentRunId]);
 
   useEffect(() => {
@@ -6076,13 +5993,13 @@ function LiveLogsPanel({
   const historyQuery = useQuery({
     queryKey: ['agent-run-observability-events', agentRunId],
     queryFn: () => fetchObservabilityEvents(apiBase, agentRunId, routes.observabilityEvents),
-    enabled: structuredHistoryEnabled && !!agentRunId && expanded && summaryQuery.isSuccess,
+    enabled: !!agentRunId && expanded && summaryQuery.isSuccess,
     staleTime: Infinity,
     retry: false,
   });
   const historyRows = useMemo(() => mapEventsToTimelineRows(historyQuery.data), [historyQuery.data]);
-  const historyUnavailable = !structuredHistoryEnabled || historyQuery.isError || historyQuery.data === null;
-  const historyEmpty = structuredHistoryEnabled && historyQuery.isSuccess && historyRows.length === 0;
+  const historyUnavailable = historyQuery.isError || historyQuery.data === null;
+  const historyEmpty = historyQuery.isSuccess && historyRows.length === 0;
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
@@ -6092,7 +6009,7 @@ function LiveLogsPanel({
       !!agentRunId &&
       expanded &&
       summaryQuery.isSuccess &&
-      (!structuredHistoryEnabled || historyUnavailable || historyEmpty),
+      (historyUnavailable || historyEmpty),
     staleTime: Infinity,
     retry: false,
   });
@@ -6103,11 +6020,11 @@ function LiveLogsPanel({
       setViewerState('starting');
       return;
     }
-    if ((structuredHistoryEnabled && historyQuery.isError && tailQuery.isError) || (!structuredHistoryEnabled && tailQuery.isError)) {
+    if (historyQuery.isError && tailQuery.isError) {
       setViewerState('error');
     } else if (
       summaryQuery.isSuccess &&
-      ((structuredHistoryEnabled && historyQuery.isSuccess) || tailQuery.isSuccess)
+      (historyQuery.isSuccess || tailQuery.isSuccess)
     ) {
       const summary = summaryQuery.data;
       const runIsTerminal =
@@ -6126,7 +6043,6 @@ function LiveLogsPanel({
     }
   }, [
     expanded,
-    structuredHistoryEnabled,
     historyQuery.data,
     historyQuery.isError,
     historyQuery.isSuccess,
@@ -6145,9 +6061,6 @@ function LiveLogsPanel({
 
   // Sync structured history into the local timeline when history fetch completes.
   useEffect(() => {
-    if (!structuredHistoryEnabled) {
-      return;
-    }
     if (historyQuery.isSuccess) {
       const sequences = historyQuery.data?.events
         .map((event) => event.sequence)
@@ -6167,21 +6080,21 @@ function LiveLogsPanel({
         }
       }
     }
-  }, [historyQuery.data, historyQuery.isSuccess, historyRows, structuredHistoryEnabled]);
+  }, [historyQuery.data, historyQuery.isSuccess, historyRows]);
 
   // Sync legacy merged-text fallback only when structured history is unavailable.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data && (!structuredHistoryEnabled || historyUnavailable || historyEmpty)) {
+    if (tailQuery.isSuccess && tailQuery.data && (historyUnavailable || historyEmpty)) {
       if (lastSeqRef.current === null) {
         setLogContent(parseArtifactToRows(tailQuery.data));
       }
     }
-  }, [historyEmpty, historyUnavailable, structuredHistoryEnabled, tailQuery.data, tailQuery.isSuccess]);
+  }, [historyEmpty, historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
     if (!agentRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
-    if ((structuredHistoryEnabled && !historyQuery.isSuccess && !tailQuery.isSuccess) || (!structuredHistoryEnabled && !tailQuery.isSuccess)) return;
+    if (!historyQuery.isSuccess && !tailQuery.isSuccess) return;
 
     const summary = summaryQuery.data;
     const runIsTerminal =
@@ -6304,7 +6217,6 @@ function LiveLogsPanel({
         ['Live', liveStatusValue],
       ].filter(([, value]) => value) as Array<[string, string]>
     : [];
-  const showRawTimeline = rawTimelineExpanded || (sessionTimelineEnabled && logContent.length > 0 && chatBlocks.length === 0);
 
   const panelBody = (
     <div className="stack live-logs-panel">
@@ -6322,11 +6234,6 @@ function LiveLogsPanel({
       <p className="small">
         Workflow run <code className="text-xs">{agentRunId}</code> — {statusLabel}
       </p>
-      {sessionTimelineEnabled ? (
-        <p className="small">
-          Timeline shows what happened. Continuity artifacts remain the durable drill-down evidence.
-        </p>
-      ) : null}
       {sessionBadges.length > 0 ? (
         <div className="live-logs-session-badges">
           {sessionBadges.map(([label, value]) => (
@@ -6339,27 +6246,6 @@ function LiveLogsPanel({
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
         {logContent.length === 0 ? (
           <div className="live-logs-empty">{emptyLabel}</div>
-        ) : sessionTimelineEnabled ? (
-          <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
-            <details
-              className="raw-timeline-escape-hatch"
-              open={showRawTimeline}
-              onToggle={(event) => setRawTimelineExpanded(event.currentTarget.open)}
-            >
-              <summary>Raw Timeline</summary>
-              {showRawTimeline ? (
-                <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
-                  <Virtuoso
-                    style={{ height: 400 }}
-                    data={logContent}
-                    computeItemKey={(_, row) => row.id}
-                    itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
-                  />
-                </div>
-              ) : null}
-            </details>
-          </div>
         ) : (
           <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
             <Virtuoso
@@ -8938,8 +8824,6 @@ function WorkflowChatDiagnostics({
   showAgentRunAttachNotice,
   isTerminal,
   routes,
-  sessionTimelineEnabled,
-  structuredHistoryEnabled,
 }: {
   apiBase: string;
   execution: z.infer<typeof ExecutionDetailSchema>;
@@ -8952,8 +8836,6 @@ function WorkflowChatDiagnostics({
   showAgentRunAttachNotice: boolean;
   isTerminal: boolean;
   routes: AgentRunRouteTemplates;
-  sessionTimelineEnabled: boolean;
-  structuredHistoryEnabled: boolean;
 }) {
   const bridgeResolutionQuery = useQuery({
     queryKey: ['omnigent-bridge-session-projection', workflowId, idempotencyKey],
@@ -9004,8 +8886,6 @@ function WorkflowChatDiagnostics({
               autoExpand
               disclosure={false}
               routes={routes}
-              sessionTimelineEnabled={sessionTimelineEnabled}
-              structuredHistoryEnabled={structuredHistoryEnabled}
             />
           </>
         ) : resolvedBridgeSessionId ? (
@@ -9044,7 +8924,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   );
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
-  const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
   const currentPathname = window.location.pathname;
   const currentSearch = window.location.search;
   const taskId = decodeWorkflowIdFromPath(currentPathname);
@@ -9073,11 +8952,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [selectedRetryStepId, setSelectedRetryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
-  const [continuationMaxAttempts, setContinuationMaxAttempts] = useState(1);
-  const [
-    continuationMaxConsecutiveNoProgressAttempts,
-    setContinuationMaxConsecutiveNoProgressAttempts,
-  ] = useState(1);
   const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
 
   const detailQuery = useQuery(
@@ -9109,11 +8983,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     '';
   const executionIdempotencyKey = execution?.idempotencyKey || execution?.idempotency_key || '';
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
-  const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
-    config: cfg,
-    targetRuntime: execution?.targetRuntime,
-    agentRunId: resolvedAgentRunId,
-  });
   const agentRunTrackingInitializedRef = useRef(false);
   const previousAgentRunIdRef = useRef(resolvedAgentRunId);
   const [showAgentRunAttachNotice, setShowAgentRunAttachNotice] = useState(false);
@@ -9217,21 +9086,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     staleTime: evidenceStaleTime,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
-  const continueRemediationEvidence =
-    execution?.actions?.actionEvidence?.continueRemediation;
-  const authorizedContinuationBudget =
-    continueRemediationEvidence?.continuationBudget;
-  useEffect(() => {
-    if (!authorizedContinuationBudget) return;
-    setContinuationMaxAttempts(authorizedContinuationBudget.maxAttempts);
-    setContinuationMaxConsecutiveNoProgressAttempts(
-      authorizedContinuationBudget.maxConsecutiveNoProgressAttempts,
-    );
-  }, [
-    authorizedContinuationBudget?.grantId,
-    authorizedContinuationBudget?.maxAttempts,
-    authorizedContinuationBudget?.maxConsecutiveNoProgressAttempts,
-  ]);
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
   const retryOptions = useMemo(
     () => retryStepOptions(stepsQuery.data?.steps || [], execution?.retryFromStep?.failedStepId),
@@ -9507,44 +9361,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Publication-only recovery started.');
-      invalidate();
-    },
-    onError: (error: Error) => setActionError(error.message),
-  });
-
-  const continueRemediationMutation = useMutation({
-    mutationFn: async () => {
-      if (!authorizedContinuationBudget?.grantId) {
-        throw new Error(
-          'Continue remediation requires an authorized continuation budget.',
-        );
-      }
-      const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            proposedContinuationBudget: {
-              maxAttempts: continuationMaxAttempts,
-              maxConsecutiveNoProgressAttempts:
-                continuationMaxConsecutiveNoProgressAttempts,
-            },
-          }),
-        },
-      );
-      if (!response.ok) {
-        throw await responseError(response);
-      }
-      return response.json();
-    },
-    onSuccess: (result: { destinationWorkflowId?: string }) => {
-      setActionNotice(
-        result.destinationWorkflowId
-          ? `Continuation started: ${result.destinationWorkflowId}`
-          : 'Continuation started.',
-      );
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -9911,7 +9727,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     signalMutation.isPending ||
     cancelMutation.isPending ||
     retryFromStepMutation.isPending ||
-    continueRemediationMutation.isPending ||
     retryPublicationMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
@@ -10018,10 +9833,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       onRetryPublication: () => {
         setActionError(null);
         retryPublicationMutation.mutate();
-      },
-      onContinueRemediation: () => {
-        setActionError(null);
-        continueRemediationMutation.mutate();
       },
       onPause,
       onResume,
@@ -10154,8 +9965,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       showAgentRunAttachNotice={showAgentRunAttachNotice}
       isTerminal={isTerminalExecution}
       routes={agentRunRoutes}
-      sessionTimelineEnabled={sessionTimelineEnabled}
-      structuredHistoryEnabled={structuredHistoryEnabled}
     />
   ) : null;
   const pageTitle = execution?.title?.trim() || 'Workflow';
@@ -10644,110 +10453,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     <Fact label="Authoritative remaining work">
                       <code className="text-xs break-all">{runSummary.controlStop.remainingWorkRef || '—'}</code>
                     </Fact>
-                    {continueRemediationEvidence?.sourceBudget ? (
-                      <Fact label="Exhausted source budget">
-                        {continueRemediationEvidence.sourceBudget.consumedAttempts}
-                        {' / '}
-                        {continueRemediationEvidence.sourceBudget.maxAttempts}
-                        {' · '}
-                        {formatStatusLabel(
-                          continueRemediationEvidence.sourceBudget.exhaustedDimension,
-                        )}
-                      </Fact>
-                    ) : null}
-                    {authorizedContinuationBudget ? (
-                      <Fact label="Authorized continuation grant">
-                        {authorizedContinuationBudget.maxAttempts} attempts
-                        {' · '}
-                        {authorizedContinuationBudget.maxConsecutiveNoProgressAttempts}
-                        {' consecutive no-progress'}
-                      </Fact>
-                    ) : null}
-                    {continueRemediationEvidence?.destinationWorkflowId ? (
-                      <Fact label="Linked continuation">
-                        <a
-                          href={`/workflows/${encodeURIComponent(
-                            continueRemediationEvidence.destinationWorkflowId,
-                          )}/details?source=temporal`}
-                        >
-                          <code className="text-xs break-all">
-                            {continueRemediationEvidence.destinationWorkflowId}
-                          </code>
-                        </a>
-                      </Fact>
-                    ) : null}
-                    {continueRemediationEvidence?.restorationEvidenceRef ? (
-                      <Fact label="Restoration provenance">
-                        <code className="text-xs break-all">
-                          {continueRemediationEvidence.restorationEvidenceRef}
-                        </code>
-                      </Fact>
-                    ) : null}
                   </FlatFactGrid>
-                  {authorizedContinuationBudget ? (
-                    <fieldset className="stack td-continuation-budget">
-                      <legend>Proposed continuation budget</legend>
-                      <label>
-                        Maximum attempts
-                        <input
-                          aria-label="Continuation maximum attempts"
-                          type="number"
-                          min={1}
-                          max={authorizedContinuationBudget.maxAttempts}
-                          value={continuationMaxAttempts}
-                          onChange={(event) =>
-                            setContinuationMaxAttempts(
-                              Math.max(
-                                1,
-                                Math.min(
-                                  authorizedContinuationBudget.maxAttempts,
-                                  Number(event.target.value) || 1,
-                                ),
-                              ),
-                            )}
-                        />
-                      </label>
-                      <label>
-                        Consecutive no-progress attempts
-                        <input
-                          aria-label="Continuation consecutive no-progress attempts"
-                          type="number"
-                          min={1}
-                          max={
-                            authorizedContinuationBudget
-                              .maxConsecutiveNoProgressAttempts
-                          }
-                          value={continuationMaxConsecutiveNoProgressAttempts}
-                          onChange={(event) =>
-                            setContinuationMaxConsecutiveNoProgressAttempts(
-                              Math.max(
-                                1,
-                                Math.min(
-                                  authorizedContinuationBudget
-                                    .maxConsecutiveNoProgressAttempts,
-                                  Number(event.target.value) || 1,
-                                ),
-                              ),
-                            )}
-                        />
-                      </label>
-                    </fieldset>
-                  ) : null}
-                  {continueRemediationEvidence?.hostSessionLifecycle ? (
-                    <details>
-                      <summary>Host/session lifecycle evidence</summary>
-                      <pre className="text-xs break-all">
-                        {JSON.stringify(
-                          continueRemediationEvidence.hostSessionLifecycle,
-                          null,
-                          2,
-                        )}
-                      </pre>
-                    </details>
-                  ) : null}
                   <p className="small">
-                    Edit for rerun and Full retry reuse the original task input. Continue remediation,
-                    when admitted, consumes the preserved candidate and remaining-work evidence.
+                    Edit for rerun and Full retry reuse the original task input.
                     Publication retry only retries the publication handoff; it does not accept the work.
                   </p>
                 </div>
@@ -10938,8 +10646,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                         key={row.logicalStepId}
                         apiBase={payload.apiBase}
                         logStreamingEnabled={logStreamingEnabled}
-                        sessionTimelineEnabled={sessionTimelineEnabled}
-                        structuredHistoryEnabled={structuredHistoryEnabled}
                         row={row}
                         workflowId={workflowId}
                         runId={latestRunId}
@@ -11263,8 +10969,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       isTerminal={isTerminalExecution}
                       autoExpand={showAgentRunAttachNotice}
                       routes={agentRunRoutes}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
                     />
                     <StaticLogPanel
                       apiBase={payload.apiBase}

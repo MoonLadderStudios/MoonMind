@@ -172,8 +172,8 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-// The default rollout gate leaves saved-work publication off; the server's
-// action projection says so with its reason.
+// A deployment that turns publication recovery off leaves saved-work
+// publication off; the server's action projection says so with its reason.
 const publicationDisabledExecution = {
   ...execution,
   actions: {
@@ -232,7 +232,6 @@ beforeEach(() => {
             workflowId: 'mm:saved-publication:7f3a',
             runId: 'publication-run',
             publicationIdempotencyKey: 'saved-publication:7f3a',
-            rolloutGeneration: 'g1',
           },
           201,
         );
@@ -449,7 +448,7 @@ describe('saved results after the source host is gone', () => {
     await within(region).findByText('Saved work', {}, { timeout: 10_000 });
 
     expect(within(region).getByRole('note').textContent).toMatch(
-      /Publish saved work is unavailable: .*publication rollout policy/,
+      /Publish saved work is unavailable: .*publication policy/,
     );
     const unit = rowFor(region, 'Saved work');
     const publish = within(unit).getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;

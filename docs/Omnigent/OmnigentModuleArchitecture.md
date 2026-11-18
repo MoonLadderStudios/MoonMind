@@ -458,8 +458,12 @@ The generic host-image aliases and `OMNIGENT_OPENCODE_HOST_IMAGE_REF` are in
 their deprecation window and still honored; the Pi alias is not deprecated.
 Names nothing reads any more (`MINIO_ENDPOINT`, `MINIO_BUCKET`,
 `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TEMPORAL_ARTIFACTS_ROOT`, the user
-Workflow cutover paths and `MEMORY_LONG_TERM`) fail startup for one release,
-since ignoring a credential alias would silently fall back to a default.
+Workflow cutover paths, `MEMORY_LONG_TERM`, and the retired rollout controls
+for publication recovery, control-stop continuation and Live Logs) fail startup
+for one release, since ignoring a credential alias would silently fall back to a
+default and a kept shadow or canary setting would silently go live. Each
+retired control's previous default still counts as omitted, in any spelling
+settings parsed as that boolean (`0`, `off` and `no` for false).
 
 ## 6. Adding an approved harness
 
