@@ -319,8 +319,6 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices(
             "WORKFLOW_ARTIFACT_ROOT",
             "WORKFLOW_ARTIFACTS_ROOT",
-            "WORKFLOW_ARTIFACT_ROOT",
-            "WORKFLOW_ARTIFACTS_ROOT",
         ),
         description="Filesystem location where Spec workflow artifacts are persisted.",
     )
@@ -567,7 +565,6 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
-            "WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
         description="Fallback publish mode applied when queued workflow payloads omit publish.mode.",
         json_schema_extra={
@@ -593,15 +590,11 @@ class WorkflowSettings(BaseSettings):
     )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
-        validation_alias=AliasChoices(
-            "WORKFLOW_GITHUB_REPOSITORY",
-            "WORKFLOW_GITHUB_REPOSITORY",
-        ),
+        validation_alias=AliasChoices("WORKFLOW_GITHUB_REPOSITORY"),
     )
     git_user_name: Optional[str] = Field(
         None,
         validation_alias=AliasChoices(
-            "WORKFLOW_GIT_USER_NAME",
             "WORKFLOW_GIT_USER_NAME",
             "MOONMIND_GIT_USER_NAME",
         ),
@@ -611,18 +604,17 @@ class WorkflowSettings(BaseSettings):
         None,
         validation_alias=AliasChoices(
             "WORKFLOW_GIT_USER_EMAIL",
-            "WORKFLOW_GIT_USER_EMAIL",
             "MOONMIND_GIT_USER_EMAIL",
         ),
         description="Optional Git author/committer email used by worker publish stages.",
     )
     github_token: Optional[str] = Field(
         None,
-        validation_alias=AliasChoices("WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"),
+        validation_alias=AliasChoices("WORKFLOW_GITHUB_TOKEN"),
     )
     test_mode: bool = Field(
         False,
-        validation_alias=AliasChoices("WORKFLOW_TEST_MODE", "WORKFLOW_TEST_MODE"),
+        validation_alias=AliasChoices("WORKFLOW_TEST_MODE"),
     )
     agent_backend: str = Field(
         "codex_cli",
@@ -643,7 +635,6 @@ class WorkflowSettings(BaseSettings):
         "auto",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_SKILL",
-            "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
         description="Default skill identifier for run-scoped skill resolution.",
@@ -651,7 +642,6 @@ class WorkflowSettings(BaseSettings):
     skill_policy_mode: str = Field(
         "permissive",
         validation_alias=AliasChoices(
-            "WORKFLOW_SKILL_POLICY_MODE",
             "WORKFLOW_SKILL_POLICY_MODE",
             "MOONMIND_SKILL_POLICY_MODE",
             "SKILL_POLICY_MODE",
@@ -677,7 +667,6 @@ class WorkflowSettings(BaseSettings):
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
         ("auto",),
         validation_alias=AliasChoices(
-            "WORKFLOW_ALLOWED_SKILLS",
             "WORKFLOW_ALLOWED_SKILLS",
             "MOONMIND_ALLOWED_SKILLS",
         ),
@@ -1473,7 +1462,6 @@ class AppSettings(BaseSettings):
         None,
         validation_alias=AliasChoices(
             "workflow_github_repository",
-            "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_GITHUB_REPOSITORY",
         ),
         description="Compatibility passthrough for workflow repository override.",
