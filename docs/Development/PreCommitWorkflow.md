@@ -86,6 +86,10 @@ The integration wrapper retains `phase-timings.jsonl` with host-observed phase w
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
+Selected backend, hermetic, image preparation and installed-image jobs wait for `preflight-policy` before starting expensive work. The backend matrix stays together to retain native fail-fast across its fast and reliability rows. Frontend and generated-contract feedback still runs beside preflight. The existing artifact/recovery phases intentionally omit source policy, so their image consumers accept that specific skip, not a failed policy check or a skipped full/source preflight. Required aggregation still rejects selected work that did not succeed.
+
+Draft PR pushes retain full selected validation; there is no stabilization timer or draft-only deferral. This prevents heavy starts after rejected preflight, not all superseded work, and can delay successful candidates by the prerequisite duration. Runner and queue measurements are needed before claiming net savings.
+
 The workflow selects `frontend-static` and the browser matrix (Chromium and WebKit, plus Firefox for browser-sensitive changes) independently by changed-file impact. They run in parallel and report into `ci-required`, which accepts a skip only when the selector did not select the job. The generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh`, run inside `select-test-suites`, reports an OpenAPI-affecting path or the change set is unknown, and `ci-required` aggregates it the same way.
 
 See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
