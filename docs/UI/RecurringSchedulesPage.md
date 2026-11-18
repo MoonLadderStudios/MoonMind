@@ -253,8 +253,8 @@ Desktop table columns:
 | State | Active, Paused, or Needs attention; column filter. |
 | Provider Profile | Saved target's Provider Profile reference. |
 | Repository | Saved repository name; column filter. |
-| Model | Authored model or model tier. |
-| Effort | Authored effort. |
+| Model | Saved admitted model, falling back to authored runtime model or tier. |
+| Effort | Saved admitted effort, falling back to authored runtime effort. |
 | Cadence / Timezone | Human-readable cadence with raw cron tooltip; column filter. |
 | Next run | Next occurrence time; server sorting. |
 | Actions | Run now and pause/resume when available. |
@@ -267,7 +267,7 @@ Rules:
 4. The `State` column should use the dashboard status pill style family.
 5. `Needs attention` should be visually distinct without relying on color alone.
 6. Dispatch errors remain on detail, with overview attention indicated by State.
-7. Provider Profile, repository, model, and effort use separate columns.
+7. Provider Profile, repository, model, and effort use separate columns. Prefer the admitted snapshot Provider Profile reference or top-level provider identity; do not confuse the agent-profile identity with its Provider Profile.
 8. Raw target payload belongs in detail, not the table.
 9. The table should use the same density, header, border, hover, focus, loading, empty, and error visual language as Workflows.
 10. Sorting/filtering should follow the Workflows table posture: deterministic URL state where server-authoritative behavior exists and explicit copy where sorting is current-page-only.

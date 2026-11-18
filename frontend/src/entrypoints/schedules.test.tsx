@@ -283,6 +283,28 @@ describe("SchedulesPage", () => {
     expect(screen.queryByText('stale-preview')).toBeNull();
   });
 
+  it.each([
+    { profileId: 'admitted-provider' },
+    { agentProfileSnapshot: { profileId: 'agent-profile', providerProfileRef: 'admitted-provider' } },
+    { profileId: 'admitted-provider', workflow: { runtime: { profileId: 'old-provider', model: 'old-model', effort: 'low' } } },
+  ])('shows admitted provider/model/effort without depending on nested runtime: %j', async (parameters) => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      ...detailSchedule,
+      target: { initialParameters: {
+        ...parameters,
+        agentProfile: { profileId: 'agent-profile', version: 1, digest: 'digest' },
+        model: 'admitted-model', effort: 'high',
+      } },
+    }] }) } as Response);
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    const table = await screen.findByRole('table', { name: 'Recurring schedules' });
+    expect(await within(table).findByText('admitted-provider')).toBeTruthy();
+    expect(within(table).getByText('admitted-model')).toBeTruthy();
+    expect(within(table).getByText('high')).toBeTruthy();
+    expect(within(table).queryByText('agent-profile')).toBeNull();
+    expect(within(table).queryByText('old-provider')).toBeNull();
+  });
+
   it("renders the table loading state without an overview summary", async () => {
     let resolveFetch: (value: Response) => void = () => {};
     fetchSpy.mockReturnValue(new Promise<Response>((resolve) => {

@@ -576,7 +576,9 @@ function targetProviderProfile(schedule: Schedule): string {
   const parameters = targetParameters(schedule);
   const runtime = targetRuntime(schedule);
   const profileKeys = ['providerProfileRef', 'profileId', 'providerProfile', 'executionProfileRef', 'execution_profile_ref', 'profile_id', 'provider_profile'];
-  return stringValue(runtime, profileKeys)
+  return stringValue(asRecord(parameters?.agentProfileSnapshot), ['providerProfileRef'])
+    || stringValue(parameters, ['profileId'])
+    || stringValue(runtime, profileKeys)
     || stringValue(asRecord(runtime?.agentProfile), ['providerProfileRef'])
     || stringValue(asRecord(parameters?.agentProfile), ['providerProfileRef'])
     || stringValue(parameters, ['providerProfileRef', 'providerProfile', 'executionProfileRef'])
@@ -585,14 +587,15 @@ function targetProviderProfile(schedule: Schedule): string {
 
 function targetModel(schedule: Schedule): string {
   const runtime = targetRuntime(schedule);
-  const model = stringValue(runtime, ['model']);
+  const model = stringValue(targetParameters(schedule), ['model']) || stringValue(runtime, ['model']);
   if (model) return model;
   if (typeof runtime?.modelTier === 'number') return `Tier ${runtime.modelTier}`;
   return '-';
 }
 
 function targetEffort(schedule: Schedule): string {
-  return stringValue(targetRuntime(schedule), ['effort']) || '-';
+  return stringValue(targetParameters(schedule), ['effort'])
+    || stringValue(targetRuntime(schedule), ['effort']) || '-';
 }
 
 function policySummary(schedule: Schedule): string {
