@@ -7,10 +7,12 @@ from the Provider Profile manager and runs one bounded probe. If execution or
 maintenance needs the credential home meanwhile, the manager signals
 ``preempt_usage_observation``: the probe is cancelled, its container is
 proven gone, and only then is the grant released (release-last ordering).
+Cancelling this workflow stops the probe the same way.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -21,14 +23,17 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.workflow import ActivityCancellationType
 
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         USAGE_OBSERVATION_PREEMPT_SIGNAL,
         workflow_id_for_runtime,
     )
 
+DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 WORKFLOW_NAME = "MoonMind.ProviderAccountUsageCollection"
 WORKFLOW_ID_PREFIX = "provider-account-usage"
-ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 _ONCE = RetryPolicy(maximum_attempts=1)
 _BOUNDED = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=3)
 
@@ -57,7 +62,7 @@ class MoonMindProviderAccountUsageCollectionWorkflow:
         return await workflow.execute_activity(
             name,
             payload,
-            task_queue=ACTIVITY_TASK_QUEUE,
+            task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(name).task_queue,
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
             retry_policy=retry,
         )
@@ -115,24 +120,40 @@ class MoonMindProviderAccountUsageCollectionWorkflow:
         lease["fencingGeneration"] = grant.get("fencingGeneration")
 
         outcome: dict[str, Any] = {"status": "failed"}
+        cancelled: asyncio.CancelledError | None = None
         cleaned = False
+        stopped = False
         try:
             probe = workflow.start_activity(
                 "provider_account_usage.probe",
                 {**request, **lease},
-                task_queue=ACTIVITY_TASK_QUEUE,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "provider_account_usage.probe"
+                ).task_queue,
                 start_to_close_timeout=timedelta(seconds=240),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=_ONCE,
                 cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
             )
-            await workflow.wait_condition(lambda: probe.done() or self._preempted)
+            try:
+                await workflow.wait_condition(lambda: probe.done() or self._preempted)
+            except asyncio.CancelledError as exc:
+                # Workflow cancellation interrupts only this wait; the probe
+                # keeps running unless it is stopped before cleanup.
+                cancelled = exc
             if not probe.done():
                 probe.cancel()
             try:
                 outcome = await probe
-            except (exceptions.ActivityError, exceptions.CancelledError):
+            except (
+                exceptions.ActivityError,
+                exceptions.CancelledError,
+                asyncio.CancelledError,
+            ):
                 outcome = {"status": "deferred" if self._preempted else "failed"}
+            stopped = True
+            if cancelled is not None:
+                raise cancelled
         finally:
             try:
                 await self._activity(
@@ -142,11 +163,11 @@ class MoonMindProviderAccountUsageCollectionWorkflow:
                 )
                 cleaned = True
             except exceptions.ActivityError:
-                # Without proof of cleanup the grant stays held; the manager
-                # reclaims it only once this run is closed and the probe's
-                # own lifetime has passed.
                 outcome = {"status": "failed", "cleanup": "unverified"}
-            if cleaned:
+            # Without proof that the probe stopped and its container is gone,
+            # the grant stays held; the manager reclaims it only once this run
+            # is closed and the probe's own lifetime has passed.
+            if stopped and cleaned:
                 await self._release(request, lease)
         return {"status": outcome.get("status"), "preempted": self._preempted}
 

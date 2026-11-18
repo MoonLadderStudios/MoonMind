@@ -8,13 +8,19 @@ from typing import Any
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.exceptions import ApplicationError
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
+from moonmind.config.settings import TemporalSettings
+from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_TASK_QUEUE,
+    WORKFLOW_TASK_QUEUE,
+    build_default_activity_catalog,
+)
+from moonmind.workflows.temporal.workflows import provider_account_usage
 from moonmind.workflows.temporal.workflows.provider_account_usage import (
-    ACTIVITY_TASK_QUEUE,
     MoonMindProviderAccountUsageCollectionWorkflow,
     workflow_id_for_attempt,
 )
@@ -118,7 +124,7 @@ def reset():
 
 
 @asynccontextmanager
-async def _workers(env):
+async def _workers(env, activity_queue: str = AGENT_RUNTIME_TASK_QUEUE):
     async with Worker(
         env.client,
         task_queue=WORKFLOW_TASK_QUEUE,
@@ -126,7 +132,7 @@ async def _workers(env):
         workflow_runner=UnsandboxedWorkflowRunner(),
     ), Worker(
         env.client,
-        task_queue=ACTIVITY_TASK_QUEUE,
+        task_queue=activity_queue,
         activities=[resolve, collect_from_owner, try_acquire, probe, cleanup],
     ):
         await env.client.start_workflow(
@@ -137,7 +143,7 @@ async def _workers(env):
         yield
 
 
-async def _run(env, *, preempt: bool = False) -> dict:
+async def _run(env, *, preempt: bool = False, cancel: bool = False) -> dict:
     workflow_id = workflow_id_for_attempt("alpha", "attempt-1")
     handle = await env.client.start_workflow(
         MoonMindProviderAccountUsageCollectionWorkflow.run,
@@ -145,16 +151,19 @@ async def _run(env, *, preempt: bool = False) -> dict:
         id=workflow_id,
         task_queue=WORKFLOW_TASK_QUEUE,
     )
-    if preempt:
+    if preempt or cancel:
         for _ in range(100):
             if "probe" in EVENTS:
                 break
             await asyncio.sleep(0.1)
+    if preempt:
         await handle.signal(
             USAGE_OBSERVATION_PREEMPT_SIGNAL,
             {"lease_id": workflow_id, "reason": "execution_pending"},
         )
-    return await handle.result()
+    if cancel:
+        await handle.cancel()
+    return await asyncio.wait_for(handle.result(), timeout=30)
 
 
 async def test_idle_probe_releases_its_grant_only_after_verified_cleanup() -> None:
@@ -181,6 +190,38 @@ async def test_arriving_work_cancels_the_probe_then_cleans_up_before_release() -
     cleaned = EVENTS.index(("cleanup", owner, True))
     released = next(i for i, event in enumerate(EVENTS) if event[0] == "release")
     assert cancelled < cleaned < released
+
+
+async def test_cancellation_stops_the_probe_before_cleanup_and_release() -> None:
+    Behavior.block_probe = True
+    async with await WorkflowEnvironment.start_time_skipping() as env, _workers(env):
+        with pytest.raises(WorkflowFailureError) as failure:
+            await _run(env, cancel=True)
+
+    owner = workflow_id_for_attempt("alpha", "attempt-1")
+    assert isinstance(failure.value.cause, CancelledError)
+    cancelled = EVENTS.index("probe_cancelled")
+    cleaned = EVENTS.index(("cleanup", owner, False))
+    released = next(i for i, event in enumerate(EVENTS) if event[0] == "release")
+    assert cancelled < cleaned < released
+
+
+async def test_collection_uses_the_configured_agent_runtime_queue(monkeypatch) -> None:
+    queue = "mm.activity.agent_runtime.site"
+    monkeypatch.setattr(
+        provider_account_usage,
+        "DEFAULT_ACTIVITY_CATALOG",
+        build_default_activity_catalog(
+            TemporalSettings(TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=queue)
+        ),
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env, _workers(
+        env, queue
+    ):
+        result = await _run(env)
+
+    assert result == {"status": "observed", "preempted": False}
+    assert ("cleanup", workflow_id_for_attempt("alpha", "attempt-1"), False) in EVENTS
 
 
 async def test_unverified_cleanup_keeps_the_grant() -> None:

@@ -527,7 +527,8 @@ caller can widen its own authority.
 A `usage_observation` grant is exclusive but never waits:
 `TryAcquireUsageObservationLease` refuses at once while any profile bound to the
 same home holds a lease, has queued work, or owes cleanup. Work arriving later
-preempts it, and the owner proves its probe container is gone before releasing.
+preempts it. The owner, preempted or cancelled, stops its probe and proves the
+probe container is gone before releasing.
 
 A mutable OAuth home is shared credential state, so validating it is exclusive
 and the profile is capacity one. Exclusive maintenance drains only leases
