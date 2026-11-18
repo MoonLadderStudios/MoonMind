@@ -506,19 +506,26 @@ def _model_probe_argv(
     *,
     image_ref: str,
     provider_id: str,
+    runtime_version: str,
     credential_source: str | None = None,
     credential_target: str | None = None,
 ) -> list[str]:
     """Build the exact pinned-runtime catalog probe command.
 
     The credential materializer deliberately mounts a read-only staging
-    directory. The v2 key-connection endpoint imports only the selected provider into a
-    fresh, disposable database. Catalog rows are projected to IDs in the
-    container because their settings can contain credentials.
+    directory. The observed runtime selects the protocol before discovery. Retained v1
+    images use their CLI; v2 imports only the selected provider into a disposable
+    database. A failed v2 operation never falls back to v1.
     """
 
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", provider_id):
         raise ValueError("invalid OpenCode provider ID")
+    version = re.search(r"(?<![0-9])([0-9]+)\.[0-9]+\.[0-9]+\b", runtime_version)
+    if version is None or version.group(1) not in {"1", "2"}:
+        raise HarnessPlatformError(
+            "OpenCode validation runtime version is unavailable or unsupported",
+            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
+        )
     argv = [
         "docker",
         "run",
@@ -547,11 +554,27 @@ def _model_probe_argv(
         ]
     for item in omnigent_proxy_env():
         argv.extend(("--env", item))
-    stage_and_probe = (
-        "set -eu; exec python3 -c "
-        + shlex.quote(_OPENCODE_V2_CATALOG_PROBE)
-        + ' "$2" "$1" validate'
-    )
+    if version.group(1) == "1":
+        stage_auth = (
+            "mkdir -p /home/app/.local/share/opencode; "
+            'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
+            "chmod 0600 /home/app/.local/share/opencode/auth.json; "
+            if credential_target is not None
+            else ""
+        )
+        stage_and_probe = (
+            "set -eu; "
+            "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
+            "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
+            + stage_auth
+            + 'exec opencode models --refresh "$2"'
+        )
+    else:
+        stage_and_probe = (
+            "set -eu; exec python3 -c "
+            + shlex.quote(_OPENCODE_V2_CATALOG_PROBE)
+            + ' "$2" "$1" validate'
+        )
     argv.extend(("--entrypoint", "/bin/sh", image_ref, "-ceu", stage_and_probe))
     argv.extend(("--", credential_target or "", provider_id))
     return argv
@@ -692,6 +715,37 @@ class OpenCodeProviderRuntimeValidationService:
         handle = None
         try:
             effective_image_ref = await self._resolve_effective_image_ref()
+            versions: dict[str, str] = {}
+            for binary in ("opencode", "omnigent"):
+                version_code, version_out, _version_err = await self._backend.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--network",
+                        "none",
+                        "--entrypoint",
+                        binary,
+                        effective_image_ref,
+                        "--version",
+                    ]
+                )
+                if version_code != 0 and "Unable to find image" in _version_err.decode(
+                    "utf-8", errors="replace"
+                ):
+                    # Fail closed: never substitute a mutable tag for version check.
+                    raise HarnessPlatformError(
+                        f"pinned image {effective_image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                if version_code != 0:
+                    raise HarnessPlatformError(
+                        f"pinned image does not provide {binary}",
+                        code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
+                    )
+                versions[binary] = version_out.decode(
+                    "utf-8", errors="replace"
+                ).strip()[:128]
             handle = await materializer.materialize(
                 CredentialMaterializationContext(
                     request=request,
@@ -706,6 +760,7 @@ class OpenCodeProviderRuntimeValidationService:
             argv = _model_probe_argv(
                 image_ref=effective_image_ref,
                 provider_id=str(profile.provider_id or ""),
+                runtime_version=versions["opencode"],
                 credential_source=(attachment.sourceRef if attachment else None),
                 credential_target=(attachment.targetPath if attachment else None),
             )
@@ -753,37 +808,6 @@ class OpenCodeProviderRuntimeValidationService:
                 verification = {"status": "unverified"}
             # Only the authenticated probe result certifies the current key.
             verification = {"status": verification["status"]}
-            versions: dict[str, str] = {}
-            for binary in ("opencode", "omnigent"):
-                version_code, version_out, _version_err = await self._backend.run(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "--network",
-                        "none",
-                        "--entrypoint",
-                        binary,
-                        effective_image_ref,
-                        "--version",
-                    ]
-                )
-                if version_code != 0 and "Unable to find image" in _version_err.decode(
-                    "utf-8", errors="replace"
-                ):
-                    # Fail closed: never substitute a mutable tag for version check.
-                    raise HarnessPlatformError(
-                        f"pinned image {effective_image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
-                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-                    )
-                if version_code != 0:
-                    raise HarnessPlatformError(
-                        f"pinned image does not provide {binary}",
-                        code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-                    )
-                versions[binary] = version_out.decode(
-                    "utf-8", errors="replace"
-                ).strip()[:128]
             evidence: dict[str, Any] = {
                 "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
                 "models": [{"qualifiedId": item} for item in models],

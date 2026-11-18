@@ -26,10 +26,19 @@ REQUESTED_IMAGE = "registry.example/opencode@sha256:" + "a" * 64
 EFFECTIVE_IMAGE = "registry.example/opencode@sha256:" + "b" * 64
 
 
+def _is_catalog_probe(argv):
+    script = " ".join(argv)
+    return (
+        "integration/{provider}/connect/key" in script
+        or 'opencode models --refresh "$2"' in script
+    )
+
+
 def test_model_probe_stages_auth_in_writable_home_with_restricted_egress() -> None:
     image_ref = "registry.example/opencode@sha256:" + "a" * 64
     argv = _model_probe_argv(
         image_ref=image_ref,
+        runtime_version="2.0.32",
         provider_id="opencode-go",
         credential_source="credential-volume",
         credential_target="/run/mm-credentials/opencode",
@@ -56,7 +65,7 @@ def test_model_probe_stages_auth_in_writable_home_with_restricted_egress() -> No
 
 def test_credentialless_model_probe_omits_auth_mount_and_staging() -> None:
     image_ref = "registry.example/opencode@sha256:" + "a" * 64
-    argv = _model_probe_argv(image_ref=image_ref, provider_id="opencode")
+    argv = _model_probe_argv(image_ref=image_ref, provider_id="opencode", runtime_version="2.0.32")
 
     assert "--mount" not in argv
     script = argv[argv.index("-ceu") + 1]
@@ -64,23 +73,58 @@ def test_credentialless_model_probe_omits_auth_mount_and_staging() -> None:
     assert "exec python3 -c" in script
 
 
+@pytest.mark.parametrize("credentials", [False, True])
+def test_retained_v1_probe_uses_isolated_cli(credentials):
+    argv = _model_probe_argv(
+        image_ref=REQUESTED_IMAGE,
+        provider_id="openrouter",
+        runtime_version="opencode 1.18.11",
+        credential_source="credential-volume" if credentials else None,
+        credential_target="/run/mm-credentials/opencode" if credentials else None,
+    )
+    script = argv[argv.index("-ceu") + 1]
+    assert 'exec opencode models --refresh "$2"' in script
+    assert "integration/{provider}/connect/key" not in script
+    assert "OPENCODE_AUTH_CONTENT" in script
+    assert "--read-only" in argv
+    assert ("--mount" in argv) is credentials
+    assert ('cp "$1/auth.json"' in script) is credentials
+    if credentials:
+        assert "chmod 0600 /home/app/.local/share/opencode/auth.json" in script
+        assert "type=volume,src=credential-volume,dst=/run/mm-credentials/opencode,readonly" in argv
+
+
+@pytest.mark.parametrize("runtime_version", ["", "unavailable", "3.0.0", "0.9.0"])
+def test_unknown_validation_runtime_never_guesses_a_protocol(runtime_version):
+    with pytest.raises(HarnessPlatformError) as exc:
+        _model_probe_argv(
+            image_ref=REQUESTED_IMAGE, provider_id="openrouter", runtime_version=runtime_version
+        )
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH
+
+
 @pytest.mark.asyncio
-async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret() -> (
-    None
-):
+@pytest.mark.parametrize("runtime_version", ["1.18.11", "2.0.32"])
+async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret(runtime_version) -> None:
     class _Backend:
         def __init__(self) -> None:
             self.commands: list[list[str]] = []
 
         async def run(self, argv, **_kwargs):
             self.commands.append(list(argv))
-            if "integration/{provider}/connect/key" in " ".join(argv):
+            if "-ceu" in argv:
+                script = argv[argv.index("-ceu") + 1]
+                if runtime_version.startswith("1."):
+                    assert 'opencode models --refresh "$2"' in script
+                    assert "integration/{provider}/connect/key" not in script
+                else:
+                    assert "integration/{provider}/connect/key" in script
                 return (
                     0,
                     b"opencode/muse-spark-1.2-contributor-free\n",
                     b"",
                 )
-            return 0, b"1.18.11\n", b""
+            return 0, runtime_version.encode(), b""
 
     class _Artifacts:
         async def write_json(self, **_kwargs):
@@ -113,10 +157,12 @@ async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret()
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
 @pytest.mark.parametrize(
-    "probe_result", ["accepted", "verified", "rejected", "sibling-only"]
+    "runtime_version,probe_result",
+    [("2.0.32", result) for result in ("accepted", "verified", "rejected", "sibling-only")]
+    + [("1.18.11", result) for result in ("accepted", "rejected", "sibling-only")],
 )
 async def test_generic_validation_preserves_route_and_cleans_up(
-    provider_id, probe_result
+    provider_id, runtime_version, probe_result
 ) -> None:
     class _Backend:
         def __init__(self) -> None:
@@ -132,7 +178,10 @@ async def test_generic_validation_preserves_route_and_cleans_up(
                 }
             if argv[1:3] == ["volume", "ls"]:
                 return 0, b"owned\n", b""
-            if "integration/{provider}/connect/key" in " ".join(argv):
+            if _is_catalog_probe(argv):
+                script = argv[argv.index("-ceu") + 1]
+                assert ("integration/{provider}/connect/key" in script) is runtime_version.startswith("2.")
+                assert ('opencode models --refresh "$2"' in script) is runtime_version.startswith("1.")
                 if probe_result == "rejected":
                     return 1, b"", b"invalid api key"
                 catalog = f"{provider_id}-other/model\nother/model\n"
@@ -152,7 +201,7 @@ async def test_generic_validation_preserves_route_and_cleans_up(
                 if probe_result == "accepted":
                     catalog += f"{provider_id}/author/model:free\n"
                 return 0, catalog.encode(), b""
-            return 0, b"1.18.11\n", b""
+            return 0, runtime_version.encode(), b""
 
     class _Artifacts:
         async def write_json(self, **kwargs):
@@ -198,11 +247,7 @@ async def test_generic_validation_preserves_route_and_cleans_up(
             exc.value.code
             == HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE
         )
-    model_probe = next(
-        argv
-        for argv in backend.commands
-        if "integration/{provider}/connect/key" in " ".join(argv)
-    )
+    model_probe = next(argv for argv in backend.commands if _is_catalog_probe(argv))
     assert (
         model_probe[model_probe.index("--network") + 1] == OMNIGENT_EGRESS_NETWORK_REF
     )
@@ -212,6 +257,8 @@ async def test_generic_validation_preserves_route_and_cleans_up(
     )
     assert backend.commands[-1] == ["docker", "volume", "rm", created]
     assert "candidate-key" not in str(backend.commands)
+
+    assert sum(_is_catalog_probe(argv) for argv in backend.commands) == 1
 
 
 @pytest.mark.asyncio
@@ -279,6 +326,7 @@ def test_sibling_catalog_does_not_validate_selected_provider(provider) -> None:
 def test_model_probe_is_scoped_to_selected_provider(provider_id, with_credentials):
     argv = _model_probe_argv(
         image_ref="registry.example/opencode@sha256:" + "a" * 64,
+        runtime_version="2.0.32",
         provider_id=provider_id,
         credential_source="credential-volume" if with_credentials else None,
         credential_target="/run/mm-credentials/opencode" if with_credentials else None,
@@ -318,7 +366,7 @@ async def test_catalog_capture_through_local_bounded_runner(
         elif kwargs.get("stdin") == asyncio.subprocess.PIPE:
             program = "import sys; sys.stdin.buffer.read()"
         else:
-            program = "print('1.18.11')"
+            program = "print('2.0.32')"
         return await original_exec(sys.executable, "-c", program, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", execute)
@@ -355,7 +403,9 @@ async def test_catalog_capture_through_local_bounded_runner(
     else:
         with pytest.raises(HarnessPlatformError, match="output exceeded.*1048576"):
             await validation
-        assert not any("--version" in argv for argv in commands)
+        # Protocol selection observes versions first; truncation still aborts
+        # discovery without a second/fallback probe or successful model evidence.
+        assert sum(_is_catalog_probe(argv) for argv in commands) == 1
         assert all("models" not in artifact for artifact in artifacts)
     assert commands[-1][0:3] == ["docker", "volume", "rm"]
 
@@ -394,7 +444,7 @@ class _DriftBackend:
             if self.catalog_result is not None:
                 return self.catalog_result
             return 0, b"opencode-go/author/model:free\n", b""
-        return 0, b"1.18.11\n", b""
+        return 0, b"2.0.32\n", b""
 
 
 class _DriftArtifacts:
@@ -497,7 +547,7 @@ async def test_installed_requested_image_keeps_original_evidence(
                 return 0, b"credential-volume\n", b""
             if "integration/{provider}/connect/key" in text:
                 return 0, b"opencode-go/author/model:free\n", b""
-            return 0, b"1.18.11\n", b""
+            return 0, b"2.0.32\n", b""
 
     backend = _PresentBackend()
     service = _drift_service(backend, monkeypatch)

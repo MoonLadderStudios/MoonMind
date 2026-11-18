@@ -214,7 +214,10 @@ built with the warm cache.
 
 ### Provider checks and upgrades
 
-Enrollment launches a short-lived isolated v2 server and reads `/api/model`,
+Enrollment observes the selected image’s CLI version before discovery. Retained
+v1 images stage the selected key in a disposable writable home and use
+`opencode models --refresh`; this reports catalog availability, not verified
+credentials. V2 launches a short-lived isolated server and reads `/api/model`,
 returning only selected-provider model IDs. Raw catalog settings can contain
 API keys and must never be stored as evidence. Catalog availability and
 `/api/integration/<provider>/connect/key` do not prove that a key is valid:
