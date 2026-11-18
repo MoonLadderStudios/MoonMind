@@ -1,6 +1,6 @@
 {
   "issue": "MoonLadderStudios/MoonMind#3954",
-  "sourceCommit": "a9a0a163dc89e7945b2612b9d61488e7a157fa26",
+  "sourceCommit": "b6dd19692e8e17f4f998f667d3c9307546685485",
   "httpOperations": [
     {
       "operation": "session_items",

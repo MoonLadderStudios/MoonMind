@@ -63,6 +63,8 @@ const FAILURE_REASONS: Record<FailureCode, string> = {
   reconnect_required: 'the sign-in must be renewed',
   dispatch_failed: 'the usage check could not start',
   credential_refresh_unavailable: 'the stored sign-in could not be renewed while idle',
+  credential_recovery_unsupported:
+    'the installed runtime cannot renew the stored sign-in while idle; update MoonMind or reconnect this profile',
   attempt_abandoned: 'the usage check did not finish',
   internal_error: 'the usage check failed',
 };

@@ -270,9 +270,11 @@ class UsageCollectorRegistry:
 
 
 def default_usage_collectors() -> UsageCollectorRegistry:
-    """Adapters available in this build; the provider work items add theirs."""
+    """Adapters available in this build."""
 
-    return UsageCollectorRegistry()
+    from moonmind.provider_profiles.claude_account_usage import ClaudeUsageCollector
+
+    return UsageCollectorRegistry((ClaudeUsageCollector(),))
 
 
 async def resolve_credential_consumers(

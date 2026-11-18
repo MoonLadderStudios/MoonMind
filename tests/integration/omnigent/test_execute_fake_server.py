@@ -11,6 +11,7 @@ from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.helpers.omnigent_conformance import (
+    FakeOmnigentScenario,
     FakeOmnigentServer,
     start_fake_omnigent_server,
 )
@@ -224,3 +225,86 @@ async def test_omnigent_execute_journals_bounded_large_tool_output(
     )
     assert len(server.session_ids) == 1
     assert len(server.events) == 1
+
+
+async def test_omnigent_execute_hands_native_quota_to_the_profile_publisher(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Status-line quota on ``session.usage`` reaches the bound profile (#5365)."""
+
+    usage_frame = {
+        "type": "session.usage",
+        "conversation_id": "session-1",
+        "rate_limits": {
+            "seven_day": {
+                "used_percentage": 42,
+                "resets_at": 1795000000,
+                "observed_at": 1794990000.0,
+            },
+            "claude_code_version": "2.1.281",
+        },
+    }
+    server = FakeOmnigentServer(
+        scenario=FakeOmnigentScenario(
+            stream_frames=[
+                b'data: {"session":{"status":"running"}}\n\n',
+                f"data: {json.dumps(usage_frame)}\n\n".encode(),
+                b'data: {"type":"response.completed","session":{"status":"completed"}}\n\n',
+            ]
+        )
+    )
+    running = await start_fake_omnigent_server(server)
+    published: list[tuple[dict, dict]] = []
+
+    class RecordingPublisher:
+        def __init__(self, *, profile_authorization, session_id) -> None:
+            self.authorization = dict(profile_authorization)
+            assert session_id == "session-1"
+
+        async def observe(self, event):
+            if event.get("type") == "session.usage":
+                published.append((self.authorization, dict(event)))
+            return None
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.NativeAccountUsagePublisher", RecordingPublisher
+    )
+    monkeypatch.setenv("OMNIGENT_ENABLED", "1")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", running.base_url)
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-quota",
+        idempotencyKey="idem-quota",
+        parameters={
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {"allowEmptyWorkspace": True},
+                "prompt": {"text": "report quota"},
+            }
+        },
+    )
+    # The generic host realizer attaches the admitted authorization this way.
+    parameters = json.loads(json.dumps(request.parameters))
+    parameters["omnigent"]["_moonmindProfileAuthorization"] = {
+        "providerProfileId": "claude-oauth",
+        "providerLeaseRef": "provider-profile-lease:lease-1",
+        "credentialGeneration": 3,
+    }
+    try:
+        result = await run_omnigent_execution(
+            request.model_copy(update={"parameters": parameters}),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        )
+    finally:
+        await running.runner.cleanup()
+
+    assert result.failure_class is None
+    [(authorization, event)] = published
+    assert authorization == {
+        "providerProfileId": "claude-oauth",
+        "providerLeaseRef": "provider-profile-lease:lease-1",
+        "credentialGeneration": 3,
+    }
+    assert event["rate_limits"]["seven_day"]["used_percentage"] == 42
