@@ -5,12 +5,6 @@ Source issue: MoonLadderStudios/MoonMind#3941.
 Coherent group under test: duplicated bootstrap definitions whose values are
 already determined by a single owner.
 
-* ``MODEL_CACHE_REFRESH_INTERVAL`` (legacy, unit-less) versus
-  ``MODEL_CACHE_REFRESH_INTERVAL_SECONDS`` (canonical): two template lines
-  and two ``AppSettings`` fields for one value with zero consumers. The
-  legacy name is honored once through the existing ``AppSettings`` owner;
-  the canonical name wins on conflict and a blank value behaves like an
-  omitted one, while an explicit ``0`` stays ``0``.
 * ``MOONMIND_IMAGE`` advertised twice in ``.env-template`` with the same
   value.
 * The ``MEMORY_*`` block advertised twice in ``.env-template`` with
@@ -29,12 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from api_service.services.settings_catalog import SettingsCatalogService
-from moonmind.config.settings import AppSettings
 from moonmind.memory.context_pack import DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS
-
-_CANONICAL_MODEL_CACHE_ENV = "MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
-_LEGACY_MODEL_CACHE_ENV = "MODEL_CACHE_REFRESH_INTERVAL"
-_MODEL_CACHE_DEFAULT = 3600
 
 
 def _template_assignments() -> list[tuple[str, str]]:
@@ -57,15 +46,6 @@ def test_env_template_has_no_duplicate_keys() -> None:
     assert duplicates == []
 
 
-def test_env_template_advertises_single_model_cache_interval() -> None:
-    """Only the canonical model-cache interval remains in the example."""
-
-    values = dict(_template_assignments())
-
-    assert values[_CANONICAL_MODEL_CACHE_ENV] == str(_MODEL_CACHE_DEFAULT)
-    assert _LEGACY_MODEL_CACHE_ENV not in values
-
-
 def test_env_template_memory_block_matches_code_default() -> None:
     """The single retained MEMORY block agrees with the code default."""
 
@@ -75,74 +55,6 @@ def test_env_template_memory_block_matches_code_default() -> None:
         DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS
     )
     assert DEFAULT_MEMORY_CONTEXT_BUDGET_TOKENS == 4096
-
-
-def test_model_cache_defaults_without_either_variable(monkeypatch) -> None:
-    """No-``.env`` startup resolves the documented default."""
-
-    monkeypatch.delenv(_CANONICAL_MODEL_CACHE_ENV, raising=False)
-    monkeypatch.delenv(_LEGACY_MODEL_CACHE_ENV, raising=False)
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == _MODEL_CACHE_DEFAULT
-
-
-def test_model_cache_legacy_alias_is_honored_once(monkeypatch) -> None:
-    """Deployments exporting only the legacy name keep working."""
-
-    monkeypatch.delenv(_CANONICAL_MODEL_CACHE_ENV, raising=False)
-    monkeypatch.setenv(_LEGACY_MODEL_CACHE_ENV, "1800")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == 1800
-
-
-def test_model_cache_canonical_wins_on_conflict(monkeypatch) -> None:
-    """A conflict resolves deterministically instead of diverging fields."""
-
-    monkeypatch.setenv(_CANONICAL_MODEL_CACHE_ENV, "120")
-    monkeypatch.setenv(_LEGACY_MODEL_CACHE_ENV, "1800")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == 120
-
-
-def test_model_cache_blank_behaves_like_omitted(monkeypatch) -> None:
-    """An empty value is the documented default, not a startup failure."""
-
-    monkeypatch.setenv(_CANONICAL_MODEL_CACHE_ENV, "")
-    monkeypatch.delenv(_LEGACY_MODEL_CACHE_ENV, raising=False)
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == _MODEL_CACHE_DEFAULT
-
-
-def test_model_cache_blank_canonical_falls_through_to_legacy(
-    monkeypatch,
-) -> None:
-    """A blank canonical value defers to the legacy override, like omission."""
-
-    monkeypatch.setenv(_CANONICAL_MODEL_CACHE_ENV, "")
-    monkeypatch.setenv(_LEGACY_MODEL_CACHE_ENV, "1800")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == 1800
-
-
-def test_model_cache_explicit_zero_is_preserved(monkeypatch) -> None:
-    """Unset/empty must not collapse an explicit zero."""
-
-    monkeypatch.setenv(_CANONICAL_MODEL_CACHE_ENV, "0")
-    monkeypatch.delenv(_LEGACY_MODEL_CACHE_ENV, raising=False)
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.model_cache_refresh_interval_seconds == 0
 
 
 def _boolean_registry() -> tuple:

@@ -290,11 +290,6 @@ class TemporalDashboardSettings(BaseSettings):
         ),
         gt=0,
     )
-    list_count_timeout_seconds: float = Field(
-        1.0,
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_COUNT_TIMEOUT_SECONDS"),
-        gt=0,
-    )
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
@@ -310,11 +305,6 @@ class WorkflowSettings(BaseSettings):
     repo_root: str = Field(
         ".",
         validation_alias=AliasChoices("WORKFLOW_REPO_ROOT"),
-    )
-    recurring_dispatch_engine: str = Field(
-        "app",
-        validation_alias=AliasChoices("RECURRING_DISPATCH_ENGINE"),
-        description="Engine for recurring schedules: 'app', 'temporal', or 'dual'",
     )
     skills_on_demand_enabled: bool = Field(
         False,
@@ -333,11 +323,6 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_ARTIFACTS_ROOT",
         ),
         description="Filesystem location where Spec workflow artifacts are persisted.",
-    )
-    agent_job_artifact_root: str = Field(
-        "var/artifacts/agent_jobs",
-        alias="AGENT_JOB_ARTIFACT_ROOT",
-        description="Filesystem location where agent queue artifacts are persisted.",
     )
     temporal_artifact_root: str = Field(
         "var/artifacts/temporal_artifacts",
@@ -477,29 +462,6 @@ class WorkflowSettings(BaseSettings):
             "assembled before runtime injection."
         ),
     )
-    agent_job_max_runtime_seconds: int = Field(
-        4 * 3600,
-        alias="AGENT_JOB_MAX_RUNTIME_SECONDS",
-        description=(
-            "Maximum wall-clock runtime (seconds) a queue job may run before it is"
-            " automatically timed out."
-        ),
-        ge=300,
-    )
-    agent_job_stale_lease_grace_seconds: int = Field(
-        300,
-        alias="AGENT_JOB_STALE_LEASE_GRACE_SECONDS",
-        description=(
-            "Grace period (seconds) after a lease expires before the job is reported"
-            " as stale-running to operators."
-        ),
-        ge=60,
-    )
-    job_image: str = Field(
-        "ghcr.io/moonladderstudios/moonmind:latest",
-        validation_alias=AliasChoices("WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"),
-        description="Container image used for workflow automation job executions.",
-    )
     workspace_root: str = Field(
         "/work",
         alias="WORKFLOW_WORKSPACE_ROOT",
@@ -520,37 +482,6 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("WORKFLOW_DEFAULT_ROUTING_KEY"),
         description="Default routing key used by the workflow queue.",
     )
-    metrics_enabled: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_ENABLED"
-        ),
-        description="Toggle emission of workflow automation StatsD metrics.",
-    )
-    metrics_host: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_HOST"),
-        description="Hostname for the StatsD metrics sink (optional).",
-    )
-    metrics_port: Optional[int] = Field(
-        None,
-        validation_alias=AliasChoices("WORKFLOW_METRICS_PORT", "WORKFLOW_METRICS_PORT"),
-        description="Port for the StatsD metrics sink (optional).",
-    )
-    metrics_namespace: str = Field(
-        "automation",
-        validation_alias=AliasChoices(
-            "WORKFLOW_METRICS_NAMESPACE", "WORKFLOW_METRICS_NAMESPACE"
-        ),
-        description="Namespace/prefix applied to emitted workflow automation metrics.",
-    )
-    default_feature_key: str = Field(
-        "001-workflow",
-        validation_alias=AliasChoices(
-            "WORKFLOW_DEFAULT_FEATURE_KEY", "WORKFLOW_DEFAULT_FEATURE_KEY"
-        ),
-    )
-    codex_environment: Optional[str] = Field(None, alias="CODEX_ENV")
     codex_model: Optional[str] = Field(
         "gpt-5.5",
         validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
@@ -563,7 +494,6 @@ class WorkflowSettings(BaseSettings):
             "MODEL_REASONING_EFFORT",
         ),
     )
-    codex_profile: Optional[str] = Field(None, alias="CODEX_PROFILE")
     codex_shards: int = Field(
         3,
         alias="CODEX_SHARDS",
@@ -699,11 +629,6 @@ class WorkflowSettings(BaseSettings):
         alias="WORKFLOW_AGENT_BACKEND",
         description="Active agent backend identifier for workflow automation runs.",
     )
-    allowed_agent_backends: tuple[str, ...] = Field(
-        ("codex_cli",),
-        alias="WORKFLOW_ALLOWED_AGENT_BACKENDS",
-        description="Whitelisted agent backend identifiers for workflow automation.",
-    )
     agent_version: str = Field(
         "unspecified",
         alias="WORKFLOW_AGENT_VERSION",
@@ -768,11 +693,6 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("WORKFLOW_SKILLS_WORKSPACE_ROOT"),
         description="Workspace subdirectory (under WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
     )
-    skills_registry_source: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("WORKFLOW_SKILLS_REGISTRY_SOURCE"),
-        description="Optional registry profile/URI for skill source resolution.",
-    )
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
         validation_alias=AliasChoices("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT"),
@@ -786,30 +706,10 @@ class WorkflowSettings(BaseSettings):
             "nested '<root>/skills' is auto-detected for compatibility."
         ),
     )
-    skills_verify_signatures: bool = Field(
-        False,
-        validation_alias=AliasChoices("WORKFLOW_SKILLS_VERIFY_SIGNATURES"),
-        description="Require signature metadata for selected skills before activation.",
-    )
-    skills_validate_local_mirror: bool = Field(
-        False,
-        validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
-        description="Enable startup validation of the configured local skill mirror root.",
-    )
     log_streaming_enabled: bool = Field(
         True,
         validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
         description="Enable artifact-backed live log streaming (Phase 0 boundary).",
-    )
-    stage_command_timeout_seconds: int = Field(
-        3600,
-        validation_alias=AliasChoices(
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-        ),
-        description="Hard timeout for non-container worker stage commands.",
-        ge=1,
     )
     workflow_docker_mode: Literal["disabled", "profiles", "unrestricted"] = Field(
         "profiles",
@@ -846,11 +746,8 @@ class WorkflowSettings(BaseSettings):
         return normalize_workflow_docker_mode(value)
 
     @field_validator(
-        "metrics_host",
-        "codex_environment",
         "codex_model",
         "codex_effort",
-        "codex_profile",
         "codex_queue",
         "codex_volume_name",
         "claude_volume_name",
@@ -860,7 +757,6 @@ class WorkflowSettings(BaseSettings):
         "git_user_name",
         "git_user_email",
         "default_skill",
-        "skills_registry_source",
         mode="before",
     )
     @classmethod
@@ -872,29 +768,6 @@ class WorkflowSettings(BaseSettings):
             return stripped or None
         return value
 
-    @field_validator("allowed_agent_backends", mode="before")
-    @classmethod
-    def _split_agent_csv(cls, value: Optional[str | Sequence[str]]) -> tuple[str, ...]:
-        """Allow comma-delimited strings for tuple-based agent settings."""
-
-        if value is None:
-            return ()
-
-        if isinstance(value, str):
-            raw_items: Sequence[object] = value.split(",")
-        elif isinstance(value, Sequence) and not isinstance(
-            value, (bytes, bytearray, str)
-        ):
-            raw_items = value
-        else:
-            raw_items = (value,)
-
-        items = [str(item).strip() for item in raw_items if str(item).strip()]
-        if not items:
-            return ()
-
-        # Preserve order while removing duplicates.
-        return tuple(dict.fromkeys(items))
 
     @field_validator("allowed_skills", mode="before")
     @classmethod
@@ -1012,12 +885,10 @@ class WorkflowSettings(BaseSettings):
         )
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
-        """Validate agent backend selections after settings load."""
+        """Normalize run-scoped skill selection after settings load."""
 
         super().model_post_init(__context)
         # Ensure tuples are deduplicated even when env provided sequences
-        allowed = tuple(dict.fromkeys(self.allowed_agent_backends or ()))
-        self.allowed_agent_backends = allowed
         self.allowed_skills = tuple(dict.fromkeys(self.allowed_skills or ()))
 
         if isinstance(self.default_skill, str):
@@ -1045,13 +916,6 @@ class WorkflowSettings(BaseSettings):
             self.claude_home = self.claude_volume_path
         if not self.github_repository:
             self.github_repository = "MoonLadderStudios/MoonMind"
-
-        if allowed and self.agent_backend not in allowed:
-            allowed_display = ", ".join(allowed)
-            raise ValueError(
-                f"Agent backend '{self.agent_backend}' is not permitted. "
-                f"Allowed values: {allowed_display or '<none>'}"
-            )
 
 # Workflow overrides rely on pydantic ``env`` fallbacks and
 # ``AppSettings.model_post_init`` to populate sensible defaults.
@@ -1174,24 +1038,10 @@ class OpenAISettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-class ConfluenceSettings(BaseSettings):
-    """Confluence specific settings"""
-
-    confluence_enabled: bool = Field(False, alias="ATLASSIAN_CONFLUENCE_ENABLED")
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
 
 class JiraSettings(BaseSettings):
     """Jira specific settings"""
 
-    jira_jql_query: Optional[str] = Field(None, alias="ATLASSIAN_JIRA_JQL_QUERY")
-    jira_fetch_batch_size: int = Field(50, alias="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
     jira_enabled: bool = Field(False, alias="ATLASSIAN_JIRA_ENABLED")
     jira_tool_enabled: bool = Field(False, alias="ATLASSIAN_JIRA_TOOL_ENABLED")
     jira_allowed_projects: Optional[str] = Field(
@@ -1334,7 +1184,6 @@ class AtlassianSettings(BaseSettings):
     atlassian_url: Optional[str] = Field(None, alias="ATLASSIAN_URL")
 
     # Nested settings for Confluence and Jira
-    confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
     @field_validator("atlassian_url", "atlassian_site_url", mode="before")
@@ -1356,15 +1205,7 @@ class AtlassianSettings(BaseSettings):
 
     def __init__(self, **data):
         super().__init__(**data)
-        # Pydantic does not automatically populate nested models from environment
-        # variables when they are created with ``default_factory``. Explicitly
-        # handle boolean flags for nested Confluence and Jira settings to ensure
-        # environment variables like ``ATLASSIAN_CONFLUENCE_ENABLED`` and
-        # ``ATLASSIAN_JIRA_ENABLED`` are respected.
-        confluence_env = os.getenv("ATLASSIAN_CONFLUENCE_ENABLED")
-        if confluence_env is not None:
-            self.confluence.confluence_enabled = confluence_env.lower() == "true"
-
+        # Preserve nested Jira controls supplied through environment variables.
         jira_env = os.getenv("ATLASSIAN_JIRA_ENABLED")
         if jira_env is not None:
             self.jira.jira_enabled = jira_env.lower() == "true"
@@ -1611,19 +1452,6 @@ class AppSettings(BaseSettings):
     integration_callbacks: IntegrationCallbackSettings = Field(
         default_factory=IntegrationCallbackSettings
     )
-    worker_stage_command_timeout_seconds: Optional[int] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-        ),
-        ge=1,
-        exclude=True,
-        description=(
-            "Compatibility passthrough for worker stage-command timeout env flags."
-        ),
-    )
     worker_codex_model: Optional[str] = Field(
         None,
         validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
@@ -1641,32 +1469,6 @@ class AppSettings(BaseSettings):
         description="Compatibility passthrough for worker Codex effort env flags.",
     )
 
-    moonmind_workdir: Optional[str] = Field(
-        None,
-        alias="MOONMIND_WORKDIR",
-        exclude=True,
-        description="Compatibility passthrough for worker workspace root.",
-    )
-    moonmind_agent_workspaces_volume_name: Optional[str] = Field(
-        None,
-        alias="MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
-        exclude=True,
-        description="Compatibility passthrough for worker workspace volume name.",
-    )
-    moonmind_worker_capabilities: Optional[str] = Field(
-        None,
-        alias="MOONMIND_WORKER_CAPABILITIES",
-        exclude=True,
-        description="Compatibility passthrough for worker capabilities declaration.",
-    )
-    workflow_git_user_name: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"
-        ),
-        description="Compatibility passthrough for workflow git user display name.",
-        exclude=True,
-    )
     workflow_github_repository: Optional[str] = Field(
         None,
         validation_alias=AliasChoices(
@@ -1677,152 +1479,9 @@ class AppSettings(BaseSettings):
         description="Compatibility passthrough for workflow repository override.",
         exclude=True,
     )
-    workflow_git_user_email: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "workflow_git_user_email", "WORKFLOW_GIT_USER_EMAIL"
-        ),
-        description="Compatibility passthrough for workflow git user email.",
-        exclude=True,
-    )
-    moonmind_git_user_name: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_git_user_name", "MOONMIND_GIT_USER_NAME"
-        ),
-        description="Compatibility passthrough for legacy MoonMind git user display name.",
-        exclude=True,
-    )
-    moonmind_git_user_email: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_git_user_email", "MOONMIND_GIT_USER_EMAIL"
-        ),
-        description="Compatibility passthrough for legacy MoonMind git user email.",
-        exclude=True,
-    )
-    moonmind_live_log_events_enabled: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_live_log_events_enabled",
-            "MOONMIND_LIVE_LOG_EVENTS_ENABLED",
-        ),
-        description="Compatibility passthrough for legacy live log event setting.",
-        exclude=True,
-    )
-    moonmind_live_log_events_batch_bytes: Optional[int] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_live_log_events_batch_bytes",
-            "MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES",
-        ),
-        description="Compatibility passthrough for legacy live log batch size setting.",
-        exclude=True,
-    )
-    moonmind_live_log_events_flush_interval_ms: Optional[int] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_live_log_events_flush_interval_ms",
-            "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
-        ),
-        description="Compatibility passthrough for legacy live log flush interval setting.",
-        exclude=True,
-    )
-    moonmind_claude_cli_auth_mode: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "moonmind_claude_cli_auth_mode",
-            "MOONMIND_CLAUDE_CLI_AUTH_MODE",
-        ),
-        description="Compatibility passthrough for legacy Claude CLI auth mode.",
-        exclude=True,
-    )
-    claude_home: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("claude_home", "CLAUDE_HOME"),
-        description="Compatibility passthrough for legacy Claude auth home.",
-        exclude=True,
-    )
 
     # Default providers and models
     default_chat_provider: str = Field("google", alias="DEFAULT_CHAT_PROVIDER")
-
-    # Model cache settings (MoonLadderStudios/MoonMind#3941: the unit-less
-    # MODEL_CACHE_REFRESH_INTERVAL name is a legacy alias honored once through
-    # this owner. MODEL_CACHE_REFRESH_INTERVAL_SECONDS is canonical and wins
-    # when both are set; a blank value behaves like an omitted one.)
-    model_cache_refresh_interval_seconds: int = Field(
-        3600,
-        validation_alias=AliasChoices(
-            "MODEL_CACHE_REFRESH_INTERVAL_SECONDS",
-            "MODEL_CACHE_REFRESH_INTERVAL",
-        ),
-    )
-    # Other settings
-    fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
-    fernet_key: Optional[str] = Field(None, alias="FERNET_KEY")
-    postgres_version: int = Field(14, alias="POSTGRES_VERSION")
-
-    # ------------------------------------------------------------------
-    # Validators
-    # ------------------------------------------------------------------
-
-    @field_validator("model_cache_refresh_interval_seconds", mode="before")
-    @classmethod
-    def _blank_model_cache_interval_to_default(cls, v):
-        """Ensure a blank interval behaves like an omitted one.
-
-        An empty string must resolve to the documented default instead of
-        failing startup, while an explicit ``0`` stays ``0``. Because
-        ``AliasChoices`` selects the blank canonical value before this
-        validator runs, a blank canonical input falls through to the legacy
-        ``MODEL_CACHE_REFRESH_INTERVAL`` override when one is set.
-        """
-
-        if v is None or (isinstance(v, str) and not v.strip()):
-            legacy = os.environ.get("MODEL_CACHE_REFRESH_INTERVAL", "")
-            if isinstance(legacy, str) and legacy.strip():
-                return legacy
-            return 3600
-        return v
-
-    @field_validator("fastapi_reload", mode="before")
-    @classmethod
-    def _coerce_fastapi_reload(cls, v):
-        """Ensure an empty string or malformed value for FASTAPI_RELOAD becomes False.
-
-        This avoids ValidationError when the env var is set but left blank.
-        """
-        from moonmind.utils.env_bool import env_to_bool
-
-        return env_to_bool(v, default=False)
-
-    def is_provider_enabled(self, provider: str) -> bool:
-        """Check if a provider is enabled"""
-        provider = provider.lower()
-        if provider == "google":
-            return self.google.google_enabled and bool(self.google.google_api_key)
-        elif provider == "openai":
-            return self.openai.openai_enabled and bool(self.openai.openai_api_key)
-        elif provider == "anthropic":
-            return self.anthropic.anthropic_enabled and bool(
-                self.anthropic.anthropic_api_key
-            )
-        else:
-            return False
-
-    def get_default_chat_model(self) -> str:
-        """Get the default chat model based on the default provider"""
-        provider = self.default_chat_provider.lower()
-        if provider == "google":
-            return self.google.google_chat_model
-        elif provider == "openai":
-            return self.openai.openai_chat_model
-        elif provider == "anthropic":
-            return self.anthropic.anthropic_chat_model
-        else:
-            # Fallback to google if unknown provider
-            return self.google.google_chat_model
 
     @property
     def claude_runtime_gate(self):
@@ -1839,10 +1498,6 @@ class AppSettings(BaseSettings):
         super().model_post_init(__context)
         if not self.workflow.codex_queue:
             self.workflow.codex_queue = self.workflow.default_queue
-        if self.worker_stage_command_timeout_seconds is not None:
-            self.workflow.stage_command_timeout_seconds = (
-                self.worker_stage_command_timeout_seconds
-            )
         if self.worker_codex_model is not None:
             self.workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:

@@ -17,9 +17,7 @@ def test_codex_login_check_uses_omnigent_host_image(monkeypatch, override):
     monkeypatch.setattr(
         "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
     )
-    monkeypatch.setattr(
-        settings.workflow, "job_image", "registry.invalid/api:agent-free"
-    )
+    monkeypatch.setenv("WORKFLOW_JOB_IMAGE", "registry.invalid/api:agent-free")
     monkeypatch.setattr(settings.workflow, "codex_login_check_image", override)
     client = MagicMock()
     container = client.containers.run.return_value
