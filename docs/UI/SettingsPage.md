@@ -79,7 +79,7 @@ There is no Settings landing page, because the dropdown already is the configura
 | Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` | `Providers & Secrets \| MoonMind` |
 | Operations | `/settings/operations` | `settings-operations` | `Operations \| MoonMind` |
 
-Both use the dashboard's utility-page classification and share a bundle with separate route-owned components. Security is a top-level workspace, not a Configuration page.
+Both use the dashboard's utility-page classification and share a bundle with separate route-owned components. Security is a top-level workspace, not a Configuration page. When the preset catalog is disabled, Assessments and Reports still load direct security assessment work and state that preset-based history is unavailable.
 
 ### 5.2 Default entry point
 

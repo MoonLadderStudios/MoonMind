@@ -8,7 +8,7 @@ import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { AssessmentProjectsSettings } from '../components/settings/AssessmentProjectsSettings';
 import { AssessmentAuthorizationsSettings } from '../components/settings/AssessmentAuthorizationsSettings';
 import { SettingsDraftGuardProvider } from '../components/settings/SettingsDraftGuard';
-import { responseError } from '../lib/api/client';
+import { ApiError, responseError } from '../lib/api/client';
 import { copyAssessmentSnapshot } from '../lib/assessmentProjects';
 import { buildSavedResultPreviewHref, canDownloadSavedResultRaw, buildSavedResultDownloadHref, type SavedResultArtifactLike } from './saved-results';
 
@@ -29,14 +29,15 @@ function AssessmentHistory({ apiBase, reports }: { apiBase: string; reports: boo
   const [target, setTarget] = useState('');
   const [selected, setSelected] = useState('');
   const presets = useQuery({ queryKey: ['security-presets', apiBase], queryFn: async ({ signal }) => Presets.parse(await read(apiBase, '/presets?includeInactive=true', signal)) });
-  const assessmentPresets = presets.data?.items.filter(item => item.tags?.includes('security') && item.tags?.includes('assessment')) ?? [];
+  const catalogDisabled = presets.error instanceof ApiError && presets.error.status === 404 && presets.error.code === 'preset_catalog_disabled';
+  const assessmentPresets = catalogDisabled ? [] : presets.data?.items.filter(item => item.tags?.includes('security') && item.tags?.includes('assessment')) ?? [];
   // The execution API projects preset slugs as targetSkill. Include direct
   // portable assessment/tool work as well; no title-based classification.
   const skills = ['security-review', 'security.assess', ...assessmentPresets.map(item => item.slug)];
   const params = new URLSearchParams({ source: 'temporal', pageSize: '10', targetSkillIn: skills.join(',') });
   const token = tokens[tokens.length - 1];
   if (token) params.set('nextPageToken', token);
-  const runs = useQuery({ queryKey: ['security-runs', apiBase, params.toString()], enabled: presets.isSuccess,
+  const runs = useQuery({ queryKey: ['security-runs', apiBase, params.toString()], enabled: presets.isSuccess || catalogDisabled,
     queryFn: async ({ signal }) => Runs.parse(await read(apiBase, `/executions?${params}`, signal)) });
   const items = runs.data?.items ?? [];
   const details = useQueries({ queries: items.map(run => ({ queryKey: ['security-run-context', apiBase, runId(run)],
@@ -60,7 +61,8 @@ function AssessmentHistory({ apiBase, reports }: { apiBase: string; reports: boo
     <h2>{reports ? 'Reports' : 'Recent assessments'}</h2>
     <p>History for cataloged security assessment presets and direct security assessment work. Filters below apply to this page of 10 workflows, not all history. Custom workflows without assessment identity may only appear in <Link to="/workflows">Workflows</Link>.</p>
     {presets.isPending || runs.isLoading ? <p role="status">Loading assessments…</p> : null}
-    {presets.isError || runs.isError ? <div role="alert"><p>{presets.error?.message || runs.error?.message}</p><Button onClick={() => { void presets.refetch(); void runs.refetch(); }}>Try again</Button></div> : null}
+    {catalogDisabled ? <p role="status">Preset catalog is disabled. Showing direct security assessment work only; preset-based history is unavailable.</p> : null}
+    {(presets.isError && !catalogDisabled) || runs.isError ? <div role="alert"><p>{(!catalogDisabled && presets.error?.message) || runs.error?.message}</p><Button onClick={() => { void presets.refetch(); void runs.refetch(); }}>Try again</Button></div> : null}
     {runs.data?.degradedCount ? <p role="alert">The workflow service reports degraded filtering or counts. This page may be incomplete; check Workflows and Operations.</p> : null}
     <label className="block">Target / environment (current page)<select className="ml-2" value={target} onChange={event => { setTarget(event.target.value); setSelected(''); }}><option value="">All targets</option>{Array.from(new Map(rows.filter(row => row.target).map(row => [targetKey(row), `${row.target!.projectName} / ${row.target!.environmentName}`])).entries()).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
     {reports ? <label className="block">Assessment<select className="ml-2" value={selected} onChange={event => setSelected(event.target.value)}><option value="">Select an assessment</option>{visible.map(({ run }) => <option key={runId(run)} value={runId(run)}>{run.title}</option>)}</select></label> : null}
