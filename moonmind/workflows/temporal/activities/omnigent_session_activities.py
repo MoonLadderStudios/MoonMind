@@ -1084,6 +1084,14 @@ async def _reconstruct_plan_bound_request(
                 "task-input snapshot lacks the selected logical Step authority"
             )
         selected_workflow = dict(matches[0])
+    # New specialized plans freeze this preference, including null/default,
+    # alongside their tier resolution. Retained plans without the field keep
+    # their original payload; generic tier metadata is not new launch authority.
+    planned_resolution = getattr(plan.payload.modelConfig, "tierResolution", None)
+    if isinstance(planned_resolution, Mapping) and "stepPublicationBaseBranch" in planned_resolution:
+        authored_parameters["publishBaseBranch"] = planned_resolution["stepPublicationBaseBranch"]
+    if isinstance(planned_resolution, Mapping) and "stepCommitMessage" in planned_resolution:
+        authored_parameters["commitMessage"] = planned_resolution["stepCommitMessage"]
     instruction = str(selected_workflow.get("instructions") or "").strip()
     if not instruction:
         instruction = str(workflow.get("instructions") or "").strip()

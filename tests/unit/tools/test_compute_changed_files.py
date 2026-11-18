@@ -293,3 +293,33 @@ def test_creates_custom_output_parent_directory(tmp_path) -> None:
 
     assert result.returncode == 0
     assert output.read_text(encoding="utf-8").splitlines() == ["b.txt"]
+
+
+def test_reopened_or_pushed_retargeted_pull_request_selects_against_new_base(
+    tmp_path,
+) -> None:
+    # A base change emits only `edited`, which CI does not run on; the next
+    # push or a reopen reselects from the payload's current base.
+    repo, base, stacked_base = _init_repo(tmp_path)
+    (repo / "c.txt").write_text("c\n", encoding="utf-8")
+    _git(repo, "add", "c.txt")
+    _git(repo, "commit", "-qm", "stacked head")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    selections = [
+        _run_helper(
+            repo,
+            tmp_path,
+            event_name="pull_request",
+            event_payload={
+                "action": action,
+                "pull_request": {"base": {"sha": base_sha}, "head": {"sha": head}},
+            },
+        )
+        for action, base_sha in (("opened", stacked_base), ("reopened", base))
+    ]
+
+    assert selections == [
+        ("resolution=known", ["c.txt"]),
+        ("resolution=known", ["b.txt", "c.txt"]),
+    ]

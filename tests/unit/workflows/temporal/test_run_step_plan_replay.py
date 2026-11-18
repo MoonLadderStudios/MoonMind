@@ -8,6 +8,8 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_REMEDIATION_STEP_PLANS_PATCH,
     RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH,
+    RUN_STEP_COMMIT_MESSAGE_PATCH,
+    RUN_STEP_PUBLICATION_BASE_PATCH,
     MoonMindRunWorkflow,
 )
 from tests.unit.workflows.temporal.workflows.test_run_omnigent_plan_authority import _binding
@@ -22,8 +24,25 @@ class _BeforeStepPlans(MoonMindRunWorkflow):
         return MoonMindRunWorkflow._workflow_patch_enabled(patch_id)
 
 
+class _BeforeStepPublicationBase(MoonMindRunWorkflow):
+    @staticmethod
+    def _workflow_patch_enabled(patch_id):
+        if patch_id == RUN_STEP_PUBLICATION_BASE_PATCH:
+            return False
+        return MoonMindRunWorkflow._workflow_patch_enabled(patch_id)
+
+
+class _BeforeStepCommitMessage(MoonMindRunWorkflow):
+    @staticmethod
+    def _workflow_patch_enabled(patch_id):
+        if patch_id == RUN_STEP_COMMIT_MESSAGE_PATCH:
+            return False
+        return MoonMindRunWorkflow._workflow_patch_enabled(patch_id)
+
+
 async def _request(implementation, *, forged=False):
-    runtime = {"mode": "omnigent", "model": "step-model", "effort": "high"}
+    runtime = {"mode": "omnigent", "model": "step-model", "effort": "high",
+               "parameters": {"publishBaseBranch": "node-base", "commitMessage": "node message"}}
     if forged:
         runtime["omnigentExecutionPlan"] = _binding("3")
     request = implementation._build_agent_execution_request(
@@ -36,6 +55,8 @@ async def _request(implementation, *, forged=False):
                     "omnigentExecutionPlan": _binding("2"),
                     "resolvedSkillsetRef": "art_step_skills",
                     "commitMessage": "admitted step commit",
+                    "modelTierResolution": {"stepCommitMessage": "admitted step commit"},
+                    "publishBaseBranch": "admitted-base",
                     "model": "step-model", "effort": "high",
                 },
             },
@@ -44,9 +65,18 @@ async def _request(implementation, *, forged=False):
     expected_commit = (
         "admitted step commit"
         if request.omnigent_execution_plan.plan_ref == _binding("2")["planRef"]
-        else None
+        and implementation._workflow_patch_enabled(RUN_STEP_COMMIT_MESSAGE_PATCH)
+        else "node message"
     )
     assert request.parameters.get("commitMessage") == expected_commit
+    expected_base = (
+        "admitted-base"
+        if request.omnigent_execution_plan.plan_ref == _binding("2")["planRef"]
+        and implementation._workflow_patch_enabled(RUN_STEP_PUBLICATION_BASE_PATCH)
+        else "node-base"
+    )
+    assert request.parameters["publishBaseBranch"] == expected_base
+    assert request.parameters["runtime"]["parameters"]["publishBaseBranch"] == expected_base
     await workflow.sleep(1)
     return request.omnigent_execution_plan.plan_ref
 
@@ -56,6 +86,20 @@ class _LegacyFixture:
     @workflow.run
     async def run(self):
         return await _request(_BeforeStepPlans())
+
+
+@workflow.defn(name="LogicalStepPlanReplayFixture")
+class _BeforeBaseFixture:
+    @workflow.run
+    async def run(self):
+        return await _request(_BeforeStepPublicationBase())
+
+
+@workflow.defn(name="LogicalStepPlanReplayFixture")
+class _BeforeMessageFixture:
+    @workflow.run
+    async def run(self):
+        return await _request(_BeforeStepCommitMessage())
 
 
 @workflow.defn(name="LogicalStepPlanReplayFixture")
@@ -71,6 +115,8 @@ async def test_retained_root_plan_and_new_step_plan_histories_replay():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         for label, fixture, expected in (
             ("retained", _LegacyFixture, _binding("1")["planRef"]),
+            ("before-base", _BeforeBaseFixture, _binding("2")["planRef"]),
+            ("before-message", _BeforeMessageFixture, _binding("2")["planRef"]),
             ("current", _CurrentFixture, _binding("2")["planRef"]),
         ):
             queue = f"test-logical-step-plan-{label}"
@@ -212,3 +258,71 @@ async def test_retained_loop_requests_and_controller_plan_histories_replay():
     replayer = Replayer(workflows=[_CurrentLoopFixture], workflow_runner=UnsandboxedWorkflowRunner())
     for history in histories:
         await replayer.replay_workflow(history)
+
+
+@pytest.mark.parametrize("saved_base", ["release", "", None])
+@pytest.mark.parametrize("source", ["runtime", "node", "runtime_parameters"])
+def test_specialized_publication_base_uses_frozen_admission(monkeypatch, saved_base, source):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(namespace="default", workflow_id="mm:step-plans", run_id="run-1", parent=None))
+    monkeypatch.setattr(workflow, "patched", lambda _patch: True)
+    runtime = {"mode": "omnigent", "model": "step-model", "effort": "high"}
+    node = {"runtime": runtime}
+    if source == "runtime_parameters":
+        runtime["parameters"] = {"publishBaseBranch": "changed"}
+    else:
+        (runtime if source == "runtime" else node)["publishBaseBranch"] = "changed"
+    admitted = {
+        "omnigentExecutionPlan": _binding("2"),
+        "resolvedSkillsetRef": "art_step_skills",
+        "modelTierResolution": {"tierParameterDefaults": {}},
+        "publishBaseBranch": saved_base,
+        "model": "step-model", "effort": "high",
+    }
+    request = MoonMindRunWorkflow()._build_agent_execution_request(
+        node_inputs=node, node_id="verify", tool_name="auto",
+        workflow_parameters={
+            "omnigentExecutionPlan": _binding("1"),
+            "publishBaseBranch": "root-base",
+            "omnigentStepExecutionPlans": {"verify": admitted},
+        },
+    )
+    assert request.parameters.get("publishBaseBranch") == saved_base
+    assert request.parameters["runtime"].get("parameters", {}).get("publishBaseBranch") == saved_base
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("saved_message", ["release", "", None])
+@pytest.mark.parametrize("source", ["runtime", "node", "runtime_parameters"])
+def test_specialized_commit_message_uses_frozen_admission(monkeypatch, saved_message, source, legacy):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(namespace="default", workflow_id="mm:step-plans", run_id="run-1", parent=None))
+    monkeypatch.setattr(workflow, "patched", lambda _patch: True)
+    runtime = {"mode": "omnigent", "model": "step-model", "effort": "high"}
+    node = {"runtime": runtime}
+    if source == "runtime_parameters":
+        runtime["parameters"] = {"commitMessage": "changed"}
+    else:
+        (runtime if source == "runtime" else node)["commitMessage"] = "changed"
+    admitted = {
+        "omnigentExecutionPlan": _binding("2"),
+        "resolvedSkillsetRef": "art_step_skills",
+        "modelTierResolution": {"tierParameterDefaults": {}, "stepCommitMessage": saved_message},
+        "commitMessage": saved_message,
+        "model": "step-model", "effort": "high",
+    }
+    if legacy:
+        admitted["modelTierResolution"].pop("stepCommitMessage")
+    request = MoonMindRunWorkflow()._build_agent_execution_request(
+        node_inputs=node, node_id="verify", tool_name="auto",
+        workflow_parameters={
+            "omnigentExecutionPlan": _binding("1"),
+            "commitMessage": "root message",
+            "omnigentStepExecutionPlans": {"verify": admitted},
+        },
+    )
+    assert request.parameters.get("commitMessage") == ("changed" if legacy else saved_message)
+    if not legacy:
+        assert request.parameters["runtime"].get("parameters", {}).get("commitMessage") == saved_message

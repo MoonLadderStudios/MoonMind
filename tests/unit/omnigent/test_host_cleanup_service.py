@@ -30,12 +30,18 @@ class _Backend:
         logs_stderr: str = "",
         logs_exit_code: int = 0,
         logs_raises: Exception | None = None,
+        volume_users: dict[str, dict[str, str]] | None = None,
+        list_users_exit_code: int = 0,
     ) -> None:
         self.owner = owner
         self.logs = logs
         self.logs_stderr = logs_stderr
         self.logs_exit_code = logs_exit_code
         self.logs_raises = logs_raises
+        # volume -> {container id: Docker status}; Docker refuses to remove a
+        # volume that any container, even a never-started one, still mounts.
+        self.volume_users = volume_users or {}
+        self.list_users_exit_code = list_users_exit_code
         self.commands: list[list[str]] = []
         self.kwargs: list[dict[str, object]] = []
 
@@ -50,6 +56,36 @@ class _Backend:
             if self.logs_raises is not None:
                 raise self.logs_raises
             return self.logs_exit_code, self.logs, self.logs_stderr
+        if argv[:2] == ["docker", "ps"]:
+            if self.list_users_exit_code:
+                return self.list_users_exit_code, "", "Cannot connect to Docker"
+            filters = dict(
+                argv[index + 1].split("=", 1)
+                for index, word in enumerate(argv)
+                if word == "--filter"
+            )
+            users = self.volume_users.get(filters.get("volume", ""), {})
+            status = filters.get("status")
+            return (
+                0,
+                "".join(
+                    f"{container}\n"
+                    for container, state in users.items()
+                    if status is None or state == status
+                ),
+                "",
+            )
+        if argv[:3] == ["docker", "volume", "rm"]:
+            if self.volume_users.get(argv[3]):
+                return 1, "", f"Error: remove {argv[3]}: volume is in use"
+            return 0, "", ""
+        if argv[:2] == ["docker", "rm"] and argv[2] != "-f":
+            for container in argv[2:]:
+                for users in self.volume_users.values():
+                    if users.get(container, "created") != "created":
+                        return 1, "", "cannot remove container: it is running"
+                    users.pop(container, None)
+            return 0, "", ""
         return 0, "", ""
 
 
@@ -145,3 +181,53 @@ async def test_cleanup_stale_owner_is_fenced_before_any_log_read_or_removal() ->
     kinds = [tuple(command[:2]) for command in backend.commands]
     assert ("docker", "logs") not in kinds
     assert ("docker", "rm") not in kinds
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_never_started_writers_that_pin_lease_volumes() -> None:
+    # A ``docker run --rm`` capability writer killed by its timeout between
+    # create and start stays Created forever and still mounts the volume.
+    backend = _Backend(
+        volume_users={
+            "mm-state-1": {"writer-a": "created"},
+            "mm-control-1": {"writer-b": "created", "writer-c": "created"},
+        }
+    )
+
+    evidence = await _cleanup(backend)
+
+    assert evidence["stateVolumeRemoved"] is True
+    assert evidence["controlVolumeRemoved"] is True
+    assert backend.volume_users == {"mm-state-1": {}, "mm-control-1": {}}
+    removed_volumes = [
+        command[3]
+        for command in backend.commands
+        if command[:3] == ["docker", "volume", "rm"]
+    ]
+    assert removed_volumes == ["mm-state-1", "mm-control-1"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_never_removes_a_started_volume_user() -> None:
+    backend = _Backend(volume_users={"mm-control-1": {"live-writer": "running"}})
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _cleanup(backend)
+
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED.value
+    assert backend.volume_users == {"mm-control-1": {"live-writer": "running"}}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_defers_volume_removal_when_its_users_cannot_be_listed() -> None:
+    backend = _Backend(list_users_exit_code=1)
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _cleanup(backend)
+
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED.value
+    assert not [
+        command
+        for command in backend.commands
+        if command[:3] == ["docker", "volume", "rm"]
+    ]

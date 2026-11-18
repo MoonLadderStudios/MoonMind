@@ -2,6 +2,10 @@ name: CI / Test Suite
 
 on:
   pull_request:
+    # Draft pushes already get full validation, so ready_for_review would only
+    # repeat the same head. `edited` also fires for body edits, whose skipped
+    # jobs would replace real required results; a base retarget reruns on the
+    # next push or a reopen.
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
@@ -58,7 +62,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.verification_phase }}-${{ inputs.verification_phase && github.run_id || inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
+  # A newer run supersedes only its own PR, merge group or event kind on a ref:
+  # a manual dispatch and the nightly schedule never cancel each other.
+  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.verification_phase }}-${{ github.event_name }}-${{ inputs.verification_phase && github.run_id || inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

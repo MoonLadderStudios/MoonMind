@@ -49,6 +49,10 @@ agent_jobs/
 # Runtime / ephemeral data (never commit)
 /var/
 /omnigent_workspaces/
+# Container test jobs mount the checkout at /workspace, where the deployment
+# evidence mirror writes; runtime write probes also leave mtime-test-* here.
+/omnigent-evidence/
+/mtime-test-*/
 
 # Runtime / ephemeral artifact output directories
 artifacts*/

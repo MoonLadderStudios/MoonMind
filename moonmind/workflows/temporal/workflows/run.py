@@ -885,6 +885,8 @@ RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
     "run-omnigent-execution-plan-binding-authority-v1"
 )
 RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH = "run-omnigent-step-execution-plans-v1"
+RUN_STEP_COMMIT_MESSAGE_PATCH = "run-step-commit-message-v1"
+RUN_STEP_PUBLICATION_BASE_PATCH = "run-step-publication-base-v1"
 RUN_OMNIGENT_REMEDIATION_STEP_PLANS_PATCH = "run-omnigent-remediation-step-plans-v1"
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
@@ -23790,6 +23792,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         trusted_remediation_checkpoint_restore_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
+        admitted_step = None
         if self._workflow_patch_enabled(RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH):
             step_plans = (workflow_parameters or {}).get("omnigentStepExecutionPlans")
             admitted_step = step_plans.get(node_id) if isinstance(step_plans, Mapping) else None
@@ -24079,6 +24082,36 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if isinstance(explicit_parameters, Mapping):
                 parameters["runtime"]["parameters"] = dict(explicit_parameters)
                 parameters.update(explicit_parameters)
+        if (
+            isinstance(admitted_step, Mapping)
+            and "publishBaseBranch" in admitted_step
+            and self._workflow_patch_enabled(RUN_STEP_PUBLICATION_BASE_PATCH)
+        ):
+            # Admission, not regenerated node/runtime parameters, owns this
+            # logical step's base (including an admitted default/null). Retained
+            # histories and step records without this field keep their payload.
+            parameters["publishBaseBranch"] = admitted_step["publishBaseBranch"]
+            runtime_parameters = dict(parameters.get("runtime") or {})
+            runtime_parameters["parameters"] = {
+                **(runtime_parameters.get("parameters") or {}),
+                "publishBaseBranch": admitted_step["publishBaseBranch"],
+            }
+            parameters["runtime"] = runtime_parameters
+        if (
+            isinstance(admitted_step, Mapping)
+            and "commitMessage" in admitted_step
+            and "stepCommitMessage" in (admitted_step.get("modelTierResolution") or {})
+            and self._workflow_patch_enabled(RUN_STEP_COMMIT_MESSAGE_PATCH)
+        ):
+            # Only newly frozen preferences override generated launch inputs.
+            # Replay and retained plans without the marker keep their payload.
+            parameters["commitMessage"] = admitted_step["commitMessage"]
+            runtime_parameters = dict(parameters.get("runtime") or {})
+            runtime_parameters["parameters"] = {
+                **(runtime_parameters.get("parameters") or {}),
+                "commitMessage": admitted_step["commitMessage"],
+            }
+            parameters["runtime"] = runtime_parameters
         remediation_context_enabled = self._workflow_patch_enabled(
             RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH
         )

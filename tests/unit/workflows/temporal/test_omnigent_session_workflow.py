@@ -258,9 +258,11 @@ def test_intent_snapshot_keeps_plan_bound_authority_compact() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("processing", [None, {"modelDelivery": "disabled"}, {"modelDelivery": "local_only"}, {"allowedProfileRefs": ["different-profile"]}, {"allowedProfileRefs": ["provider-profile-1"]}], ids=["legacy", "disabled", "local", "profile-bound", "allowed-profile"])
+@pytest.mark.parametrize("publication", ["absent", "tier", "explicit", "blank", "inherited", "legacy-tier"])
+@pytest.mark.parametrize("layout", ["draft", "scheduled"])
 async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     monkeypatch: pytest.MonkeyPatch,
-    processing,
+    processing, publication, layout, message="legacy",
 ) -> None:
     snapshot = {
         "schemaVersion": "task-input-snapshot/v1",
@@ -290,6 +292,29 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     if processing is not None:
         from tests.unit.services.test_assessment_model_delivery import source
         snapshot["draft"]["assessmentProject"] = source(processing).parameters["assessmentProject"]
+    expected_base = None
+    if publication not in {"absent", "legacy-tier"}:
+        expected_base = "tier-base"
+    if publication == "inherited":
+        expected_base = "root-base"
+        if layout == "scheduled":
+            snapshot["draft"]["publishBaseBranch"] = expected_base
+        else:
+            snapshot["draft"]["workflow"]["runtime"] = {
+                "parameters": {"publishBaseBranch": expected_base}
+            }
+    if publication in {"explicit", "blank"}:
+        expected_base = "step-base" if publication == "explicit" else ""
+        snapshot["draft"]["workflow"]["steps"][1]["runtime"] = {
+            "parameters": {"publishBaseBranch": expected_base}
+        }
+    expected_message = None
+    if message != "legacy":
+        expected_message = {"tier": "tier message", "explicit": "step message", "blank": "", "null": None}[message]
+        if message == "explicit":
+            snapshot["draft"]["workflow"]["steps"][1].setdefault("runtime", {}).setdefault("parameters", {})["commitMessage"] = expected_message
+    if layout == "scheduled":
+        snapshot["target"] = {"initialParameters": snapshot.pop("draft")}
     snapshot_digest = omnigent_session_activities._digest_bytes(
         omnigent_session_activities._json_bytes(snapshot)
     )
@@ -320,6 +345,12 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
             },
             modelConfig=SimpleNamespace(
                 qualifiedId="opencode/gpt-5",
+                tierResolution={
+                    "tierParameterDefaults": {"publishBaseBranch": "tier-base", "commitMessage": "tier message"},
+                    **({"stepCommitMessage": expected_message} if message != "legacy" else {}),
+                    **({"stepPublicationBaseBranch": expected_base}
+                       if publication != "legacy-tier" else {}),
+                },
                 effort="high",
             ),
         )
@@ -350,6 +381,8 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
         logical_step_id="implement",
     )
 
+    assert request.parameters.get("commitMessage") == expected_message
+    assert request.parameters.get("publishBaseBranch") == expected_base
     assert "assessmentProject" not in request.parameters
     assert request.instruction_ref == "Implement the selected change."
     assert request.instruction_ref != binding.task_input_snapshot_ref
@@ -400,6 +433,8 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
         ),
         workspace_checkpoint_restore_ref=checkpoint_restore_ref,
     )
+    assert continued.parameters.get("commitMessage") == expected_message
+    assert continued.parameters.get("publishBaseBranch") == expected_base
     assert continued.instruction_ref == continuation_instruction
     assert continued.input_refs[-2:] == continuation_refs
     assert (
@@ -2634,3 +2669,12 @@ async def test_signal_continuation_claims_through_the_canonical_command_service(
         ) == 2
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["tier", "explicit", "blank", "null", "legacy"])
+@pytest.mark.parametrize("layout", ["draft", "scheduled"])
+async def test_compact_step_commit_message_preserves_frozen_preference(monkeypatch, message, layout):
+    await test_compact_plan_handoff_reconstructs_selected_authored_step(
+        monkeypatch, None, "absent", layout, message=message,
+    )

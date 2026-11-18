@@ -23,10 +23,9 @@ if TYPE_CHECKING:
     )
 
 
-# Commit messages already cross the fixed-step request handoff without changing
-# repository authority. Other native launch options need their own equivalent
-# admission/consumer path before this compiler can translate them.
-_STEP_LAUNCH_PARAMETER_KEYS = frozenset({"commitMessage"})
+# Both publication preferences have existing consumers. Neither grants writes
+# or changes repository identity; other native options still need translation.
+_STEP_LAUNCH_PARAMETER_KEYS = frozenset({"commitMessage", "publishBaseBranch"})
 
 
 @dataclass(frozen=True)
@@ -158,10 +157,30 @@ async def compile_step_execution_plans(
         if frozen:
             # The saved step handoff owns supplied and absent launch choices.
             for key in _STEP_LAUNCH_PARAMETER_KEYS:
+                if key == "publishBaseBranch" and key not in saved:
+                    # Older step records did not carry the base. Their original
+                    # immutable task inputs still own the inherited choice.
+                    continue
                 parameters.pop(key, None)
                 if key in saved:
                     parameters[key] = copy.deepcopy(saved[key])
         else:
+            # Match the planner's authored publication aliases before applying
+            # tier defaults. Explicit step parameters still win below, including
+            # null/default; successors use only their already frozen handoff.
+            publication = task.get("publish")
+            publication = publication if isinstance(publication, Mapping) else {}
+            message = publication.get("commitMessage", initial_parameters.get("commitMessage"))
+            if isinstance(message, str) and message.strip():
+                parameters["commitMessage"] = message.strip()
+            for candidate in (
+                publication.get("prBaseBranch"), publication.get("baseBranch"),
+                initial_parameters.get("publishBaseBranch"),
+                initial_parameters.get("prBaseBranch"), initial_parameters.get("baseBranch"),
+            ):
+                if isinstance(candidate, str) and candidate.strip():
+                    parameters["publishBaseBranch"] = candidate.strip()
+                    break
             applied = apply_tier_parameter_defaults(
                 parameters, tier_parameters=defaults, explicit_parameters=explicit,
             )
@@ -169,6 +188,24 @@ async def compile_step_execution_plans(
             # Model-only steps keep their existing readmission drift checks.
             if defaults or explicit:
                 resolution["tierParameterDefaults"] = applied
+        base = parameters.get("publishBaseBranch")
+        if base is not None and not isinstance(base, str):
+            raise ValueError("Selected step publication base must be a string or null")
+        if not frozen and (defaults or explicit):
+            resolution["stepPublicationBaseBranch"] = copy.deepcopy(parameters.get("publishBaseBranch"))
+        if "stepPublicationBaseBranch" in resolution:
+            if frozen and saved.get("publishBaseBranch") != resolution["stepPublicationBaseBranch"]:
+                raise ValueError("Selected step publication base conflicts with its admitted inputs")
+            parameters["publishBaseBranch"] = copy.deepcopy(resolution["stepPublicationBaseBranch"])
+        message = parameters.get("commitMessage")
+        if message is not None and not isinstance(message, str):
+            raise ValueError("Selected step commit message must be a string or null")
+        if not frozen and (defaults or explicit):
+            resolution["stepCommitMessage"] = copy.deepcopy(message)
+        if "stepCommitMessage" in resolution:
+            if frozen and saved.get("commitMessage") != resolution["stepCommitMessage"]:
+                raise ValueError("Selected step commit message conflicts with its admitted inputs")
+            parameters["commitMessage"] = copy.deepcopy(resolution["stepCommitMessage"])
         parameters.update(model=model, effort=effort, modelSource=resolution.get("modelSource"))
         # The original snapshot remains unchanged. Resolved selection is the
         # same canonical metadata used by ordinary admission and the adapter.
@@ -189,7 +226,13 @@ async def compile_step_execution_plans(
             "model": model,
             "effort": effort,
             "modelTierResolution": resolution,
-            **{key: copy.deepcopy(parameters[key]) for key in _STEP_LAUNCH_PARAMETER_KEYS if key in parameters},
+            **{
+                key: copy.deepcopy(parameters[key])
+                for key in _STEP_LAUNCH_PARAMETER_KEYS
+                if key in parameters and (
+                    key != "publishBaseBranch" or "stepPublicationBaseBranch" in resolution
+                )
+            },
         }
         if foreign_profile:
             step_parameters[step_id].update({

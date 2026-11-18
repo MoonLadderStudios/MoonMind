@@ -2034,3 +2034,16 @@ def test_late_ownership_failure_blocks_merge_after_successful_selected_work(
     result = _run_required_gate(tmp_path, outputs=selection, results=results)
     assert result.returncode != 0
     assert "preflight-policy is always required but ended with result=" in result.stdout
+
+
+def test_pull_request_triggers_cover_candidates_without_duplicate_runs():
+    types = _workflow_triggers(_load_workflow())["pull_request"]["types"]
+    # No job reads the draft flag, so a draft push already gets the full
+    # candidate result; ready_for_review would only cancel and repeat it.
+    assert "pull_request.draft" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "ready_for_review" not in types
+    # `edited` also fires for title/body edits, whose skipped jobs would replace
+    # the head's real ci-required result. A base retarget reruns through the
+    # next push or a reopen, which select against the new base.
+    assert "edited" not in types
+    assert {"synchronize", "reopened"} <= set(types)
