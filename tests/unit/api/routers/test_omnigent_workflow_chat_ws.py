@@ -431,12 +431,13 @@ def test_unknown_ws_transport_fails_closed_with_diagnostic() -> None:
 # --- Terminal / PTY gating ----------------------------------------------------
 
 
-def test_terminal_attach_is_denied_by_capability() -> None:
+@pytest.mark.parametrize("query", ["", "?await_launch=true"])
+def test_terminal_attach_is_denied_by_capability(query) -> None:
     # Terminal input requires writeTerminal, which the facade never grants, so
     # even the workflow owner cannot write to a PTY (acceptance criteria 4-5).
     client = _build()
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach" + query)
     )
     assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
     assert disconnect.reason == "omnigent_chat_operation_denied"
@@ -463,6 +464,37 @@ def test_terminal_attach_relays_when_durable_policy_explicitly_grants_it() -> No
         _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"),
     )
     assert disconnect.code == 1000
+
+
+@pytest.mark.parametrize("hint", ["true", "TRUE", "false", "1", "", "unexpected"])
+def test_terminal_attach_preserves_only_normalized_launch_wait(monkeypatch, hint) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    captured = {}
+
+    async def relay(*, browser, **kwargs):
+        captured.update(kwargs)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
+    client = _build()
+    disconnect = _connect_expect_close(
+        client,
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach"
+            f"?read_only=true&transport=pty&await_launch={hint}&unreviewed=drop"
+        ),
+    )
+    assert disconnect.code == 1000
+    query = parse_qs(urlsplit(captured["upstream_url"]).query)
+    expected = {"read_only": ["true"], "transport": ["pty"]}
+    if hint.lower() == "true":
+        expected["await_launch"] = ["true"]
+    assert query == expected
+    assert "/prov-sess-1/resources/terminals/t1/attach" in captured["upstream_url"]
 
 
 def test_terminal_input_frame_is_scanned_and_durably_receipted(

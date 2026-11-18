@@ -22,15 +22,23 @@ from moonmind.omnigent.opencode_runtime_validation import (
 )
 from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF, omnigent_proxy_env
 
-
 REQUESTED_IMAGE = "registry.example/opencode@sha256:" + "a" * 64
 EFFECTIVE_IMAGE = "registry.example/opencode@sha256:" + "b" * 64
+
+
+def _is_catalog_probe(argv):
+    script = " ".join(argv)
+    return (
+        "integration/{provider}/connect/key" in script
+        or 'opencode models --refresh "$2"' in script
+    )
 
 
 def test_model_probe_stages_auth_in_writable_home_with_restricted_egress() -> None:
     image_ref = "registry.example/opencode@sha256:" + "a" * 64
     argv = _model_probe_argv(
         image_ref=image_ref,
+        runtime_version="2.0.32",
         provider_id="opencode-go",
         credential_source="credential-volume",
         credential_target="/run/mm-credentials/opencode",
@@ -50,38 +58,73 @@ def test_model_probe_stages_auth_in_writable_home_with_restricted_egress() -> No
     for item in omnigent_proxy_env():
         assert item in argv
     script = argv[argv.index("-ceu") + 1]
-    assert 'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json' in script
-    assert "exec opencode models --refresh" in script
-    assert "head" not in script
+    assert '(Path(credential_dir) / "auth.json").read_text()' in script
+    assert "exec python3 -c" in script
+    assert "head -" not in script
 
 
 def test_credentialless_model_probe_omits_auth_mount_and_staging() -> None:
     image_ref = "registry.example/opencode@sha256:" + "a" * 64
-    argv = _model_probe_argv(image_ref=image_ref, provider_id="opencode")
+    argv = _model_probe_argv(image_ref=image_ref, provider_id="opencode", runtime_version="2.0.32")
 
     assert "--mount" not in argv
     script = argv[argv.index("-ceu") + 1]
-    assert "auth.json" not in script
-    assert "exec opencode models --refresh" in script
+    assert argv[-2] == ""
+    assert "exec python3 -c" in script
+
+
+@pytest.mark.parametrize("credentials", [False, True])
+def test_retained_v1_probe_uses_isolated_cli(credentials):
+    argv = _model_probe_argv(
+        image_ref=REQUESTED_IMAGE,
+        provider_id="openrouter",
+        runtime_version="opencode 1.18.11",
+        credential_source="credential-volume" if credentials else None,
+        credential_target="/run/mm-credentials/opencode" if credentials else None,
+    )
+    script = argv[argv.index("-ceu") + 1]
+    assert 'exec opencode models --refresh "$2"' in script
+    assert "integration/{provider}/connect/key" not in script
+    assert "OPENCODE_AUTH_CONTENT" in script
+    assert "--read-only" in argv
+    assert ("--mount" in argv) is credentials
+    assert ('cp "$1/auth.json"' in script) is credentials
+    if credentials:
+        assert "chmod 0600 /home/app/.local/share/opencode/auth.json" in script
+        assert "type=volume,src=credential-volume,dst=/run/mm-credentials/opencode,readonly" in argv
+
+
+@pytest.mark.parametrize("runtime_version", ["", "unavailable", "3.0.0", "0.9.0"])
+def test_unknown_validation_runtime_never_guesses_a_protocol(runtime_version):
+    with pytest.raises(HarnessPlatformError) as exc:
+        _model_probe_argv(
+            image_ref=REQUESTED_IMAGE, provider_id="openrouter", runtime_version=runtime_version
+        )
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH
 
 
 @pytest.mark.asyncio
-async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret() -> (
-    None
-):
+@pytest.mark.parametrize("runtime_version", ["1.18.11", "2.0.32"])
+async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret(runtime_version) -> None:
     class _Backend:
         def __init__(self) -> None:
             self.commands: list[list[str]] = []
 
         async def run(self, argv, **_kwargs):
             self.commands.append(list(argv))
-            if "models --refresh" in " ".join(argv):
+            if "-ceu" in argv:
+                script = argv[argv.index("-ceu") + 1]
+                if runtime_version.startswith("1."):
+                    assert 'opencode models --refresh "$2"' in script
+                    assert "integration/{provider}/connect/key" not in script
+                else:
+                    assert "integration/{provider}/connect/key" in script
                 return (
                     0,
                     b"opencode/muse-spark-1.2-contributor-free\n",
                     b"",
                 )
-            return 0, b"1.18.11\n", b""
+            return 0, runtime_version.encode(), b""
 
     class _Artifacts:
         async def write_json(self, **_kwargs):
@@ -113,9 +156,13 @@ async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
-@pytest.mark.parametrize("probe_result", ["accepted", "rejected", "sibling-only"])
+@pytest.mark.parametrize(
+    "runtime_version,probe_result",
+    [("2.0.32", result) for result in ("accepted", "verified", "rejected", "sibling-only")]
+    + [("1.18.11", result) for result in ("accepted", "rejected", "sibling-only")],
+)
 async def test_generic_validation_preserves_route_and_cleans_up(
-    provider_id, probe_result
+    provider_id, runtime_version, probe_result
 ) -> None:
     class _Backend:
         def __init__(self) -> None:
@@ -131,14 +178,30 @@ async def test_generic_validation_preserves_route_and_cleans_up(
                 }
             if argv[1:3] == ["volume", "ls"]:
                 return 0, b"owned\n", b""
-            if "models --refresh" in " ".join(argv):
+            if _is_catalog_probe(argv):
+                script = argv[argv.index("-ceu") + 1]
+                assert ("integration/{provider}/connect/key" in script) is runtime_version.startswith("2.")
+                assert ('opencode models --refresh "$2"' in script) is runtime_version.startswith("1.")
                 if probe_result == "rejected":
                     return 1, b"", b"invalid api key"
                 catalog = f"{provider_id}-other/model\nother/model\n"
+                if probe_result == "verified":
+                    import json
+
+                    return (
+                        0,
+                        json.dumps(
+                            {
+                                "models": [f"{provider_id}/author/model:free"],
+                                "credentialVerification": {"status": "verified"},
+                            }
+                        ).encode(),
+                        b"",
+                    )
                 if probe_result == "accepted":
                     catalog += f"{provider_id}/author/model:free\n"
                 return 0, catalog.encode(), b""
-            return 0, b"1.18.11\n", b""
+            return 0, runtime_version.encode(), b""
 
     class _Artifacts:
         async def write_json(self, **kwargs):
@@ -166,13 +229,16 @@ async def test_generic_validation_preserves_route_and_cleans_up(
         candidate_secret="candidate-key",
         candidate_generation=2,
     )
-    if probe_result == "accepted":
+    if probe_result in {"accepted", "verified"}:
         evidence = await validation
         assert evidence["models"] == [
             {"qualifiedId": f"{provider_id}/author/model:free"}
         ]
         assert evidence["materializerRef"] == "opencode-auth-json@1"
         assert evidence["credentialGeneration"] == 2
+        assert evidence["credentialVerification"] == {
+            "status": "verified" if probe_result == "verified" else "unverified"
+        }
         assert "candidate-key" not in str(evidence)
     else:
         with pytest.raises(HarnessPlatformError) as exc:
@@ -181,9 +247,7 @@ async def test_generic_validation_preserves_route_and_cleans_up(
             exc.value.code
             == HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE
         )
-    model_probe = next(
-        argv for argv in backend.commands if "models --refresh" in " ".join(argv)
-    )
+    model_probe = next(argv for argv in backend.commands if _is_catalog_probe(argv))
     assert (
         model_probe[model_probe.index("--network") + 1] == OMNIGENT_EGRESS_NETWORK_REF
     )
@@ -193,6 +257,8 @@ async def test_generic_validation_preserves_route_and_cleans_up(
     )
     assert backend.commands[-1] == ["docker", "volume", "rm", created]
     assert "candidate-key" not in str(backend.commands)
+
+    assert sum(_is_catalog_probe(argv) for argv in backend.commands) == 1
 
 
 @pytest.mark.asyncio
@@ -260,12 +326,13 @@ def test_sibling_catalog_does_not_validate_selected_provider(provider) -> None:
 def test_model_probe_is_scoped_to_selected_provider(provider_id, with_credentials):
     argv = _model_probe_argv(
         image_ref="registry.example/opencode@sha256:" + "a" * 64,
+        runtime_version="2.0.32",
         provider_id=provider_id,
         credential_source="credential-volume" if with_credentials else None,
         credential_target="/run/mm-credentials/opencode" if with_credentials else None,
     )
     script = argv[argv.index("-ceu") + 1]
-    assert 'exec opencode models --refresh "$2"' in script
+    assert 'request(f"integration/{provider}/connect/key"' in script
     assert argv[-3:] == [
         "--",
         "/run/mm-credentials/opencode" if with_credentials else "",
@@ -288,7 +355,7 @@ async def test_catalog_capture_through_local_bounded_runner(
 
     async def execute(*argv, **kwargs):
         commands.append(list(argv))
-        if "models --refresh" in " ".join(argv):
+        if "integration/{provider}/connect/key" in " ".join(argv):
             program = (
                 "import sys; "
                 f"sys.stdout.write(''.join(f'{provider_id}/author/model-{{i:06d}}:free\\n' "
@@ -299,7 +366,7 @@ async def test_catalog_capture_through_local_bounded_runner(
         elif kwargs.get("stdin") == asyncio.subprocess.PIPE:
             program = "import sys; sys.stdin.buffer.read()"
         else:
-            program = "print('1.18.11')"
+            program = "print('2.0.32')"
         return await original_exec(sys.executable, "-c", program, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", execute)
@@ -336,7 +403,9 @@ async def test_catalog_capture_through_local_bounded_runner(
     else:
         with pytest.raises(HarnessPlatformError, match="output exceeded.*1048576"):
             await validation
-        assert not any("--version" in argv for argv in commands)
+        # Protocol selection observes versions first; truncation still aborts
+        # discovery without a second/fallback probe or successful model evidence.
+        assert sum(_is_catalog_probe(argv) for argv in commands) == 1
         assert all("models" not in artifact for artifact in artifacts)
     assert commands[-1][0:3] == ["docker", "volume", "rm"]
 
@@ -371,11 +440,11 @@ class _DriftBackend:
             return 0, b"owned\n", b""
         if argv[1:3] == ["volume", "create"]:
             return 0, b"credential-volume\n", b""
-        if "models --refresh" in text:
+        if "integration/{provider}/connect/key" in text:
             if self.catalog_result is not None:
                 return self.catalog_result
             return 0, b"opencode-go/author/model:free\n", b""
-        return 0, b"1.18.11\n", b""
+        return 0, b"2.0.32\n", b""
 
 
 class _DriftArtifacts:
@@ -385,8 +454,7 @@ class _DriftArtifacts:
 
 def _drift_service(backend, monkeypatch) -> OpenCodeProviderRuntimeValidationService:
     monkeypatch.setattr(
-        "moonmind.omnigent.opencode_runtime_validation."
-        "compatible_deployed_fallback",
+        "moonmind.omnigent.opencode_runtime_validation." "compatible_deployed_fallback",
         lambda requested, **kwargs: (
             EFFECTIVE_IMAGE if requested == REQUESTED_IMAGE else None
         ),
@@ -431,12 +499,12 @@ async def test_stale_image_uses_compatible_replacement_across_handoff(
 
     assert evidence["imageRef"] == EFFECTIVE_IMAGE
     assert evidence["requestedImageRef"] == REQUESTED_IMAGE
-    assert evidence["models"] == [
-        {"qualifiedId": "opencode-go/author/model:free"}
-    ]
+    assert evidence["models"] == [{"qualifiedId": "opencode-go/author/model:free"}]
 
     catalog_probes = [
-        argv for argv in backend.commands if "models --refresh" in " ".join(argv)
+        argv
+        for argv in backend.commands
+        if "integration/{provider}/connect/key" in " ".join(argv)
     ]
     assert len(catalog_probes) == 1
     assert EFFECTIVE_IMAGE in catalog_probes[0]
@@ -477,9 +545,9 @@ async def test_installed_requested_image_keeps_original_evidence(
                 return 0, b"owned\n", b""
             if argv[1:3] == ["volume", "create"]:
                 return 0, b"credential-volume\n", b""
-            if "models --refresh" in text:
+            if "integration/{provider}/connect/key" in text:
                 return 0, b"opencode-go/author/model:free\n", b""
-            return 0, b"1.18.11\n", b""
+            return 0, b"2.0.32\n", b""
 
     backend = _PresentBackend()
     service = _drift_service(backend, monkeypatch)
@@ -631,3 +699,285 @@ def test_plain_403_is_not_a_credential_rejection() -> None:
     )
     assert is_confirmed_credential_rejection(err) is False
     assert is_transient_validation_error(err) is True
+
+
+@pytest.mark.parametrize("credentials", [False, True])
+@pytest.mark.parametrize("provider", ["openrouter", "anthropic", "vendor.v2_test"])
+def test_v2_catalog_probe_executes_authenticated_api_and_projects_only_ids(
+    tmp_path, credentials, provider
+):
+    """Execute the actual embedded probe against a tiny v2 contract server."""
+    import json
+    import os
+    import subprocess
+
+    from moonmind.omnigent.opencode_runtime_validation import _OPENCODE_V2_CATALOG_PROBE
+
+    binary = tmp_path / "opencode"
+    receipt = tmp_path / "requests.jsonl"
+    binary.write_text(f"#!{sys.executable}\n" + """import http.server, json, os, sys
+from pathlib import Path
+port = int(sys.argv[sys.argv.index('--port') + 1])
+assert 'OPENCODE_API_KEY' not in os.environ
+assert 'OPENROUTER_API_KEY' not in os.environ
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+    def respond(self, payload):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(json.dumps(payload).encode())
+    def do_GET(self):
+        assert self.headers.get('Authorization', '').startswith('Basic ')
+        if self.path == '/api/info': self.respond({'version': '2.0.32'})
+        elif self.path == '/api/model': self.respond({'data': [
+            {'providerID': 'openrouter', 'id': 'author/model', 'settings': {'apiKey': 'do-not-record'}},
+            {'providerID': 'sibling', 'id': 'other'},
+            {'providerID': 'openrouter', 'id': 'disabled', 'enabled': False}]})
+        else: self.send_error(404)
+    def do_POST(self):
+        assert self.path == '/api/integration/openrouter/connect/key'
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        with Path(__file__).with_name("requests.jsonl").open('a') as out: out.write(json.dumps(body)+'\\n')
+        self.send_response(204); self.end_headers()
+http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
+""")
+    binary.write_text(binary.read_text().replace("openrouter", provider))
+    binary.chmod(0o755)
+    staging = tmp_path / "credentials"
+    staging.mkdir()
+    (staging / "auth.json").write_text(
+        json.dumps({provider: {"type": "api", "key": "candidate-key"}})
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import io, urllib.request\n"
+                "original_build_opener = urllib.request.build_opener\n"
+                "class ProviderResponse:\n"
+                " def open(self, request, timeout):\n"
+                "  assert request.full_url == 'https://openrouter.ai/api/v1/key'\n"
+                "  assert request.get_header('Authorization') == 'Bearer candidate-key'\n"
+                '  return io.BytesIO(b\'{"data":{"label":"validated"}}\')\n'
+                "urllib.request.build_opener = lambda *args: ProviderResponse() if args and isinstance(args[0], urllib.request.HTTPRedirectHandler) else original_build_opener(*args)\n"
+                + _OPENCODE_V2_CATALOG_PROBE
+            ),
+            provider,
+            str(staging) if credentials else "",
+            "validate",
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "OPENCODE_API_KEY": "sibling-secret",
+            "OPENROUTER_API_KEY": "another-sibling-secret",
+        },
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "models": [f"{provider}/author/model"],
+        "credentialVerification": {
+            "status": (
+                "verified" if credentials and provider == "openrouter" else "unverified"
+            )
+        },
+    }
+    assert "do-not-record" not in result.stdout + result.stderr
+    assert receipt.exists() is credentials
+    if credentials:
+        assert json.loads(receipt.read_text()) == {"key": "candidate-key"}
+        assert (
+            json.loads((staging / "auth.json").read_text())[provider]["key"]
+            == "candidate-key"
+        )
+
+
+def test_loopback_api_401_is_not_provider_credential_rejection():
+    from moonmind.omnigent.opencode_runtime_validation import _catalog_probe_failure
+
+    exc = _catalog_probe_failure(
+        exit_code=1,
+        stderr=b"OpenCode local API unavailable (status 401)",
+        effective_image_ref=EFFECTIVE_IMAGE,
+    )
+    assert exc.code == HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED
+    assert not is_confirmed_credential_rejection(exc)
+
+
+@pytest.mark.parametrize(
+    "provider,body",
+    [
+        ("openrouter", {"data": {"label": "account-key"}}),
+        (
+            "opencode-go",
+            {
+                "usage": {
+                    key: {
+                        "status": "ok",
+                        "percent": 25,
+                        "resetsAt": "2026-11-20T00:00:00Z",
+                    }
+                    for key in ("rolling", "weekly", "monthly")
+                }
+            },
+        ),
+    ],
+)
+@pytest.mark.parametrize("status", [200, 401, 403, 429, 500, 302])
+def test_v2_provider_auth_probe_is_bounded_non_generation_and_secret_safe(
+    monkeypatch, provider, body, status
+):
+    import ast
+    import io
+    import json
+    import urllib.error
+    import urllib.request
+
+    from moonmind.omnigent.opencode_runtime_validation import _OPENCODE_V2_CATALOG_PROBE
+
+    # Exercise the same helper shipped into the image without starting a server.
+    parsed = ast.parse(_OPENCODE_V2_CATALOG_PROBE)
+    helper = ast.Module(
+        body=[
+            node
+            for node in parsed.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            and node.name in {"NoRedirect", "verify_provider_key"}
+        ],
+        type_ignores=[],
+    )
+    scope = {"urllib": __import__("urllib"), "json": json, "math": __import__("math")}
+    exec(compile(helper, "<catalog-auth-probe>", "exec"), scope)
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, request.get_method(), timeout))
+            assert request.get_header("Authorization") == "Bearer private-key"
+            if status != 200:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    "private-key",
+                    {},
+                    io.BytesIO(b"private-key"),
+                )
+            return io.BytesIO(json.dumps(body).encode())
+
+    def build(handler):
+        assert (
+            handler.redirect_request(None, None, 302, None, None, "https://evil.test")
+            is None
+        )
+        return Opener()
+
+    monkeypatch.setattr(urllib.request, "build_opener", build)
+    if status == 200:
+        scope["verify_provider_key"](provider, "private-key")
+    else:
+        with pytest.raises(RuntimeError) as error:
+            scope["verify_provider_key"](provider, "private-key")
+        assert "private-key" not in str(error.value)
+        assert ("credential rejected" in str(error.value)) is (status == 401)
+    assert calls == [
+        (
+            {
+                "openrouter": "https://openrouter.ai/api/v1/key",
+                "opencode-go": "https://opencode.ai/zen/go/v1/usage",
+            }[provider],
+            "GET",
+            15,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "provider,body",
+    [
+        ("openrouter", {}),
+        ("openrouter", {"data": {"label": ""}}),
+        ("opencode-go", {"usage": {}}),
+        (
+            "opencode-go",
+            {"usage": {key: {} for key in ("rolling", "weekly", "monthly")}},
+        ),
+    ],
+)
+def test_v2_provider_200_without_authenticated_shape_fails_closed(
+    monkeypatch, provider, body
+):
+    import ast
+    import io
+    import json
+    import urllib.request
+
+    from moonmind.omnigent.opencode_runtime_validation import _OPENCODE_V2_CATALOG_PROBE
+
+    parsed = ast.parse(_OPENCODE_V2_CATALOG_PROBE)
+    helper = ast.Module(
+        body=[
+            node
+            for node in parsed.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            and node.name in {"NoRedirect", "verify_provider_key"}
+        ],
+        type_ignores=[],
+    )
+    scope = {"urllib": __import__("urllib"), "json": json, "math": __import__("math")}
+    exec(compile(helper, "<catalog-auth-probe>", "exec"), scope)
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *_: SimpleNamespace(
+            open=lambda *_, **__: io.BytesIO(json.dumps(body).encode())
+        ),
+    )
+    with pytest.raises(RuntimeError, match="verification unavailable"):
+        scope["verify_provider_key"](provider, "private-key")
+
+
+def test_v2_catalog_probe_prefers_image_vendor_over_path_wrapper():
+    import ast
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from moonmind.omnigent.opencode_runtime_validation import _OPENCODE_V2_CATALOG_PROBE
+
+    tree = ast.parse(_OPENCODE_V2_CATALOG_PROBE)
+    body = next(
+        node.body
+        for node in tree.body
+        if isinstance(node, ast.With)
+        and any(
+            isinstance(child, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "binary"
+                for target in child.targets
+            )
+            for child in node.body
+        )
+    )
+    statements = []
+    for node in body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "process"
+            for target in node.targets
+        ):
+            break
+        statements.append(node)
+    scope = {"Path": Path, "shutil": __import__("shutil")}
+    with patch.object(Path, "is_file", return_value=True), patch(
+        "shutil.which", side_effect=AssertionError("must not resolve the PATH wrapper")
+    ):
+        exec(
+            compile(
+                ast.Module(body=statements, type_ignores=[]),
+                "<vendor-selection>",
+                "exec",
+            ),
+            scope,
+        )
+    assert scope["binary"] == "/usr/local/bin/opencode"

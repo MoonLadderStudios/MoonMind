@@ -235,18 +235,6 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="omnigent-inventory",
     ),
     DashboardDestination(
-        key="remediation",
-        label="Remediation",
-        icon_key="wrench",
-        canonical_path="/remediations",
-        path_patterns=("/remediations/*",),
-        navigation_group="operations",
-        page_classification="collection",
-        capability_key="remediationCollection",
-        endpoint_key="remediations",
-        page="remediations",
-    ),
-    DashboardDestination(
         key="artifacts",
         label="Artifacts",
         icon_key="archive",
@@ -638,7 +626,9 @@ def _settings_redirect_url(
     # which is retired as page identity (SettingsPage.md 5.3).
     if not request.query_params:
         return canonical
-    preserved = [(k, v) for k, v in request.query_params.multi_items() if k != "section"]
+    preserved = [
+        (k, v) for k, v in request.query_params.multi_items() if k != "section"
+    ]
     # Filter to page-relevant keys per target to avoid leaking irrelevant filters.
     # Providers & Secrets owns `runtime`; Operations owns `status`. The Instance
     # page keeps no URL-owned filters: stale human-scope params (scope, q) are
@@ -654,13 +644,17 @@ def _settings_redirect_url(
         if allowed is not None:
             preserved = [(k, v) for k, v in preserved if k in allowed]
         # If target is unknown, keep only generic safe keys (none) to avoid confusion.
-        query = "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in preserved)
+        query = "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in preserved
+        )
         if query:
             return f"{canonical}?{query}"
     return canonical
 
 
-def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
+def _is_extensionless_collection_route(
+    request: Request, destination_keys: set[str]
+) -> bool:
     path = request.url.path
     if not path.startswith("/"):
         return False
@@ -1348,24 +1342,6 @@ async def schedule_detail_route(
     )
 
 
-@router.get("/remediations", response_class=HTMLResponse)
-async def remediations_route(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-    _user: OperatorAdmission = Depends(get_instance_access),
-) -> HTMLResponse:
-    """Serve the capability-gated remediation inventory shell."""
-    destination = _dashboard_destination("remediation")
-    return await _render_react_page(
-        request,
-        destination.page,
-        destination.canonical_path,
-        data_wide_panel=destination.data_wide_panel,
-        session=session,
-        user=_user,
-    )
-
-
 @router.get("/artifacts", response_class=HTMLResponse)
 @router.get("/observability", response_class=HTMLResponse)
 async def artifact_collection_route(
@@ -1578,7 +1554,6 @@ async def workflow_console_route(
 
 @router.get("/artifacts/{dashboard_path:path}", response_class=HTMLResponse)
 @router.get("/observability/{dashboard_path:path}", response_class=HTMLResponse)
-@router.get("/remediations/{dashboard_path:path}", response_class=HTMLResponse)
 @router.get("/omnigent/agents/{dashboard_path:path}", response_class=HTMLResponse)
 @router.get("/omnigent/policies/{dashboard_path:path}", response_class=HTMLResponse)
 async def collection_spa_fallback_route(
@@ -1594,7 +1569,6 @@ async def collection_spa_fallback_route(
             "artifacts",
             "omnigent-agents",
             "omnigent-policies",
-            "remediation",
         },
     ):
         _raise_dashboard_route_not_found()
@@ -1646,7 +1620,6 @@ async def get_dashboard_ui_info(
             "settingsInstance": True,
             "settingsOperations": True,
             "oauthTerminal": True,
-            "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
             "omnigentPolicies": True,
         },
@@ -1666,7 +1639,6 @@ async def get_dashboard_ui_info(
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
             "omnigentPolicies": "/api/omnigent/policies",
-            "remediations": "/api/executions/remediations",
             **(
                 {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}
                 if omnigent_agents_available

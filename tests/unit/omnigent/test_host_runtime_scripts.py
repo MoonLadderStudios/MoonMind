@@ -567,9 +567,8 @@ def test_generic_projection_restores_scoped_capability_file_selector(
 
 
 def test_opencode_runtime_seeds_plugin_npm_cache_before_host_start():
-    """OpenCode's first ``serve`` runs ``npm install @opencode-ai/plugin`` in a
-    fresh per-session config directory; the entrypoint must make that install
-    resolve from the image-owned cache before Omnigent starts the runner."""
+    """SDK-backed OpenCode plugins must resolve dependencies from the image-owned
+    cache before Omnigent starts the runner."""
 
     script, environment = _build(target_path="", enable_opencode_runtime=True)
 

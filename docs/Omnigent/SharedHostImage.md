@@ -86,12 +86,15 @@ ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 The image derives from the digest-pinned stock Omnigent host base and installs at build time only:
 
 ```text
-@openai/codex@0.159.0
+@openai/codex@0.170.0
 @anthropic-ai/claude-code@2.1.281
-opencode-ai@1.18.11
+@opencode/cli@2.0.32
 gh (pinned by services/omnigent/tools/manifest.lock.json, e.g. 2.76.2)
 moonmind (copied from services/omnigent/scripts/moonmind-container-cli.py)
 ```
+
+OpenCode uses the v2 native harness supplied by Omnigent v0.22.0. The SDK
+package is `@opencode/plugin`, not the incompatible v1 `@opencode-ai/plugin`.
 
 The Claude Code 2.1.281 pin supports Opus 5.5, which rejects clients older
 than 2.1.280.
@@ -157,9 +160,9 @@ A runtime pack is trusted deployment data, never workflow-authored. The registry
 
 | Pack | Harness | Vendor runtime | Credential home |
 | --- | --- | --- | --- |
-| `codex-native-pack@1` | `codex-native` | `codex` (pin `0.159.0`) | `/home/app/.codex` |
+| `codex-native-pack@1` | `codex-native` | `codex` (pin `0.170.0`) | `/home/app/.codex` |
 | `claude-native-pack@1` | `claude-native` | `claude` (pin `2.1.281`) | `/home/app/.claude` |
-| `opencode-native-pack@1` | `opencode-native` | `opencode` (pin `1.18.11`) | `/home/app/.local/share/opencode` |
+| `opencode-native-pack@1` | `opencode-native` | `opencode` (pin `2.0.32`) | `/home/app/.local/share/opencode` |
 
 Each pack declares the vendor version command, the pinned image release, the credential-home layout (target path, writability, uid/gid ownership), the bounded environment the generic startup may shape, the ambient environment keys the row must reject, and the exact-host readiness probe kind.
 

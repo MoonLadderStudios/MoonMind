@@ -92,6 +92,47 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
     cli.chmod(0o755)
 
 
+def _install_v2_catalog_server(root: Path) -> Path:
+    """Exercise the real v2 probe against a bounded, local-only vendor API."""
+    catalogs = load_replay("omnigent-model-catalog-refresh", "catalogs.json")
+    rows = [
+        {"providerID": provider, "id": model}
+        for provider, model in (
+            item.split("/", 1) for item in catalogs["refreshed"].splitlines()
+        )
+    ]
+    (root / "opencode").write_text(
+        f"#!{sys.executable}\n"
+        "import base64, http.server, json, os, sys\n"
+        "assert sys.argv[1] == 'serve'\n"
+        "port = int(sys.argv[sys.argv.index('--port') + 1])\n"
+        "auth = 'Basic ' + base64.b64encode(('opencode:' + os.environ['OPENCODE_PASSWORD']).encode()).decode()\n"
+        f"rows = {rows!r}\n"
+        "class Handler(http.server.BaseHTTPRequestHandler):\n"
+        "    def log_message(self, *_): pass\n"
+        "    def respond(self, body):\n"
+        "        assert self.headers['Authorization'] == auth\n"
+        "        self.send_response(200); self.end_headers()\n"
+        "        self.wfile.write(json.dumps(body).encode())\n"
+        "    def do_GET(self):\n"
+        "        if self.path == '/api/info': self.respond({'version': '2.0.32'})\n"
+        "        elif self.path == '/api/model': self.respond({'data': rows})\n"
+        "        else: self.send_error(404)\n"
+        "    def do_POST(self):\n"
+        "        assert self.path == '/api/integration/opencode-go/connect/key'\n"
+        "        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n"
+        "        assert body == {'key': 'synthetic-replay-key'}\n"
+        "        self.respond(None)\n"
+        "http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()\n"
+    )
+    credentials = root / "credentials"
+    credentials.mkdir()
+    (credentials / "auth.json").write_text(json.dumps({
+        "opencode-go": {"type": "api", "key": "synthetic-replay-key"}
+    }))
+    return credentials
+
+
 async def _pinned_profile_store(tmp_path, monkeypatch, *, harness_id, pin):
     """Seed a durable Provider Profile whose Tier 2 pins ``pin``."""
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -251,6 +292,9 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
 ) -> None:
     manifest = load_replay("omnigent-model-catalog-refresh", "manifest.json")
     _install_catalog_cli(tmp_path, fault=fault)
+    v2_credentials = (
+        _install_v2_catalog_server(tmp_path) if fault == "vendor_release_changed" else None
+    )
     if fault == "build_mismatch":
         (tmp_path / "omnigent/harnesses/opencode_native/app_server.py").write_text("")
     events = []
@@ -405,7 +449,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 if fault == "vendor_runtime_missing":
                     # The real backend turns the failed exec into its typed cause.
                     return await super().run(["sh", "-c", "exit 127"], **kwargs)
-                return 0, "opencode 2.0.1", ""
+                return 0, "opencode 2.0.32" if v2_credentials else "opencode 1.18.11", ""
             if argv[3] == "/bin/sh":
                 if argv[-1] == "/home/app/.codex":
                     return 0, "4", ""
@@ -413,6 +457,22 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             if argv[3:] == ["codex", "login", "status"]:
                 events.append("login_status")
                 return 0, "Logged in using ChatGPT", ""
+            if argv[3:5] == ["python3", "-c"]:
+                from moonmind.omnigent.opencode_runtime_validation import opencode_catalog_probe_argv
+
+                assert v2_credentials is not None
+                assert argv[3:] == opencode_catalog_probe_argv(
+                    provider_id="opencode-go",
+                    credential_target="/home/app/.local/share/opencode",
+                    verify_credentials=False,
+                )
+                attempts.append(argv[2])
+                events.append("catalog")
+                return await super().run(
+                    ["env", f"PATH={tmp_path}:{os.environ.get('PATH', '')}",
+                     sys.executable, *argv[4:-2], str(v2_credentials), argv[-1]],
+                    **kwargs,
+                )
             assert argv[3:5] == ["/opt/venv/bin/python", "-c"]
             if argv[-1] == "/home/app/.codex":
                 events.append(
@@ -562,7 +622,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 # faults launch a host whose runtime differs from it.
                 runtimeDependencies=(
                     [{"name": "opencode", "version": "1.18.11"}]
-                    if fault.startswith("vendor_")
+                    if harness_id == "opencode-native"
                     else []
                 ),
             )
@@ -800,8 +860,9 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 (tmp_path / "generic-host-attestation.json").read_text()
             )
             # Observed and declared releases are both kept for diagnosis.
-            assert host_evidence["runtimeVersions"] == {"opencode": "opencode 2.0.1"}
+            assert host_evidence["runtimeVersions"] == {"opencode": "opencode 2.0.32"}
             assert host_evidence["declaredRuntimeVersions"] == {"opencode": "1.18.11"}
+            assert "exact-host-opencode-api" in (tmp_path / "generic-host-model-options.json").read_text()
     record_ended_login.assert_not_awaited()
     assert events.count("launch") == 1
     assert set(attempts) == {"replay-host"}

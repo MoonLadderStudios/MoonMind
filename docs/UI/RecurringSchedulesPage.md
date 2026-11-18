@@ -205,67 +205,17 @@ Implementation guidance:
 
 ## 7. Default full-table page layout
 
-The default `/schedules` page should be a full-width table view, visually close to the Workflows table.
+The `/schedules` table starts directly below the masthead and reaches both page edges. It uses the Workflows table's header, divider, and transparent body treatment, without a title/description band, refresh/add toolbar, summary counts, or standalone Filters button. An accessible page heading and browser-tab title remain available.
 
-Desired layout:
+Creation stays available through a compact `+` action in the shell on the overview and beside the Recurring sidebar heading on desktop detail. Both use the accessible label `Create recurring schedule` and open `/workflows/new?scheduleMode=recurring`.
 
-```text
-Masthead navigation │ Recurring page
-                          │ Page header / route context
-                          │ Recurring table control band
-                          │   [+] Total Active Next 24h Attention [optional refresh/live]
-                          │ Full recurring schedules table
-                          │   filters / view options / table / pagination / live state
-```
-
-Rules:
-
-1. Leave deliberate space between the page header/route context and the table.
-2. Use that space for the compact create action and summary metrics.
-3. The `+` action should be visually near the summary strip, not buried inside the masthead or global shell.
-4. The table should use the wide data-panel layout because it is a multi-column scanning surface.
-5. The full table should occupy the available dashboard content width.
-6. The page should not render a selected detail pane in table mode.
-7. Table mode should be optimized for comparing schedule definitions across columns.
-8. Refresh/live-update controls may appear in the control band when they do not crowd the create action and summary metrics.
-9. If space is constrained, preserve `+`, Total, Active, Next 24h, and Attention before optional controls.
-
-Create action:
-
-| Element | Contract |
-| --- | --- |
-| Visual label | compact `+` button. |
-| Accessible label | `Create recurring schedule`. |
-| Initial target | `/workflows/new?scheduleMode=recurring`. |
-| Future target | a native Recurring create route may replace the initial target. |
-
-The create action starts a recurring schedule creation flow. It should not create one-off scheduled workflow executions.
+The overview contains schedule definitions only; selecting a name opens `/schedules/{definitionId}`. Table mode does not mount a detail pane.
 
 ---
 
-## 8. Summary metrics
+## 8. Saved runtime metadata
 
-The control band includes four summary metrics:
-
-| Metric | Definition |
-| --- | --- |
-| `Total` | Count of recurring schedule definitions in the current authorized result set. |
-| `Active` | Count where `enabled === true`. |
-| `Next 24h` | Count where `enabled === true` and `nextRunAt` is within the next 24 hours. |
-| `Attention` | Count where dispatch status, dispatch error, reconciliation state, or other health fields indicate operator attention. |
-
-Rules:
-
-1. Metrics summarize recurring schedule definitions, not spawned workflow executions.
-2. Metrics should update when the table query changes.
-3. For an unpaginated list, the frontend may compute metrics from the returned `items` array.
-4. If the list becomes paginated, filtered, or server-sorted, the API should return result-level metrics so the strip does not misleadingly summarize only the current page.
-5. Metric loading states should preserve the strip layout with compact skeletons.
-6. Metric errors should not block the table if table data is available.
-7. Metrics are summary affordances only; per-row state must still be visible in the table.
-8. `Next 24h` uses the viewer's current time for client-computed metrics unless the server returns authoritative counts.
-9. Disabled or paused schedules are excluded from `Next 24h` even if `nextRunAt` is populated.
-10. `Attention` should include enabled schedules with failed or errored last dispatch and any paused/disabled schedules only when the backend marks them as needing attention rather than intentionally paused.
+Provider Profile, repository, model, and effort describe the saved target, rather than a past occurrence. Current Temporal targets store parameters in `initialParameters`; older queue targets use `job.payload`. Structured repository references display their repository name. A saved model tier displays as `Tier N`; missing values display `-` instead of implying a resolved model or profile. Dispatch and policy diagnostics remain on detail.
 
 ---
 
@@ -295,34 +245,33 @@ Recommended row fields:
 | `temporalScheduleId` | Advanced Temporal identity when available. |
 | `updatedAt` | Last definition update or reconciliation timestamp. |
 
-Recommended desktop table columns:
+Desktop table columns:
 
-| Order | Column | Contents | Sort/filter expectation |
-| --- | --- | --- | --- |
-| 1 | `Schedule` | schedule name link, optional description clamp | title/id search |
-| 2 | `State` | Active, Paused, Needs attention | state filter |
-| 3 | `Target` | target kind plus repository/runtime/model when available | target/repository filter |
-| 4 | `Cadence` | human-readable cadence for common cron shapes (raw cron otherwise, and in the tooltip) plus timezone | cadence/timezone filter later |
-| 5 | `Next run` | `nextRunAt` | date sort/filter |
-| 6 | `Last scheduled` | `lastScheduledFor` | date sort/filter |
-| 7 | `Dispatch` | last dispatch status plus compact error supplement | dispatch status filter |
-| 8 | `Policy` | overlap/catchup/jitter summary | optional filter later |
-| 9 | `Updated` | `updatedAt` | date sort/filter |
-| 10 | `Actions` | row actions if needed | none |
+| Column | Contents |
+| --- | --- |
+| Schedule | Schedule name linked to detail; column filter. |
+| State | Active, Paused, or Needs attention; column filter. |
+| Provider Profile | Saved target's Provider Profile reference. |
+| Repository | Saved repository name; column filter. |
+| Model | Saved admitted model, falling back to authored runtime model or tier. |
+| Effort | Saved admitted effort, falling back to authored runtime effort. |
+| Cadence / Timezone | Human-readable cadence with raw cron tooltip; column filter. |
+| Next run | Next occurrence time; server sorting. |
+| Actions | Run now and pause/resume when available. |
 
 Rules:
 
 1. The first column is the primary accessible link to `/schedules/{definitionId}`.
 2. Row click may be supported, but the schedule name must remain a normal link.
-3. Column order should optimize scan speed: identity, health, target, cadence, next timing, last timing, dispatch, policy, freshness.
+3. Column order keeps identity and state before saved runtime metadata and next timing.
 4. The `State` column should use the dashboard status pill style family.
 5. `Needs attention` should be visually distinct without relying on color alone.
-6. The `Dispatch` column may show the last error as a compact supplement, but it must not expand row height unpredictably.
-7. The `Target` column should prefer a compact product-level target summary over raw JSON.
+6. Dispatch errors remain on detail, with overview attention indicated by State.
+7. Provider Profile, repository, model, and effort use separate columns. Prefer the admitted snapshot Provider Profile reference or top-level provider identity; do not confuse the agent-profile identity with its Provider Profile.
 8. Raw target payload belongs in detail, not the table.
 9. The table should use the same density, header, border, hover, focus, loading, empty, and error visual language as Workflows.
 10. Sorting/filtering should follow the Workflows table posture: deterministic URL state where server-authoritative behavior exists and explicit copy where sorting is current-page-only.
-11. The empty state should say `No recurring schedules yet.` and include a create action.
+11. The empty state explains that schedules can be created from the workflow page; the shell retains its create action.
 12. The table must not fetch per-run workflow details to render the list.
 13. The table must not show spawned workflow steps, logs, artifacts, or diagnostics.
 
@@ -349,7 +298,7 @@ Updated
 Rules:
 
 1. Filter controls should belong to columns where possible.
-2. A mobile filter sheet may expose the full filter set when table headers are not visible.
+2. There is no standalone desktop Filters button. On the mobile card layout, an icon-only filter entry opens the filter sheet even before a filter is applied. Existing active chips can also reopen their filter sheet, including filters retained in older URLs.
 3. Active filter chips should summarize applied filters and reopen the corresponding filter section.
 4. Filter changes reset pagination to the first page.
 5. Page-size changes reset pagination to the first page.
@@ -371,19 +320,17 @@ Suggested shape:
 
 ```text
 ┌──────────────────────────────┐
-│ Recurring                    │
+│ Recurring                [+] │
 ├──────────────────────────────┤
-│ Nightly code scan            │
-│ Active · next 2:00 AM        │
+│ Nightly code scan       ▶    │
 ├──────────────────────────────┤
-│ Weekly dependency audit      │
-│ Paused · next —              │
+│ Weekly dependency audit  Ⅱ   │
 └──────────────────────────────┘
 ```
 
 Rules:
 
-1. The sidebar uses the shared `CollectionSidebar` shell, header, filter, row metrics, selected/focus states, divider, scrolling, and localized state components.
+1. The sidebar uses the shared `CollectionSidebar` shell, header, row metrics, selected/focus states, divider, scrolling, and localized state components.
 2. It is the first content-region column immediately right of the masthead navigation and is never wrapped inside the detail frame or a centered page container.
 3. Sidebar rows link to `/schedules/{definitionId}`.
 4. The active schedule row exposes `aria-current="page"`.
@@ -394,11 +341,11 @@ Rules:
 9. Detail failures do not erase a successfully loaded sidebar.
 10. The sidebar header row remains visible during loading, empty, and error states.
 11. Sidebar row height is compatible with the table's first-column row height.
-12. Status and next-run summaries may appear only when they fit the shared row height.
+12. Rows show an accessible Active or Paused icon, without next-run text; dispatch attention remains in detail and the full table State.
 13. Sidebar rows must not grow individually based on long descriptions, errors, payloads, or target metadata.
 14. Long names clamp; full names remain available through accessible text or title attributes when appropriate.
-15. Sidebar filtering/search may be deferred; the first implementation may show the current effective table query or a compact default authorized list.
-16. The sidebar may include a compact create affordance only when it does not duplicate or conflict with the full-table create action and detail actions.
+15. The sidebar has no search box or refresh action. Its localized error state retains Retry.
+16. A compact `+` action sits to the right of the Recurring heading, using the same primary-button treatment as Skills.
 17. Clicking a spawned Workflow run inside detail navigates to the Workflow detail route and does not change the Recurring sidebar selection.
 
 Visual contract:
@@ -482,7 +429,7 @@ Recurring schedule actions operate on the schedule definition unless explicitly 
 
 | Action | Surface | Behavior |
 | --- | --- | --- |
-| Create | Full table control band | Starts recurring schedule creation. Initial route: `/workflows/new?scheduleMode=recurring`. |
+| Create | Shell or Recurring sidebar heading | Starts recurring schedule creation. Initial route: `/workflows/new?scheduleMode=recurring`. |
 | Open detail | Table row or sidebar row | Navigates to `/schedules/{definitionId}`. |
 | Edit schedule | Detail | Edits definition fields such as name, description, enabled, cron, timezone, policy, and supported target parameters. |
 | Run now | Detail | Creates an immediate manual run from the definition. |
@@ -582,7 +529,7 @@ Full table states:
 
 | State | Behavior |
 | --- | --- |
-| Loading | Preserve the control band and table frame with skeletons. |
+| Loading | Preserve the table header and show table skeletons. |
 | Empty | Show `No recurring schedules yet.` and a create action. |
 | Filtered empty | Show that no recurring schedules match the current filters and keep filters editable. |
 | List error | Show a recoverable error in the table region; keep the shell/workspace mode selector available. |
@@ -629,8 +576,8 @@ Mobile:
 
 1. Use a card-list-to-standalone-detail flow.
 2. Hide the desktop list display radio control until mobile-specific behavior exists.
-3. The create action and summary metrics should remain visible above the card list when space allows.
-4. Cards should include schedule name, state, cadence, next run, target, and dispatch attention when available.
+3. Creation remains available in shell navigation.
+4. Cards include schedule name, state, cadence, next run, Provider Profile, repository, model, and effort.
 5. Mobile detail keeps the same actions and run-history behavior, but without the desktop sidebar.
 
 ---
@@ -702,7 +649,7 @@ Implementation should add or preserve tests for these behaviors:
 
 1. The visible nav/page copy uses `Recurring` or `Recurring schedules` rather than ambiguous broad `Schedules`, unless a combined Schedules design is intentionally implemented.
 2. `/schedules` resolves to full table mode on desktop.
-3. The area between the page header/route context and table includes the create action plus Total, Active, Next 24h, and Attention metrics.
+3. The table starts at the top without an overview control band or schedule counts.
 4. The create action has accessible text `Create recurring schedule` and points to the recurring creation flow.
 5. The shell/workspace utility region renders the list display radio group on Recurring routes with `No list`, `Sidebar list`, and `Full table` options.
 6. The radio group exposes an accessible name such as `Recurring list display`.
@@ -731,11 +678,11 @@ Recommended implementation sequence:
 
 1. Update visible copy from broad `Schedules` to `Recurring` / `Recurring schedules` while keeping `/schedules` route compatibility.
 2. Extract reusable list display mode primitives so Recurring can declare entity-specific mode behavior.
-3. Convert `/schedules` into the full-width table surface with the create/metrics control band.
+3. Use the full-width, flush-top table surface and shell create action.
 4. Build the recurring schedule sidebar using the sidebar-as-table-slice contract.
 5. Mount recurring detail beside the recurring sidebar by default on desktop.
 6. Preserve existing edit, run now, pause/resume, run history, and delete behaviors inside detail.
-7. Add tests for route/mode resolution, shell/workspace radio semantics, summary metrics, sidebar selection, and one-off exclusion.
+7. Add tests for route/mode resolution, shell/workspace radio semantics, runtime metadata, sidebar selection, and one-off exclusion.
 8. Keep server-side counts, sorting, and filtering aligned with the table and sidebar queries.
 
 This rollout should avoid changing the user's mental model all at once: keep the existing `/schedules` route and detail capabilities, then upgrade the page composition, naming, and list display behavior around them.

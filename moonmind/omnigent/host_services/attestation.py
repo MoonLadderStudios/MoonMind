@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
@@ -158,6 +159,8 @@ async def _read_exact_host_model_options(
     container_name: str,
     omnigent_host_id: str,
     harness_id: str,
+    selected_model: str = "",
+    runtime_version: str = "",
 ) -> tuple[Any, str]:
     """Read model options from the exact host through its supported substrate.
 
@@ -168,9 +171,16 @@ async def _read_exact_host_model_options(
 
     if harness_id == "opencode-native":
         payload = await upstream_probes.read_opencode_model_options(
-            backend=backend, container_name=container_name
+            backend=backend,
+            container_name=container_name,
+            provider_id=selected_model.split("/", 1)[0],
+            runtime_version=runtime_version,
         )
-        return payload, "exact-host-opencode-cli"
+        return payload, (
+            "exact-host-opencode-cli"
+            if re.search(r"(?<![0-9])1\.[0-9]+\.[0-9]+\b", runtime_version)
+            else "exact-host-opencode-api"
+        )
     try:
         model_options = await client.get_host_model_options(
             omnigent_host_id, harness_id
@@ -1390,6 +1400,8 @@ class DockerOmnigentHostAttestor:
                         container_name=launch_result["containerName"],
                         omnigent_host_id=host_id,
                         harness_id=plan.payload.harnessId,
+                        selected_model=selected_model,
+                        runtime_version=runtime_versions.get("opencode", ""),
                     )
                 )
                 observed_model_options = model_options

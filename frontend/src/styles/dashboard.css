@@ -1972,11 +1972,83 @@ h1 {
   width: 100%;
 }
 
-/* Recurring Schedules list: the routed panel bleeds to the nav's bottom border,
- * so give the heading a little breathing room below that line. The detail view
- * lives in a workspace shell that already insets its content, so exclude it. */
+/* Keep the Recurring table flush with the masthead and page sides, like Workflows. */
 .schedules-page:not(.schedules-detail-page) {
-  padding-top: 1.25rem;
+  gap: 0;
+}
+
+.schedules-table-panel .data-table-slab {
+  overflow: visible;
+  width: calc(100% + 2rem);
+  max-width: none;
+  max-height: none;
+  margin-inline: -1rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.schedules-table-panel .data-table {
+  width: 100%;
+  white-space: normal;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+@media (max-width: 1180px) {
+  .schedules-table-panel .data-table-slab { overflow-x: auto; }
+}
+
+.schedules-table-panel .data-table th {
+  height: var(--workflow-list-header-row-height);
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 1px 0 var(--workflow-list-divider-color);
+}
+
+.schedules-table-panel .data-table td {
+  border-bottom-color: var(--workflow-list-divider-color);
+  overflow-wrap: anywhere;
+}
+
+.schedules-table-panel .data-table th:first-child,
+.schedules-table-panel .data-table td:first-child {
+  padding-left: 1rem;
+}
+
+.schedules-table-panel .data-table th:last-child,
+.schedules-table-panel .data-table td:last-child {
+  padding-right: 1rem;
+}
+
+.schedules-table-panel .data-table tbody tr:nth-child(2n):not(:hover) {
+  background: transparent;
+}
+
+.recurring-collection-sidebar .recurring-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.schedules-sidebar-state {
+  display: inline-flex;
+  vertical-align: middle;
+  color: rgb(var(--mm-muted));
+}
+
+.schedules-sidebar-state--active {
+  color: rgb(var(--mm-ok));
+}
+
+.schedules-detail-context {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+@media (max-width: 767px) {
+  .schedules-detail-context { display: none; }
 }
 
 .entity-detail-frame {
@@ -2122,6 +2194,7 @@ h1 {
   gap: 0.75rem;
 }
 
+.schedules-table-panel .schedules-mobile-filter-entry,
 .schedules-mobile-card-list {
   display: none;
 }
@@ -4035,20 +4108,12 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   color: rgb(var(--mm-status-danger));
 }
 
-@media (max-width: 1180px) {
-  .schedules-table-panel .data-table [data-column-key="policy"],
-.schedules-table-panel .data-table [data-column-key="updatedAt"] {
-    display: none;
-  }
-}
-
-@media (max-width: 980px) {
-  .schedules-table-panel .data-table [data-column-key="lastScheduledFor"] {
-    display: none;
-  }
-}
-
 @media (max-width: 720px) {
+  .schedules-table-panel .schedules-mobile-filter-entry {
+    display: inline-flex;
+    justify-self: end;
+  }
+
   .schedules-table-panel .data-table-slab {
     display: none;
   }

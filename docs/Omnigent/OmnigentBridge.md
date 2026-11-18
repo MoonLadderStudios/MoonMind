@@ -149,7 +149,7 @@ For `host_type = managed`, caller-authored `host_id` and local absolute paths ar
 
 The first `message` carries `moonmindFirstMessageDigest` and `moonmindIdempotencyKey` metadata and a `MoonMind-Omnigent-Run:` marker containing correlation id, key and digest. Its persisted states are `not_prepared -> prepared -> posting -> posted -> terminal`. Digest preparation precedes posting; `posted` confirms acceptance. Replay skips accepted messages. Ambiguous posting reconciles snapshots, pending inputs, item ids, events and the marker; unproven absence or a conflicting digest fails closed. When a delivered admission's runtime is cleaned without a terminal result, re-admission requests interrupted-step recovery. It leaves the journal bound to its original provider session and uses the existing recovery owner and budget.
 
-Dispatch has a 150-second budget for runner-terminal setup, connect-time bootstrap and one recovery. `omnigent.submit_turn` allows 180 seconds per attempt and 600 overall; other events allow 60. The [OpenCode image](./OpenCodeHost.md) supplies a warm plugin npm cache; a cold `@opencode-ai/plugin` download is an image defect.
+Dispatch has a 150-second budget for runner-terminal setup, connect-time bootstrap and one recovery. `omnigent.submit_turn` allows 180 seconds per attempt and 600 overall; other events allow 60. The [OpenCode image](./OpenCodeHost.md) supplies a warm plugin npm cache; a cold `@opencode/plugin` download is an image defect.
 
 ### 9.2 Native follow-up messages
 

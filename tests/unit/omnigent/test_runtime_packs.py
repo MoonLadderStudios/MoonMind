@@ -122,6 +122,14 @@ def test_pinned_codex_runtime_meets_native_harness_readiness_floor():
     assert Version(codex.vendorRuntime.pinnedVersion) >= Version("0.137.0")
 
 
+def test_pinned_opencode_runtime_matches_native_v2_api():
+    from packaging.version import Version
+
+    opencode = get_runtime_pack("opencode-native-pack@1")
+    # The released Omnigent native harness consumes the 2.0 API, not v1.
+    assert Version("2.0.18") <= Version(opencode.vendorRuntime.pinnedVersion) < Version("2.1.0")
+
+
 def test_pinned_claude_runtime_supports_opus_5_5():
     from packaging.version import Version
 

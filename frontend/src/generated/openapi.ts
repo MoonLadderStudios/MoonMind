@@ -2934,91 +2934,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{session_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Session Snapshot */
-        get: operations["get_session_snapshot_api_sessions__session_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sessions/{session_id}/items": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Session Items */
-        get: operations["get_session_items_api_sessions__session_id__items_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sessions/{session_id}/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Stream Session */
-        get: operations["stream_session_api_sessions__session_id__stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sessions/{session_id}/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Post Session Event */
-        post: operations["post_session_event_api_sessions__session_id__events_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sessions/{session_id}/elicitations/{elicitation_id}/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Resolve Session Elicitation */
-        post: operations["resolve_session_elicitation_api_sessions__session_id__elicitations__elicitation_id__resolve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/sessions/{session_id}/resources": {
         parameters: {
             query?: never;
@@ -4109,26 +4024,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/remediations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Remediations Route
-         * @description Serve the capability-gated remediation inventory shell.
-         */
-        get: operations["remediations_route_remediations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/observability": {
         parameters: {
             query?: never;
@@ -4485,26 +4380,6 @@ export interface paths {
          * @description Serve recognized extensionless collection deep links from the SPA shell.
          */
         get: operations["collection_spa_fallback_route_omnigent_agents__dashboard_path__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/remediations/{dashboard_path}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Collection Spa Fallback Route
-         * @description Serve recognized extensionless collection deep links from the SPA shell.
-         */
-        get: operations["collection_spa_fallback_route_remediations__dashboard_path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11302,6 +11177,29 @@ export interface components {
              */
             last_known: boolean;
         };
+        /** ProviderApiKeyReadiness */
+        ProviderApiKeyReadiness: {
+            /** Connected */
+            connected: boolean;
+            /** Last Validated At */
+            last_validated_at?: string | null;
+            /** Backing Secret Exists */
+            backing_secret_exists: boolean;
+            /** Launch Ready */
+            launch_ready: boolean;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Credential Verification
+             * @default verified
+             */
+            credential_verification: string;
+            /**
+             * Observation
+             * @default confirmed
+             */
+            observation: string;
+        };
         /** ProviderApiKeySetupRequest */
         ProviderApiKeySetupRequest: {
             /** Api Key */
@@ -11325,7 +11223,7 @@ export interface components {
             status: string;
             /** Status Label */
             status_label: string;
-            readiness: components["schemas"]["ClaudeManualAuthReadiness"];
+            readiness: components["schemas"]["ProviderApiKeyReadiness"];
             /** Profile Id */
             profile_id: string;
             /** Secret Ref */
@@ -20810,188 +20708,6 @@ export interface operations {
             };
         };
     };
-    get_session_snapshot_api_sessions__session_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_session_items_api_sessions__session_id__items_get: {
-        parameters: {
-            query?: {
-                since?: number | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_session_api_sessions__session_id__stream_get: {
-        parameters: {
-            query?: {
-                since?: number | null;
-                format?: string;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_session_event_api_sessions__session_id__events_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    resolve_session_elicitation_api_sessions__session_id__elicitations__elicitation_id__resolve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-                elicitation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_session_resources_api_sessions__session_id__resources_get: {
         parameters: {
             query?: never;
@@ -23949,26 +23665,6 @@ export interface operations {
             };
         };
     };
-    remediations_route_remediations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
     artifact_collection_route_observability_get: {
         parameters: {
             query?: never;
@@ -24365,37 +24061,6 @@ export interface operations {
         };
     };
     collection_spa_fallback_route_omnigent_agents__dashboard_path__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dashboard_path: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    collection_spa_fallback_route_remediations__dashboard_path__get: {
         parameters: {
             query?: never;
             header?: never;

@@ -6153,6 +6153,10 @@ async def workflow_chat_binding_facade_ws(
                 )
                 return
             query["transport"] = transport
+        # Stock UI attaches while its terminal create request is in flight.
+        # Forward only the bounded wait hint, never arbitrary browser query data.
+        if str(websocket.query_params.get("await_launch") or "").lower() == "true":
+            query["await_launch"] = "true"
         upstream_path += "?" + urlencode(query)
 
     async def still_authorized() -> bool:

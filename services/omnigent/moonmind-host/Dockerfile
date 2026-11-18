@@ -23,9 +23,9 @@
 
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST
-ARG CODEX_CLI_VERSION=0.165.0
+ARG CODEX_CLI_VERSION=0.170.0
 ARG CLAUDE_CLI_VERSION=2.1.281
-ARG OPENCODE_VERSION=1.18.11
+ARG OPENCODE_VERSION=2.0.32
 ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache
 # Image-owned helper tools (MoonLadderStudios/MoonMind#4558): gh and the
 # non-secret MoonMind container CLI. The single pin source is
@@ -58,10 +58,11 @@ RUN [[ "${OMNIGENT_BUILD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
 RUN npm config set fund false \
     && npm config set audit false \
     && npm config set update-notifier false \
+    && npm uninstall -g --no-audit --no-fund opencode-ai \
     && npm install -g --include=optional --no-audit --no-fund \
         "@openai/codex@${CODEX_CLI_VERSION}" \
         "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
-        "opencode-ai@${OPENCODE_VERSION}" \
+        "@opencode/cli@${OPENCODE_VERSION}" \
     && echo "Verifying vendor runtime installations..." \
     && command -v codex >/dev/null || { echo "codex binary missing after install" >&2; exit 1; } \
     && command -v claude >/dev/null || { echo "claude binary missing after install" >&2; exit 1; } \
@@ -97,24 +98,22 @@ RUN GH_VERSION="${OMNIGENT_GH_VERSION}" \
 
 # Warm the OpenCode plugin SDK dependency closure at image build time.
 #
-# The first `opencode serve` in a config directory writes
-# `package.json` = {"dependencies": {"@opencode-ai/plugin": "<opencode version>"}}
-# next to `opencode.json` and runs `npm install` there. Populate an image-owned
-# npm cache with exactly that closure and prove a second install resolves from
-# it with the network disabled, so the workflow launch only copies files and
-# never installs from registry.npmjs.org.
+# OpenCode 2 uses directory plugins with the @opencode/plugin SDK. Keep its
+# dependency closure available for plugin-enabled sessions without registry
+# access. The release smoke installs a fresh SDK-backed plugin offline and
+# verifies that the authenticated v2 server actually activates it.
 RUN set -eu \
     && warm="$(mktemp -d)" \
     && verify="$(mktemp -d)" \
-    && printf '{"dependencies":{"@opencode-ai/plugin":"%s"}}\n' "${OPENCODE_VERSION}" > "${warm}/package.json" \
+    && printf '{"dependencies":{"@opencode/plugin":"%s"}}\n' "${OPENCODE_VERSION}" > "${warm}/package.json" \
     && cp "${warm}/package.json" "${verify}/package.json" \
     && (cd "${warm}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --prefer-online) \
     && (cd "${verify}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --offline) \
-    && test -f "${verify}/node_modules/@opencode-ai/plugin/package.json" \
+    && test -f "${verify}/node_modules/@opencode/plugin/package.json" \
     && rm -rf "${warm}" "${verify}" "${OPENCODE_PLUGIN_NPM_CACHE}/_logs" \
     && chown -R 1000:1000 "${OPENCODE_PLUGIN_NPM_CACHE}" \
     && chmod -R u+rwX,go+rX "${OPENCODE_PLUGIN_NPM_CACHE}" \
-    && echo "opencode plugin npm cache warmed at ${OPENCODE_PLUGIN_NPM_CACHE} for @opencode-ai/plugin@${OPENCODE_VERSION}"
+    && echo "opencode plugin npm cache warmed at ${OPENCODE_PLUGIN_NPM_CACHE} for @opencode/plugin@${OPENCODE_VERSION}"
 
 # The exact-host launcher owns the portable numeric runtime contract. Upstream
 # Omnigent images may run as root or may name UID 1000 differently, so ensure

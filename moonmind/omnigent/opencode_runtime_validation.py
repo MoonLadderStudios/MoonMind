@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import UTC, datetime
 from typing import Any
 
@@ -205,6 +206,16 @@ def _catalog_probe_failure(
     excerpt = _stderr_excerpt(stderr, secrets_to_redact=secrets_to_redact)
     lowered = excerpt.lower()
     detail = f"(exit {exit_code}): {excerpt}" if excerpt else f"(exit {exit_code})"
+    if "opencode credential verification unavailable" in lowered:
+        return HarnessPlatformError(
+            f"OpenCode credential verification unavailable {detail}; retry without changing the credential",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+        )
+    if "opencode local" in lowered and "api unavailable" in lowered:
+        return HarnessPlatformError(
+            f"OpenCode catalog transport unavailable {detail}; retry without changing the credential",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
     if any(signal in lowered for signal in _CATALOG_UNSUPPORTED_SIGNALS):
         return HarnessPlatformError(
             f"OpenCode runtime image {effective_image_ref} does not support "
@@ -276,23 +287,245 @@ def is_transient_validation_error(exc: BaseException) -> bool:
     }
 
 
+# Runs inside the selected immutable image; only model IDs cross this boundary.
+_OPENCODE_V2_CATALOG_PROBE = r"""
+import base64
+import json
+import math
+import os
+from pathlib import Path
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+provider, credential_dir, mode = sys.argv[1:]
+if mode not in ("validate", "catalog"):
+    raise SystemExit("invalid catalog probe mode")
+root = Path(tempfile.mkdtemp(prefix="opencode-catalog-"))
+# Preserve transport and runtime settings only, never ambient provider accounts.
+env = {name: value for name, value in os.environ.items() if name in {
+    "PATH", "LANG", "LC_ALL", "TZ", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+}}
+for name, directory in (("HOME", "home"), ("XDG_CONFIG_HOME", "config"),
+                        ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"),
+                        ("XDG_STATE_HOME", "state")):
+    path = root / directory
+    path.mkdir()
+    env[name] = str(path)
+env["OPENCODE_PASSWORD"] = secrets.token_urlsafe(32)
+env["OPENCODE_DB"] = str(root / "opencode.db")
+env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+authorization = "Basic " + base64.b64encode(
+    ("opencode:" + env["OPENCODE_PASSWORD"]).encode()
+).decode()
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+deadline = time.monotonic() + 90
+
+
+def request(path, body=None):
+    headers = {"Authorization": authorization}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/{path}", data=data, headers=headers
+    )
+    with opener.open(req, timeout=min(10, max(.1, deadline-time.monotonic()))) as response:
+        payload = response.read(16_777_217)
+        if len(payload) > 16_777_216:
+            raise RuntimeError("catalog response exceeded 16777216 bytes")
+        return json.loads(payload) if payload else None
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_provider_key(provider, key):
+    # Provider-owned non-generation endpoints. Never take a URL from catalog
+    # metadata or follow redirects with the credential.
+    endpoint = {
+        "openrouter": "https://openrouter.ai/api/v1/key",
+        "opencode-go": "https://opencode.ai/zen/go/v1/usage",
+    }.get(provider)
+    if endpoint is None:
+        # v2 has no universal account-verification operation. Importing a key
+        # and observing models establishes configuration, not authentication.
+        return "unverified"
+    provider_opener = urllib.request.build_opener(NoRedirect())
+    req = urllib.request.Request(endpoint, headers={
+        "Authorization": "Bearer " + key, "Accept": "application/json",
+    })
+    try:
+        with provider_opener.open(req, timeout=15) as response:
+            payload = response.read(262145)
+            if len(payload) > 262144:
+                raise RuntimeError("OpenCode credential verification unavailable: oversized response")
+            body = json.loads(payload)
+    except urllib.error.HTTPError as error:
+        # Do not retain account metadata or error bodies, which can echo keys.
+        if error.code == 401:
+            raise RuntimeError("OpenCode provider credential rejected: HTTP 401") from None
+        raise RuntimeError("OpenCode credential verification unavailable: provider HTTP " + str(error.code)) from None
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        raise RuntimeError("OpenCode credential verification unavailable: provider transport or response") from None
+    if provider == "openrouter":
+        data = body.get("data") if isinstance(body, dict) else None
+        valid = isinstance(data, dict) and isinstance(data.get("label"), str) and bool(data["label"].strip())
+        if valid and data.get("disabled") is True:
+            raise RuntimeError("OpenCode provider credential rejected: disabled key")
+    else:
+        usage = body.get("usage") if isinstance(body, dict) else None
+        def meter(value):
+            return (isinstance(value, dict) and value.get("status") in ("ok", "rate-limited")
+                and type(value.get("percent")) in (int, float) and math.isfinite(value["percent"])
+                and isinstance(value.get("resetsAt"), str) and bool(value["resetsAt"]))
+        valid = isinstance(usage, dict) and all(meter(usage.get(k)) for k in ("rolling", "weekly", "monthly"))
+    if not valid:
+        raise RuntimeError("OpenCode credential verification unavailable: unexpected provider response")
+    return "verified"
+
+
+with (root / "serve.log").open("w+b") as log:
+    # The host PATH may contain MoonMind's context-restoring wrapper. Invoke
+    # the image-owned vendor executable directly so it cannot rehydrate auth.
+    binary = "/usr/local/bin/opencode"
+    if not Path(binary).is_file():
+        binary = shutil.which("opencode") or binary
+    process = subprocess.Popen(
+        [binary, "serve", "--hostname", "127.0.0.1", "--port", str(port), "--stdio"],
+        stdin=subprocess.PIPE, stdout=log, stderr=log, env=env, cwd=root,
+    )
+    try:
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError("OpenCode server exited before catalog readiness (exit " + str(process.returncode) + ")")
+            try:
+                info = request("info")
+                if not isinstance(info, dict) or not isinstance(info.get("version"), str) or not info["version"].strip():
+                    raise RuntimeError("OpenCode info API returned an invalid response")
+                break
+            except urllib.error.HTTPError as error:
+                # Loopback API auth failures are not provider credential verdicts.
+                raise RuntimeError(f"OpenCode local API unavailable (status {error.code})") from None
+            except (urllib.error.URLError, TimeoutError):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("OpenCode startup timeout") from None
+                time.sleep(.25)
+        verification = "not_required" if provider == "opencode" and not credential_dir else "unverified"
+        if credential_dir and not (Path(credential_dir) / "auth.json").is_file():
+            if mode == "catalog" and provider == "opencode":
+                credential_dir = ""
+            else:
+                raise RuntimeError("OpenCode credential verification unavailable: selected provider credential is missing")
+        if credential_dir:
+            credentials = json.loads((Path(credential_dir) / "auth.json").read_text())
+            entry = credentials.get(provider, {})
+            if entry.get("type") != "api" or not isinstance(entry.get("key"), str) or not entry["key"]:
+                raise RuntimeError("OpenCode credential materialization missing selected provider key")
+            if mode == "validate":
+                verification = verify_provider_key(provider, entry["key"])
+            try:
+                request(f"integration/{provider}/connect/key", {"key": entry["key"]})
+            except urllib.error.HTTPError as error:
+                if error.code == 401:
+                    raise RuntimeError("OpenCode local API unavailable (status 401)") from None
+                raise RuntimeError(f"OpenCode local integration API unavailable (status {error.code})") from None
+        while True:
+            try:
+                payload = request("model")
+            except urllib.error.HTTPError as error:
+                raise RuntimeError(f"OpenCode local catalog API unavailable (status {error.code})") from None
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise RuntimeError("OpenCode model API returned an invalid catalog shape")
+            models = sorted({provider + "/" + row["id"] for row in rows
+                if isinstance(row, dict) and row.get("providerID") == provider
+                and isinstance(row.get("id"), str) and row["id"].strip()
+                and row.get("enabled") is not False})
+            if models:
+                # API rows can include provider keys in settings. Emit IDs only.
+                print(json.dumps({"models": models, "credentialVerification": {"status": verification}}
+                    if mode == "validate" else models))
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("OpenCode catalog settlement timeout: no models for selected provider")
+            time.sleep(.5)
+    except Exception as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
+    finally:
+        process.stdin.close()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        # Disposable SQLite credentials and server diagnostics are not retained.
+        shutil.rmtree(root, ignore_errors=True)
+"""
+
+
+def opencode_catalog_probe_argv(
+    *,
+    provider_id: str,
+    credential_target: str | None = None,
+    verify_credentials: bool = True,
+) -> list[str]:
+    """Run isolated v2 discovery; catalog-only mode never attests credentials."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", provider_id):
+        raise ValueError("invalid OpenCode provider ID")
+    return [
+        "python3",
+        "-c",
+        _OPENCODE_V2_CATALOG_PROBE,
+        provider_id,
+        credential_target or "",
+        "validate" if verify_credentials else "catalog",
+    ]
+
+
 def _model_probe_argv(
     *,
     image_ref: str,
     provider_id: str,
+    runtime_version: str,
     credential_source: str | None = None,
     credential_target: str | None = None,
 ) -> list[str]:
     """Build the exact pinned-runtime catalog probe command.
 
     The credential materializer deliberately mounts a read-only staging
-    directory. OpenCode reads ``auth.json`` from its writable data directory,
-    so validation must perform the same staging step as the real host before
-    invoking catalog discovery.
+    directory. The observed runtime selects the protocol before discovery. Retained v1
+    images use their CLI; v2 imports only the selected provider into a disposable
+    database. A failed v2 operation never falls back to v1.
     """
 
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", provider_id):
         raise ValueError("invalid OpenCode provider ID")
+    version = re.search(r"(?<![0-9])([0-9]+)\.[0-9]+\.[0-9]+\b", runtime_version)
+    if version is None or version.group(1) not in {"1", "2"}:
+        raise HarnessPlatformError(
+            "OpenCode validation runtime version is unavailable or unsupported",
+            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
+        )
     argv = [
         "docker",
         "run",
@@ -321,20 +554,27 @@ def _model_probe_argv(
         ]
     for item in omnigent_proxy_env():
         argv.extend(("--env", item))
-    stage_auth = (
-        "mkdir -p /home/app/.local/share/opencode; "
-        'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
-        "chmod 0600 /home/app/.local/share/opencode/auth.json; "
-        if credential_target is not None
-        else ""
-    )
-    stage_and_probe = (
-        "set -eu; "
-        "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
-        "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-        + stage_auth
-        + 'exec opencode models --refresh "$2"'
-    )
+    if version.group(1) == "1":
+        stage_auth = (
+            "mkdir -p /home/app/.local/share/opencode; "
+            'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
+            "chmod 0600 /home/app/.local/share/opencode/auth.json; "
+            if credential_target is not None
+            else ""
+        )
+        stage_and_probe = (
+            "set -eu; "
+            "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
+            "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
+            + stage_auth
+            + 'exec opencode models --refresh "$2"'
+        )
+    else:
+        stage_and_probe = (
+            "set -eu; exec python3 -c "
+            + shlex.quote(_OPENCODE_V2_CATALOG_PROBE)
+            + ' "$2" "$1" validate'
+        )
     argv.extend(("--entrypoint", "/bin/sh", image_ref, "-ceu", stage_and_probe))
     argv.extend(("--", credential_target or "", provider_id))
     return argv
@@ -475,6 +715,37 @@ class OpenCodeProviderRuntimeValidationService:
         handle = None
         try:
             effective_image_ref = await self._resolve_effective_image_ref()
+            versions: dict[str, str] = {}
+            for binary in ("opencode", "omnigent"):
+                version_code, version_out, _version_err = await self._backend.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--network",
+                        "none",
+                        "--entrypoint",
+                        binary,
+                        effective_image_ref,
+                        "--version",
+                    ]
+                )
+                if version_code != 0 and "Unable to find image" in _version_err.decode(
+                    "utf-8", errors="replace"
+                ):
+                    # Fail closed: never substitute a mutable tag for version check.
+                    raise HarnessPlatformError(
+                        f"pinned image {effective_image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                if version_code != 0:
+                    raise HarnessPlatformError(
+                        f"pinned image does not provide {binary}",
+                        code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
+                    )
+                versions[binary] = version_out.decode(
+                    "utf-8", errors="replace"
+                ).strip()[:128]
             handle = await materializer.materialize(
                 CredentialMaterializationContext(
                     request=request,
@@ -489,6 +760,7 @@ class OpenCodeProviderRuntimeValidationService:
             argv = _model_probe_argv(
                 image_ref=effective_image_ref,
                 provider_id=str(profile.provider_id or ""),
+                runtime_version=versions["opencode"],
                 credential_source=(attachment.sourceRef if attachment else None),
                 credential_target=(attachment.targetPath if attachment else None),
             )
@@ -523,40 +795,23 @@ class OpenCodeProviderRuntimeValidationService:
             models = _validated_models(
                 parsed, provider_id=str(profile.provider_id or "")
             )
-            versions: dict[str, str] = {}
-            for binary in ("opencode", "omnigent"):
-                version_code, version_out, _version_err = await self._backend.run(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "--network",
-                        "none",
-                        "--entrypoint",
-                        binary,
-                        effective_image_ref,
-                        "--version",
-                    ]
-                )
-                if version_code != 0 and "Unable to find image" in _version_err.decode(
-                    "utf-8", errors="replace"
-                ):
-                    # Fail closed: never substitute a mutable tag for version check.
-                    raise HarnessPlatformError(
-                        f"pinned image {effective_image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
-                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-                    )
-                if version_code != 0:
-                    raise HarnessPlatformError(
-                        f"pinned image does not provide {binary}",
-                        code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-                    )
-                versions[binary] = version_out.decode(
-                    "utf-8", errors="replace"
-                ).strip()[:128]
+            verification = (
+                parsed.get("credentialVerification")
+                if isinstance(parsed, dict)
+                else None
+            )
+            if not isinstance(verification, dict) or verification.get("status") not in {
+                "verified",
+                "unverified",
+                "not_required",
+            }:
+                verification = {"status": "unverified"}
+            # Only the authenticated probe result certifies the current key.
+            verification = {"status": verification["status"]}
             evidence: dict[str, Any] = {
                 "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
                 "models": [{"qualifiedId": item} for item in models],
+                "credentialVerification": verification,
                 "imageRef": effective_image_ref,
                 "runtimeVersions": versions,
                 "validatedAt": datetime.now(UTC).isoformat(),
@@ -599,6 +854,7 @@ __all__ = [
     "CREDENTIAL_REJECTED_MARKER",
     "OpenCodeProviderRuntimeValidationService",
     "_model_probe_argv",
+    "opencode_catalog_probe_argv",
     "_validated_models",
     "is_confirmed_credential_rejection",
     "is_transient_validation_error",

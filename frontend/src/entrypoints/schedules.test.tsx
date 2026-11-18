@@ -224,7 +224,88 @@ describe("SchedulesPage", () => {
     vi.mocked(navigateTo).mockReset();
   });
 
-  it("renders page-matched loading placeholders for schedule summary and table regions", async () => {
+  it("shows authored runtime columns without the old overview controls", async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      ...detailSchedule,
+      target: { kind: 'queue_task', job: { payload: {
+        repository: { repository: { name: 'MoonLadderStudios/MoonMind' }, branch: { name: 'main' } },
+        task: { runtime: { profileId: 'codex-primary', model: 'gpt-6', effort: 'high' } },
+      } } },
+    }] }) } as Response);
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    const table = await screen.findByRole('table', { name: 'Recurring schedules' });
+    await within(table).findByText('codex-primary');
+    for (const name of ['Provider Profile', 'Repository', 'Model', 'Effort']) {
+      expect(within(table).getByRole('columnheader', { name: new RegExp(name) })).toBeTruthy();
+    }
+    expect(within(table).getByText('MoonLadderStudios/MoonMind')).toBeTruthy();
+    expect(within(table).getByText('gpt-6')).toBeTruthy();
+    expect(within(table).getByText('high')).toBeTruthy();
+    for (const name of ['Target', 'Last Scheduled', 'Dispatch', 'Policy', 'Updated']) {
+      expect(within(table).queryByRole('columnheader', { name: new RegExp(name) })).toBeNull();
+    }
+    expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Schedule summary' })).toBeNull();
+    expect(screen.queryByText('Managed recurring schedules for workflow targets.')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Create recurring schedule' })).toBeNull();
+  });
+
+  it("keeps the recurring sidebar compact with state icons and a create action", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: detailSchedule.name });
+    const sidebar = screen.getByRole('complementary', { name: 'Recurring schedule navigation' });
+    expect(within(sidebar).queryByRole('searchbox')).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: 'Create recurring schedule' }).getAttribute('href'))
+      .toBe('/workflows/new?scheduleMode=recurring');
+    expect(within(sidebar).getByRole('img', { name: 'Active' })).toBeTruthy();
+    expect(sidebar.textContent).not.toContain('next');
+    expect(within(sidebar).queryByRole('button', { name: /refresh/i })).toBeNull();
+    expect(screen.getByText('Schedule', { selector: '.schedules-detail-context' })).toBeTruthy();
+  });
+
+  it.each(['initialParameters', 'initial_parameters'])('reads %s without confusing an agent profile with its provider', async (key) => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      ...detailSchedule,
+      target: { [key]: {
+        repository: 'MoonLadderStudios/MoonMind',
+        agentProfile: { profileId: 'workflow-agent', providerProfileRef: 'claude-primary' },
+        workflow: { runtime: { modelTier: 3, effort: 'medium', tierPreview: { model: 'stale-preview' } } },
+      } },
+    }] }) } as Response);
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    await screen.findByText('claude-primary');
+    expect(screen.getByText('Tier 3')).toBeTruthy();
+    expect(screen.getByText('medium')).toBeTruthy();
+    expect(screen.getByText('MoonLadderStudios/MoonMind')).toBeTruthy();
+    expect(screen.queryByText('workflow-agent')).toBeNull();
+    expect(screen.queryByText('stale-preview')).toBeNull();
+  });
+
+  it.each([
+    { profileId: 'admitted-provider' },
+    { agentProfileSnapshot: { profileId: 'agent-profile', providerProfileRef: 'admitted-provider' } },
+    { profileId: 'admitted-provider', workflow: { runtime: { profileId: 'old-provider', model: 'old-model', effort: 'low' } } },
+  ])('shows admitted provider/model/effort without depending on nested runtime: %j', async (parameters) => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      ...detailSchedule,
+      target: { initialParameters: {
+        ...parameters,
+        agentProfile: { profileId: 'agent-profile', version: 1, digest: 'digest' },
+        model: 'admitted-model', effort: 'high',
+      } },
+    }] }) } as Response);
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    const table = await screen.findByRole('table', { name: 'Recurring schedules' });
+    expect(await within(table).findByText('admitted-provider')).toBeTruthy();
+    expect(within(table).getByText('admitted-model')).toBeTruthy();
+    expect(within(table).getByText('high')).toBeTruthy();
+    expect(within(table).queryByText('agent-profile')).toBeNull();
+    expect(within(table).queryByText('old-provider')).toBeNull();
+  });
+
+  it("renders the table loading state without an overview summary", async () => {
     let resolveFetch: (value: Response) => void = () => {};
     fetchSpy.mockReturnValue(new Promise<Response>((resolve) => {
       resolveFetch = resolve;
@@ -233,9 +314,8 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={{ ...mockPayload, apiBase: "/loading-api" }} />);
 
     expect(screen.getByRole("heading", { name: "Recurring Schedules" })).toBeTruthy();
-    expect(screen.getByText("Recurring summary loading placeholder").closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText("Recurring list loading placeholder").closest('[role="status"]')).toBeTruthy();
-    expect(screen.getByTestId("loading-placeholder-metric-strip")).toBeTruthy();
+    expect(screen.queryByTestId("loading-placeholder-metric-strip")).toBeNull();
     expect(screen.getByTestId("loading-placeholder-table")).toBeTruthy();
     resolveFetch({
       ok: true,
@@ -244,7 +324,7 @@ describe("SchedulesPage", () => {
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
   });
 
-  it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
+  it("renders schedule state, repository, and cadence with sparse target fallbacks", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
@@ -258,17 +338,13 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Daily at 09:00").getAttribute("title")).toBe("0 9 * * *");
     expect(screen.getByText("Every Monday at 04:30")).not.toBeNull();
     expect(screen.getByText("America/New_York")).not.toBeNull();
-    expect(screen.getByText("Skip / Latest")).not.toBeNull();
-    expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
-    const summary = screen.getByRole("region", { name: "Schedule summary" });
-    expect(summary.textContent).toContain("3 schedules · 2 active");
-    expect(within(summary).getByText("1 needs attention")).not.toBeNull();
-    expect(screen.queryByText("Total")).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Policy' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Schedule summary' })).toBeNull();
     // Raw definition IDs stay off the list rows.
     expect(screen.queryByText("schedule-1")).toBeNull();
   });
 
-  it("makes the list title the page's only h1 and names the browser tab", async () => {
+  it("keeps an accessible list title and browser tab without a visible title band", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
@@ -276,10 +352,11 @@ describe("SchedulesPage", () => {
     expect(headings).toHaveLength(1);
     expect(headings[0]?.textContent).toBe("Recurring Schedules");
     expect(headings[0]?.hasAttribute("data-recurring-table-title")).toBe(true);
+    expect(headings[0]?.className).toBe("sr-only");
     expect(document.title).toBe("Recurring Schedules | MoonMind");
   });
 
-  it("renders mobile schedule cards only at the mobile breakpoint and preserves dispatch errors", async () => {
+  it("renders mobile configuration cards only at the mobile breakpoint", async () => {
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -321,7 +398,12 @@ describe("SchedulesPage", () => {
       renderWithClient(<SchedulesPage payload={mockPayload} />);
 
       expect(await screen.findByLabelText("Recurring schedule cards")).not.toBeNull();
-      expect(screen.getByText("Enqueued: Last adapter failure")).not.toBeNull();
+      const cards = screen.getByLabelText('Recurring schedule cards');
+      for (const label of ['Provider Profile', 'Repository', 'Model', 'Effort']) {
+        expect(within(cards).getByText(label)).toBeTruthy();
+      }
+      expect(within(cards).queryByText('Target')).toBeNull();
+      expect(within(cards).queryByText('Dispatch')).toBeNull();
     } finally {
       Object.defineProperty(window, "matchMedia", {
         configurable: true,
@@ -331,17 +413,12 @@ describe("SchedulesPage", () => {
     }
   });
 
-  it("renders the documented Updated and Actions columns in the recurring table", async () => {
+  it("retains safe row actions after removing the Updated column", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
 
-    // Column 9: Updated (updatedAt freshness) after Policy.
-    expect(screen.getByRole("columnheader", { name: "Updated" })).not.toBeNull();
-    const expectedUpdated = new Date("2025-01-15T09:30:00Z").toLocaleString();
-    expect(screen.getByText(expectedUpdated)).not.toBeNull();
-
-    // Column 10: Actions with safe, common row actions only.
+    expect(screen.queryByRole('columnheader', { name: 'Updated' })).toBeNull();
     expect(screen.getByRole("columnheader", { name: "Actions" })).not.toBeNull();
     // One "Run now" action per schedule definition row.
     expect(screen.getAllByRole("button", { name: /^Run .+ now$/ })).toHaveLength(3);
@@ -582,7 +659,8 @@ describe("SchedulesPage", () => {
   });
 
   it("routes creation to the workflow create page without local mutations", async () => {
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    mockScheduleDetailFetch(fetchSpy);
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     const createLink = await screen.findByRole("link", {
       name: "Create recurring schedule",
@@ -602,7 +680,7 @@ describe("SchedulesPage", () => {
     expect(mutationCalls).toEqual([]);
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/recurring-workflows" || String(url).startsWith("/api/recurring-workflows?"),
+        ([url]) => String(url) === "/console/schedules" || String(url).startsWith("/console/schedules?"),
       ),
     ).toBe(true);
     // The account-era scope partition is never sent, even though the schedule
@@ -621,7 +699,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(screen.getByRole("region", { name: "Schedule summary" }).textContent).toContain("0 schedules");
+    expect(screen.queryByRole("region", { name: "Schedule summary" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create Schedule" })).toBeNull();
   });
 
@@ -651,8 +729,8 @@ describe("SchedulesPage", () => {
 
     expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
     expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
-    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
-    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Create recurring schedule" })).toBeNull();
     // Stale account-era scope partitions are dropped while real filters survive.
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
       "/console/schedules?state=paused",
@@ -705,8 +783,8 @@ describe("SchedulesPage", () => {
     expect(await screen.findByText("You do not have access to recurring schedules.")).not.toBeNull();
     expect(screen.queryByText(/Daily repository sweep/)).toBeNull();
     expect(screen.queryByText(/schedule-alpha/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
-    expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Create recurring schedule" })).toBeNull();
   });
 
   it("honors dashboard schedule list sources from the boot payload", async () => {
@@ -793,26 +871,24 @@ describe("SchedulesPage", () => {
     });
   });
 
-  it("exposes a mobile filter sheet with the full recurring filter set", async () => {
+  it("opens mobile filters from an initially unfiltered list and can reopen after closing", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
+    await screen.findByText('Daily repository sweep');
+    const opener = screen.getByRole('button', { name: 'Filter recurring schedules' });
+    fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'Recurring filters' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    expect(screen.queryByRole('dialog', { name: 'Recurring filters' })).toBeNull();
+    fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'Recurring filters' })).toBeTruthy();
+  });
 
-    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-
-    const dialog = screen.getByRole("dialog", { name: "Recurring filters" });
-    for (const label of [
-      "Schedule filter value",
-      "State filter value",
-      "Target filter value",
-      "Repository filter value",
-      "Cadence / Timezone filter value",
-      "Next run filter value",
-      "Last scheduled filter value",
-      "Dispatch filter value",
-      "Updated filter value",
-    ]) {
-      expect(within(dialog).getByLabelText(label)).not.toBeNull();
-    }
+  it("keeps column filters without a standalone Filters button", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    await screen.findByText('Daily repository sweep');
+    expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Repository filter. No filter applied.' }));
+    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
   });
 
   it("uses opaque cursor paging and resets the cursor on page-size changes", async () => {
@@ -944,7 +1020,7 @@ describe("SchedulesPage", () => {
     const sidebarTable = screen.getByRole("table", { name: "Recurring schedule list table slice" });
     expect(sidebarTable).not.toBeNull();
     expect(within(sidebarTable).getByRole("columnheader").textContent).toContain("Recurring");
-    expect(screen.getByRole("searchbox", { name: "Recurring schedule sidebar filter" })).not.toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "Recurring schedule sidebar filter" })).toBeNull();
     expect(screen.getByRole("link", { name: /Nightly detail sweep/ }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("button", { name: "Edit schedule" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();

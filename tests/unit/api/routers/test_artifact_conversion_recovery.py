@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import select
 
-from api_service.api.routers import agent_runs, sessions, temporal_artifacts
+from api_service.api.routers import agent_runs, temporal_artifacts
 from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
@@ -21,7 +21,6 @@ from api_service.db.models import (
 )
 from api_service.migrations.account_source import source_user_ids
 from api_service.services import single_user_conversion as conversion
-from moonmind.config.settings import settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -44,7 +43,6 @@ def mounted_app(session, tmp_path):
     app.include_router(temporal_artifacts.router)
     app.include_router(agent_runs.sessions_router, prefix="/api")
     app.include_router(agent_runs.router, prefix="/api")
-    app.include_router(sessions.router, prefix="/api")
     app.dependency_overrides[get_async_session] = lambda: session
     app.dependency_overrides[temporal_artifacts._get_temporal_artifact_service] = (
         lambda: service(session, tmp_path)
@@ -63,7 +61,6 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setenv("DEFAULT_USER_ID", str(DEFAULT_OPERATOR or ""))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "runtime"))
-    monkeypatch.setattr(settings.feature_flags, "session_api_compat_enabled", True)
     metadata_principals = set()
     read_metadata = TemporalArtifactService.get_metadata
 
@@ -146,14 +143,6 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
                 assert response.status_code == 200, response.text
                 projected = {item["artifact_id"]: item
                              for group in response.json()["grouped_artifacts"]
-                             for item in group["artifacts"]}
-                assert projected[rows["main"]]["raw_access_allowed"] is True
-                assert projected[rows["quarantined"]]["raw_access_allowed"] is False
-                assert projected[rows["machine"]]["raw_access_allowed"] is False
-                snapshot = await client.get(f"/api/sessions/{record.session_id}")
-                assert snapshot.status_code == 200, snapshot.text
-                projected = {item["artifact_id"]: item
-                             for group in snapshot.json()["artifactRefs"]["groupedArtifacts"]
                              for item in group["artifacts"]}
                 assert projected[rows["main"]]["raw_access_allowed"] is True
                 assert projected[rows["quarantined"]]["raw_access_allowed"] is False
