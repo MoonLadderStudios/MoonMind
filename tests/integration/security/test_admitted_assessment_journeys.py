@@ -445,9 +445,6 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
         )
         monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
         monkeypatch.setattr(mcp_tools.settings.feature_flags, "preset_catalog", True)
-        monkeypatch.setattr(
-            mcp_tools.settings.feature_flags, "disable_preset_catalog", False
-        )
         session.app.include_router(presets.router)
         async with AsyncClient(
             transport=ASGITransport(app=session.app, client=("127.0.0.1", 12345)),
@@ -860,9 +857,6 @@ async def expand_preset(environment, tmp_path, monkeypatch, slug, assessment):
     )
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(mcp_tools.settings.feature_flags, "preset_catalog", True)
-    monkeypatch.setattr(
-        mcp_tools.settings.feature_flags, "disable_preset_catalog", False
-    )
     app = FastAPI()
     app.include_router(presets.router)
 

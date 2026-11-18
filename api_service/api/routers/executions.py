@@ -80,6 +80,7 @@ from api_service.api.execution_principal import (
 )
 from api_service.api.instance_access import is_instance_operator
 from api_service.api.routers.temporal_artifacts import _raise_temporal_artifact_http
+from api_service.api.routers.workflow_console_view_model import TEMPORAL_SOURCE_ROUTES
 from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import (
     get_instance_access,
@@ -5188,9 +5189,7 @@ def _serialize_execution(
     # lookup. Approval and state validation stay at their owning boundaries.
     is_admin = True
     steps_href = (
-        settings.temporal_dashboard.steps_endpoint.replace(
-            "{workflowId}", record.workflow_id
-        )
+        TEMPORAL_SOURCE_ROUTES["steps"].replace("{workflowId}", record.workflow_id)
         if workflow_type_value == "MoonMind.UserWorkflow"
         else None
     )
@@ -16463,7 +16462,7 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-        if settings.temporal.temporal_authoritative_read_enabled and result.items:
+        if result.items:
             from api_service.core.sync import sync_temporal_executions_safely
 
             try:
@@ -17343,22 +17342,21 @@ async def describe_execution_steps(
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepLedgerSnapshotModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
-    if settings.temporal.temporal_authoritative_read_enabled:
-        try:
-            await execution_sync.fetch_and_sync_execution(
-                session,
-                canonical_workflow_id,
-                temporal_client,
-            )
-            await session.commit()
-        except Exception as exc:
-            await session.rollback()
-            logger.warning(
-                "Failed to sync execution %s from Temporal for step ledger: %s",
-                canonical_workflow_id,
-                exc,
-                exc_info=True,
-            )
+    try:
+        await execution_sync.fetch_and_sync_execution(
+            session,
+            canonical_workflow_id,
+            temporal_client,
+        )
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        logger.warning(
+            "Failed to sync execution %s from Temporal for step ledger: %s",
+            canonical_workflow_id,
+            exc,
+            exc_info=True,
+        )
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -19075,48 +19073,49 @@ async def describe_execution(
     use_projection_read = source_is_temporal
     temporal_sync_unavailable = False
 
-    if settings.temporal.temporal_authoritative_read_enabled or source_is_temporal:
-        try:
-            client = temporal_client
-            await execution_sync.fetch_and_sync_execution(
-                session,
-                canonical_workflow_id,
-                client,
-            )
-            await session.commit()
-            # Return the synced projection to avoid clobbering it with stale source data.
-            use_projection_read = True
-        except WorkflowProjectionExcluded as exc:
-            await session.rollback()
-            # MoonLadderStudios/MoonMind#3947 (R4): same authorization-before-
-            # disclosure rule as _get_owned_execution — reason codes only for
-            # admins, generic not-found for everyone else.
-            if _is_execution_admin(user):
-                raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+    try:
+        client = temporal_client
+        await execution_sync.fetch_and_sync_execution(
+            session,
+            canonical_workflow_id,
+            client,
+        )
+        await session.commit()
+        # Return the synced projection to avoid clobbering it with stale source data.
+        use_projection_read = True
+    except WorkflowProjectionExcluded as exc:
+        await session.rollback()
+        # MoonLadderStudios/MoonMind#3947 (R4): same authorization-before-
+        # disclosure rule as _get_owned_execution — reason codes only for
+        # admins, generic not-found for everyone else.
+        if _is_execution_admin(user):
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "code": "execution_not_found",
-                    "message": f"Workflow execution {workflow_id} was not found",
-                },
+                status_code=404, detail={"code": exc.code, "message": str(exc)}
             ) from exc
-        except RPCError as exc:
-            temporal_sync_unavailable = True
-            await session.rollback()
-            logger.warning(
-                "Failed to sync execution %s from Temporal: %s",
-                canonical_workflow_id,
-                exc,
-                exc_info=True,
-            )
-        except Exception as exc:
-            await session.rollback()
-            logger.warning(
-                "Failed to sync execution %s from Temporal: %s",
-                canonical_workflow_id,
-                exc,
-                exc_info=True,
-            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "execution_not_found",
+                "message": f"Workflow execution {workflow_id} was not found",
+            },
+        ) from exc
+    except RPCError as exc:
+        temporal_sync_unavailable = True
+        await session.rollback()
+        logger.warning(
+            "Failed to sync execution %s from Temporal: %s",
+            canonical_workflow_id,
+            exc,
+            exc_info=True,
+        )
+    except Exception as exc:
+        await session.rollback()
+        logger.warning(
+            "Failed to sync execution %s from Temporal: %s",
+            canonical_workflow_id,
+            exc,
+            exc_info=True,
+        )
 
     try:
         record = await _get_owned_execution(

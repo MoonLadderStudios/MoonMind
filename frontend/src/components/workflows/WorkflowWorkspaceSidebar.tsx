@@ -45,11 +45,6 @@ import {
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number };
-  features?: {
-    temporalDashboard?: {
-      listEnabled?: boolean;
-    };
-  };
 };
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
@@ -285,7 +280,6 @@ export function WorkflowWorkspaceSidebarPanel({
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
-  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
   const searchKey = search.toString();
   const listQueryParams = useMemo(() => {
     const params = new URLSearchParams(searchKey);
@@ -306,8 +300,7 @@ export function WorkflowWorkspaceSidebarPanel({
       }
       return WorkflowWorkspaceListResponseSchema.parse(await response.json());
     },
-    enabled: listEnabled,
-    refetchInterval: listEnabled ? listPoll : false,
+    refetchInterval: listPoll,
     staleTime: listPoll,
   });
   const rows = workflowsQuery.data?.items;
@@ -317,10 +310,6 @@ export function WorkflowWorkspaceSidebarPanel({
       && workflowSidebarMatchesFilter(row, sidebarFilterText)
     ))
   ), [rows, sidebarFilterText]);
-  // Every hook above runs on each render; the flag may flip while mounted.
-  if (!listEnabled) {
-    return null;
-  }
   const activeInList = (rows || []).some((row) => workflowWorkspaceRowId(row) === activeWorkflowId);
   const pinnedRow = pinnedCurrentRow && !activeInList ? pinnedCurrentRow : null;
 

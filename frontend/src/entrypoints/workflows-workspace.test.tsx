@@ -66,16 +66,13 @@ describe('WorkflowsWorkspacePage', () => {
     window.history.pushState({}, 'Workspace Test', '/workflows/test-123?source=temporal');
   });
 
-  it.each([
-    { listEnabled: false, workspaceShellEnabled: true },
-    { listEnabled: true, workspaceShellEnabled: false },
-  ])('honors disabled desktop workspace shell flags %#', async (temporalDashboard) => {
+  it('honors the disabled desktop workspace shell flag', async () => {
     renderWorkspace({
       page: 'dashboard',
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard },
+          features: { temporalDashboard: { workspaceShellEnabled: false } },
         },
       },
     });

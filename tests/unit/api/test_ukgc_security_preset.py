@@ -35,7 +35,6 @@ async def seed(session, tmp_path):
 async def test_ukgc_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
-    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
     async with template_db(tmp_path) as maker:
         async with maker() as session:
             await seed(session, tmp_path)

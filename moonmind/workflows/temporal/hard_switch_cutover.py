@@ -30,8 +30,6 @@ LEGACY_USER_WORKFLOW_TYPE = "MoonMind.Run"
 RENAMED_USER_WORKFLOW_TYPE = "MoonMind.UserWorkflow"
 RENAMED_USER_WORKFLOW_CONTRACT = "renamed_contract"
 
-_VALID_CONTRACT_MODES = {RENAMED_USER_WORKFLOW_CONTRACT}
-
 
 class HardSwitchCutoverError(ValueError):
     """Raised when the user-workflow start contract is misconfigured."""
@@ -46,18 +44,6 @@ class UserWorkflowStartContract:
     contract_mode: str
 
 
-def normalize_user_workflow_contract_mode(value: Any) -> str:
-    """Normalize the configured user-workflow contract mode."""
-
-    normalized = str(value or RENAMED_USER_WORKFLOW_CONTRACT).strip().lower()
-    if normalized not in _VALID_CONTRACT_MODES:
-        raise HardSwitchCutoverError(
-            "TEMPORAL_USER_WORKFLOW_CONTRACT_MODE must be one of "
-            f"{', '.join(sorted(_VALID_CONTRACT_MODES))}"
-        )
-    return normalized
-
-
 def resolve_user_workflow_start_contract(
     temporal_settings: TemporalSettings,
 ) -> UserWorkflowStartContract:
@@ -67,9 +53,6 @@ def resolve_user_workflow_start_contract(
     record or release-note file is consulted.
     """
 
-    normalize_user_workflow_contract_mode(
-        temporal_settings.user_workflow_contract_mode
-    )
     task_queue = str(temporal_settings.user_workflow_v2_task_queue).strip()
     if not task_queue:
         raise HardSwitchCutoverError(

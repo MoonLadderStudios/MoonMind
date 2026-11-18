@@ -78,7 +78,7 @@ The table starts directly below the navigation bar; the page heading is availabl
 | Mobile cards | Compact cards whose title is the only detail link, with the `More actions` menu as a separate target, so no control nests inside another. Filters are available through the mobile filter sheet. |
 | View options | Density, column visibility, and live-update preference. |
 
-The page reads `dashboardConfig.pollIntervalsMs.list` (default five seconds) and is disabled when `dashboardConfig.features.temporalDashboard.listEnabled === false`.
+The page polls at `dashboardConfig.pollIntervalsMs.list` (default five seconds).
 
 ### 5.1 Rows and status cells
 

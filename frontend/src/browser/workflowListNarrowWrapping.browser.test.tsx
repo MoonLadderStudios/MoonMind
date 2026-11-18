@@ -19,7 +19,7 @@ const payload: BootPayload = {
   apiBase: '/api',
   initialData: {
     dashboardConfig: {
-      features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+      features: { temporalDashboard: { actionsEnabled: true } },
     },
   },
 };

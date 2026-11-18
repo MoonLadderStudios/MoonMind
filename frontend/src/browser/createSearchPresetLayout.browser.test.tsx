@@ -42,7 +42,7 @@ const uiInfo = {
     pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 },
     sources: { temporal: { create: '/api/executions', artifactCreate: '/api/artifacts' }, github: { branches: '/api/github/branches?repository={repository}' } },
     system: { defaultRepository: 'MoonLadderStudios/MoonMind', defaultAgentRuntime: 'codex_cli', defaultPublishMode: 'none', providerProfiles: { list: '/api/v1/provider-profiles' }, presetCatalog: { enabled: true, list: '/api/presets' } },
-    features: { temporalDashboard: { actionsEnabled: true, listEnabled: false, workspaceShellEnabled: false } },
+    features: { temporalDashboard: { actionsEnabled: true, workspaceShellEnabled: false } },
   },
 };
 const payload: BootPayload = { page: 'dashboard', apiBase: '/api' };

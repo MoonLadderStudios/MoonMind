@@ -597,28 +597,6 @@ describe("WorkflowStartPage workflow list display modes", () => {
     expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
   });
 
-  it("does not render the Create sidebar when workflow navigation is disabled", () => {
-    renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            ...(mockPayload.initialData as Record<string, unknown>),
-            dashboardConfig: {
-              ...mockDashboardConfig,
-              features: {
-                temporalDashboard: {
-                  listEnabled: false,
-                },
-              },
-            },
-            workflowListDisplayMode: "sidebar",
-          },
-        });
-
-    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
-    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
-    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
-  });
-
   it("guards ordinary dashboard links when the Create draft has changed", async () => {
     renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
     await new Promise((resolve) => window.setTimeout(resolve, 0));

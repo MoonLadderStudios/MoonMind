@@ -37,6 +37,23 @@ _POLL_INTERVALS_MS = {
     "events": 1000,
 }
 
+# Execution and artifact routes are fixed by the API routers, so they are not
+# operator settings.
+TEMPORAL_SOURCE_ROUTES = {
+    "list": "/api/executions",
+    "create": "/api/executions",
+    "detail": "/api/executions/{workflowId}",
+    "steps": "/api/executions/{workflowId}/steps",
+    "update": "/api/executions/{workflowId}/update",
+    "signal": "/api/executions/{workflowId}/signal",
+    "cancel": "/api/executions/{workflowId}/cancel",
+    "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+    "artifactCreate": "/api/artifacts",
+    "artifactMetadata": "/api/artifacts/{artifactId}",
+    "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
+    "artifactDownload": "/api/artifacts/{artifactId}/download",
+}
+
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "claude_code", "universal")
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SSH_GIT_RE = re.compile(
@@ -1572,26 +1589,13 @@ def build_runtime_config(
                 "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
                 "delete": "/api/recurring-workflows/{definitionId}",
             },
-            "temporal": {
-                "list": temporal_dashboard.list_endpoint,
-                "create": temporal_dashboard.create_endpoint,
-                "detail": temporal_dashboard.detail_endpoint,
-                "steps": temporal_dashboard.steps_endpoint,
-                "update": temporal_dashboard.update_endpoint,
-                # MoonLadderStudios/MoonMind#4187: the native Manifest
-                # product is retired and its manifest-status/manifest-nodes
-                # routes are removed. No manifestStatus/manifestNodes links
-                # are advertised here: there are no consumers, and
-                # historical manifest_ref/manifestArtifactRef reads stay
-                # served through the execution list/detail projections.
-                "signal": temporal_dashboard.signal_endpoint,
-                "cancel": temporal_dashboard.cancel_endpoint,
-                "artifacts": temporal_dashboard.artifacts_endpoint,
-                "artifactCreate": temporal_dashboard.artifact_create_endpoint,
-                "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
-                "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
-                "artifactDownload": temporal_dashboard.artifact_download_endpoint,
-            },
+            # MoonLadderStudios/MoonMind#4187: the native Manifest product is
+            # retired and its manifest-status/manifest-nodes routes are
+            # removed. No manifestStatus/manifestNodes links are advertised:
+            # there are no consumers, and historical
+            # manifest_ref/manifestArtifactRef reads stay served through the
+            # execution list/detail projections.
+            "temporal": dict(TEMPORAL_SOURCE_ROUTES),
             "agentRuns": {
                 "observabilitySummary": "/api/agent-runs/{agentRunId}/observability-summary",
                 "observabilityEvents": "/api/agent-runs/{agentRunId}/observability/events",
@@ -1614,9 +1618,6 @@ def build_runtime_config(
         },
         "features": {
             "temporalDashboard": {
-                "enabled": bool(temporal_dashboard.enabled),
-                "listEnabled": bool(temporal_dashboard.list_enabled),
-                "detailEnabled": bool(temporal_dashboard.detail_enabled),
                 "actionsEnabled": bool(temporal_dashboard.actions_enabled),
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "temporalWorkflowEditing": bool(
@@ -1646,10 +1647,8 @@ def build_runtime_config(
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
             "runtimeCommandPreview": build_runtime_command_preview_config(),
             "presetCatalog": {
-                "enabled": bool(settings.feature_flags.preset_catalog_enabled),
-                "templateSaveEnabled": bool(
-                    settings.feature_flags.preset_catalog_enabled
-                ),
+                "enabled": bool(settings.feature_flags.preset_catalog),
+                "templateSaveEnabled": bool(settings.feature_flags.preset_catalog),
                 "list": "/api/presets",
                 "detail": "/api/presets/{slug}",
                 "expand": "/api/presets/{slug}:expand",

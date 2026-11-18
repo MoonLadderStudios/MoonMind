@@ -884,7 +884,6 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
     # alone; no cutover record or release-note file is consulted.
     temporal_settings = settings.temporal.model_copy(
         update={
-            "user_workflow_contract_mode": "renamed_contract",
             "user_workflow_v2_task_queue": "mm.workflow.user.v2",
         }
     )

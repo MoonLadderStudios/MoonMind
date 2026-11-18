@@ -118,7 +118,6 @@ type DashboardConfig = {
       temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
-      listEnabled?: boolean;
       workspaceShellEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
@@ -11034,10 +11033,9 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
     : null;
   const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
-  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
   const displayMode = readWorkflowListDisplayMode(payload);
 
-  if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
+  if (workspaceShellEnabled && isDesktop && workflowId) {
     return (
       <WorkflowWorkspaceShell
         payload={payload}

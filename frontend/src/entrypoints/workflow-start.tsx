@@ -83,19 +83,6 @@ import type {
   RuntimeTargetRolloutState,
 } from "../runtime/runtimeTargets";
 
-type WorkflowStartDashboardConfig = {
-  features?: {
-    temporalDashboard?: {
-      listEnabled?: boolean;
-    };
-  };
-};
-
-function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDashboardConfig | undefined {
-  const raw = payload.initialData as { dashboardConfig?: WorkflowStartDashboardConfig } | undefined;
-  return raw?.dashboardConfig;
-}
-
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
 const REMEDIATION_DRAFT_LOAD_MESSAGES: Record<
@@ -13886,9 +13873,7 @@ function WorkflowStartPageWithSearch({
   if (displayMode === "table") {
     return <WorkflowStartPageContent payload={payload} searchString={searchString} navigationKey={navigationKey} />;
   }
-  const cfg = readWorkflowStartDashboardConfig(payload);
-  const sidebarVisible = displayMode === "sidebar"
-    && cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const sidebarVisible = displayMode === "sidebar";
 
   return (
     <div

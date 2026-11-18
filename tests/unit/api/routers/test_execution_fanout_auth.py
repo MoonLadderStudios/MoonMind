@@ -67,7 +67,8 @@ def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
+    # Describe always syncs from Temporal first; this suite exercises auth only.
+    monkeypatch.setattr("api_service.core.sync.fetch_and_sync_execution", AsyncMock())
 
     from api_service.services import single_user_conversion
 

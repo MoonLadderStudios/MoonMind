@@ -5,14 +5,13 @@ import { renderWithClient, screen } from '../../utils/test-utils';
 import { workflowWorkspaceRowFromDetail } from '../../lib/workflowWorkspaceList';
 import { WorkflowWorkspaceSidebarPanel } from './WorkflowWorkspaceSidebar';
 
-function payload(listEnabled: boolean): BootPayload {
+function payload(): BootPayload {
   return {
     page: 'dashboard',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
         pollIntervalsMs: { list: 60_000 },
-        features: { temporalDashboard: { listEnabled } },
       },
     },
   };
@@ -32,28 +31,6 @@ describe('WorkflowWorkspaceSidebarPanel', () => {
     fetchSpy.mockRestore();
   });
 
-  it('keeps a stable hook order when the list flag is toggled', async () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const search = new URLSearchParams();
-      const view = renderWithClient(
-        <WorkflowWorkspaceSidebarPanel payload={payload(true)} search={search} />,
-      );
-      expect(await screen.findByRole('link', { name: /First workflow/ })).toBeTruthy();
-
-      view.rerender(<WorkflowWorkspaceSidebarPanel payload={payload(false)} search={search} />);
-      expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
-
-      view.rerender(<WorkflowWorkspaceSidebarPanel payload={payload(true)} search={search} />);
-      expect(await screen.findByRole('link', { name: /First workflow/ })).toBeTruthy();
-
-      const hookErrors = consoleErrorSpy.mock.calls.filter((call) => /hooks/i.test(String(call[0])));
-      expect(hookErrors).toEqual([]);
-    } finally {
-      consoleErrorSpy.mockRestore();
-    }
-  });
-
   it('matches the list status when a completed workflow has a failed objective', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -65,7 +42,7 @@ describe('WorkflowWorkspaceSidebarPanel', () => {
       }),
     } as Response);
 
-    renderWithClient(<WorkflowWorkspaceSidebarPanel payload={payload(true)} search={new URLSearchParams()} />);
+    renderWithClient(<WorkflowWorkspaceSidebarPanel payload={payload()} search={new URLSearchParams()} />);
 
     const failedLink = await screen.findByRole('link', { name: /Failed objective/ });
     const failedIcon = failedLink.querySelector('[data-testid="workflow-workspace-sidebar-status-icon"]');
@@ -81,7 +58,7 @@ describe('WorkflowWorkspaceSidebarPanel', () => {
   it('applies the objective outcome to the pinned current workflow', async () => {
     renderWithClient(
       <WorkflowWorkspaceSidebarPanel
-        payload={payload(true)}
+        payload={payload()}
         search={new URLSearchParams()}
         activeWorkflowId="wf-pinned"
         pinnedCurrentRow={workflowWorkspaceRowFromDetail({

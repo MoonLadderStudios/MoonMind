@@ -14697,9 +14697,8 @@ def test_describe_execution_bounds_slow_live_progress_query(
         0.01,
     )
     monkeypatch.setattr(
-        settings.temporal,
-        "temporal_authoritative_read_enabled",
-        False,
+        "api_service.core.sync.fetch_and_sync_execution",
+        AsyncMock(),
     )
     observed_timeouts: list[float] = []
 
@@ -14778,14 +14777,12 @@ def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> Non
     load_progress.assert_not_awaited()
     enrich_merge_automation.assert_awaited_once()
 
-def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
-    monkeypatch.setattr(
-        settings.temporal_dashboard,
-        "detail_endpoint",
-        "/gateway/api/executions/{workflowId}",
+def test_describe_execution_steps_href_uses_fixed_steps_route(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "TEMPORAL_DASHBOARD_DETAIL_ENDPOINT", "/gateway/api/executions/{workflowId}"
     )
     payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
-    assert payload["stepsHref"] == "/gateway/api/executions/mm:wf-1/steps"
+    assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
 
 def test_describe_execution_does_not_query_progress_for_manifest_workflows() -> None:
     app = FastAPI()
@@ -15765,8 +15762,6 @@ def test_get_execution_steps_uses_projection_fallback_when_temporal_query_fails(
             None,
         ),
     )
-    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
-
     async def _raise_sync_failure(*_args, **_kwargs):
         raise RPCError("Temporal query failed", RPCStatusCode.FAILED_PRECONDITION, None)
 
