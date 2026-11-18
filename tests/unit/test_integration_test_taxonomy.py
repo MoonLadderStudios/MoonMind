@@ -14,7 +14,6 @@ COMPOSE_TEST_RUNNERS = (
     "tools/test_unit_docker.sh",
     "tools/test-unit.ps1",
     "tools/test-integration.ps1",
-    "tools/test-e2e.ps1",
 )
 
 
@@ -156,7 +155,6 @@ def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> 
     for relative_path in (
         "tools/test-unit.ps1",
         "tools/test-integration.ps1",
-        "tools/test-e2e.ps1",
     ):
         runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         capture_index = runner.index("$testExitCode = $LASTEXITCODE")
