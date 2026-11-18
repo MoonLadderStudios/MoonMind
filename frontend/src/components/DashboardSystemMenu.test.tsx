@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 
-import { fireEvent, renderWithClient, screen, within } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, within } from '../utils/test-utils';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
 import { DashboardSystemMenu } from './DashboardSystemMenu';
 
@@ -51,6 +51,26 @@ describe('DashboardSystemMenu without UI info', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
     fireEvent.blur(screen.getByRole('menuitem', { name: /Skills/ }), { relatedTarget: null });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('keeps an opened menu through query normalization but closes on page navigation', () => {
+    let navigate: ReturnType<typeof useNavigate>;
+    function NavigationProbe() {
+      navigate = useNavigate();
+      return null;
+    }
+    renderWithClient(
+      <MemoryRouter initialEntries={['/schedules']}>
+        <NavigationProbe />
+        <DashboardSystemMenu uiInfo={null} availabilityUnknown mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Recurring' }));
+    const skills = screen.getByRole('menuitem', { name: /Skills/ });
+    act(() => { void navigate('?limit=50&sort=updatedAt&sortDir=desc', { replace: true }); });
+    expect(screen.getByRole('menuitem', { name: /Skills/ })).toBe(skills);
+    act(() => { void navigate('/skills'); });
     expect(screen.queryByRole('menu')).toBeNull();
   });
 

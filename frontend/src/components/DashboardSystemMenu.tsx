@@ -173,7 +173,9 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
   const triggerIconKey = activeDestinationGroup?.triggerIconKey ?? activeDestination?.iconKey;
   const TriggerIcon = active && triggerIconKey ? (ICONS[triggerIconKey] ?? Settings) : Settings;
 
-  useEffect(() => setOpen(false), [location.pathname, location.search]);
+  // List pages may normalize their query after the menu is opened. Only
+  // leaving the page should dismiss it; link selection also closes directly.
+  useEffect(() => setOpen(false), [location.pathname]);
 
   useEffect(() => {
     if (!open) return undefined;
