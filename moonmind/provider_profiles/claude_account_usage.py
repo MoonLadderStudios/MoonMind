@@ -172,6 +172,12 @@ def usage_from_oauth_usage(
     if not recognized.intersection(raw_windows) and raw_limits is None:
         # Nothing this adapter knows answered: a changed schema, not "none".
         raise _Malformed
+    if any(
+        raw_windows.get(key) is not None and not isinstance(raw_windows[key], Mapping)
+        for key in recognized
+    ):
+        # Skipping it would read as "not reported" and erase the cached value.
+        raise _Malformed
     legacy = [
         (key, period, duration, None) for key, (period, duration) in _GENERAL.items()
     ]

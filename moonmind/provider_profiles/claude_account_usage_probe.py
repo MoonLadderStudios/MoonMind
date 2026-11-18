@@ -119,6 +119,10 @@ def project_usage(body):
                 "utilization": _scalar(value.get("utilization")),
                 "resets_at": _scalar(value.get("resets_at")),
             }
+        elif key != "limits":
+            # Kept so MoonMind can fail a recognized window it cannot read
+            # instead of treating it as not reported.
+            windows[key] = "invalid"
     limits = None
     raw = body.get("limits")
     if isinstance(raw, list):
@@ -142,6 +146,8 @@ def project_usage(body):
                     "scoped": scope is not None,
                 }
             )
+    elif raw is not None:
+        limits = "invalid"
     return {"windows": windows, "limits": limits}
 
 

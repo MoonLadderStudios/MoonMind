@@ -136,6 +136,27 @@ def test_absent_windows_are_not_reported_but_a_changed_schema_is_malformed() -> 
         _usage({"weekly_allowance": {"utilization": 3, "resets_at": None}})
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"seven_day": "unreadable"},
+        {"seven_day": {}},
+        {"seven_day_opus": [3]},
+        {"limits": {"kind": "weekly", "percent": 3}},
+    ],
+)
+def test_unreadable_recognized_windows_fail_instead_of_vanishing(malformed) -> None:
+    # Dropped, the window would look unreported and a full snapshot would
+    # erase its cached last-good value.
+    body = {"five_hour": {"utilization": 5, "resets_at": None}, **malformed}
+    with pytest.raises(claude._Malformed):
+        _usage(body)
+    # Unknown keys stay ignored whatever their shape.
+    assert set(_windows({**body, **dict.fromkeys(malformed, None), "x_y": "?"})) == {
+        "five_hour"
+    }
+
+
 def test_limits_only_responses_use_the_same_keys_as_legacy_and_native() -> None:
     windows = _windows(
         {

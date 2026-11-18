@@ -185,6 +185,8 @@ class FakeAnthropic:
             await writer.start_tls(self.tls)
             await self._serve(reader, writer, host)
         except (OSError, ssl.SSLError, ValueError, asyncio.IncompleteReadError):
+            # The CLI may drop or abort a connection mid-exchange. The tests
+            # assert on the recorded requests, not on connection teardown.
             pass
         finally:
             writer.close()
