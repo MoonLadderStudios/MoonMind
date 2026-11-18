@@ -161,7 +161,7 @@ Codex has one host mode, on-demand Docker, under its binding, bridge, readiness,
 
 `on_demand_docker` starts one lease-owned container after the Provider Profile lease is acquired. Its name and labels are deterministic from durable lease identity. It receives one workflow workspace, one Codex OAuth home, one Omnigent state volume, and one active session.
 
-Terminal cleanup removes only the lease-owned container and Omnigent state volume. The canonical OAuth volume and unrelated containers or volumes survive.
+Terminal cleanup removes only the lease-owned container and Omnigent state and control volumes. Before removing a volume, it also removes never-started containers that still mount it. For example, a `docker run --rm` writer killed between create and start stays Created, and Docker would otherwise refuse the volume removal on every attempt. The canonical OAuth volume and unrelated containers or volumes survive.
 
 ### 5.2 Selection authority
 
