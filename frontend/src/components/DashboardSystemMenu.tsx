@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import {
@@ -23,7 +23,6 @@ const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   settings: Settings,
   'shield-check': ShieldCheck,
   sparkles: Sparkles,
-  wrench: Wrench,
 };
 
 type MenuDestinationState = DashboardDestinationState | 'unknown';
@@ -31,7 +30,7 @@ type MenuDestinationState = DashboardDestinationState | 'unknown';
 const SECTION_LABELS: Record<string, string> = {
   recurring: 'Workflow resources',
   'omnigent-agents': 'Omnigent',
-  remediation: 'Operations',
+  artifacts: 'Operations',
 };
 
 function DestinationLink({ destination, state, onSelect, menuItem = true }: {

@@ -4109,26 +4109,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/remediations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Remediations Route
-         * @description Serve the capability-gated remediation inventory shell.
-         */
-        get: operations["remediations_route_remediations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/observability": {
         parameters: {
             query?: never;
@@ -4405,26 +4385,6 @@ export interface paths {
          * @description Serve recognized extensionless collection deep links from the SPA shell.
          */
         get: operations["collection_spa_fallback_route_omnigent_agents__dashboard_path__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/remediations/{dashboard_path}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Collection Spa Fallback Route
-         * @description Serve recognized extensionless collection deep links from the SPA shell.
-         */
-        get: operations["collection_spa_fallback_route_remediations__dashboard_path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -23869,26 +23829,6 @@ export interface operations {
             };
         };
     };
-    remediations_route_remediations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
     artifact_collection_route_observability_get: {
         parameters: {
             query?: never;
@@ -24205,37 +24145,6 @@ export interface operations {
         };
     };
     collection_spa_fallback_route_omnigent_agents__dashboard_path__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dashboard_path: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    collection_spa_fallback_route_remediations__dashboard_path__get: {
         parameters: {
             query?: never;
             header?: never;

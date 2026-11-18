@@ -52,7 +52,7 @@ Navigation rules:
 
 ## 5. Page Composition
 
-The recurring schedule detail page is a schedule adapter rendered through the same `EntityDetailFrame` as Workflow detail. The Recurring sidebar is the single contextual sidebar and a workspace sibling; it lists schedules only and is never mounted inside the frame or beside a page-navigation sidebar.
+The recurring schedule detail page is a schedule adapter rendered through the same `EntityDetailFrame` as Workflow detail. The Recurring sidebar is the single contextual sidebar and a workspace sibling; it lists schedules only and is never mounted inside the frame or beside a page-navigation sidebar. Its heading has a `+` creation action on the right. Rows show Active/Paused icons without next-run text, and there is no sidebar search or refresh action. When this sidebar is visible, `Schedule` labels the top left of the detail pane.
 
 Reuse from workflow detail:
 
