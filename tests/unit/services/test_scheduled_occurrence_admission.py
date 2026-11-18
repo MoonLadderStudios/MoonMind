@@ -178,7 +178,7 @@ def compiler(monkeypatch, plan_input_delegation):
 
 
 async def _schedule_parameters(
-    artifacts, *, provider=None, steps=None, session=None
+    artifacts, *, provider=None, steps=None, session=None, initial_parameters=None
 ) -> dict:
     """Plan a schedule the way the API did before the release."""
 
@@ -192,6 +192,7 @@ async def _schedule_parameters(
         "agentProfileSnapshot": snapshot,
         "system": {"recurrence": {"definitionId": "schedule-1"}},
     }
+    parameters.update(initial_parameters or {})
     if steps is not None:
         parameters["workflow"]["steps"] = steps
     stored = await plan_service.compile_and_persist_execution_plan(
@@ -1602,27 +1603,28 @@ async def test_scheduled_assessment_denial_preserves_validation_reason(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("launch_key", ["commitMessage", "publishBaseBranch"])
 @pytest.mark.parametrize("successor", [False, True])
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_specialized_tier_launch_defaults_remain_frozen_for_successor(
-    monkeypatch, compiler, successor, explicit
+    monkeypatch, compiler, successor, explicit, launch_key
 ):
     _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
     artifacts = _ArtifactService()
     provider = _provider()
     provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
-                             "parameters": {"commitMessage": "admitted"}}]
+                             "parameters": {launch_key: "admitted"}}]
     provider.default_model_tier = 1
     runtime = {"mode": "omnigent", "modelTier": 1}
     if explicit:
-        runtime["parameters"] = {"commitMessage": "authored"}
+        runtime["parameters"] = {launch_key: "authored"}
     parameters, _ = await _schedule_parameters(
         artifacts, provider=provider,
         steps=[{"id": "specialized", "runtime": runtime}],
     )
     saved = deepcopy(parameters["omnigentStepExecutionPlans"]["specialized"])
-    assert saved["commitMessage"] == ("authored" if explicit else "admitted")
-    provider.model_tiers[0]["parameters"]["commitMessage"] = "edited"
+    assert saved[launch_key] == ("authored" if explicit else "admitted")
+    provider.model_tiers[0]["parameters"][launch_key] = "edited"
     if successor:
         provider.model_tiers[0]["model"] = "example/edited-model"
         provider.model_tiers[0]["parameters"]["nativeOnlyOption"] = True
@@ -1635,7 +1637,7 @@ async def test_specialized_tier_launch_defaults_remain_frozen_for_successor(
         )
     assert admitted["disposition"] == "admitted"
     step = admitted["omnigentStepExecutionPlans"]["specialized"]
-    assert step["commitMessage"] == ("authored" if explicit else "admitted" if successor else "edited")
+    assert step[launch_key] == ("authored" if explicit else "admitted" if successor else "edited")
     plan = _PlanStore.plans[step["omnigentExecutionPlan"]["planRef"]].payload
     assert plan.modelConfig.qualifiedId == "example/tier-model"
     assert plan.modelConfig.tierResolution == step["modelTierResolution"]
@@ -1673,7 +1675,7 @@ async def test_specialized_tier_rejects_generated_branch_without_name(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("option", [
     {"publishMode": "branch"}, {"publishMode": "pr"},
-    {"publishBaseBranch": "another-base"}, {"githubOperations": ["write"]},
+    {"githubOperations": ["write"]},
     {"repository": "other/repo"},
 ])
 async def test_specialized_step_repository_options_keep_native_authority_boundary(
@@ -1731,3 +1733,91 @@ async def test_specialized_step_does_not_adopt_new_launch_defaults_on_successor(
     )
     assert fresh["disposition"] == "admitted"
     assert fresh["omnigentStepExecutionPlans"]["specialized"]["commitMessage"] == "new default"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("inherited", [None, "root-base"])
+async def test_specialized_successor_preserves_absent_or_legacy_base(
+    monkeypatch, compiler, legacy, inherited
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"commitMessage": "admitted"}}]
+    provider.default_model_tier = 1
+    compile_plan = plan_service.compile_and_persist_execution_plan
+
+    async def legacy_compile(**kwargs):
+        # Produce the pre-field plan/handoff before the root binds its digest,
+        # rather than modifying an already admitted map or bypassing its checks.
+        if kwargs.get("_compile_step_plans") is False:
+            kwargs["model_tier_resolution"].pop("stepPublicationBaseBranch", None)
+            if inherited is None:
+                kwargs["initial_parameters"].pop("publishBaseBranch", None)
+        return await compile_plan(**kwargs)
+
+    if legacy:
+        monkeypatch.setattr(plan_service, "compile_and_persist_execution_plan", legacy_compile)
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider,
+        initial_parameters={} if inherited is None else {"publishBaseBranch": inherited},
+        steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}],
+    )
+    step = parameters["omnigentStepExecutionPlans"]["specialized"]
+    monkeypatch.setattr(plan_service, "compile_and_persist_execution_plan", compile_plan)
+    if legacy:
+        assert "publishBaseBranch" not in step
+        assert "stepPublicationBaseBranch" not in step["modelTierResolution"]
+    else:
+        assert step["publishBaseBranch"] == inherited
+    provider.model_tiers[0]["parameters"]["publishBaseBranch"] = "later-profile-base"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts)
+    )
+    assert admitted["disposition"] == "admitted"
+    successor_step = admitted["omnigentStepExecutionPlans"]["specialized"]
+    if legacy:
+        assert "publishBaseBranch" not in successor_step
+        assert "stepPublicationBaseBranch" not in successor_step["modelTierResolution"]
+    else:
+        assert successor_step["publishBaseBranch"] == inherited
+        assert successor_step["modelTierResolution"]["stepPublicationBaseBranch"] == inherited
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["", None])
+async def test_specialized_explicit_default_base_overrides_tier_and_survives_successor(
+    monkeypatch, compiler, value
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"publishBaseBranch": "tier-base"}}]
+    provider.default_model_tier = 1
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider,
+        steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1,
+                "parameters": {"publishBaseBranch": value}}}],
+    )
+    provider.model_tiers[0]["parameters"]["publishBaseBranch"] = "edited-base"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts)
+    )
+    assert admitted["disposition"] == "admitted"
+    assert admitted["omnigentStepExecutionPlans"]["specialized"]["publishBaseBranch"] == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, 123, ["main"], {"base": "main"}])
+async def test_specialized_publication_base_rejects_nonstring_options(monkeypatch, compiler, value):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"publishBaseBranch": value}}]
+    provider.default_model_tier = 1
+    with pytest.raises(ValueError, match="publication base must be a string or null"):
+        await _schedule_parameters(_ArtifactService(), provider=provider,
+            steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}])
