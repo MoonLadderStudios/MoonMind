@@ -4,4 +4,4 @@ The embedded runner-auth transport is retired. The updater and compatibility
 readers keep this source authority without an executable authentication adapter.
 """
 
-PINNED_OMNIGENT_COMMIT = "1164f5894432ba7824a8720a071e5b1207404527"
+PINNED_OMNIGENT_COMMIT = "498b21e37c9462c172d980851c3a20c7c51f01f2"

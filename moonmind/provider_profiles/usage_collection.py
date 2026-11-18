@@ -181,10 +181,10 @@ def bind_native_owner_event(
 class UsageProbePlan:
     """One bounded command run inside the approved runtime image.
 
-    ``writes_credentials`` is set only for an adapter's compatibility-tested
-    native recovery action. It mounts the enrolled home writable, which the
-    executor allows only under the exclusive idle grant; every other probe
-    mounts it read-only.
+    ``writes_credentials`` is set only for a command whose compatibility-tested
+    native runtime may renew and rotate the stored tokens. It mounts the
+    enrolled home writable, which the executor allows only under the exclusive
+    idle grant; every other probe mounts it read-only.
     """
 
     argv: tuple[str, ...]
@@ -270,9 +270,12 @@ class UsageCollectorRegistry:
 
 
 def default_usage_collectors() -> UsageCollectorRegistry:
-    """Adapters available in this build; the provider work items add theirs."""
+    """Adapters available in this build."""
 
-    return UsageCollectorRegistry()
+    from moonmind.provider_profiles.claude_account_usage import ClaudeUsageCollector
+    from moonmind.provider_profiles.codex_account_usage import CodexUsageCollector
+
+    return UsageCollectorRegistry((ClaudeUsageCollector(), CodexUsageCollector()))
 
 
 async def resolve_credential_consumers(

@@ -1,0 +1,29 @@
+{
+  "_source": "account/read results recorded from codex-cli 0.165.0 and 0.170.0 app-server against a local fake backend; values synthetic.",
+  "0.165.0": {
+    "account": {"type": "chatgpt", "email": "person@example.com", "planType": "plus"},
+    "requiresOpenaiAuth": true,
+    "workspaceRouting": {
+      "chatgptAccountId": "acct-1111",
+      "backendOrigin": "https://chatgpt.example",
+      "accountRoutingOverride": "NO_CONSTRAINT"
+    }
+  },
+  "0.170.0": {
+    "account": {
+      "type": "chatgpt",
+      "email": "person@example.com",
+      "planType": "plus",
+      "workspaceName": "Example Workspace"
+    },
+    "userId": "user-1",
+    "requiresOpenaiAuth": true,
+    "workspaceRouting": {
+      "chatgptAccountId": "acct-1111",
+      "backendOrigin": "https://chatgpt.example",
+      "accountRoutingOverride": "NO_CONSTRAINT"
+    }
+  },
+  "signed_out": {"account": null, "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": null},
+  "api_key": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}
+}

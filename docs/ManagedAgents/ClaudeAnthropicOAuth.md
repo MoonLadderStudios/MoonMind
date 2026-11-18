@@ -339,3 +339,71 @@ workspace head exactly as they do for Codex.
 Direct Claude remains a compatibility Backend under Advanced. Claude on
 Omnigent, direct Claude, and Codex never silently fall back to one another, and
 historical provenance is never rewritten.
+
+## 12. Account usage
+
+Settings shows the account email, weekly allowance, reset time and scoped
+limits of an OAuth `claude_code` profile through the shared account-usage
+service ([ProviderProfiles.md §5.6](../Security/ProviderProfiles.md)). The Claude collector
+(`moonmind/provider_profiles/claude_account_usage.py`) reads two sources.
+Both report the general weekly window as `seven_day` and the short window as
+`five_hour`, so a reading from either source replaces only an older reading of
+the same window.
+
+- **Native status line, during a session.** The claude-native harness reads
+  `rate_limits.five_hour` and `rate_limits.seven_day` from Claude Code's
+  statusLine stdin, whether or not `context_window` is present. The
+  operator's chained statusLine command still runs. The statusLine hook only
+  writes locally, and the forwarder posts the block on `session.usage` when
+  it changes. Claude Code re-renders cached limits, so each window carries
+  the time its values last changed. MoonMind binds the event to the step's
+  held Provider Profile lease, looked up in its own database, and stores it
+  as a partial observation. Headless and direct Claude launches have no
+  status line, so they report no native usage. Native forwarding needs a
+  deployed Omnigent server and host that include this change. Without it,
+  collection during a session defers and the next idle read updates Settings.
+- **Idle read.** While no owner uses the credential home, the collection
+  workflow runs a bounded probe in the installed host image under the
+  exclusive `usage_observation` grant. The probe reads the stored access
+  token once. With that token it calls the internal
+  `GET https://api.anthropic.com/api/oauth/usage` and `/api/oauth/profile`
+  routes, sending `anthropic-beta: oauth-2025-04-20`. It follows no
+  redirects and gives each request 15 seconds. `utilization` is a
+  percentage (1.0 means 1%) and resets are ISO 8601.
+  - Legacy `seven_day_opus` and `seven_day_sonnet` and the `limits[]` model
+    entries stay model-scoped, and two entries merge only when they name the
+    same pool. `seven_day_oauth_apps` is reported as another limit. Unknown
+    keys and kinds are ignored.
+  - The profile's account and organization UUIDs bind the observation. A
+    failed profile read keeps the usage it accompanies.
+  - Only allowlisted fields leave the probe.
+- **Idle recovery.** Only Claude Code renews an expired token. The recovery
+  probe mounts the home writable and asks the CLI `initialize` and
+  `get_usage` over its SDK control protocol, never with a prompt. The CLI
+  refreshes under its config-directory lock and writes the rotated tokens
+  with a compare-and-set. After a renewal the probe reads once more.
+  - A refresh token the provider rejects is cleared by the CLI and reported
+    as `reconnect_required`.
+  - An unchanged or uncertain outcome reports
+    `credential_refresh_unavailable` and is not retried in that attempt.
+  - A CLI without the control request reports
+    `credential_recovery_unsupported`, and Settings advises updating or
+    reconnecting.
+
+  During a session, collection defers to it, because only the running
+  session may renew its own credentials.
+
+Each failure maps to a typed code:
+
+- A missing `user:profile` scope (inference-only setup tokens) and HTTP 403
+  report `usage_access_missing`.
+- HTTP 401 or an expired token starts recovery.
+- HTTP 429 reports `rate_limited` and honors `Retry-After`.
+- Timeouts, 5xx responses, redirects, and unreadable bodies report
+  `timeout`, `provider_unavailable`, or `malformed_response`, and the
+  last-known values are kept.
+
+None of these change the profile, its readiness, or scheduling.
+`tests/integration/provider_profiles/test_claude_cli_credential_recovery.py`
+re-qualifies the installed CLI's renewal and rejection behavior against a local
+TLS proxy whenever `claude` is on the test path.

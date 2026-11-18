@@ -1,0 +1,19 @@
+{
+  "_source": "Shape of GET /api/oauth/profile; values synthetic.",
+  "account": {
+    "uuid": "6f1c2a9e-0000-4000-8000-000000000001",
+    "full_name": "Example Person",
+    "display_name": "Example",
+    "email": "person@example.com",
+    "has_claude_max": true,
+    "has_claude_pro": false,
+    "created_at": "2025-01-01T00:00:00Z"
+  },
+  "organization": {
+    "uuid": "0a7d3b10-0000-4000-8000-0000000000aa",
+    "name": "Example Workspace",
+    "organization_type": "claude_max",
+    "billing_type": "stripe_subscription",
+    "rate_limit_tier": "default_claude_max_20x"
+  }
+}

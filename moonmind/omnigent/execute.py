@@ -59,6 +59,7 @@ from moonmind.omnigent.failure_classification import (
     failure_class_for_terminal_status,
 )
 from moonmind.omnigent.harness_platform.failures import remediation_for
+from moonmind.omnigent.native_account_usage import NativeAccountUsagePublisher
 from moonmind.omnigent.session_launch import (
     OmnigentLaunchReconciliationError,
     prepare_workflow_session_create,
@@ -3810,6 +3811,9 @@ async def run_omnigent_execution(
                     idle_tick_seconds=_TERMINAL_RECONCILIATION_INTERVAL_SECONDS,
                 )
             next_terminal_reconciliation_at = 0.0
+            native_account_usage = NativeAccountUsagePublisher(
+                profile_authorization=profile_authorization, session_id=session_id
+            )
             live_native_response_id: str | None = None
             native_completion_disqualified = (
                 external_state["retry"]["sessionResolution"] != "created"
@@ -3953,6 +3957,8 @@ async def run_omnigent_execution(
                         or normalized in _JOURNAL_FLUSH_NOW_STATUSES
                     ):
                         await journal.flush()
+                    # Bounded and never raises; quota is observation only.
+                    await native_account_usage.observe(event)
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,

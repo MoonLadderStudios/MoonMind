@@ -2,11 +2,12 @@
 
 An admitted usage observation runs one short-lived container from the
 installed host image with the profile's enrolled credential home mounted at
-its exact target path: read-only unless the adapter's native recovery action
-must persist rotated tokens. The container joins the restricted Omnigent
-egress network, carries the observation lease's labels, and kills itself
-before the lease lifetime ends, so a lost worker cannot leave it reading or
-rotating credentials. It is not an agent turn or an execution session.
+its exact target path: read-only unless the adapter's native runtime may
+renew the login and must persist rotated tokens. The container joins the
+restricted Omnigent egress network, carries the observation lease's labels,
+and kills itself before the lease lifetime ends, so a lost worker cannot
+leave it reading or rotating credentials. It is not an agent turn or an
+execution session.
 
 Unlike :mod:`oauth_credential_validation` (network-less, read-only), this
 probe needs provider egress, so it is a separate operation.
