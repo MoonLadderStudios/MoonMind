@@ -2296,20 +2296,7 @@ async def test_soft_delete_template_not_found(tmp_path):
                 )
 
 
-async def test_deactivate_seed_templates_marks_matching_rows_inactive(
-    tmp_path, monkeypatch
-):
-    increment_calls: list[tuple[str, int]] = []
-
-    class _FakeMetrics:
-        def increment(self, metric: str, value: int = 1) -> None:
-            increment_calls.append((metric, value))
-
-    monkeypatch.setattr(
-        "api_service.services.presets.catalog._METRICS",
-        _FakeMetrics(),
-    )
-
+async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -2355,8 +2342,6 @@ async def test_deactivate_seed_templates_marks_matching_rows_inactive(
             )
 
             assert deactivated == 2
-            delete_calls = [call for call in increment_calls if call[0] == "delete"]
-            assert delete_calls == [("delete", 2)]
 
             with pytest.raises(PresetNotFoundError, match="Template not found."):
                 await service._get_instance_template(

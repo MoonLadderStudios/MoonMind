@@ -52,6 +52,7 @@ from temporalio import exceptions as temporal_exceptions
 from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.auth.env_shaping import _should_filter_base_env_var
 from moonmind.config.settings import settings
+from moonmind.observability.metrics import increment_counter
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.publish import is_unpublished_submodule_failure
 from moonmind.publish.submodules import (
@@ -146,7 +147,6 @@ from moonmind.utils.logging import (
     redact_sensitive_payload,
     redact_sensitive_text,
 )
-from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.utils.workspace_paths import (
     atomic_write_text,
     open_directory,
@@ -4001,16 +4001,10 @@ class TemporalSandboxActivities:
 
     @staticmethod
     def _record_legacy_workspace_path_usage(operation: str) -> None:
-        try:
-            get_metrics_emitter().increment(
-                "workspace_locator.compatibility_path_usage",
-                tags={"operation": operation},
-            )
-        except Exception:
-            logger.warning(
-                "Failed to emit legacy workspace path compatibility metric",
-                exc_info=True,
-            )
+        increment_counter(
+            "moonmind_workspace_locator_legacy_path_usage",
+            labels={"operation": operation},
+        )
 
     def _resolve_checkpoint_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool

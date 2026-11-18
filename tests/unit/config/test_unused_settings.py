@@ -32,6 +32,7 @@ def test_settings_load_without_unused_controls(monkeypatch, tmp_path, source):
             "FERNET_KEY", "LocalData", "ATLASSIAN_JIRA_JQL_QUERY",
             "MODEL_CONTEXT_PROTOCOL_ENABLED", "MODEL_CONTEXT_PROTOCOL_PORT",
             "MODEL_CONTEXT_PROTOCOL_HOST", "MOONMIND_CLAUDE_CLI_AUTH_MODE",
+            "WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_PREFIX", "STATSD_HOST", "STATSD_PORT",
         )
         if source == "old_environment":
             for key in obsolete_names:

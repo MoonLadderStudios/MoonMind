@@ -17346,8 +17346,17 @@ def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None
     )
 
 
-def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
-    metrics = Mock()
+def _task_editing_log_events(logger: Mock) -> list[dict[str, object]]:
+    return [
+        logged.kwargs["extra"]
+        for logged in logger.info.call_args_list
+        if str(logged.kwargs.get("extra", {}).get("event", "")).startswith(
+            "temporal_workflow_editing."
+        )
+    ]
+
+
+def test_task_editing_update_route_logs_attempt_and_result() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
         service.update_execution.return_value = {
@@ -17367,10 +17376,7 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
             )
         )
         with (
-            patch(
-                "api_service.api.routers.executions.get_metrics_emitter",
-                return_value=metrics,
-            ),
+            patch("api_service.api.routers.executions.logger") as logger,
             patch(
                 "api_service.api.routers.executions.get_temporal_artifact_service",
                 return_value=artifact_service,
@@ -17388,29 +17394,18 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
             )
 
         assert response.status_code == 200, response.json()
-        metric_calls = [
-            call
-            for call in metrics.increment.call_args_list
-            if call.args[0] == "temporal_workflow_editing.event"
+        events = _task_editing_log_events(logger)
+        assert [event["event"] for event in events] == [
+            "temporal_workflow_editing.submit_attempt",
+            "temporal_workflow_editing.submit_result",
         ]
-        assert len(metric_calls) == 2
-        assert metric_calls[0].kwargs["tags"] == {
-            "event": "submit_attempt",
-            "update_name": "UpdateInputs",
-            "workflow_type": "MoonMind.UserWorkflow",
-            "state": "executing",
-        }
-        assert metric_calls[1].kwargs["tags"] == {
-            "event": "submit_result",
-            "update_name": "UpdateInputs",
-            "workflow_type": "MoonMind.UserWorkflow",
-            "state": "executing",
-            "result": "success",
-            "applied": "next_safe_point",
-        }
+        assert events[0]["update_name"] == "UpdateInputs"
+        assert events[0]["workflow_type"] == "MoonMind.UserWorkflow"
+        assert events[0]["state"] == "executing"
+        assert events[1]["result"] == "success"
+        assert events[1]["applied"] == "next_safe_point"
 
-def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
-    metrics = Mock()
+def test_task_editing_update_route_logs_failure_reason() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record(
             has_workflow_input_snapshot=False
@@ -17419,29 +17414,18 @@ def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
             "Workflow state changed and rerun is no longer available."
         )
 
-        with patch(
-            "api_service.api.routers.executions.get_metrics_emitter",
-            return_value=metrics,
-        ):
+        with patch("api_service.api.routers.executions.logger") as logger:
             response = test_client.post(
                 "/api/executions/mm:wf-1/update",
                 json={"updateName": "RequestRerun"},
             )
 
         assert response.status_code == 422
-        metric_calls = [
-            call
-            for call in metrics.increment.call_args_list
-            if call.args[0] == "temporal_workflow_editing.event"
-        ]
-        assert metric_calls[1].kwargs["tags"] == {
-            "event": "submit_result",
-            "update_name": "RequestRerun",
-            "workflow_type": "MoonMind.UserWorkflow",
-            "state": "executing",
-            "result": "failure",
-            "reason": "validation",
-        }
+        events = _task_editing_log_events(logger)
+        assert events[-1]["event"] == "temporal_workflow_editing.submit_result"
+        assert events[-1]["update_name"] == "RequestRerun"
+        assert events[-1]["result"] == "failure"
+        assert events[-1]["reason"] == "validation"
 
 def test_list_executions_preserves_logical_identity_fields() -> None:
     for test_client, service in _client_with_service():

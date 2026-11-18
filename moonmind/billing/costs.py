@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
 
-from moonmind.utils.metrics import get_metrics_emitter
-
 logger = logging.getLogger(__name__)
 
 _ENV_PRICING_KEY = "MOONMIND_MODEL_PRICING_JSON"
@@ -220,16 +218,6 @@ def emit_llm_cost_telemetry(
 
     if estimate is None:
         return
-    tags = {
-        "provider": provider or "unknown",
-        "model": model or "unknown",
-        "pricing_source": estimate.pricing_source,
-    }
-    get_metrics_emitter().increment(
-        "llm_cost_estimate_usd_total",
-        value=estimate.cost_estimate_usd,
-        tags=tags,
-    )
     logger.info(
         "moonmind.cost_estimate_usd",
         extra={

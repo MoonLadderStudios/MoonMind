@@ -68,8 +68,8 @@ During the Temporal replay window, checkpoint activities continue to read legacy
 `workspacePath` and `workspaceRootRef` fields. New producers prefer
 `workspaceLocator`; they do not derive a new authority from an old absolute path.
 The legacy fields can be removed after all histories recorded before this contract
-have passed their retention and rollback windows. Activity workers emit
-`workspace_locator.compatibility_path_usage` with an `operation` tag whenever
-checkpoint capture, git-effect classification, or recovery/apply consumes a legacy
-path field; operators use this counter to determine when the compatibility window
-can close.
+have passed their retention and rollback windows. Activity workers increment the
+OpenTelemetry counter `moonmind_workspace_locator_legacy_path_usage` with an
+`operation` label whenever checkpoint capture, git-effect classification, or
+recovery/apply consumes a legacy path field; operators use this counter to
+determine when the compatibility window can close.

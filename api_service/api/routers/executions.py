@@ -260,7 +260,6 @@ from moonmind.statuses.workflow import (
     workflow_objective_outcome,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
-from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
 from moonmind.workflows.executions.execution_contract import (
@@ -2578,44 +2577,6 @@ _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
 )
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
 _WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
-
-
-def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return fallback
-    return re.sub(r"[^a-zA-Z0-9_.-]", "_", normalized)[:80] or fallback
-
-
-def _emit_task_editing_metric(
-    event: str,
-    *,
-    update_name: str,
-    workflow_type: object | None,
-    state: object | None,
-    result: str | None = None,
-    reason: str | None = None,
-    applied: str | None = None,
-) -> None:
-    tags = {
-        "event": _bounded_metric_tag(event),
-        "update_name": _bounded_metric_tag(update_name),
-        "workflow_type": _bounded_metric_tag(_enum_value(workflow_type)),
-        "state": _bounded_metric_tag(_enum_value(state)),
-    }
-    if result:
-        tags["result"] = _bounded_metric_tag(result)
-    if reason:
-        tags["reason"] = _bounded_metric_tag(reason)
-    if applied:
-        tags["applied"] = _bounded_metric_tag(applied)
-    try:
-        get_metrics_emitter().increment(
-            "temporal_workflow_editing.event",
-            tags=tags,
-        )
-    except Exception:
-        return
 
 
 def _enum_value(value: object | None) -> str | None:
@@ -9141,20 +9102,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 "recoverable": True,
                             }
                         )
-                        try:
-                            get_metrics_emitter().increment(
-                                "capability_input_contract.event",
-                                tags={
-                                    "event": "digest_mismatch",
-                                    "kind": "skill",
-                                    "skill": _bounded_metric_tag(skill_id),
-                                },
-                            )
-                        except Exception:
-                            logger.debug(
-                                "Failed to emit skill input contract digest mismatch metric",
-                                exc_info=True,
-                            )
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:
                         normalized_caps = _coerce_string_list(
@@ -20591,12 +20538,6 @@ async def update_execution(
             },
         )
     if is_task_editing_update:
-        _emit_task_editing_metric(
-            "submit_attempt",
-            update_name=payload.update_name,
-            workflow_type=getattr(record, "workflow_type", None),
-            state=getattr(record, "state", None),
-        )
         logger.info(
             "Temporal task editing update attempt",
             extra={
@@ -20759,14 +20700,6 @@ async def update_execution(
         ) from exc
     except TemporalExecutionValidationError as exc:
         if is_task_editing_update:
-            _emit_task_editing_metric(
-                "submit_result",
-                update_name=payload.update_name,
-                workflow_type=getattr(record, "workflow_type", None),
-                state=getattr(record, "state", None),
-                result="failure",
-                reason="validation",
-            )
             logger.info(
                 "Temporal task editing update rejected",
                 extra={
@@ -20826,15 +20759,6 @@ async def update_execution(
         applied = str(update_result.get("applied") or "").strip() or None
         result = "success" if accepted else "failure"
         reason = None if accepted else "rejected"
-        _emit_task_editing_metric(
-            "submit_result",
-            update_name=payload.update_name,
-            workflow_type=getattr(refreshed_record, "workflow_type", None),
-            state=getattr(refreshed_record, "state", None),
-            result=result,
-            reason=reason,
-            applied=applied,
-        )
         logger.info(
             "Temporal task editing update result",
             extra={

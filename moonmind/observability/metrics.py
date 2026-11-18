@@ -8,6 +8,7 @@ BOUNDED_VALUES = {
     "component": frozenset({"api", "worker", "temporal", "provider", "omnigent", "artifact", "operator"}),
     "outcome": frozenset({"success", "failure", "canceled", "timeout", "denied", "unknown"}),
     "runtime_family": frozenset({"omnigent", "codex", "claude", "other", "unknown"}),
+    "operation": frozenset({"capture_checkpoint", "classify_git_effect", "apply_policy", "unknown"}),
 }
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ REGISTRY = (
     MetricDefinition("moonmind_observability_stream_lag_seconds", "histogram", "seconds", ("component",), "operator", ("artifacts", "logs-slo")),
     MetricDefinition("moonmind_policy_decisions", "counter", "decisions", ("outcome",), "security", ("safety",)),
     MetricDefinition("moonmind_usage_attribution_coverage_ratio", "gauge", "ratio", ("runtime_family",), "profiles", ("providers", "attribution-slo")),
+    MetricDefinition("moonmind_workspace_locator_legacy_path_usage", "counter", "operations", ("operation",), "workflows", ("workflow", "compatibility-window")),
 )
 
 def definition(name: str) -> MetricDefinition:
