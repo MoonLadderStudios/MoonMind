@@ -1821,3 +1821,44 @@ async def test_specialized_publication_base_rejects_nonstring_options(monkeypatc
     with pytest.raises(ValueError, match="publication base must be a string or null"):
         await _schedule_parameters(_ArtifactService(), provider=provider,
             steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier_base", [False, True])
+@pytest.mark.parametrize("source", ["workflow-pr", "workflow-alias", "canonical", "pr-alias", "base-alias"])
+@pytest.mark.parametrize("explicit", ["omitted", "step-base", None])
+async def test_specialized_freezes_authored_publication_alias_before_tier_defaults(
+    monkeypatch, compiler, source, explicit, tier_base
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"commitMessage": "admitted",
+                                            **({"publishBaseBranch": "tier-base"} if tier_base else {})}}]
+    provider.default_model_tier = 1
+    initial = {"workflow": {"instructions": "Implement the requested change.", "publish": {"mode": "pr"}}}
+    if source.startswith("workflow"):
+        field = "prBaseBranch" if source == "workflow-pr" else "baseBranch"
+        initial["workflow"]["publish"][field] = " authored-base "
+        initial["publishBaseBranch"] = "lower-precedence-base"
+    else:
+        field = {"canonical": "publishBaseBranch", "pr-alias": "prBaseBranch", "base-alias": "baseBranch"}[source]
+        initial[field] = " authored-base "
+    runtime = {"mode": "omnigent", "modelTier": 1}
+    if explicit != "omitted":
+        runtime["parameters"] = {"publishBaseBranch": explicit}
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider, initial_parameters=initial,
+        steps=[{"id": "specialized", "runtime": runtime}],
+    )
+    expected = "authored-base" if explicit == "omitted" else explicit
+    step = parameters["omnigentStepExecutionPlans"]["specialized"]
+    assert step["publishBaseBranch"] == expected
+    assert step["modelTierResolution"]["stepPublicationBaseBranch"] == expected
+    provider.model_tiers[0]["parameters"]["publishBaseBranch"] = "later-profile-base"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts)
+    )
+    assert admitted["disposition"] == "admitted"
+    assert admitted["omnigentStepExecutionPlans"]["specialized"]["publishBaseBranch"] == expected

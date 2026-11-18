@@ -165,6 +165,19 @@ async def compile_step_execution_plans(
                 if key in saved:
                     parameters[key] = copy.deepcopy(saved[key])
         else:
+            # Match the planner's authored publication aliases before applying
+            # tier defaults. Explicit step parameters still win below, including
+            # null/default; successors use only their already frozen handoff.
+            publication = task.get("publish")
+            publication = publication if isinstance(publication, Mapping) else {}
+            for candidate in (
+                publication.get("prBaseBranch"), publication.get("baseBranch"),
+                initial_parameters.get("publishBaseBranch"),
+                initial_parameters.get("prBaseBranch"), initial_parameters.get("baseBranch"),
+            ):
+                if isinstance(candidate, str) and candidate.strip():
+                    parameters["publishBaseBranch"] = candidate.strip()
+                    break
             applied = apply_tier_parameter_defaults(
                 parameters, tier_parameters=defaults, explicit_parameters=explicit,
             )
