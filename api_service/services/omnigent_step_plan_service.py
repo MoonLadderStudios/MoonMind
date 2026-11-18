@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from moonmind.config.settings import settings
+from moonmind.provider_profiles.model_tiers import (
+    apply_tier_parameter_defaults,
+    ensure_tier_metadata_is_credential_free,
+)
 from moonmind.runtime_intent import merge_runtime_selection, model_selection_fields
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
@@ -17,6 +21,12 @@ if TYPE_CHECKING:
         OmnigentExecutionPlanEnvelope,
         ProviderConfigurationSnapshotRef,
     )
+
+
+# Commit messages already cross the fixed-step request handoff without changing
+# repository authority. Other native launch options need their own equivalent
+# admission/consumer path before this compiler can translate them.
+_STEP_LAUNCH_PARAMETER_KEYS = frozenset({"commitMessage"})
 
 
 @dataclass(frozen=True)
@@ -91,16 +101,38 @@ async def compile_step_execution_plans(
                 )
             if selected_snapshot.get("providerProfileRef") != profile_ref:
                 raise ValueError("The step snapshot conflicts with its selected Provider Profile")
-        selection = resolve_model_effort(
-            runtime_id=selected_provider.runtime_id,
-            profile=selected_provider,
-            authored_runtime=merge_runtime_selection(parent_runtime, runtime),
-            require_launch_ready=False,
-            workflow_settings=settings.workflow,
+        saved = (recorded_step_parameters or {}).get(step_id, {})
+        recorded_resolution = saved.get("modelTierResolution")
+        # The frozen compiler supplies configuration snapshots only for a
+        # successor. A fresh occurrence resolves current tier policy instead.
+        frozen = (
+            recorded_provider_configurations is not None
+            and isinstance(recorded_resolution, Mapping)
+            and "tierParameterDefaults" in recorded_resolution
         )
-        if selection.tier_parameters:
+        if frozen:
+            resolution = copy.deepcopy(dict(recorded_resolution))
+            defaults = resolution["tierParameterDefaults"]
+        else:
+            selection = resolve_model_effort(
+                runtime_id=selected_provider.runtime_id,
+                profile=selected_provider,
+                authored_runtime=merge_runtime_selection(parent_runtime, runtime),
+                require_launch_ready=False,
+                workflow_settings=settings.workflow,
+            )
+            resolution = selection.as_metadata()
+            defaults = selection.tier_parameters
+        model = resolution.get("resolvedModel")
+        effort = resolution.get("resolvedEffort")
+        explicit = merge_runtime_selection(parent_runtime, runtime).get("parameters") or {}
+        if not isinstance(defaults, Mapping) or not isinstance(explicit, Mapping):
             raise ValueError("Selected step native tier options require their native route")
-        if not foreign_profile and (selection.model, selection.effort) == (
+        if (set(defaults) | set(explicit)) - _STEP_LAUNCH_PARAMETER_KEYS:
+            raise ValueError("Selected step native tier options require their native route")
+        if recorded_provider_configurations is not None and saved and not frozen and (defaults or explicit):
+            raise ValueError("Selected step launch options changed from its admitted inputs")
+        if not foreign_profile and not (defaults or explicit or frozen) and (model, effort) == (
             root_model.qualifiedId, root_model.effort,
         ):
             continue
@@ -121,14 +153,26 @@ async def compile_step_execution_plans(
             from api_service.services.omnigent_agent_profile_selection import compile_agent_profile_snapshot_parameters
 
             parameters = compile_agent_profile_snapshot_parameters(parameters, snapshot=selected_snapshot)
-        parameters.update(
-            model=selection.model,
-            effort=selection.effort,
-            modelSource=selection.model_source,
-        )
+        ensure_tier_metadata_is_credential_free(defaults)
+        ensure_tier_metadata_is_credential_free(explicit)
+        if frozen:
+            # The saved step handoff owns supplied and absent launch choices.
+            for key in _STEP_LAUNCH_PARAMETER_KEYS:
+                parameters.pop(key, None)
+                if key in saved:
+                    parameters[key] = copy.deepcopy(saved[key])
+        else:
+            applied = apply_tier_parameter_defaults(
+                parameters, tier_parameters=defaults, explicit_parameters=explicit,
+            )
+            # Only translated launch choices introduce this frozen metadata.
+            # Model-only steps keep their existing readmission drift checks.
+            if defaults or explicit:
+                resolution["tierParameterDefaults"] = applied
+        parameters.update(model=model, effort=effort, modelSource=resolution.get("modelSource"))
         # The original snapshot remains unchanged. Resolved selection is the
         # same canonical metadata used by ordinary admission and the adapter.
-        parameters["modelTierResolution"] = selection.as_metadata()
+        parameters["modelTierResolution"] = resolution
         specialized = await compile_and_persist_execution_plan(
             provider_profile=selected_provider,
             initial_parameters=parameters,
@@ -136,14 +180,16 @@ async def compile_step_execution_plans(
             _recorded_provider_configuration_snapshot=(
                 (recorded_provider_configurations or {}).get(step_id, "capture")
             ),
-            **{**compilation_arguments, "agent_profile_snapshot": selected_snapshot},
+            **{**compilation_arguments, "agent_profile_snapshot": selected_snapshot,
+               "model_tier_resolution": resolution},
         )
         step_plans.append(specialized)
         step_parameters[step_id] = {
             **specialized.execution_parameters,
-            "model": selection.model,
-            "effort": selection.effort,
-            "modelTierResolution": selection.as_metadata(),
+            "model": model,
+            "effort": effort,
+            "modelTierResolution": resolution,
+            **{key: copy.deepcopy(parameters[key]) for key in _STEP_LAUNCH_PARAMETER_KEYS if key in parameters},
         }
         if foreign_profile:
             step_parameters[step_id].update({
