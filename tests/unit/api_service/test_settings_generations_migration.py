@@ -93,10 +93,17 @@ def test_predecessor_alembic_graph_refuses_new_database_revision(tmp_path):
     from shutil import copyfile
 
     source = Path(__file__).resolve().parents[3] / "api_service/migrations/versions"
+    # The predecessor image has neither this revision nor any later one.
+    newer = {
+        Path(revision.path).name
+        for revision in ScriptDirectory(str(source.parent)).walk_revisions(
+            base="414_settings_generations", head="heads"
+        )
+    }
     versions = tmp_path / "versions"
     versions.mkdir()
     for migration in source.glob("*.py"):
-        if migration.name != "414_settings_generations.py":
+        if migration.name not in newer:
             copyfile(migration, versions / migration.name)
     script = ScriptDirectory(str(tmp_path))
     with pytest.raises(util.CommandError, match="Can't locate revision"):

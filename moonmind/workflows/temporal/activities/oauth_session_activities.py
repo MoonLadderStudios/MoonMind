@@ -732,6 +732,15 @@ async def oauth_session_update_status(
 
         await db.commit()
 
+        if new_status == OAuthSessionStatus.SUCCEEDED and session_obj.profile_id:
+            # The workflow records success only after its exclusive
+            # enrollment ownership is released, so collection cannot race it.
+            from api_service.services.provider_account_usage import (
+                request_initial_account_usage,
+            )
+
+            await request_initial_account_usage(db, session_obj.profile_id)
+
     logger.info("Updated session %s status to %s", session_id, new_status_str)
     return {"session_id": session_id, "status": new_status_str}
 

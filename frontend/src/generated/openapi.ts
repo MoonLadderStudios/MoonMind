@@ -541,6 +541,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/account-usage/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Account Usage
+         * @description Request account-usage collection; ``accepted`` means requested, not refreshed.
+         */
+        post: operations["refresh_account_usage_api_v1_provider_profiles_account_usage_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -4938,6 +4958,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccountUsageFailureCode
+         * @description Typed, secret-free collection failures. Provider text is never kept.
+         * @enum {string}
+         */
+        AccountUsageFailureCode: "timeout" | "rate_limited" | "provider_unavailable" | "malformed_response" | "usage_access_missing" | "reconnect_required" | "dispatch_failed" | "attempt_abandoned" | "internal_error";
+        /**
+         * AccountUsageStatus
+         * @description Safe observation states, distinct from refresh-operation state.
+         * @enum {string}
+         */
+        AccountUsageStatus: "unknown" | "fresh" | "stale" | "unavailable" | "not_reported" | "not_supported" | "usage_access_missing" | "reconnect_required";
         /**
          * AdvertisedConcurrencyView
          * @description The concurrency peak one exact combination may advertise.
@@ -9585,6 +9617,11 @@ export interface components {
             hostImageRef: string;
         };
         /**
+         * IdentityStatus
+         * @enum {string}
+         */
+        IdentityStatus: "unknown" | "reported" | "verified";
+        /**
          * ImageAssessment
          * @description One Trivy operation on an image, image archive, SBOM or source snapshot.
          *
@@ -11027,6 +11064,164 @@ export interface components {
             /** Digest */
             digest: string;
         };
+        /** ProviderAccountUsageIdentity */
+        ProviderAccountUsageIdentity: {
+            status: components["schemas"]["IdentityStatus"];
+            /** Email */
+            email?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Plan */
+            plan?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Observed At */
+            observed_at?: string | null;
+        };
+        /** ProviderAccountUsageProjection */
+        ProviderAccountUsageProjection: {
+            /** Schema Version */
+            schema_version: number;
+            /** Profile Id */
+            profile_id: string;
+            /** Credential Generation */
+            credential_generation: number;
+            /** Snapshot Revision */
+            snapshot_revision: number;
+            /** Provider Id */
+            provider_id: string;
+            /** Runtime Id */
+            runtime_id: string;
+            /** Binding Verified */
+            binding_verified: boolean;
+            status: components["schemas"]["AccountUsageStatus"];
+            account: components["schemas"]["ProviderAccountUsageIdentity"];
+            usage: components["schemas"]["ProviderAccountUsageSummary"];
+            refresh: components["schemas"]["ProviderAccountUsageRefreshStatus"];
+        };
+        /** ProviderAccountUsageRefreshError */
+        ProviderAccountUsageRefreshError: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "provider_profiles_not_found";
+            /** Message */
+            message: string;
+            /** Profile Ids */
+            profile_ids: string[];
+        };
+        /** ProviderAccountUsageRefreshErrorResponse */
+        ProviderAccountUsageRefreshErrorResponse: {
+            detail: components["schemas"]["ProviderAccountUsageRefreshError"];
+        };
+        /** ProviderAccountUsageRefreshRequest */
+        ProviderAccountUsageRefreshRequest: {
+            /** Profile Ids */
+            profile_ids: string[];
+            /**
+             * Trigger
+             * @default manual
+             * @enum {string}
+             */
+            trigger: "manual" | "visibility";
+        };
+        /** ProviderAccountUsageRefreshResponse */
+        ProviderAccountUsageRefreshResponse: {
+            /** Results */
+            results: components["schemas"]["ProviderAccountUsageRefreshResult"][];
+        };
+        /** ProviderAccountUsageRefreshResult */
+        ProviderAccountUsageRefreshResult: {
+            /** Profile Id */
+            profile_id: string;
+            /** Credential Generation */
+            credential_generation: number;
+            /** @description accepted means collection was requested, not that data changed. */
+            outcome: components["schemas"]["RefreshOutcome"];
+            refresh_state: components["schemas"]["RefreshState"];
+            /** Request Id */
+            request_id?: string | null;
+            /**
+             * Coalesced
+             * @default false
+             */
+            coalesced: boolean;
+            /** Retry After Seconds */
+            retry_after_seconds?: number | null;
+            /** Next Allowed At */
+            next_allowed_at?: string | null;
+        };
+        /** ProviderAccountUsageRefreshStatus */
+        ProviderAccountUsageRefreshStatus: {
+            state: components["schemas"]["RefreshState"];
+            /** Request Id */
+            request_id?: string | null;
+            /** Last Attempt At */
+            last_attempt_at?: string | null;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Failure At */
+            last_failure_at?: string | null;
+            last_failure?: components["schemas"]["AccountUsageFailureCode"] | null;
+            /** Next Allowed At */
+            next_allowed_at?: string | null;
+        };
+        /** ProviderAccountUsageSummary */
+        ProviderAccountUsageSummary: {
+            completeness?: components["schemas"]["UsageCompleteness"] | null;
+            /** Primary Window Key */
+            primary_window_key?: string | null;
+            /** Full Observed At */
+            full_observed_at?: string | null;
+            /** Windows */
+            windows?: components["schemas"]["ProviderAccountUsageWindow"][];
+        };
+        /** ProviderAccountUsageWindow */
+        ProviderAccountUsageWindow: {
+            /** Key */
+            key: string;
+            period: components["schemas"]["UsageWindowPeriod"];
+            scope: components["schemas"]["UsageWindowScope"];
+            /** Model Label */
+            model_label?: string | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /**
+             * Used Percent
+             * @description Provider-reported percentage used; may exceed 100.
+             */
+            used_percent?: number | null;
+            /**
+             * Remaining Percent
+             * @description Displayed remaining allowance, clamped to 0-100.
+             */
+            remaining_percent?: number | null;
+            /** Exhausted */
+            exhausted?: boolean | null;
+            /** Reset At */
+            reset_at?: string | null;
+            /** Source */
+            source: string;
+            /** Source Version */
+            source_version?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Fresh Until
+             * Format: date-time
+             */
+            fresh_until: string;
+            freshness: components["schemas"]["WindowFreshness"];
+            /**
+             * Last Known
+             * @description True when the value is not a fresh reading.
+             */
+            last_known: boolean;
+        };
         /** ProviderApiKeySetupRequest */
         ProviderApiKeySetupRequest: {
             /** Api Key */
@@ -11473,6 +11668,7 @@ export interface components {
             launch_isolation?: {
                 [key: string]: unknown;
             } | null;
+            account_usage?: components["schemas"]["ProviderAccountUsageProjection"] | null;
             /** Created At */
             created_at: string | null;
             /** Updated At */
@@ -11985,6 +12181,16 @@ export interface components {
             updatedAt: string;
             execution?: components["schemas"]["RecurringWorkflowRunExecutionModel"] | null;
         };
+        /**
+         * RefreshOutcome
+         * @enum {string}
+         */
+        RefreshOutcome: "already_fresh" | "accepted" | "deferred_busy" | "backoff" | "not_supported" | "not_connected" | "disabled";
+        /**
+         * RefreshState
+         * @enum {string}
+         */
+        RefreshState: "idle" | "queued" | "running" | "deferred" | "backoff";
         /**
          * RegistryAuthorization
          * @description Non-sensitive private-image authorization outcome (#3257).
@@ -14170,6 +14376,21 @@ export interface components {
             /** Version */
             version: number;
         };
+        /**
+         * UsageCompleteness
+         * @enum {string}
+         */
+        UsageCompleteness: "full" | "partial";
+        /**
+         * UsageWindowPeriod
+         * @enum {string}
+         */
+        UsageWindowPeriod: "weekly" | "short" | "other";
+        /**
+         * UsageWindowScope
+         * @enum {string}
+         */
+        UsageWindowScope: "general" | "model";
         /** ValidateCreate */
         ValidateCreate: {
             /** Version */
@@ -14306,6 +14527,11 @@ export interface components {
             /** Methods */
             methods?: ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS")[];
         };
+        /**
+         * WindowFreshness
+         * @enum {string}
+         */
+        WindowFreshness: "fresh" | "stale" | "expired";
         /**
          * WorkerOperationCommand
          * @description Typed worker pause/resume command accepted by the system operations API.
@@ -15542,6 +15768,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderCredentialVolumeImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_account_usage_api_v1_provider_profiles_account_usage_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountUsageRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountUsageRefreshResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountUsageRefreshErrorResponse"];
                 };
             };
             /** @description Validation Error */

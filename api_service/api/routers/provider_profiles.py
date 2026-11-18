@@ -17,6 +17,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.instance_access import access_principal, is_instance_operator
+from api_service.api.schemas_provider_account_usage import (
+    ProviderAccountUsageProjection,
+    ProviderAccountUsageRefreshErrorResponse,
+    ProviderAccountUsageRefreshRequest,
+    ProviderAccountUsageRefreshResponse,
+)
 from api_service.auth_providers import get_instance_access
 from api_service.db.models import (
     ManagedAgentProviderProfile,
@@ -32,6 +38,12 @@ from api_service.db.models import (
 )
 from api_service.services.profile_execution_selection import (
     ProfileExecutionConfiguration,
+)
+from api_service.services.provider_account_usage import (
+    AccountUsageDispatcher,
+    AccountUsageProfilesNotFound,
+    ProviderAccountUsageService,
+    get_account_usage_dispatcher,
 )
 from api_service.services.provider_profile_creation import (
     ProviderApiKeyStrategy,
@@ -60,6 +72,7 @@ from moonmind.auth.secret_refs import (
     SecretReferenceError,
     parse_secret_ref,
 )
+from moonmind.provider_profiles.account_usage import RefreshTrigger
 from moonmind.provider_profiles.model_tiers import (
     ProviderModelEffortTier,
     coerce_model_effort_tier_policy,
@@ -663,6 +676,9 @@ class ProviderProfileResponse(BaseModel):
     authentication_method: Optional[str] = None
     creation_capabilities: ProviderProfileCreationCapabilitiesResponse
     launch_isolation: Optional[dict[str, Any]] = None
+    # Cached observation, populated by list/detail only; never collected
+    # inline and never part of profile settings.
+    account_usage: Optional[ProviderAccountUsageProjection] = None
     created_at: Optional[str]
     updated_at: Optional[str]
 
@@ -1142,7 +1158,19 @@ def _activate_selected_api_key_refs(
     )
 
 
-async def _reconcile_imported_credential_generation(
+def _credential_binding(profile: ManagedAgentProviderProfile) -> tuple[Any, ...]:
+    """The fields that decide which credentials a profile reads."""
+
+    return (
+        profile.provider_id,
+        profile.credential_source,
+        profile.volume_ref,
+        profile.volume_mount_path,
+        dict(profile.secret_refs or {}),
+    )
+
+
+async def _reconcile_credential_generation(
     profile: ManagedAgentProviderProfile,
 ) -> None:
     """Refresh bindings and fence hosts issued for an older credential home."""
@@ -1170,6 +1198,7 @@ async def list_profiles(
     include_execution: bool = False,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
+    usage_dispatcher: AccountUsageDispatcher = Depends(get_account_usage_dispatcher),
 ) -> list[dict[str, Any]]:
     stmt = select(ManagedAgentProviderProfile)
     if runtime_id:
@@ -1199,6 +1228,11 @@ async def list_profiles(
         )
         for r in visible_rows
     ]
+    account_usage = await ProviderAccountUsageService(
+        session, dispatcher=usage_dispatcher
+    ).load_projections(visible_rows)
+    for row, payload in zip(visible_rows, payloads):
+        payload["account_usage"] = account_usage.get(row.profile_id)
     if include_execution:
         from api_service.services.profile_execution_selection import (
             load_execution_configurations,
@@ -1329,11 +1363,42 @@ async def validate_imported_credential_volume(
     }
 
 
+@router.post(
+    "/account-usage/refresh",
+    response_model=ProviderAccountUsageRefreshResponse,
+    responses={404: {"model": ProviderAccountUsageRefreshErrorResponse}},
+)
+async def refresh_account_usage(
+    body: ProviderAccountUsageRefreshRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: Any = Depends(get_instance_access),
+    usage_dispatcher: AccountUsageDispatcher = Depends(get_account_usage_dispatcher),
+) -> dict[str, Any]:
+    """Request account-usage collection; ``accepted`` means requested, not refreshed."""
+
+    service = ProviderAccountUsageService(session, dispatcher=usage_dispatcher)
+    try:
+        results = await service.request_refresh(
+            body.profile_ids, trigger=RefreshTrigger(body.trigger)
+        )
+    except AccountUsageProfilesNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "provider_profiles_not_found",
+                "message": "One or more requested provider profiles do not exist.",
+                "profile_ids": exc.profile_ids,
+            },
+        ) from exc
+    return {"results": [result.as_dict() for result in results]}
+
+
 @router.get("/{profile_id}", response_model=ProviderProfileResponse)
 async def get_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
+    usage_dispatcher: AccountUsageDispatcher = Depends(get_account_usage_dispatcher),
 ) -> dict[str, Any]:
     row = await session.get(ManagedAgentProviderProfile, profile_id)
     if not row:
@@ -1349,11 +1414,16 @@ async def get_profile(
         [row],
         secret_ref_results=secret_ref_results,
     )
-    return _row_to_dict(
+    payload = _row_to_dict(
         row,
         managed_secret_statuses=secret_statuses,
         secret_ref_results=secret_ref_results.get(row.profile_id),
     )
+    account_usage = await ProviderAccountUsageService(
+        session, dispatcher=usage_dispatcher
+    ).load_projections([row])
+    payload["account_usage"] = account_usage.get(row.profile_id)
+    return payload
 
 
 def _deployment_parallel_ceiling() -> int:
@@ -1660,6 +1730,7 @@ async def update_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     _require_profile_management(profile, current_user)
+    credential_binding_before = _credential_binding(profile)
 
     update_data = body.model_dump(exclude_unset=True)
     execution_configuration = update_data.get(
@@ -2118,7 +2189,6 @@ async def update_profile(
                 profile_id,
                 exc_info=True,
             )
-        profile.credential_generation = int(profile.credential_generation) + 1
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
     legacy_default_supplied = (
@@ -2232,6 +2302,15 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    # A new generation invalidates per-profile credential caches (such as
+    # cached account usage) and fences hosts issued for the old binding. A
+    # re-import always advances it: the volume's contents may have changed.
+    credential_generation_advanced = (
+        import_existing_credential_volume
+        or _credential_binding(profile) != credential_binding_before
+    )
+    if credential_generation_advanced:
+        profile.credential_generation = int(profile.credential_generation) + 1
     if operator_disable_requested:
         profile.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
     try:
@@ -2311,8 +2390,8 @@ async def update_profile(
     )
     await session.commit()
     await session.refresh(profile)
-    if import_existing_credential_volume:
-        await _reconcile_imported_credential_generation(profile)
+    if credential_generation_advanced:
+        await _reconcile_credential_generation(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     secret_ref_results = _secret_ref_results_for_rows([profile])
     secret_statuses = await _managed_secret_statuses_for_rows(
