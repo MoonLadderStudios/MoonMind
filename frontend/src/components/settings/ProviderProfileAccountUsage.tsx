@@ -62,6 +62,7 @@ const FAILURE_REASONS: Record<FailureCode, string> = {
   usage_access_missing: 'this connection does not grant usage access',
   reconnect_required: 'the sign-in must be renewed',
   dispatch_failed: 'the usage check could not start',
+  credential_refresh_unavailable: 'the stored sign-in could not be renewed while idle',
   attempt_abandoned: 'the usage check did not finish',
   internal_error: 'the usage check failed',
 };

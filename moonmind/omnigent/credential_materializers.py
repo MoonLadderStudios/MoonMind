@@ -1523,6 +1523,49 @@ def build_default_credential_materializer_registry(
     )
 
 
+async def load_profile_credential_home(
+    session_factory: Any, *, profile_id: str, credential_generation: int
+) -> ProfileCredentialHome:
+    """Resolve a Provider Profile's enrollment-owned credential home.
+
+    A profile-owned materializer never resolves a secret: the durable
+    enrollment volume *is* the credential state. The caller's generation is
+    re-fenced against the profile row so a rotated enrollment cannot be
+    attached under stale authority. References come only from the profile
+    row, never from a caller-supplied path or ambient credentials.
+    """
+
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if profile is None:
+        raise HarnessPlatformError(
+            "Provider Profile disappeared after lease acquisition",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
+    if int(profile.credential_generation or 0) != credential_generation:
+        raise HarnessPlatformError(
+            "Provider Profile credential generation changed after lease acquisition",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    volume_ref = str(profile.volume_ref or "").strip()
+    if not volume_ref:
+        raise HarnessPlatformError(
+            "profile-owned OAuth materializer requires an enrolled "
+            "credential home volume on the Provider Profile",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+        )
+    target_path = str(profile.volume_mount_path or "").strip()
+    if not target_path:
+        raise HarnessPlatformError(
+            "profile-owned OAuth materializer requires the enrolled "
+            "credential home mount path on the Provider Profile",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+        )
+    return ProfileCredentialHome(volume_ref=volume_ref, target_path=target_path)
+
+
 class OmnigentCredentialProvisioningService:
     """Resolve allowed roles, materialize, and durably record each handle."""
 
@@ -1597,45 +1640,13 @@ class OmnigentCredentialProvisioningService:
     async def _load_profile_credential_home(
         self, acquired: AcquiredProviderLease
     ) -> ProfileCredentialHome:
-        """Resolve the enrollment-owned credential home for one lease.
+        """Resolve the enrollment-owned credential home for one lease."""
 
-        A profile-owned materializer never resolves a secret: the durable
-        enrollment volume *is* the credential state. The lease's generation is
-        re-fenced against the profile row so a rotated enrollment cannot be
-        attached under a stale lease.
-        """
-
-        from api_service.db.models import ManagedAgentProviderProfile
-
-        async with self._session_factory() as session:
-            profile = await session.get(
-                ManagedAgentProviderProfile, acquired.provider_profile_ref
-            )
-        if profile is None:
-            raise HarnessPlatformError(
-                "Provider Profile disappeared after lease acquisition",
-                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
-            )
-        if int(profile.credential_generation or 0) != acquired.credential_generation:
-            raise HarnessPlatformError(
-                "Provider Profile credential generation changed after lease acquisition",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
-            )
-        volume_ref = str(profile.volume_ref or "").strip()
-        if not volume_ref:
-            raise HarnessPlatformError(
-                "profile-owned OAuth materializer requires an enrolled "
-                "credential home volume on the Provider Profile",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
-            )
-        target_path = str(profile.volume_mount_path or "").strip()
-        if not target_path:
-            raise HarnessPlatformError(
-                "profile-owned OAuth materializer requires the enrolled "
-                "credential home mount path on the Provider Profile",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
-            )
-        return ProfileCredentialHome(volume_ref=volume_ref, target_path=target_path)
+        return await load_profile_credential_home(
+            self._session_factory,
+            profile_id=acquired.provider_profile_ref,
+            credential_generation=acquired.credential_generation,
+        )
 
     async def materialize_all(
         self,
@@ -1866,6 +1877,7 @@ class OmnigentCredentialProvisioningService:
 
 __all__ = [
     "OAUTH_HOME_MATERIALIZER_TARGETS",
+    "load_profile_credential_home",
     "CredentialCleanupResult",
     "CredentialMaterializationContext",
     "CredentialMaterializerImplementation",

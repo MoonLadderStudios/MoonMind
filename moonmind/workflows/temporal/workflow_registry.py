@@ -112,6 +112,11 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "excluded",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.provider_account_usage",
+        "MoonMindProviderAccountUsageCollectionWorkflow",
+        "excluded",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.merge_automation",
         "MoonMindMergeAutomationWorkflow",
         "operator",
