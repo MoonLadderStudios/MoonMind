@@ -81,6 +81,40 @@ const executionConfigurations = [
 
 type SavedTier = { label: string; model: string | null; effort: string | null };
 
+const LONG_EMAIL = `synthetic.operator.with.an.exceptionally.long.mailbox.name@${'very-long-subdomain.'.repeat(3)}example.com`;
+
+/** Fresh cached account usage with long reported values (MoonMind#5366). */
+function savedAccountUsage() {
+  const now = Date.now();
+  const at = (offsetMs: number) => new Date(now + offsetMs).toISOString();
+  const usageWindow = (key: string, period: string, scope: string, modelLabel: string | null, used: number) => ({
+    key, period, scope, model_label: modelLabel, duration_seconds: period === 'short' ? 18_000 : 604_800,
+    used_percent: used, remaining_percent: 100 - used, exhausted: false, reset_at: at(2 * 86_400_000),
+    source: 'synthetic', source_version: null, observed_at: at(-60_000), fresh_until: at(240_000),
+    freshness: 'fresh', last_known: false,
+  });
+  return {
+    schema_version: 1, profile_id: LONG_ID, credential_generation: 1, snapshot_revision: 1,
+    provider_id: 'openai', runtime_id: 'codex_cli', binding_verified: true, status: 'fresh',
+    account: {
+      status: 'verified', email: LONG_EMAIL, display_name: `Workspace ${LONG_ID}`, plan: 'synthetic',
+      source: 'synthetic', observed_at: at(-60_000),
+    },
+    usage: {
+      completeness: 'full', primary_window_key: 'weekly', full_observed_at: at(-60_000),
+      windows: [
+        usageWindow('weekly', 'weekly', 'general', null, 64),
+        usageWindow('five_hour', 'short', 'general', null, 10),
+        usageWindow('model.long', 'weekly', 'model', `Reported model limit ${LONG_ID}`, 20),
+      ],
+    },
+    refresh: {
+      state: 'idle', request_id: null, last_attempt_at: at(-60_000), last_success_at: at(-60_000),
+      last_failure_at: null, last_failure: null, next_allowed_at: null,
+    },
+  };
+}
+
 function savedProfile(tiers: SavedTier[], defaultTier: number) {
   return {
     profile_id: LONG_ID,
@@ -96,6 +130,7 @@ function savedProfile(tiers: SavedTier[], defaultTier: number) {
     is_default: true,
     model_tiers: tiers,
     default_model_tier: defaultTier,
+    account_usage: savedAccountUsage(),
   };
 }
 
@@ -666,6 +701,11 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
   it.each(LAYOUTS)('keeps saved records, the profile form and secrets usable on a $name ($width x $height)', async ({ width, height }) => {
     await openProviders();
     await useLayout(width, height);
+    // Long provider-reported account and limit names wrap inside the
+    // Provider cell with their details open (MoonMind#5366).
+    const usageDetails = (await screen.findByRole('group', { name: `Account and usage for ${LONG_ID}` })).querySelector('details')!;
+    usageDetails.open = true;
+    expect(within(usageDetails).getByText(new RegExp(`Reported model limit ${LONG_ID}`))).toBeTruthy();
     expectUsableLayout(`Providers & Secrets at ${width}x${height}`);
     if (width <= 720) {
       // Stacked records: the label sits above its value and actions use the

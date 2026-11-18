@@ -296,10 +296,26 @@ reset boundary. Manual requests are limited to one per minute per verified
 account and never beat a provider `Retry-After`. Each attempt has an ID and a
 two-minute deadline, so a lost acknowledgment expires instead of staying
 running. OAuth success requests an initial collection after the session workflow
-releases enrollment ownership. Nothing polls, and disabled or disconnected
-profiles never collect automatically. Collection runs through the installed
-`AccountUsageDispatcher`; until a credential-owning executor installs one, every
-provider reports `not_supported`.
+releases enrollment ownership. The server never polls, and disabled or
+disconnected profiles never collect automatically. Collection runs through the
+installed `AccountUsageDispatcher`; until a credential-owning executor installs
+one, every provider reports `not_supported`.
+
+Settings → Providers & Secrets renders the projection in each row's Provider
+cell and in a read-only **Account & usage** editor section, never in the profile
+draft. The provider-reported email and organization name are attribution from
+the provider, separate from the operator's `account_label`. Only the general
+weekly window is the weekly allowance; short, model-scoped, and other windows
+keep their reported labels in separate groups, and a missing weekly window is
+reported as missing. Resets are formatted from the UTC instant in the browser's
+locale and time zone, so daylight saving follows the zone. A passed reset shows
+the old value as last known, never as refilled. "Updated" ages come from
+observation times, so a failed or deferred refresh keeps the real age. While
+visible, the page sends one batched `visibility` request for stale profiles on
+load, on return, and about every five minutes. After `accepted` it re-reads the
+cached list for up to two minutes. Refresh sends `manual` and stays disabled
+until the backend's next allowed time. A result applies only to the credential
+generation it was requested for.
 
 ---
 

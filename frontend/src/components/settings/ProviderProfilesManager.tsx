@@ -31,6 +31,12 @@ import {
   type ProviderProfileTierDraft,
 } from '../../utils/providerProfileTiers';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
+import {
+  ProviderProfileAccountUsage,
+  type AccountUsageReconnectAction,
+  type ProviderAccountUsage,
+} from './ProviderProfileAccountUsage';
+import { useProviderAccountUsageRefresh } from './useProviderAccountUsageRefresh';
 
 type ProviderProfileCreationPreset =
   components['schemas']['ProviderProfileCreationPresetResponse'];
@@ -70,6 +76,8 @@ export interface ProviderProfile {
   authentication_method?: AuthenticationMethod | null;
   creation_capabilities?: ProviderProfileCreationCapabilities | null;
   launch_isolation?: ProviderProfileLaunchIsolation | null;
+  /** Cached provider-reported account and allowance; never editable profile state. */
+  account_usage?: ProviderAccountUsage | null;
 }
 
 export interface ProviderProfileLaunchIsolation {
@@ -2306,6 +2314,15 @@ export function ProviderProfilesManager({
     () => profiles.find((profile) => profile.profile_id === editingProfileId) ?? null,
     [editingProfileId, profiles],
   );
+  // Account usage is read from the cached profile list and never enters the
+  // editor draft; re-reading the list leaves drafts and focus untouched.
+  const accountUsageRefresh = useProviderAccountUsageRefresh(profiles, async () => {
+    await queryClient.refetchQueries(
+      { queryKey: PROVIDER_PROFILE_QUERY_KEY, exact: true, type: 'active' },
+      { throwOnError: true },
+    );
+    return queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY);
+  });
   const selectedAuthenticationCapability = useMemo<AuthenticationMethodCapability | null>(
     () =>
       creationCapabilities?.authentication_methods.find(
@@ -4408,6 +4425,28 @@ export function ProviderProfilesManager({
     return items;
   };
 
+  // Expired sign-in recovery reuses the row's existing connection action.
+  const accountUsageReconnect = (profile: ProviderProfile): AccountUsageReconnectAction | null => {
+    if (!canWriteProviderProfiles || profile.account_usage?.status !== 'reconnect_required') return null;
+    const connect = profileActionItems(profile).find(
+      (item) => item.id === 'oauth' || item.id === 'claude-connect_oauth',
+    );
+    return connect?.onSelect
+      ? { label: 'Reconnect OAuth', onSelect: connect.onSelect, disabledReason: connect.disabledReason }
+      : null;
+  };
+  const renderAccountUsage = (profile: ProviderProfile, variant: 'compact' | 'full') => (
+    <ProviderProfileAccountUsage
+      subject={profile.profile_id}
+      usage={profile.account_usage}
+      oauth={credentialMethodLabel(profile) === 'OAuth'}
+      variant={variant}
+      refresh={accountUsageRefresh.viewFor(profile)}
+      onRefresh={() => accountUsageRefresh.requestManualRefresh(profile.profile_id)}
+      reconnect={accountUsageReconnect(profile)}
+    />
+  );
+
   const formSecretRefs = useMemo(() => {
     try {
       return parseSecretRefs(form.secretRefsText);
@@ -4713,6 +4752,7 @@ export function ProviderProfilesManager({
                         Priority: {profile.priority}
                       </div>
                     ) : null}
+                    {renderAccountUsage(profile, 'compact')}
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
@@ -5538,6 +5578,24 @@ export function ProviderProfilesManager({
               OAuth and API-key setup use dedicated backend flows. No credential plaintext, volume name, mount path, or SecretRef JSON is collected here.
             </p>
           </fieldset>
+
+          {isEditing && editingProfile && editingProfile.account_usage !== undefined ? (
+            <section
+              aria-labelledby="provider-profile-account-usage-title"
+              className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-3 min-w-0 max-w-full"
+            >
+              <h4
+                id="provider-profile-account-usage-title"
+                className="text-sm font-semibold text-slate-700 dark:text-slate-300"
+              >
+                Account &amp; usage
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Reported by the provider for this connection. Read-only; the account label above is your own name for it.
+              </p>
+              {renderAccountUsage(editingProfile, 'full')}
+            </section>
+          ) : null}
 
 
           {/* ── Model & effort tiers ── */}
