@@ -82,6 +82,8 @@ python -m pytest tests/unit \
   -q -n auto --dist loadfile --durations=25
 ```
 
+The integration wrapper retains `phase-timings.jsonl` with host-observed phase wall times, including Compose teardown and interrupted phases. Receipt setup/call/teardown sums are worker-seconds, not parallel wall time; compare them separately.
+
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
 The workflow selects `frontend-static` and the browser matrix (Chromium and WebKit, plus Firefox for browser-sensitive changes) independently by changed-file impact. They run in parallel and report into `ci-required`, which accepts a skip only when the selector did not select the job. The generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh`, run inside `select-test-suites`, reports an OpenAPI-affecting path or the change set is unknown, and `ci-required` aggregates it the same way.

@@ -36,6 +36,28 @@ JUNIT_NAME="pytest-integration-ci.xml"
 CLEANUP_TIMEOUT="${MOONMIND_TEST_CLEANUP_TIMEOUT:-120}"
 TEST_PID=""
 TEST_STATUS=0
+ACTIVE_PHASE=""
+PHASE_STARTED=""
+PHASE_TIMINGS="$REPORT_DIR/phase-timings.jsonl"
+TIMING_HELPER="$SCRIPT_DIR/ci/write_backend_matrix_summary.py"
+
+phase_start() {
+  ACTIVE_PHASE="$1"
+  PHASE_STARTED="$(python3 "$TIMING_HELPER" phase-clock)" || {
+    PHASE_STARTED=""
+    echo "warning: integration phase clock unavailable for $ACTIVE_PHASE" >&2
+  }
+}
+
+phase_finish() {
+  if [[ -n "$ACTIVE_PHASE" && -n "$PHASE_STARTED" ]]; then
+    python3 "$TIMING_HELPER" phase-timing --output "$PHASE_TIMINGS" \
+      --phase "$ACTIVE_PHASE" --start "$PHASE_STARTED" --exit-code "$1" \
+      || echo "warning: integration phase timing unavailable for $ACTIVE_PHASE" >&2
+  fi
+  ACTIVE_PHASE=""
+  PHASE_STARTED=""
+}
 
 project_name_regex='^moonmind-test(-[a-z0-9][a-z0-9_-]*)?$'
 if [[ ! "$TEST_COMPOSE_PROJECT_NAME" =~ $project_name_regex ]]; then
@@ -71,11 +93,15 @@ compose() {
 }
 
 cleanup() {
+  local original_status=$? cleanup_status=0
+  phase_finish "$original_status"
   if [[ -n "$TEST_PID" ]]; then
     kill "$TEST_PID" >/dev/null 2>&1 || true
   fi
   if (( ${#COMPOSE_CMD[@]} )); then
-    compose "$CLEANUP_TIMEOUT" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    phase_start compose-down
+    compose "$CLEANUP_TIMEOUT" down --volumes --remove-orphans >/dev/null 2>&1 || cleanup_status=$?
+    phase_finish "$cleanup_status"
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
     local retain_quality_source=0
@@ -209,8 +235,8 @@ pipeline_compose=("${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME
 # All pytest and restart phases share one deadline, signal handling, and log.
 # A phase failure stops the pipeline and still reaches diagnostics/teardown.
 run_phase() {
-  local output="$1"
-  shift
+  local phase="$1" output="$2"
+  shift 2
   if (( TEST_STATUS != 0 )); then return; fi
   local -a bound=()
   if (( RUN_BUDGET_SECONDS > 0 )); then
@@ -218,6 +244,7 @@ run_phase() {
     if (( remaining <= 0 )); then TEST_STATUS=124; return; fi
     bound=("$SCRIPT_DIR/gnu_timeout.sh" --signal=INT --kill-after=30s "${remaining}s")
   fi
+  phase_start "$phase"
   if [[ -n "$output" ]]; then
     ${bound[@]+"${bound[@]}"} "$@" > "$output" 2> >(tee -a "$REPORT_DIR/pytest-integration-ci.log" >&2) &
   else
@@ -226,10 +253,12 @@ run_phase() {
   TEST_PID=$!
   wait "$TEST_PID" || TEST_STATUS=$?
   TEST_PID=""
+  phase_finish "$TEST_STATUS"
 }
 
 # A report left by an earlier run must never stand in for a missing one.
 mkdir -p "$REPORT_DIR"
+rm -f "$PHASE_TIMINGS"
 rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/storage-restart-*.xml \
   "$REPORT_DIR/storage-images.json" "$REPORT_DIR/storage-public-port.txt" \
   "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt \
@@ -248,7 +277,7 @@ elif [[ -e "$REPORT_DIR/security-quality" ]]; then
   if command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
     evidence_cleanup_bound=("$SCRIPT_DIR/gnu_timeout.sh" --kill-after=10s "${CLEANUP_TIMEOUT}s")
   fi
-  run_phase "" ${evidence_cleanup_bound[@]+"${evidence_cleanup_bound[@]}"} \
+  run_phase evidence-cleanup "" ${evidence_cleanup_bound[@]+"${evidence_cleanup_bound[@]}"} \
     "${pipeline_compose[@]}" run --rm --no-deps pytest \
     bash -lc "rm -rf -- '$REPORT_PATH/security-quality'"
 fi
@@ -256,8 +285,8 @@ fi
 # Presigned downloads cross the same host-published port boundary as an
 # operator's browser. Never fall back to a possibly installed localhost store
 # when this disposable project's public binding is unavailable.
-run_phase "" "${pipeline_compose[@]}" up -d --wait --wait-timeout 90 minio artifact-source
-run_phase "$REPORT_DIR/storage-public-port.txt" "${pipeline_compose[@]}" port minio 9000
+run_phase storage-up "" "${pipeline_compose[@]}" up -d --wait --wait-timeout 90 minio artifact-source
+run_phase storage-port "$REPORT_DIR/storage-public-port.txt" "${pipeline_compose[@]}" port minio 9000
 if (( TEST_STATUS == 0 )); then
   public_binding=""
   IFS= read -r public_binding < "$REPORT_DIR/storage-public-port.txt" || true
@@ -271,7 +300,7 @@ if (( TEST_STATUS == 0 )); then
 fi
 
 # Run in the background so a signal reaches the traps while pytest runs.
-run_phase "" "${pipeline_compose[@]}" run --rm \
+run_phase main-pytest "" "${pipeline_compose[@]}" run --rm \
   -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \
   pytest \
   bash -lc "python tools/ci/write_backend_matrix_summary.py run -- $pytest_args"
@@ -281,14 +310,14 @@ run_phase "" "${pipeline_compose[@]}" run --rm \
 if [[ "$HERMETIC_SHARD" != "2" ]]; then
   # Persist saved inputs, remove their worker workspace, restart the real store,
   # then retrieve historical bytes and independent claims through the adapter.
-  run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
-  run_phase "" "${pipeline_compose[@]}" run --rm \
+  run_phase storage-images "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
+  run_phase storage-seed "" "${pipeline_compose[@]}" run --rm \
     -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-seed.receipt.json}" \
     pytest bash -lc \
     "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
-  run_phase "" "${pipeline_compose[@]}" restart minio
-  run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
-  run_phase "" "${pipeline_compose[@]}" run --rm \
+  run_phase storage-restart "" "${pipeline_compose[@]}" restart minio
+  run_phase storage-health "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
+  run_phase storage-verify "" "${pipeline_compose[@]}" run --rm \
     -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-verify.receipt.json}" \
     pytest bash -lc \
     "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
@@ -299,7 +328,7 @@ fi
 if [[ -z "$HERMETIC_SHARD" ]]; then
   # Write the corpus summary as the same container user that owns its evidence,
   # before teardown exports any temporary checkout to the host.
-  run_phase "" "${pipeline_compose[@]}" run --rm --no-deps \
+  run_phase quality-summary "" "${pipeline_compose[@]}" run --rm --no-deps \
     pytest python -m tests.integration.security.quality
 fi
 

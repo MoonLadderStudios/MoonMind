@@ -136,6 +136,9 @@ def _make_wrapper(tmp_path: Path, repo: Path) -> Wrapper:
     helper.chmod(0o755)
     (tools / "test_worker_count.py").write_text("print(4)\n")
     (tools / "ci").mkdir()
+    (tools / "ci/write_backend_matrix_summary.py").write_text(
+        (SCRIPT.parent / "ci/write_backend_matrix_summary.py").read_text()
+    )
     (tools / "ci/hermetic_shards.py").write_text("# Optional hints absent.\n")
     (repo / "docker-compose.test.yaml").write_text("services: {}\n")
     (repo / ".env-template").write_text("TEMPLATE=1\n")
@@ -626,3 +629,63 @@ def test_failed_container_owned_evidence_cleanup_is_bounded_and_diagnosed(wrappe
     assert (wrapper.repo / REPORT / "compose-logs.txt").exists()
     assert not wrapper.started.exists()
     assert wrapper.downs() == 1
+
+
+def _phase_timings(wrapper):
+    return [json.loads(line) for line in (wrapper.repo / REPORT / "phase-timings.jsonl").read_text().splitlines()]
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_wrapper_retains_actual_phase_timings_and_primary_status(wrapper, status):
+    wrapper.env.update(MOONMIND_CI_REVISION="revision", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2")
+    actual, _, _ = wrapper.run(run_status=status)
+    assert actual == status
+    rows = _phase_timings(wrapper)
+    names = [row["phase"] for row in rows]
+    assert names[:3] == ["storage-up", "storage-port", "main-pytest"]
+    assert names[-1] == "compose-down"
+    assert ("storage-seed" in names) == (status == 0)
+    if status == 0:
+        assert names == [
+            "storage-up", "storage-port", "main-pytest", "storage-images",
+            "storage-seed", "storage-restart", "storage-health", "storage-verify",
+            "quality-summary", "compose-down",
+        ]
+    for row in rows:
+        assert row["revision"] == "revision" and row["runId"] == "123" and row["attempt"] == "2"
+        assert row["endMonotonic"] >= row["startMonotonic"]
+        assert row["elapsedSeconds"] == pytest.approx(row["endMonotonic"] - row["startMonotonic"])
+        assert "command" not in row
+    assert next(row for row in rows if row["phase"] == "main-pytest")["exitCode"] == status
+
+
+def test_cancelled_phase_and_teardown_timings_survive(wrapper):
+    process = wrapper.start(run_sleep=120)
+    deadline = time.monotonic() + 20
+    while not wrapper.started.exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+    assert process.returncode == 143
+    rows = _phase_timings(wrapper)
+    assert [(row["phase"], row["exitCode"]) for row in rows][-2:] == [("main-pytest", 143), ("compose-down", 0)]
+
+
+def test_timing_failure_does_not_replace_primary_failure(wrapper):
+    helper = wrapper.repo / "tools/ci/write_backend_matrix_summary.py"
+    helper.write_text("raise SystemExit(1)\n")
+    status, output, _ = wrapper.run(run_status=7)
+    assert status == 7
+    assert "warning: integration phase clock unavailable" in output
+    assert wrapper.downs() == 1
+
+
+def test_phase_timings_survive_colon_checkout_export(tmp_path):
+    wrapper = _make_wrapper(tmp_path, tmp_path / "work:checkout")
+    wrapper.env["MOONMIND_AGENT_RUNTIME_STORE"] = str(tmp_path / "agent_jobs")
+    status, _, _ = wrapper.run(run_status=7)
+    assert status == 7
+    assert [row["phase"] for row in _phase_timings(wrapper)] == [
+        "storage-up", "storage-port", "main-pytest", "compose-down"
+    ]
