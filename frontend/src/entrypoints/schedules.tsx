@@ -2059,6 +2059,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const pageIndex = cursorStack.length;
   const isMobileLayout = useSchedulesMobileLayout();
 
+  const pendingOwnSearches = useRef<string[]>([]);
   const listUrlQuery = recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir });
   useEffect(() => {
     if (typeof window === 'undefined' || routeDefinitionId) {
@@ -2067,7 +2068,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const timer = window.setTimeout(() => {
       const nextUrl = `${window.location.pathname}${listUrlQuery ? `?${listUrlQuery}` : ''}`;
       if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
-        // Through the router, so the shell's location matches the address bar.
+        // Remember writes until the router observes them: an older echo
+        // must not replace input entered while its transition was pending.
+        pendingOwnSearches.current.push(listUrlQuery ? `?${listUrlQuery}` : '');
         navigateTo(nextUrl, { replace: true });
       }
     }, 250);
@@ -2077,6 +2080,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   // Follow URL changes this table did not write (the Recurring nav link,
   // Back/Forward): the page stays mounted across query changes.
   const adoptUrlSearch = (search: string) => {
+    const ownWrite = pendingOwnSearches.current.indexOf(search);
+    if (ownWrite >= 0) {
+      // A coalesced observation also supersedes earlier writes.
+      pendingOwnSearches.current.splice(0, ownWrite + 1);
+      return;
+    }
+    pendingOwnSearches.current = [];
     const next = recurringListUrlStateFromSearch(new URLSearchParams(search));
     if (recurringListUrlQuery(next) === listUrlQuery) {
       return;
