@@ -144,7 +144,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     workerPause: {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
-      shardHealth: '/api/v1/operations/codex/shards',
     },
     ...overrides,
   };
@@ -162,7 +161,6 @@ function settingsFetch(url: string): Response | null {
   if (url === '/api/system/worker-pause') {
     return ok({ system: { workersPaused: false }, metrics: {}, commands: [] });
   }
-  if (url === '/api/v1/operations/codex/shards') return ok({ shards: [] });
   if (url === '/api/v1/operations/deployment/stacks/moonmind') {
     return ok({
       stack: 'moonmind',
@@ -433,7 +431,6 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
                   workerPause: {
                     get: '/api/system/worker-pause',
                     post: '/api/system/worker-pause',
-                    shardHealth: '/api/v1/operations/codex/shards',
                   },
                 },
               } as BootPayload}

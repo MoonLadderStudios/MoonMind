@@ -674,7 +674,6 @@ def _worker_pause_sources() -> dict[str, str]:
     return {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
-        "shardHealth": "/api/v1/operations/codex/shards",
     }
 
 

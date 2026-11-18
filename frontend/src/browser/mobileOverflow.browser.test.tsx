@@ -386,13 +386,6 @@ function settingsResponse(url: URL): Response | null {
       }] });
     case '/api/workers':
       return json(workerSnapshot);
-    case '/api/v1/operations/codex/shards':
-      return json({ shards: [{
-        queueName: `codex-shard-${LONG_ID}`, status: 'offline', hashModulo: 4, workerHostname: `codex-worker-${LONG_ID}`,
-        volumeName: 'codex-auth-0', volumeStatus: 'missing', latestRunId: '00000000-0000-0000-0000-000000000010',
-        latestRunStatus: 'failed', latestPreflightStatus: 'failed', latestPreflightMessage: 'Auth volume missing',
-        latestPreflightCheckedAt: '2026-10-01T00:02:00Z',
-      }] });
     case '/api/v1/operations/deployment/stacks/moonmind':
       return json({
         stack: 'moonmind', projectName: 'moonmind', buildId: '20260930.0900',
@@ -420,7 +413,6 @@ function settingsResponse(url: URL): Response | null {
 
 const settingsUiInfo = {
   ...uiInfo,
-  workerPause: { get: '/api/workers', post: '/api/worker-action', shardHealth: '/api/v1/operations/codex/shards', pollIntervalMs: 60_000 },
 };
 
 interface ApiState {
@@ -967,12 +959,11 @@ describe('Operations and advanced settings in the dashboard shell (MoonMind#4559
     expectUsableLayout(`Operations advanced settings at ${width}x${height}`);
   });
 
-  it.each(SETTINGS_LAYOUTS)('keeps Operations worker, shard and update cards usable on a $name ($width x $height)', async ({ width, height }) => {
+  it.each(SETTINGS_LAYOUTS)('keeps Operations worker and update cards usable on a $name ($width x $height)', async ({ width, height }) => {
     api.uiInfo = settingsUiInfo;
     window.history.replaceState({}, '', '/settings/operations');
     renderDashboard();
     const workers = await screen.findByRole('region', { name: /worker operations/i });
-    await within(workers).findByText(`codex-worker-${LONG_ID}`);
     await within(workers).findByRole('button', { name: 'Pause workers' });
     const update = await screen.findByRole('region', { name: /moonmind update/i });
     await within(update).findByLabelText(/update to/i);

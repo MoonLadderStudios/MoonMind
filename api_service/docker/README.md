@@ -20,9 +20,6 @@ provider CLIs in the installed Omnigent host image; an explicit
 `MOONMIND_OAUTH_RUNNER_IMAGE` overrides that selection. API and worker startup do
 not read or rewrite local agent configuration or credential homes.
 
-The historical Codex login-check operation also selects the shared Omnigent
-host image, with `CODEX_LOGIN_CHECK_IMAGE` retained as its explicit override.
-
 The application image retains Git, GitHub CLI, Docker CLI/Buildx/Compose,
 ripgrep, curl, SSH, and process tools for workspace publication, managed
 container jobs, deployment coordination, and diagnostics. The standalone

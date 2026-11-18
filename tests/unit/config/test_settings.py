@@ -720,26 +720,8 @@ class TestWorkflowSettings:
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit",)
 
-    def test_app_settings_defaults_codex_queue_to_workflow_default(
-        self, app_settings_defaults
-    ):
-        """When codex queue is unset, app settings should align it to default queue."""
-
-        settings = AppSettings(
-            **app_settings_defaults,
-            workflow={
-                "default_queue": "moonmind.jobs",
-                "default_exchange": "moonmind.jobs",
-                "default_routing_key": "moonmind.jobs",
-                "codex_queue": None,
-            },
-        )
-
-        assert settings.workflow.default_queue == "moonmind.jobs"
-        assert settings.workflow.codex_queue == "moonmind.jobs"
-
-def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
-    """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""
+def test_workflow_settings_ignore_retired_queues_keep_exchange(monkeypatch) -> None:
+    """Retired queue values are inert; the separate exchange field is unchanged."""
 
     monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
     monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
@@ -747,9 +729,9 @@ def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
 
     settings = WorkflowSettings(_env_file=None)
 
-    assert settings.default_queue == "workflow.jobs"
+    assert "default_queue" not in settings.model_dump()
     assert settings.default_exchange == "workflow.jobs"
-    assert settings.default_routing_key == "workflow.jobs"
+    assert "default_routing_key" not in settings.model_dump()
 
     monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
     monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)

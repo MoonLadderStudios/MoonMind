@@ -467,20 +467,10 @@ class WorkflowSettings(BaseSettings):
         alias="WORKFLOW_WORKSPACE_ROOT",
         description="Host-mounted root directory for workflow automation workspaces.",
     )
-    default_queue: str = Field(
-        "moonmind.jobs",
-        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE"),
-        description="Default queue name for workflow jobs.",
-    )
     default_exchange: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices("WORKFLOW_DEFAULT_EXCHANGE"),
         description="Default exchange for workflow jobs.",
-    )
-    default_routing_key: str = Field(
-        "moonmind.jobs",
-        validation_alias=AliasChoices("WORKFLOW_DEFAULT_ROUTING_KEY"),
-        description="Default routing key used by the workflow queue.",
     )
     codex_model: Optional[str] = Field(
         "gpt-5.5",
@@ -493,21 +483,6 @@ class WorkflowSettings(BaseSettings):
             "CODEX_MODEL_REASONING_EFFORT",
             "MODEL_REASONING_EFFORT",
         ),
-    )
-    codex_shards: int = Field(
-        3,
-        alias="CODEX_SHARDS",
-        description="Number of Codex worker shards available for routing.",
-        gt=0,
-        le=64,
-    )
-    codex_queue: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "WORKFLOW_CODEX_QUEUE",
-            "CODEX_QUEUE",
-        ),
-        description="Explicit Codex queue name assigned to this worker.",
     )
     codex_volume_name: Optional[str] = Field(
         None,
@@ -528,11 +503,6 @@ class WorkflowSettings(BaseSettings):
         None,
         alias="CLAUDE_HOME",
         description="Claude CLI home directory used for persisted OAuth state.",
-    )
-    codex_login_check_image: Optional[str] = Field(
-        None,
-        alias="CODEX_LOGIN_CHECK_IMAGE",
-        description="Override container image for Codex login status checks.",
     )
     default_runtime: str = Field(
         "omnigent",
@@ -748,12 +718,10 @@ class WorkflowSettings(BaseSettings):
     @field_validator(
         "codex_model",
         "codex_effort",
-        "codex_queue",
         "codex_volume_name",
         "claude_volume_name",
         "claude_volume_path",
         "claude_home",
-        "codex_login_check_image",
         "git_user_name",
         "git_user_email",
         "default_skill",
@@ -1496,8 +1464,6 @@ class AppSettings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived defaults after settings load."""
         super().model_post_init(__context)
-        if not self.workflow.codex_queue:
-            self.workflow.codex_queue = self.workflow.default_queue
         if self.worker_codex_model is not None:
             self.workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:

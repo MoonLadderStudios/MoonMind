@@ -179,63 +179,6 @@ class WorkflowArtifactListResponse(BaseModel):
         default_factory=list, alias="artifacts"
     )
 
-class CodexShardHealthModel(BaseModel):
-    """Schema describing the health of a Codex shard and its auth volume."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    queue_name: str = Field(..., alias="queueName")
-    status: models.CodexWorkerShardStatus = Field(..., alias="status")
-    hash_modulo: int = Field(..., alias="hashModulo", ge=1)
-    worker_hostname: Optional[str] = Field(None, alias="workerHostname")
-    volume_name: Optional[str] = Field(None, alias="volumeName")
-    volume_status: Optional[models.CodexAuthVolumeStatus] = Field(
-        None, alias="volumeStatus"
-    )
-    volume_last_verified_at: datetime | None = Field(None, alias="volumeLastVerifiedAt")
-    volume_worker_affinity: Optional[str] = Field(None, alias="volumeWorkerAffinity")
-    volume_notes: Optional[str] = Field(None, alias="volumeNotes")
-    latest_run_id: Optional[UUID] = Field(None, alias="latestRunId")
-    latest_run_status: Optional[models.WorkflowRunStatus] = Field(
-        None, alias="latestRunStatus"
-    )
-    latest_preflight_status: Optional[models.CodexPreflightStatus] = Field(
-        None, alias="latestPreflightStatus"
-    )
-    latest_preflight_message: Optional[str] = Field(
-        None, alias="latestPreflightMessage"
-    )
-    latest_preflight_checked_at: datetime | None = Field(
-        None, alias="latestPreflightCheckedAt"
-    )
-
-class CodexShardListResponse(BaseModel):
-    """Envelope returned when listing Codex shard health."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    shards: list[CodexShardHealthModel] = Field(default_factory=list, alias="shards")
-
-class CodexPreflightRequest(BaseModel):
-    """Request payload accepted by the Codex pre-flight endpoint."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    affinity_key: Optional[str] = Field(None, alias="affinityKey")
-    force_refresh: bool = Field(False, alias="forceRefresh")
-
-class CodexPreflightResultModel(BaseModel):
-    """Response returned from the Codex pre-flight endpoint."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    run_id: UUID = Field(..., alias="runId")
-    queue_name: Optional[str] = Field(None, alias="queueName")
-    volume_name: Optional[str] = Field(None, alias="volumeName")
-    status: models.CodexPreflightStatus = Field(..., alias="status")
-    checked_at: datetime | None = Field(None, alias="checkedAt")
-    message: Optional[str] = Field(None, alias="message")
-
 class RetryWorkflowMode(str, enum.Enum):
     """Retry semantics supported by the workflow API."""
 
@@ -323,10 +266,6 @@ __all__ = [
     "WorkflowRunCollectionResponse",
     "WorkflowTaskStateListResponse",
     "WorkflowArtifactListResponse",
-    "CodexShardHealthModel",
-    "CodexShardListResponse",
-    "CodexPreflightRequest",
-    "CodexPreflightResultModel",
     "RetryWorkflowMode",
     "RetryWorkflowRunRequest",
     "AutomationPhaseState",

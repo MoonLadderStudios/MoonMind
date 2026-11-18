@@ -97,7 +97,6 @@ from api_service.api.routers.temporal_artifacts import (
     router as temporal_artifacts_router,
 )
 from api_service.api.routers.workflow_console import router as workflow_console_router
-from api_service.api.routers.workflows import router as workflows_router
 from api_service.dashboard_static import DashboardStaticFiles
 
 # NOTE: the operator-boundary demonstration routers
@@ -1121,7 +1120,6 @@ app.include_router(health_router, tags=["health"])
 # Include workflow-oriented and operational routers.
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
-app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
