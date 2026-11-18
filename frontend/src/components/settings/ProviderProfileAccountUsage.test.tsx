@@ -364,6 +364,19 @@ describe('ProviderProfileAccountUsage', () => {
     expect(text(usageRegion())).not.toContain('authentication method');
   });
 
+  it('never gives an API-key profile OAuth recovery guidance', () => {
+    // A failed API-key validation projects reconnect_required before support is checked.
+    renderUsage(projection({ status: 'reconnect_required' }), {
+      oauth: false,
+      reconnect: { label: 'Reconnect OAuth', onSelect: () => undefined },
+    });
+
+    const region = usageRegion();
+    expect(text(region)).toContain('Subscription weekly usage not available for this authentication method');
+    expect(text(region)).not.toMatch(/sign-in|reconnect/i);
+    expect(within(region).queryByRole('button')).toBeNull();
+  });
+
   it('replaces the previous account display as soon as the credential generation changes', () => {
     const { rerender } = renderUsage(projection(), { refresh: { checking: false, outcome: 'backoff', retryAtMs: NOW + 60_000 } });
     expect(text(usageRegion())).toContain('personal@example.com');

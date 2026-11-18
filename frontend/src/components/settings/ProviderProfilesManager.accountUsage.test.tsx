@@ -247,6 +247,79 @@ describe('Provider Profile account usage in Settings', () => {
     });
   });
 
+  it('re-reads the cached list when the server already holds a newer collection', async () => {
+    const newer = oauthProfile('codex-oauth', {
+      snapshot_revision: 8,
+      windows: [usageWindow({ used_percent: 70, remaining_percent: 30 })],
+    });
+    const harness = renderLiveManager([oauthProfile('codex-oauth', STALE)], {
+      respond: () => [
+        {
+          profile_id: 'codex-oauth',
+          credential_generation: 3,
+          outcome: 'already_fresh',
+          refresh_state: 'idle',
+          coalesced: false,
+          retry_after_seconds: 240,
+        },
+      ],
+      nextList: () => [newer],
+    });
+    await advance(10);
+
+    expect(harness.refreshRequests).toHaveLength(1);
+    expect(harness.listFetches()).toBe(1);
+    expect(within(usageGroup('codex-oauth')).getByText('30% remaining')).toBeTruthy();
+
+    // The re-read itself requests no further collection.
+    await advance(60_000);
+    expect(harness.refreshRequests).toHaveLength(1);
+    expect(harness.listFetches()).toBe(1);
+  });
+
+  it('asks again about a deferred profile and leaves the busy notice once the deferral ends', async () => {
+    const deferred = oauthProfile('codex-oauth', {
+      refresh: { state: 'deferred', request_id: 'req-busy' },
+    });
+    let deferralOver = false;
+    const harness = renderLiveManager([deferred], {
+      respond: () => [
+        deferralOver
+          ? {
+              profile_id: 'codex-oauth',
+              credential_generation: 3,
+              outcome: 'already_fresh',
+              refresh_state: 'idle',
+              coalesced: false,
+            }
+          : {
+              profile_id: 'codex-oauth',
+              credential_generation: 3,
+              outcome: 'deferred_busy',
+              refresh_state: 'deferred',
+              request_id: 'req-busy',
+              coalesced: false,
+              retry_after_seconds: 120,
+            },
+      ],
+      nextList: () => [oauthProfile('codex-oauth', {})],
+    });
+    await advance(10);
+
+    expect(harness.refreshRequests.map((request) => request.body)).toEqual([
+      { profile_ids: ['codex-oauth'], trigger: 'visibility' },
+    ]);
+    // Still deferred: the cached list is current, so nothing is re-read.
+    expect(harness.listFetches()).toBe(0);
+    expect(text(usageGroup('codex-oauth'))).toContain('This profile is busy');
+
+    deferralOver = true;
+    await advance(5 * 60_000);
+    expect(harness.refreshRequests).toHaveLength(2);
+    expect(harness.listFetches()).toBe(1);
+    expect(text(usageGroup('codex-oauth'))).not.toContain('This profile is busy');
+  });
+
   it('pauses while hidden and resumes with a stale check when visible again', async () => {
     visibility = 'hidden';
     const harness = renderLiveManager([oauthProfile('codex-oauth', STALE)]);

@@ -249,7 +249,8 @@ export function ProviderProfileAccountUsage({
   const label = `Account and usage for ${subject}`;
   const muted = 'text-slate-500 dark:text-slate-400';
 
-  if (usage === null || usage.status === 'not_supported') {
+  // Only subscription logins have weekly usage, whatever status is projected.
+  if (!oauth || usage === null || usage.status === 'not_supported') {
     const message = !oauth
       ? 'Subscription weekly usage not available for this authentication method.'
       : usage === null

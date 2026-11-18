@@ -311,11 +311,14 @@ reported as missing. Resets are formatted from the UTC instant in the browser's
 locale and time zone, so daylight saving follows the zone. A passed reset shows
 the old value as last known, never as refilled. "Updated" ages come from
 observation times, so a failed or deferred refresh keeps the real age. While
-visible, the page sends one batched `visibility` request for stale profiles on
-load, on return, and about every five minutes. After `accepted` it re-reads the
-cached list for up to two minutes. Refresh sends `manual` and stays disabled
-until the backend's next allowed time. A result applies only to the credential
-generation it was requested for.
+visible, the page sends one batched `visibility` request for stale or deferred
+profiles on load, on return, and about every five minutes. After `accepted` it
+re-reads the cached list for up to two minutes; after `already_fresh` or a
+refresh state that differs from the cached one, it re-reads the list once.
+Refresh sends `manual` and stays disabled until the backend's next allowed
+time. A result applies only to the credential generation it was requested for.
+API-key profiles show only the unsupported-method notice, so a failed key
+validation never receives OAuth recovery guidance.
 
 ---
 

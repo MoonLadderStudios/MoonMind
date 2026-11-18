@@ -56,9 +56,12 @@ export function needsVisibilityRefresh(
     return false;
   }
   const refresh = usage.refresh;
-  if (IN_FLIGHT.has(refresh.state) || refresh.state === 'deferred') return false;
+  if (IN_FLIGHT.has(refresh.state)) return false;
   const nextAllowed = parseInstant(refresh.next_allowed_at);
   if (nextAllowed !== null && nextAllowed > nowMs) return false;
+  // A deferral ends at a server deadline the projection does not carry; the
+  // backend answers deferred_busy until then.
+  if (refresh.state === 'deferred') return true;
   const lastSuccess = parseInstant(refresh.last_success_at);
   if (lastSuccess === null || nowMs - lastSuccess >= STALE_AFTER_MS) return true;
   return (usage.usage.windows ?? []).some((window) => {
@@ -253,11 +256,14 @@ class AccountUsageRefreshCoordinator {
   private apply(results: readonly RefreshResult[]): void {
     const now = Date.now();
     let accepted = false;
+    let outdated = false;
     for (const result of results) {
       const usage = this.profiles.find((profile) => profile.profile_id === result.profile_id)?.account_usage;
       // An answer for a replaced account or a removed profile is obsolete.
       if (!usage || usage.credential_generation !== result.credential_generation) continue;
       const generation = usage.credential_generation;
+      // The server holds a newer collection or refresh state than the cached list.
+      if (result.outcome === 'already_fresh' || result.refresh_state !== usage.refresh.state) outdated = true;
       if (result.outcome === 'accepted') {
         if (document.visibilityState === 'hidden') {
           this.setView(result.profile_id, { generation, checking: false });
@@ -278,7 +284,15 @@ class AccountUsageRefreshCoordinator {
         retryAtMs: result.outcome === 'backoff' || result.outcome === 'deferred_busy' ? retryAtMs : null,
       });
     }
+    // Pending re-reads reload the whole list, so one is enough either way.
     if (accepted) this.startReread();
+    else if (outdated) this.rereadOnce();
+  }
+
+  private rereadOnce(): void {
+    if (!this.running || document.visibilityState === 'hidden') return;
+    // A failed re-read changes nothing; the next check asks again.
+    void this.reread().catch(() => undefined);
   }
 
   private startReread(): void {
