@@ -72,7 +72,7 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
 
     jobs = workflow["jobs"]
     integration_job = jobs["integration-hermetic-shards"]
-    assert set(integration_job["needs"]) == {"select-test-suites", "preflight-policy"}
+    assert integration_job["needs"] == "select-test-suites"
     assert (
         integration_job["if"]
         == "needs.select-test-suites.outputs.integration_hermetic == 'true'"
@@ -332,7 +332,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
         "suite"
     ] == ["hermetic", "fresh-journey", "upgrade-journey", "controller-journey"]
     hermetic, journeys = jobs["integration-hermetic-shards"], jobs["integration-ci"]
-    assert set(hermetic["needs"]) == {"select-test-suites", "preflight-policy"}
+    assert hermetic["needs"] == "select-test-suites"
     assert "prepare-app-image" not in hermetic["needs"]
     assert "prepare-app-image" in journeys["needs"]
     assert hermetic["strategy"]["matrix"] == {"include": [
@@ -456,11 +456,11 @@ def test_journey_job_reserves_setup_execution_and_reporting(
     )
 
 
-def test_preflight_policy_enforces_workflow_display_name_guard() -> None:
+def test_selector_policy_enforces_workflow_display_name_guard() -> None:
     workflow = _load_workflow()
 
     preflight_scripts = [
-        step.get("run", "") for step in workflow["jobs"]["preflight-policy"]["steps"]
+        step.get("run", "") for step in workflow["jobs"]["select-test-suites"]["steps"]
     ]
     assert any(
         "tools/check_github_workflow_names.py" in run for run in preflight_scripts
@@ -902,7 +902,7 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "api-component",
         "temporal-boundary",
         "reliability-journey-checkpoint-resume",
-        # Static invariants now run inside preflight-policy.
+        # Source invariants are owned by selection and preflight-policy.
         "moonspec-projection",
         "verify-test-shard-ownership",
     ):
@@ -946,7 +946,7 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
     assert "inputs.verification_phase" in script
 
 
-def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
+def test_source_ownership_runs_in_parallel_with_selector_policy_guards() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["preflight-policy"]
 
@@ -958,7 +958,9 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
     assert int(checkout["with"]["fetch-depth"]) == 1
     assert "submodules" not in checkout.get("with", {})
 
-    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    scripts = "\n".join(
+        step.get("run", "") for step in workflow["jobs"]["select-test-suites"]["steps"]
+    )
     assert "tools/verify_workflow_terminology.py --mode runtime" in scripts
     assert "tools/check_removed_capability_semantics.py" in scripts
     assert "tools/status_domain_audit.py" in scripts
@@ -1027,24 +1029,18 @@ def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
     assert "open-webui" not in scripts
     assert "omnigent" not in scripts
 
-    # The repository policy scans and the shard-ownership collection walk the
-    # working tree, so MoonSpec is initialized only after they have run and
-    # they keep checking the same tree as before.
+    # Ownership collection sees the submodule-free tree before projection.
     init_index = next(
         index
         for index, run in enumerate(runs)
         if "git submodule update --init --depth 1 -- moonspec" in run
     )
-    for tree_walker in (
-        "tools/verify_workflow_terminology.py",
-        "tools/check_removed_capability_semantics.py",
-        "tools/status_domain_audit.py",
-        "tools/verify_test_shard_ownership.py",
-    ):
-        walker_index = next(
-            index for index, run in enumerate(runs) if tree_walker in run
-        )
-        assert walker_index < init_index, tree_walker
+    walker_index = next(
+        index
+        for index, run in enumerate(runs)
+        if "tools/verify_test_shard_ownership.py" in run
+    )
+    assert walker_index < init_index
     check_index = next(
         index
         for index, run in enumerate(runs)
@@ -1093,7 +1089,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     ):
         assert removed not in workflow["jobs"], removed
     job = workflow["jobs"]["backend-matrix"]
-    assert set(job["needs"]) == {"select-test-suites", "preflight-policy"}
+    assert job["needs"] == "select-test-suites"
     # Runs when any primary backend suite is selected; empty selection skips
     # the matrix intentionally without instantiating tests.
     job_if = job["if"]
@@ -1794,7 +1790,7 @@ def test_hermetic_physical_rows_own_qualifications_and_isolated_receipts():
     assert "github.run_attempt" in run["env"]["MOONMIND_TEST_COMPOSE_PROJECT_NAME"]
 
 
-HEAVY_PREFLIGHT_OWNERS = (
+HEAVY_ADMISSION_OWNERS = (
     "backend-matrix",
     "integration-hermetic-shards",
     "prepare-app-image",
@@ -1857,16 +1853,16 @@ def _admitted_job(
     return bool(eval(expression, {"__builtins__": {}}, {}))
 
 
-@pytest.mark.parametrize("owner", HEAVY_PREFLIGHT_OWNERS)
+@pytest.mark.parametrize("owner", HEAVY_ADMISSION_OWNERS)
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", ""])
-def test_selected_heavy_jobs_cannot_start_before_successful_preflight(owner, result):
+def test_selected_heavy_jobs_cannot_start_after_rejected_selector(owner, result):
     job = _load_workflow()["jobs"][owner]
-    assert "preflight-policy" in job["needs"]
-    assert not _admitted_job(job, preflight=result)
+    assert "preflight-policy" not in job["needs"]
+    assert not _admitted_job(job, selector=result)
     assert _admitted_job(job)
 
 
-@pytest.mark.parametrize("owner", HEAVY_PREFLIGHT_OWNERS)
+@pytest.mark.parametrize("owner", HEAVY_ADMISSION_OWNERS)
 def test_heavy_admission_preserves_selection_and_cancellation(owner):
     job = _load_workflow()["jobs"][owner]
     assert not _admitted_job(job, selected=False)
@@ -1889,16 +1885,9 @@ def test_image_phase_intentional_source_skip_does_not_deadlock(owner, phase):
     assert _admitted_job(
         job, preflight="skipped", phase=phase, candidate_image="image@sha256:test"
     )
-    for result in ("failure", "cancelled", ""):
+    for result in ("failure", "cancelled", "skipped", ""):
         assert not _admitted_job(
-            job, preflight=result, phase=phase, candidate_image="image@sha256:test"
-        )
-    for invalid_phase in ("", "full", "source", "unknown"):
-        assert not _admitted_job(
-            job,
-            preflight="skipped",
-            phase=invalid_phase,
-            candidate_image="image@sha256:test",
+            job, selector=result, phase=phase, candidate_image="image@sha256:test"
         )
 
 
@@ -1906,13 +1895,13 @@ def test_image_phase_intentional_source_skip_does_not_deadlock(owner, phase):
     "event",
     ["pull_request", "merge_group", "workflow_dispatch", "schedule", "workflow_call"],
 )
-def test_preflight_admission_has_no_draft_or_event_deferral(event):
+def test_fast_policy_admission_has_no_draft_or_event_deferral(event):
     jobs = _load_workflow()["jobs"]
     selected = select_suites(
         [".github/workflows/pytest-unit-tests.yml"], event_name=event
     )
     assert selected.as_outputs()["integration_hermetic"] == "true"
-    for owner in HEAVY_PREFLIGHT_OWNERS:
+    for owner in HEAVY_ADMISSION_OWNERS:
         assert "github.event" not in jobs[owner]["if"]
         assert "draft" not in jobs[owner]["if"]
         assert _admitted_job(jobs[owner])
@@ -1947,6 +1936,104 @@ def test_preflight_wait_keeps_existing_supersession_groups_isolated():
     assert triggers["merge_group"]["types"] == ["checks_requested"]
     # Draft pushes are real candidates; no ready-only or draft-only admission.
     assert triggers["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
+
+
+FAST_POLICY_STEPS = (
+    "Verify workflow terminology guardrails",
+    "Check removed capability semantics",
+    "Audit status token domains",
+    "Reject task-specific GitHub workflow names",
+)
+
+
+def test_selector_fast_policy_is_single_owner_before_selection_outputs():
+    jobs = _load_workflow()["jobs"]
+    selector = jobs["select-test-suites"]
+    steps = selector["steps"]
+    select_index = next(i for i, step in enumerate(steps) if step.get("id") == "select")
+    for name in FAST_POLICY_STEPS:
+        owners = [
+            (owner, step)
+            for owner, job in jobs.items()
+            for step in job.get("steps", [])
+            if step.get("name") == name
+        ]
+        assert len(owners) == 1
+        assert owners[0][0] == "select-test-suites"
+        step = owners[0][1]
+        assert steps.index(step) < select_index
+        assert not step.get("continue-on-error", False)
+        assert (
+            step["if"]
+            == "inputs.verification_phase != 'artifact' && inputs.verification_phase != 'recovery'"
+        )
+    assert "needs" not in jobs["preflight-policy"]
+    for owner in HEAVY_ADMISSION_OWNERS:
+        assert "preflight-policy" not in jobs[owner]["needs"]
+        assert not _admitted_job(jobs[owner], selector="failure")
+        assert _admitted_job(jobs[owner], preflight="failure")
+    assert "preflight-policy" in jobs["ci-required"]["needs"]
+
+
+def test_selector_fast_policy_executes_real_rejection_before_admission(tmp_path):
+    import shutil
+    import subprocess
+
+    steps = _load_workflow()["jobs"]["select-test-suites"]["steps"]
+    guard = next(step for step in steps if step.get("name") == FAST_POLICY_STEPS[0])
+    for path in (
+        "tools/verify_workflow_terminology.py",
+        "tests/unit/api/test_executions_temporal.py",
+        "tests/contract/test_temporal_execution_api.py",
+    ):
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / path, target)
+    clean = subprocess.run(
+        ["bash", "-c", guard["run"]], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    bad = tmp_path / "tests/unit/invalid_workflow.py"
+    bad.write_text("workflow_type = " + repr("MoonMind." + "Run") + "\n")
+    rejected = subprocess.run(
+        ["bash", "-c", guard["run"]], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert rejected.returncode != 0
+    assert "legacy-user-workflow-type" in rejected.stdout
+
+
+@pytest.mark.parametrize(
+    "phase,admitted",
+    [
+        ("", True),
+        ("full", True),
+        ("source", True),
+        ("artifact", False),
+        ("recovery", False),
+    ],
+)
+def test_selector_fast_policy_preserves_image_phase_exclusions(phase, admitted):
+    steps = _load_workflow()["jobs"]["select-test-suites"]["steps"]
+    for step in steps:
+        if step.get("name") in FAST_POLICY_STEPS:
+            assert _admitted_job(step, phase=phase) is admitted
+
+
+@pytest.mark.parametrize("preflight", ["failure", "cancelled", "skipped", ""])
+def test_late_ownership_failure_blocks_merge_after_successful_selected_work(
+    tmp_path, preflight
+):
+    selection = select_suites(
+        [".github/workflows/pytest-unit-tests.yml"], event_name="pull_request"
+    ).as_outputs()
+    selection["generated_contracts"] = "true"
+    results = {
+        name: "success" for name in _load_workflow()["jobs"]["ci-required"]["needs"]
+    }
+    results["preflight-policy"] = preflight
+    result = _run_required_gate(tmp_path, outputs=selection, results=results)
+    assert result.returncode != 0
+    assert "preflight-policy is always required but ended with result=" in result.stdout
 
 
 def test_pull_request_triggers_cover_candidates_without_duplicate_runs():
