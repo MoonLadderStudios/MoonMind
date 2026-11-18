@@ -34,7 +34,7 @@ def test_atlassian_nested_jira_flags_and_timeout_controls(monkeypatch: pytest.Mo
 
     settings = AtlassianSettings(_env_file=None)
 
-    assert settings.confluence.confluence_enabled is True
+    assert "confluence" not in settings.model_dump()
     assert settings.jira.jira_enabled is True
     assert settings.jira.jira_tool_enabled is True
     assert settings.jira.jira_require_explicit_transition_lookup is False

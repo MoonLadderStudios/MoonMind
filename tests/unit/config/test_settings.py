@@ -21,17 +21,16 @@ def app_settings_defaults():
     return {
         "google": GoogleSettings(
             google_chat_model="test-google-chat",
-            google_api_key="test_google_key",  # Required for is_provider_enabled
+            google_api_key="test_google_key",
         ),
         "openai": OpenAISettings(
             openai_chat_model="test-openai-chat",
-            openai_api_key="test_openai_key",  # Required for is_provider_enabled
+            openai_api_key="test_openai_key",
         ),
         # Ensure other required fields for AppSettings have defaults if not provided
         "default_chat_provider": "google",  # Default to google for fixture
         "github": {"github_enabled": False},
         "atlassian": {
-            "confluence": {"confluence_enabled": False},
             "jira": {"jira_enabled": False},
         },
     }
@@ -242,10 +241,6 @@ class TestWorkflowSettings:
         """Milestone 2 artifact settings should keep stable defaults."""
 
         assert (
-            WorkflowSettings.model_fields["agent_job_artifact_root"].default
-            == "var/artifacts/agent_jobs"
-        )
-        assert (
             WorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
             == 50 * 1024 * 1024
         )
@@ -298,7 +293,7 @@ class TestWorkflowSettings:
         monkeypatch.setenv("AGENT_JOB_ARTIFACT_MAX_BYTES", "2048")
         settings = WorkflowSettings(_env_file=None)
 
-        assert settings.agent_job_artifact_root == "/tmp/queue-artifacts"
+        assert "agent_job_artifact_root" not in settings.model_dump()
         assert settings.agent_job_artifact_max_bytes == 2048
 
         monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
