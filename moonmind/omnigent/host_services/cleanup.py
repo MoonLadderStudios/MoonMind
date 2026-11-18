@@ -76,6 +76,50 @@ class DockerOmnigentHostCleanupService:
             "hostLogsTailLines": _HOST_LOG_TAIL_LINES,
         }
 
+    async def _remove_unstarted_volume_users(self, volume_ref: str) -> None:
+        """Remove never-started containers that still mount a lease volume.
+
+        A ``docker run --rm`` writer killed by its timeout between create and
+        start (for example during a host disk stall) stays Created forever:
+        ``--rm`` acts only after a container exits. It carries no lease label,
+        yet Docker refuses ``volume rm`` while it exists, so every cleanup
+        attempt would defer and the lease would hold host capacity
+        indefinitely. A never-started container runs no process, so removing
+        it releases nothing live; plain ``docker rm`` refuses one that started
+        in the meantime, which defers cleanup instead.
+        """
+
+        code, out, _err = await self._backend.run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                f"volume={volume_ref}",
+                "--filter",
+                "status=created",
+            ],
+            check=False,
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                "host volume user inspection is deferred",
+                code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+            )
+        containers = out.split()
+        if not containers:
+            return
+        code, _out, _err = await self._backend.run(
+            ["docker", "rm", *containers], check=False
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                "host volume user cleanup is deferred",
+                code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+            )
+
     async def cleanup(
         self,
         *,
@@ -134,6 +178,7 @@ class DockerOmnigentHostCleanupService:
                     "stale owner cannot clean newer Omnigent host state",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
+            await self._remove_unstarted_volume_users(state_volume_ref)
             code, _out, _err = await self._backend.run(
                 ["docker", "volume", "rm", state_volume_ref], check=False
             )
@@ -165,6 +210,7 @@ class DockerOmnigentHostCleanupService:
                         "stale owner cannot clean newer Omnigent host control state",
                         code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                     )
+                await self._remove_unstarted_volume_users(control_volume_ref)
                 code, _out, _err = await self._backend.run(
                     ["docker", "volume", "rm", control_volume_ref], check=False
                 )
