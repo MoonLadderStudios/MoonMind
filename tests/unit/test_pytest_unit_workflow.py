@@ -1947,3 +1947,17 @@ def test_preflight_wait_keeps_existing_supersession_groups_isolated():
     assert triggers["merge_group"]["types"] == ["checks_requested"]
     # Draft pushes are real candidates; no ready-only or draft-only admission.
     assert triggers["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
+
+
+
+def test_pull_request_triggers_cover_candidates_without_duplicate_runs():
+    types = _workflow_triggers(_load_workflow())["pull_request"]["types"]
+    # No job reads the draft flag, so a draft push already gets the full
+    # candidate result; ready_for_review would only cancel and repeat it.
+    assert "pull_request.draft" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "ready_for_review" not in types
+    # `edited` also fires for title/body edits, whose skipped jobs would replace
+    # the head's real ci-required result. A base retarget reruns through the
+    # next push or a reopen, which select against the new base.
+    assert "edited" not in types
+    assert {"synchronize", "reopened"} <= set(types)
