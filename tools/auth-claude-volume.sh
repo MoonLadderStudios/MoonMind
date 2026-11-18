@@ -147,7 +147,6 @@ cmd_login() {
     --mount "type=volume,source=${VOLUME_NAME},target=${CLAUDE_HOME}" \
     --entrypoint /bin/bash \
     -e HOME=/home/app \
-    -e MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth \
     -e ANTHROPIC_API_KEY= \
     -e CLAUDE_API_KEY= \
     -e TERM="${CLAUDE_TERM}" \

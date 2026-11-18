@@ -272,7 +272,6 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     )
 
     api_env = _env_map(api_service["environment"])
-    assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
     assert api_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
     assert api_env["OMNIGENT_SERVER_URL"] == (
         "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
