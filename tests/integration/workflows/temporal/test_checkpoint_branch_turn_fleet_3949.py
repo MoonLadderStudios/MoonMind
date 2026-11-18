@@ -381,6 +381,33 @@ async def _run_fleet3949(
                         assert state["phase"] == "running", state
                     await handle.cancel()
                     if cancel_at_activity_entry:
+                        # cancel() acknowledges the request, not the workflow's
+                        # activity-cancel command. Keep the real activity held
+                        # until that command is durable: completing it earlier
+                        # races the test server into ACTIVITY_UNKNOWN.
+                        for _attempt in range(100):
+                            cancel_history = await handle.fetch_history()
+                            running_event_ids = {
+                                event.event_id
+                                for event in cancel_history.events
+                                if event.HasField(
+                                    "activity_task_scheduled_event_attributes"
+                                )
+                                and event.activity_task_scheduled_event_attributes.activity_type.name
+                                == "checkpoint_branch.turn.mark_running"
+                            }
+                            if any(
+                                event.HasField(
+                                    "activity_task_cancel_requested_event_attributes"
+                                )
+                                and event.activity_task_cancel_requested_event_attributes.scheduled_event_id
+                                in running_event_ids
+                                for event in cancel_history.events
+                            ):
+                                break
+                            await asyncio.sleep(0.1)
+                        else:
+                            pytest.fail("activity cancellation was not recorded")
                         assert FLEET3949_RELEASE_MARK_RUNNING is not None
                         FLEET3949_RELEASE_MARK_RUNNING.set()
                     with pytest.raises(WorkflowFailureError):
