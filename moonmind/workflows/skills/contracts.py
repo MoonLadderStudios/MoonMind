@@ -1,9 +1,7 @@
-"""Typed contracts for skills-first stage execution."""
+"""Compatibility aliases for skill and tool plan contracts."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
 
 from .tool_plan_contracts import (
     ARTIFACT_REF_PREFIX,
@@ -43,43 +41,6 @@ SkillResult = ToolResult
 parse_skill_definition = parse_tool_definition
 parse_skill_invocation = parse_step
 
-@dataclass(frozen=True, slots=True)
-class StageExecutionDecision:
-    """Resolved execution policy for one workflow stage."""
-
-    stage_name: str
-    selected_skill: str
-    adapter_id: str | None
-    use_skills: bool
-    execution_path: str
-    fallback_enabled: bool
-    shadow_mode: bool
-
-@dataclass(frozen=True, slots=True)
-class StageExecutionOutcome:
-    """Execution result metadata for a workflow stage."""
-
-    stage_name: str
-    selected_skill: str
-    adapter_id: str | None
-    execution_path: str
-    used_fallback: bool
-    used_skills: bool
-    shadow_mode_requested: bool
-    result: Any
-
-    def to_payload(self) -> dict[str, Any]:
-        """Return a serializable payload fragment for logs/task payloads."""
-
-        return {
-            "selectedSkill": self.selected_skill,
-            "adapterId": self.adapter_id,
-            "executionPath": self.execution_path,
-            "usedSkills": self.used_skills,
-            "usedFallback": self.used_fallback,
-            "shadowModeRequested": self.shadow_mode_requested,
-        }
-
 __all__ = [
     "ARTIFACT_REF_PREFIX",
     "ArtifactRef",
@@ -100,8 +61,6 @@ __all__ = [
     "SkillPolicyTimeouts",
     "SkillResult",
     "SkillSurfaceContract",
-    "StageExecutionDecision",
-    "StageExecutionOutcome",
     "SUPPORTED_FAILURE_MODES",
     "SUPPORTED_PLAN_VERSIONS",
     "ToolPolicies",

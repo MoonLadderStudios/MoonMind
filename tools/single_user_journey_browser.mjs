@@ -112,9 +112,9 @@ try {
       }
       const catalog = await catalogResponse.json();
       const descriptors = Object.values(catalog.categories || {}).flat();
-      const canary = descriptors.find((item) => item.key === "skills.canary_percent");
-      if (!canary) throw new Error("Advanced settings catalog is missing Skills Canary Percent");
-      await page.getByText(canary.title, { exact: true }).first().waitFor({ state: "visible" });
+      const skillPolicy = descriptors.find((item) => item.key === "skills.policy_mode");
+      if (!skillPolicy) throw new Error("Advanced settings catalog is missing Skill Policy Mode");
+      await page.getByText(skillPolicy.title, { exact: true }).first().waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Reset dashboard preferences", exact: true }).waitFor({ state: "visible" });
       if (await page.getByLabel("Settings scope", { exact: true }).count()) {
         throw new Error("Advanced settings still has a human-scope selector");

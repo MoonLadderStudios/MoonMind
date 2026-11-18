@@ -25,7 +25,7 @@ from tests.helpers.account_source import User, create_source_schema
 TOKEN = "integrations.github.token_ref"
 PROFILE = "workflow.default_provider_profile_ref"
 PUBLISH = "workflow.default_publish_mode"
-CANARY = "skills.canary_percent"
+OPERATION = "workflow.operation_mode"
 POLICY = "skills.policy_mode"
 
 pytestmark = pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_conversion_preserves_effective_values_nulls_refs_and_inheritance(
                 _workspace(PUBLISH, "branch"),
                 _personal(operator, PUBLISH, None),
                 # A workspace-only choice becomes the instance value.
-                _workspace(CANARY, 25, value_version=3),
+                _workspace(OPERATION, "normal", value_version=3),
             ]
         )
         await session.commit()
@@ -96,7 +96,7 @@ async def test_conversion_preserves_effective_values_nulls_refs_and_inheritance(
             "resolved_collisions": 0,
         }
         rows = {row.key: row for row in await _rows(session)}
-        assert set(rows) == {TOKEN, PUBLISH, CANARY}
+        assert set(rows) == {TOKEN, PUBLISH, OPERATION}
         assert all(
             (row.scope, row.workspace_id, row.user_id) == (None, None, None)
             for row in rows.values()
@@ -105,7 +105,7 @@ async def test_conversion_preserves_effective_values_nulls_refs_and_inheritance(
         # Merged rows advance past every pre-conversion version.
         assert rows[TOKEN].value_version == 5
         assert rows[PUBLISH].value_json is None
-        assert (rows[CANARY].value_json, rows[CANARY].value_version) == (25, 3)
+        assert (rows[OPERATION].value_json, rows[OPERATION].value_version) == ("normal", 3)
 
         service = SettingsCatalogService(env={}, session=session)
         token = await service.effective_value_async(TOKEN)
@@ -193,7 +193,7 @@ async def test_interrupted_conversion_leaves_retained_rows_and_retry_converges(
     async with factory() as session:
         operator = await _user(session)
         session.add_all(
-            [_workspace(CANARY, 40), _personal(operator, TOKEN, "env://OPERATOR")]
+            [_workspace(OPERATION, "read_only"), _personal(operator, TOKEN, "env://OPERATOR")]
         )
         await session.commit()
 
@@ -207,7 +207,7 @@ async def test_interrupted_conversion_leaves_retained_rows_and_retry_converges(
 
         assert [(row.scope, row.value_json) for row in await _rows(session)] == [
             ("user", "env://OPERATOR"),
-            ("workspace", 40),
+            ("workspace", "read_only"),
         ]
         assert (await session.execute(select(SettingsAuditEvent))).first() is None
 
@@ -215,7 +215,7 @@ async def test_interrupted_conversion_leaves_retained_rows_and_retry_converges(
         assert retried.published is True
         assert [(row.scope, row.value_json) for row in await _rows(session)] == [
             (None, "env://OPERATOR"),
-            (None, 40),
+            (None, "read_only"),
         ]
 
 
@@ -280,7 +280,7 @@ async def test_audit_actor_is_preserved_provenance_not_a_settings_owner(
     async with factory() as session:
         audit = SettingsAuditEvent(
             event_type=event_type,
-            key=CANARY,
+            key=OPERATION,
             scope="workspace",
             workspace_id=uuid.uuid4(),
             actor_user_id=uuid.uuid4(),
@@ -289,7 +289,7 @@ async def test_audit_actor_is_preserved_provenance_not_a_settings_owner(
             redacted=True,
         )
         session.add(audit)
-        session.add(SettingsOverride(key=CANARY, value_json=25))
+        session.add(SettingsOverride(key=OPERATION, value_json="normal"))
         await session.commit()
         table = SettingsAuditEvent.__table__
         before = dict((await session.execute(select(table))).mappings().one())
@@ -306,7 +306,7 @@ async def test_audit_actor_is_preserved_provenance_not_a_settings_owner(
             assert result.decision.principal_count == 0
         assert dict((await session.execute(select(table))).mappings().one()) == before
         [retained] = await _rows(session)
-        assert (retained.scope, retained.value_json) == (None, 25)
+        assert (retained.scope, retained.value_json) == (None, "normal")
 
 
 async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
@@ -318,8 +318,8 @@ async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
                 _personal(operator, PUBLISH, "branch"),
                 _personal(operator, POLICY, "allowlist"),
                 # An unrelated collision keeps the conversion refused.
-                _workspace(CANARY, 25),
-                _workspace(CANARY, 40),
+                _workspace(OPERATION, "normal"),
+                _workspace(OPERATION, "read_only"),
             ]
         )
         await session.commit()
@@ -338,7 +338,7 @@ async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
         # Resolving only the unrelated key must not publish the stale personal
         # value over the operator's confirmed writes.
         still_refused = await suc.run_guarded_upgrade(
-            session, operator_authorized=True, collision_resolutions={CANARY: 40}
+            session, operator_authorized=True, collision_resolutions={OPERATION: "read_only"}
         )
         assert still_refused.published is False
         assert still_refused.decision.reason_code == "settings_collision"
@@ -359,7 +359,7 @@ async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
             session,
             operator_authorized=True,
             collision_resolutions={
-                CANARY: 40,
+                OPERATION: "read_only",
                 TOKEN: "env://OPERATOR_NEW",
                 POLICY: "allowlist",
             },
@@ -370,7 +370,7 @@ async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
             TOKEN: (None, "env://OPERATOR_NEW"),
             PUBLISH: (None, "branch"),
             POLICY: (None, "allowlist"),
-            CANARY: (None, 40),
+            OPERATION: (None, "read_only"),
         }
         converted = {
             event.key: event

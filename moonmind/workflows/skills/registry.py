@@ -1,15 +1,11 @@
-"""Policy resolution for workflow stage execution and registry compatibility."""
+"""Registry compatibility wrappers for skill-named callers."""
 
 from __future__ import annotations
 
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 
-from moonmind.config.settings import settings
-
 from .artifact_store import ArtifactStore
-from .contracts import StageExecutionDecision
 from .tool_registry import ToolRegistryError, ToolRegistrySnapshot
 from .tool_registry import create_registry_snapshot as create_contract_registry_snapshot
 from .tool_registry import (
@@ -21,81 +17,6 @@ from .tool_registry import validate_tool_registry as validate_contract_tool_regi
 
 SkillRegistryError = ToolRegistryError
 SkillRegistrySnapshot = ToolRegistrySnapshot
-
-def _stable_percent(run_id: str, stage_name: str) -> int:
-    seed = f"{run_id}:{stage_name}".encode("utf-8")
-    digest = sha256(seed).hexdigest()
-    return int(digest[:8], 16) % 100
-
-def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
-    override = context.get("skill_overrides")
-    if isinstance(override, Mapping):
-        raw = override.get(stage_name)
-        if isinstance(raw, str) and raw.strip():
-            return raw.strip()
-
-    cfg = settings.workflow
-    stage_map = {
-        "discover_next_phase": cfg.discover_skill,
-        "submit_codex_job": cfg.submit_skill,
-        "apply_and_publish": cfg.publish_skill,
-    }
-    selected = stage_map.get(stage_name)
-    if selected:
-        return selected
-    return cfg.default_skill
-
-def _skill_allowed(skill_name: str) -> bool:
-    cfg = settings.workflow
-    if cfg.skill_policy_mode != "allowlist":
-        return True
-    allowed = cfg.allowed_skills
-    if not allowed:
-        return True
-    return skill_name in allowed
-
-def resolve_stage_execution(
-    *,
-    stage_name: str,
-    run_id: str,
-    context: Mapping[str, Any],
-) -> StageExecutionDecision:
-    """Resolve whether a stage should run through the skill path or direct mode."""
-
-    cfg = settings.workflow
-    selected_skill = _select_stage_skill(stage_name, context)
-    if not _skill_allowed(selected_skill):
-        selected_skill = cfg.default_skill
-
-    canary_bucket = _stable_percent(run_id, stage_name)
-    canary_enabled = canary_bucket < cfg.skills_canary_percent
-    use_skills = bool(cfg.skills_enabled and canary_enabled)
-    execution_path = "skill" if use_skills else "direct_only"
-
-    return StageExecutionDecision(
-        stage_name=stage_name,
-        selected_skill=selected_skill,
-        adapter_id=None,
-        use_skills=use_skills,
-        execution_path=execution_path,
-        fallback_enabled=bool(cfg.skills_fallback_enabled),
-        shadow_mode=bool(cfg.skills_shadow_mode),
-    )
-
-def configured_stage_skills() -> tuple[str, ...]:
-    """Return configured stage skills in deterministic order."""
-
-    cfg = settings.workflow
-    raw_values = (
-        cfg.default_skill,
-        cfg.discover_skill,
-        cfg.submit_skill,
-        cfg.publish_skill,
-    )
-    values = [str(value).strip() for value in raw_values if str(value or "").strip()]
-    if not values:
-        return ()
-    return tuple(dict.fromkeys(values))
 
 def load_tool_registry(path: Path) -> tuple[Any, ...]:
     """Load tool definitions from a YAML/JSON registry file."""
@@ -155,14 +76,12 @@ __all__ = [
     "ToolRegistrySnapshot",
     "SkillRegistryError",
     "SkillRegistrySnapshot",
-    "configured_stage_skills",
     "create_registry_snapshot",
     "load_registry_snapshot_from_artifact",
     "load_skill_registry",
     "load_tool_registry",
     "parse_skill_registry",
     "parse_tool_registry",
-    "resolve_stage_execution",
     "validate_skill_registry",
     "validate_tool_registry",
 ]
