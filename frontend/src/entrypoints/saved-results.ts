@@ -376,7 +376,6 @@ export interface SavedWorkPublicationResult {
   workflowId: string;
   runId: string;
   publicationIdempotencyKey: string;
-  rolloutGeneration?: string;
 }
 
 function branchSlug(value: string): string {
@@ -527,15 +526,13 @@ export interface SavedWorkPublicationAvailability {
   /** The server's disabled reason; null when available or not reported. */
   reason: string | null;
   allowedModes: SavedWorkObjective[];
-  /** Set when a rollout canary admits only these destination repositories. */
-  canaryRepositories: string[];
 }
 
 export function savedWorkPublicationAvailability(
   execution: SavedResultExecutionLike,
 ): SavedWorkPublicationAvailability {
   // Availability is the execution's server action projection, which applies
-  // the same submission gate and rollout admission as the publication route.
+  // the same submission gate and policy admission as the publication route.
   // An unreported capability is unavailable, never assumed.
   const actions = record(execution.actions);
   if (actions.canPublishSavedWork !== true) {
@@ -543,28 +540,21 @@ export function savedWorkPublicationAvailability(
       available: false,
       reason: text(record(actions.disabledReasons).canPublishSavedWork) || null,
       allowedModes: [],
-      canaryRepositories: [],
     };
   }
   const limits = record(record(actions.actionEvidence).publishSavedWork);
   const allowedModes = Array.isArray(limits.allowedModes)
     ? SAVED_WORK_OBJECTIVES.filter((mode) => (limits.allowedModes as unknown[]).includes(mode))
     : [...SAVED_WORK_OBJECTIVES];
-  const canaryRepositories = Array.isArray(limits.canaryRepositories)
-    ? limits.canaryRepositories.map(text).filter(Boolean)
-    : [];
-  return { available: true, reason: null, allowedModes, canaryRepositories };
+  return { available: true, reason: null, allowedModes };
 }
 
 const PUBLICATION_UNAVAILABLE_MESSAGES: Record<string, string> = {
   publication_recovery_disabled:
-    "Publishing saved work is turned off by this deployment's publication rollout policy.",
-  publication_recovery_shadow_only:
-    'The publication rollout is in shadow mode, so saved work cannot be published yet.',
-  publication_mode_not_allowed: 'The publication rollout policy allows no publication mode.',
-  publication_recovery_not_in_canary: 'The publication rollout canary does not include this operator.',
+    "Publishing saved work is turned off by this deployment's publication policy.",
+  publication_mode_not_allowed: "This deployment's publication policy allows no publication mode.",
   publication_recovery_policy_invalid:
-    'The publication rollout setting is invalid, so saved work cannot be published.',
+    'The publication mode setting is invalid, so saved work cannot be published.',
   temporal_submit_disabled: 'Workflow submission is disabled on this deployment.',
   historical_workflow_type: 'Retired workflow history is read-only.',
 };

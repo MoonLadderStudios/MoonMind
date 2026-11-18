@@ -222,7 +222,13 @@ class ResilienceOutboundScanPolicy(BaseModel):
 
 
 class ResilienceObservabilityPolicy(BaseModel):
-    """Observability surfaces enabled for the run."""
+    """Observability surfaces enabled for the run.
+
+    Both values are fixed now: the Live Logs session timeline was removed and
+    structured history always loads. The section stays so retained envelopes
+    validate and policy digests do not change; a new envelope schema version
+    may drop it.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

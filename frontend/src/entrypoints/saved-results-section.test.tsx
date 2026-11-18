@@ -133,7 +133,6 @@ const publication = {
   workflowId: 'mm:publication:abc',
   runId: 'publication-run',
   publicationIdempotencyKey: 'saved-publication:abc',
-  rolloutGeneration: 'g1',
 };
 
 let fetchSpy: MockInstance;
@@ -643,7 +642,7 @@ describe('Saved Results section', () => {
     // The server's reason is shown, distinct from the save's own state.
     const note = screen.getByRole('note');
     expect(note.textContent).toMatch(/Publish saved work is unavailable/);
-    expect(note.textContent).toMatch(/publication rollout policy/);
+    expect(note.textContent).toMatch(/turned off by this deployment's publication policy/);
     const text = (label: string) =>
       screen.getByText(new RegExp(`^${label}:`), { selector: 'strong' }).closest('.card')
         ?.textContent;
@@ -651,7 +650,7 @@ describe('Saved Results section', () => {
     expect(text('Compute')).toMatch(/Compute:\s*failed/i);
     const publish = screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
-    expect(publish.title).toMatch(/publication rollout policy/);
+    expect(publish.title).toMatch(/publication policy/);
     fireEvent.click(publish);
     expect(screen.queryByRole('form', { name: 'Publish saved work' })).toBeNull();
     expect(calls('/retry-publication')).toHaveLength(0);
@@ -687,7 +686,7 @@ describe('Saved Results section', () => {
         {
           detail: {
             code: 'publication_retry_not_admitted',
-            message: 'Publication is not admitted by current rollout policy.',
+            message: 'Publication is not admitted by the publication policy.',
             reason: 'publication_recovery_disabled',
           },
         },
@@ -696,7 +695,7 @@ describe('Saved Results section', () => {
     const view = renderSection();
     fireEvent.submit(await openPublishForm());
     expect(
-      await screen.findByText('Publication is not admitted by current rollout policy.'),
+      await screen.findByText('Publication is not admitted by the publication policy.'),
     ).toBeTruthy();
     expect(screen.queryByText(/Publication started/)).toBeNull();
     expect(view.onRefresh).toHaveBeenCalled();
@@ -709,7 +708,7 @@ describe('Saved Results section', () => {
         actions: {
           ...failedExecution.actions,
           actionEvidence: {
-            publishSavedWork: { allowedModes: ['branch'], canaryRepositories: ['Owner/Repo'] },
+            publishSavedWork: { allowedModes: ['branch'] },
           },
         },
       },
@@ -718,7 +717,8 @@ describe('Saved Results section', () => {
     const mode = within(form).getByLabelText('Publish as') as HTMLSelectElement;
     expect(Array.from(mode.options).map((option) => option.value)).toEqual(['branch']);
     expect(mode.value).toBe('branch');
-    expect(within(form).getByText(/rollout currently admits only Owner\/Repo/)).toBeTruthy();
+    // Destinations are limited by mode only; no repository cohort is shown.
+    expect(within(form).queryByText(/admits only/)).toBeNull();
   });
 
   it('follows the returned publication operation to its persisted outcome', async () => {

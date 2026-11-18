@@ -650,12 +650,6 @@ export function SavedResultsSection({
                   onChange={(event) => updateDraft({ repository: event.target.value })}
                 />
               </label>
-              {publication.canaryRepositories.length > 0 ? (
-                <p className="small">
-                  The publication rollout currently admits only{' '}
-                  {publication.canaryRepositories.join(', ')}.
-                </p>
-              ) : null}
               <label className="field">
                 <span className="small">Publish as</span>
                 <select

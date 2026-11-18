@@ -103,7 +103,7 @@ The status badge stays visible and uses the shared [workflow status vocabulary](
 
 ## Primary action bar
 
-Up to two of the state's main actions appear as buttons beside the **Workflow actions** menu, chosen in this order: Approve, Resume, Retry from failed step, Continue remediation, Retry publication, Rerun, Pause, Cancel. They also stay in the menu, keep the menu's confirmations, and wrap with the header on small screens. Rename, Edit, Remediate, and troubleshooting actions stay in the menu.
+Up to two of the state's main actions appear as buttons beside the **Workflow actions** menu, chosen in this order: Approve, Resume, Retry from failed step, Retry publication, Rerun, Pause, Cancel. They also stay in the menu, keep the menu's confirmations, and wrap with the header on small screens. Rename, Edit, Remediate, and troubleshooting actions stay in the menu.
 
 Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Retry from failed step** on failed Workflows.
 
@@ -443,7 +443,7 @@ The Artifacts tab shows a Saved Results section for the selected run. It reads o
 
 Actions:
 
-- **Publish saved work** opens a destination form prefilled from the workflow's repository, starting branch, and publish mode. Repository, publish mode, and head branch come first; the base branch and how saved work is applied appear when you ask for them or when the destination needs them. Submitting publishes the saved work without another model run, shows the returned publication workflow and operation, and follows that run until it finishes. The button is available only when the server reports that saved-work publication is allowed. The publication rollout setting is off by default; in that case, the section says why, and Preview, Download, and Continue working still work.
+- **Publish saved work** opens a destination form prefilled from the workflow's repository, starting branch, and publish mode. Repository, publish mode, and head branch come first; the base branch and how saved work is applied appear when you ask for them or when the destination needs them. Submitting publishes the saved work without another model run, shows the returned publication workflow and operation, and follows that run until it finishes. The button is available only when the server reports that saved-work publication is allowed. Publication is on by default; when a deployment turns it off or admits no publish mode, the section says why, and Preview, Download, and Continue working still work.
 - **Continue working** asks for new instructions and starts a fresh linked Workflow that carries the authorized saved outputs.
 
 If the server rejects an action, its message is shown. If the response is lost, the section says the request may have been accepted, and submitting the same request again reuses the same operation. The full contract is [Artifact Presentation Contract §11.6](../Artifacts/ArtifactPresentationContract.md#116-saved-result-presentation-in-workflow-detail).

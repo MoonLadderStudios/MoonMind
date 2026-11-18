@@ -11,7 +11,9 @@ An item is ``active`` while open work or an enabled schedule holds it,
 ``clean`` once nothing open can load it, and ``unknown`` when its source could
 not be read or the read exceeded its deadline. Open
 ``MoonMind.AgentSession`` children are still a supported product path, so
-they are listed for information and never decide the exit status.
+they are listed for information and never decide the exit status. The
+release registers no worker for ``MoonMind.ControlStopContinuation`` (#5340),
+so an execution of that type still open needs an old-release worker.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from moonmind.omnigent.codex_cutover_drain import run_codex_drain_procedure
 PROFILE_BOUND_REALIZER_REF = "codex-profile-bound@1"
 OPENCODE_V1_HOST_CLASS_REF = "omnigent-opencode@1"
 AGENT_SESSION_WORKFLOW_TYPE = "MoonMind.AgentSession"
+CONTROL_STOP_CONTINUATION_WORKFLOW_TYPE = "MoonMind.ControlStopContinuation"
 
 RETIRED_PATH_CATEGORIES: tuple[str, ...] = (
     "profile_bound_plans",
@@ -37,6 +40,7 @@ RETIRED_PATH_CATEGORIES: tuple[str, ...] = (
     "opencode_v1_host_class_requests",
     "agent_session_children",
     "legacy_task_queue_workflows",
+    "control_stop_continuation_workflows",
 )
 RETIRED_PATH_INFORMATIONAL: tuple[str, ...] = ("agent_session_children",)
 #: Categories read from PostgreSQL; the rest come from Temporal visibility.
@@ -398,6 +402,11 @@ async def collect_retired_path_report(
     for category, attribute, value in (
         ("agent_session_children", "WorkflowType", AGENT_SESSION_WORKFLOW_TYPE),
         ("legacy_task_queue_workflows", "TaskQueue", legacy_task_queue),
+        (
+            "control_stop_continuation_workflows",
+            "WorkflowType",
+            CONTROL_STOP_CONTINUATION_WORKFLOW_TYPE,
+        ),
     ):
         if client_error is not None:
             items, error = None, client_error
@@ -441,6 +450,7 @@ async def run_retired_path_inventory(
 
 __all__ = [
     "AGENT_SESSION_WORKFLOW_TYPE",
+    "CONTROL_STOP_CONTINUATION_WORKFLOW_TYPE",
     "OPENCODE_V1_HOST_CLASS_REF",
     "PROFILE_BOUND_REALIZER_REF",
     "RECORDED_PATH_CATEGORIES",

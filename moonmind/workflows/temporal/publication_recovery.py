@@ -392,61 +392,38 @@ def reconcile_publication_state(
     )
 
 
-class PublicationRecoveryRolloutPolicy(BaseModel):
-    """Mutable admission policy; a frozen contract remains deterministic in flight."""
+class PublicationRecoveryPolicy(BaseModel):
+    """Deployment admission policy; a frozen contract remains deterministic in flight.
+
+    Publication recovery is on or off. ``allowed_modes`` is a lasting
+    deployment policy over destination kinds (for example ``pr,draft_pr`` to
+    forbid direct branch pushes), not a rollout cohort.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     enabled: bool = True
-    shadow: bool = False
-    canary_repositories: tuple[str, ...] = Field(
-        default=(), alias="canaryRepositories"
-    )
-    canary_owner_ids: tuple[str, ...] = Field(default=(), alias="canaryOwnerIds")
     allowed_modes: tuple[Literal["pr", "draft_pr", "branch"], ...] = Field(
         default=("pr", "draft_pr", "branch"), alias="allowedModes"
     )
-    generation: str = "default"
 
-    def availability_reason(self, *, owner_id: str | None) -> str | None:
-        """Why no destination can be admitted for this owner, before one is chosen."""
+    def availability_reason(self) -> str | None:
+        """Why no destination can be admitted, before one is chosen."""
         if not self.enabled:
             return "publication_recovery_disabled"
-        if self.shadow:
-            return "publication_recovery_shadow_only"
         if not self.allowed_modes:
             return "publication_mode_not_allowed"
-        if (
-            self.canary_owner_ids
-            and not self.canary_repositories
-            and (owner_id or "") not in self.canary_owner_ids
-        ):
-            return "publication_recovery_not_in_canary"
         return None
 
-    def destination_limits(self, *, owner_id: str | None) -> dict[str, list[str]]:
-        """The modes and, under a repository canary, repositories admission accepts."""
-        limits = {"allowedModes": list(self.allowed_modes)}
-        if self.canary_repositories and (owner_id or "") not in self.canary_owner_ids:
-            limits["canaryRepositories"] = list(self.canary_repositories)
-        return limits
+    def destination_limits(self) -> dict[str, list[str]]:
+        """The destination modes admission accepts."""
+        return {"allowedModes": list(self.allowed_modes)}
 
-    def admission_reason(
-        self, *, repository: str, owner_id: str | None, mode: str
-    ) -> str | None:
+    def admission_reason(self, *, mode: str) -> str | None:
         if not self.enabled:
             return "publication_recovery_disabled"
-        if self.shadow:
-            return "publication_recovery_shadow_only"
         if mode not in self.allowed_modes:
             return "publication_mode_not_allowed"
-        if self.canary_repositories or self.canary_owner_ids:
-            if (
-                repository.lower()
-                not in {item.lower() for item in self.canary_repositories}
-                and (owner_id or "") not in self.canary_owner_ids
-            ):
-                return "publication_recovery_not_in_canary"
         return None
 
 
@@ -1022,7 +999,7 @@ __all__ = [
     "PublicationRecoveryContract",
     "PublicationRecoveryError",
     "PublicationRecoveryEvidence",
-    "PublicationRecoveryRolloutPolicy",
+    "PublicationRecoveryPolicy",
     "PublicationRecoveryTarget",
     "PublicationReconciliationDecision",
     "publication_action_eligibility",

@@ -19,7 +19,7 @@ Workflow Remediation starts an ordinary MoonMind workflow about one **target** r
 | The failure needs diagnosis, a code or instruction fix, or a MoonMind change | **Remediate** |
 | The task itself should change | **Edit** and rerun |
 
-A remediation can recommend retrying the failed step after its fix lands. **Continue remediation** is different: it resumes an admitted verifier repair loop with saved remaining work. It is unavailable when the target has no such admitted stopping point.
+A remediation can recommend retrying the failed step after its fix lands.
 
 ## 3. Architecture
 

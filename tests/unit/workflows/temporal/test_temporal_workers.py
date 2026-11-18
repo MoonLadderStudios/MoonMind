@@ -128,14 +128,14 @@ def test_workflow_worker_startup_rejects_unroutable_activity_handler(
         build_worker_topology(fleet=WORKFLOW_FLEET)
 
 
-def test_registered_workflow_types_exclude_retired_manifest_ingest():
-    # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
-    # removed; the new release never registers that type.
+def test_registered_workflow_types_exclude_retired_types():
+    # MoonLadderStudios/MoonMind#4192 and #5340: the ManifestIngest product and
+    # the control-stop continuation are removed; the release never registers them.
     assert "MoonMind.ManifestIngest" not in list_registered_workflow_types()
+    assert "MoonMind.ControlStopContinuation" not in list_registered_workflow_types()
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
         "MoonMind.ContainerJob",
-        "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",

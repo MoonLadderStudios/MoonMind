@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from moonmind.security.outbound_scan import (
     OutboundBundleItem,
     scan_outbound_bundle,
     scan_outbound_text,
-)
-from moonmind.workflows.executions.control_stop_continuation import (
-    ControlStopContinuationContract,
-)
-from tests.unit.workflows.executions.test_control_stop_continuation import (
-    _payload as control_stop_payload,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
@@ -104,14 +97,3 @@ def test_disabled_mode_preserves_exact_outbound_payloads() -> None:
         == raw_text
     )
 
-
-def test_control_stop_contract_blocks_secret_before_admission() -> None:
-    payload = control_stop_payload()
-    payload["remainingWorkRef"] = "artifact://" + "github_" + "pat_" + ("1" * 30)
-    admitted: list[str] = []
-
-    with pytest.raises(ValidationError, match="secret scanning"):
-        ControlStopContinuationContract.model_validate(payload)
-        admitted.append("started")
-
-    assert admitted == []

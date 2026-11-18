@@ -531,6 +531,58 @@ _ARTIFACT_ALIAS_GUIDANCE = (
     "back to its default. Rename it in the deployment's .env."
 )
 
+_PUBLICATION_RECOVERY_COHORT_GUIDANCE = (
+    "Publication recovery has no shadow mode, canary cohort, or generation; "
+    "PUBLICATION_RECOVERY_ENABLED turns it on or off and "
+    "PUBLICATION_RECOVERY_ALLOWED_MODES limits destination modes."
+)
+_CONTROL_STOP_CONTINUATION_GUIDANCE = (
+    "Control-stop continuation was removed; it never had a production " "producer."
+)
+# Rollout controls a single-operator product does not have. Rejecting a kept
+# non-default value stops it from changing behavior silently: a shadow or
+# canary setting would otherwise turn into live publication. The previous
+# default selects what omitting the variable now selects.
+_RETIRED_ROLLOUT_CONTROLS: tuple[tuple[str, str, str], ...] = (
+    *(
+        (f"PUBLICATION_RECOVERY_{name}", default, _PUBLICATION_RECOVERY_COHORT_GUIDANCE)
+        for name, default in (
+            ("SHADOW", "false"),
+            ("CANARY_REPOSITORIES", ""),
+            ("CANARY_OWNER_IDS", ""),
+            ("GENERATION", "default"),
+        )
+    ),
+    *(
+        (
+            f"CONTROL_STOP_CONTINUATION_{name}",
+            default,
+            _CONTROL_STOP_CONTINUATION_GUIDANCE,
+        )
+        for name, default in (
+            ("ENABLED", "false"),
+            ("SHADOW", "false"),
+            ("CANARY_OWNER_IDS", ""),
+            ("ALLOWED_PROVIDER_PROFILE_IDS", ""),
+            ("ALLOWED_EXECUTION_PROFILE_REFS", ""),
+            ("ALLOWED_LAUNCH_POLICY_REFS", ""),
+            ("GENERATION", "disabled"),
+        )
+    ),
+    (
+        "LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+        "off",
+        "The Live Logs session timeline was removed; Live Logs shows the line "
+        "viewer for every run.",
+    ),
+    (
+        "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+        "true",
+        "Live Logs always loads structured history and falls back to the "
+        "merged log only when history is unavailable.",
+    ),
+)
+
 # Every obsolete configuration identity: the API and every worker warn about it
 # during its deprecation window and fail startup once it is removed. The Pi
 # alias is not deprecated yet: it remains a supported way to pin a prior image.
@@ -620,6 +672,18 @@ OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
             "No provider replaces them."
         ),
         shippedDefault="off",
+    ),
+    *(
+        ObsoleteConfiguration(
+            variable=f"{prefix}{variable}",
+            removalCondition=_REJECTED_FOR_ONE_RELEASE,
+            deprecated=True,
+            removed=True,
+            guidance=guidance,
+            shippedDefault=previous_default,
+        )
+        for variable, previous_default, guidance in _RETIRED_ROLLOUT_CONTROLS
+        for prefix in ("", "FEATURE_FLAGS__")
     ),
 )
 

@@ -517,3 +517,38 @@ def test_obsolete_configuration_cannot_skip_its_deprecation_window() -> None:
             replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
             removed=True,
         )
+
+
+# #5340: retired rollout controls and their previous defaults.
+RETIRED_ROLLOUT_CONTROLS = {
+    "PUBLICATION_RECOVERY_SHADOW": "false",
+    "PUBLICATION_RECOVERY_CANARY_REPOSITORIES": "",
+    "PUBLICATION_RECOVERY_CANARY_OWNER_IDS": "",
+    "PUBLICATION_RECOVERY_GENERATION": "default",
+    "CONTROL_STOP_CONTINUATION_ENABLED": "false",
+    "CONTROL_STOP_CONTINUATION_SHADOW": "false",
+    "CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS": "",
+    "CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS": "",
+    "CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS": "",
+    "CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS": "",
+    "CONTROL_STOP_CONTINUATION_GENERATION": "disabled",
+    "LIVE_LOGS_SESSION_TIMELINE_ROLLOUT": "off",
+    "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED": "true",
+}
+
+
+@pytest.mark.parametrize("prefix", ("", "FEATURE_FLAGS__"))
+@pytest.mark.parametrize(
+    ("variable", "previous_default"), sorted(RETIRED_ROLLOUT_CONTROLS.items())
+)
+def test_a_retired_rollout_control_fails_startup_unless_it_keeps_its_default(
+    prefix: str, variable: str, previous_default: str
+) -> None:
+    """A kept non-default value would otherwise change behavior silently, as
+    PUBLICATION_RECOVERY_SHADOW=true would turn into live publication."""
+
+    name = f"{prefix}{variable}"
+    with pytest.raises(ObsoleteConfigurationError, match=f"{name} is obsolete"):
+        assert_obsolete_configuration({name: "deployment-value"})
+    # The previous default selects what omitting the variable now selects.
+    assert assert_obsolete_configuration({name: previous_default}) == ()

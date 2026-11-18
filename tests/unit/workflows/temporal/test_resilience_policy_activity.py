@@ -83,6 +83,11 @@ async def test_compile_policy_returns_versioned_envelope() -> None:
         "costAttribution",
     ):
         assert section in out
+    # The timeline was removed and structured history always loads (#5340).
+    assert out["observability"] == {
+        "liveLogsTimelineEnabled": False,
+        "structuredHistoryEnabled": True,
+    }
 
 
 async def test_compile_policy_captures_self_heal_config_from_env(monkeypatch) -> None:

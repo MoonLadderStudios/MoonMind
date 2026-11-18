@@ -8506,13 +8506,11 @@ class TemporalArtifactActivities:
                     "highSecurityMode": high_security_mode,
                     "blockOnFinding": high_security_mode,
                 },
+                # Fixed values (see ResilienceObservabilityPolicy): they match
+                # the former defaults, so policy digests stay unchanged.
                 observability={
-                    "liveLogsTimelineEnabled": bool(
-                        app_settings.feature_flags.live_logs_session_timeline_enabled
-                    ),
-                    "structuredHistoryEnabled": bool(
-                        app_settings.feature_flags.live_logs_structured_history_enabled
-                    ),
+                    "liveLogsTimelineEnabled": False,
+                    "structuredHistoryEnabled": True,
                 },
                 cost_attribution={
                     "runtimeId": model.runtime_id,

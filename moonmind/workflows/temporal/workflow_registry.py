@@ -59,11 +59,8 @@ STATIC_WORKFLOW_REGISTRATIONS = (
     # These guards do not observe deployment drainage. Outstanding histories
     # and tasks remain owned by old-release workers; see the retired lifecycle
     # upgrade procedure in docs/Temporal/WorkflowTypeCatalogAndLifecycle.md.
-    WorkflowRegistration(
-        "moonmind.workflows.temporal.workflows.control_stop_continuation",
-        "MoonMindControlStopContinuationWorkflow",
-        "operator",
-    ),
+    # The retired MoonMind.ControlStopContinuation type is unregistered the
+    # same way; `moonmind drain-inventory` lists any execution still open.
     WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.provider_profile_manager",
         "MoonMindProviderProfileManagerWorkflow",

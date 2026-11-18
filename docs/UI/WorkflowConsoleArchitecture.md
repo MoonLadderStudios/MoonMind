@@ -380,7 +380,7 @@ This section walks through one supported journey using existing Workflow Detail 
 | What happened? | **Summary** (operator summary or execution summary) and its **Outcome** reason |
 | What failed? | **Run Summary**: outcome code and stage, **Failed Step**, **Failure Category**, and the last-step message. A quality-gate stop says no failed Step Execution was fabricated. |
 | Where is the output? | Pull-request link, **Open failure diagnostics** (a canonical `artifact://<id>` ref links to its download; other refs stay visible as text), the remediation workspace head, and run artifacts on the **Evidence** tab |
-| What can I do next? | The **Workflow actions** menu offers only server-available actions, such as Edit, Rerun, or Continue remediation, with disabled reasons otherwise. |
+| What can I do next? | The **Workflow actions** menu offers only server-available actions, such as Edit, Rerun, or Retry from failed step, with disabled reasons otherwise. |
 | Was a governance report produced? | The **Governance report** block shows `ready`, `partial`, `pending`, or `failed`, with the recorded reason code and recoverability when no report was produced. Only its summary is kept, and a report failure never changes the run or publication outcome. Runs whose terminal state was committed outside the workflow terminal-recording path (for example operator cancellation) have no block; see [RunGovernanceReports](../Governance/RunGovernanceReports.md) §6. |
 
 Details and Evidence do not depend on native chat; when chat is unavailable, Execution → Session diagnostics keeps a read-only session transcript. `frontend/src/entrypoints/workflow-detail.test.tsx` covers the failed-run questions and the governance block.

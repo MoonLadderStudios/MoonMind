@@ -15,7 +15,7 @@ from moonmind.workflows.temporal.publication_recovery import (
     PublicationRecoveryContract,
     PublicationRecoveryError,
     PublicationRecoveryEvidence,
-    PublicationRecoveryRolloutPolicy,
+    PublicationRecoveryPolicy,
     publication_action_eligibility,
     publication_operation_key,
     publication_recovery_workflow_id,
@@ -462,38 +462,42 @@ def test_terminal_evidence_rejects_candidate_identity_mismatch(
         PublicationRecoveryEvidence.model_validate(payload)
 
 
-def test_rollout_supports_shadow_canary_disablement_and_inflight_freeze() -> None:
-    default = PublicationRecoveryRolloutPolicy()
-    assert default.availability_reason(owner_id=None) is None
-    assert default.admission_reason(
-        repository="org/repo", owner_id=None, mode="pr"
-    ) is None
-    disabled = PublicationRecoveryRolloutPolicy(enabled=False)
-    assert disabled.availability_reason(
-        owner_id="owner"
-    ) == "publication_recovery_disabled"
-    assert disabled.admission_reason(
-        repository="org/repo", owner_id="owner", mode="pr"
-    ) == "publication_recovery_disabled"
-    shadow = PublicationRecoveryRolloutPolicy(enabled=True, shadow=True)
-    assert shadow.admission_reason(
-        repository="org/repo", owner_id="owner", mode="pr"
-    ) == "publication_recovery_shadow_only"
-    canary = PublicationRecoveryRolloutPolicy(
-        enabled=True,
-        canaryRepositories=("org/canary",),
-        allowedModes=("pr",),
-        generation="canary-1",
+def test_policy_is_on_off_with_a_destination_mode_allowlist() -> None:
+    default = PublicationRecoveryPolicy()
+    assert default.availability_reason() is None
+    assert default.destination_limits() == {
+        "allowedModes": ["pr", "draft_pr", "branch"]
+    }
+    for mode in ("pr", "draft_pr", "branch"):
+        assert default.admission_reason(mode=mode) is None
+    disabled = PublicationRecoveryPolicy(enabled=False)
+    assert disabled.availability_reason() == "publication_recovery_disabled"
+    assert disabled.admission_reason(mode="pr") == "publication_recovery_disabled"
+    pull_requests_only = PublicationRecoveryPolicy(allowedModes=("pr", "draft_pr"))
+    assert pull_requests_only.admission_reason(mode="draft_pr") is None
+    assert (
+        pull_requests_only.admission_reason(mode="branch")
+        == "publication_mode_not_allowed"
     )
-    assert canary.admission_reason(
-        repository="org/other", owner_id=None, mode="pr"
-    ) == "publication_recovery_not_in_canary"
-    assert canary.admission_reason(
-        repository="org/canary", owner_id=None, mode="pr"
-    ) is None
-    assert canary.admission_reason(
-        repository="org/canary", owner_id=None, mode="draft_pr"
-    ) == "publication_mode_not_allowed"
+    assert (
+        PublicationRecoveryPolicy(allowedModes=()).availability_reason()
+        == "publication_mode_not_allowed"
+    )
+
+
+@pytest.mark.parametrize(
+    "retired",
+    (
+        {"shadow": True},
+        {"canaryRepositories": ("org/repo",)},
+        {"canaryOwnerIds": ("owner",)},
+        {"generation": "canary-1"},
+    ),
+)
+def test_policy_has_no_shadow_cohort_or_generation(retired: dict) -> None:
+    # #5340: a single-operator product has no rollout cohorts.
+    with pytest.raises(ValidationError):
+        PublicationRecoveryPolicy(**retired)
 
 
 def test_action_projection_requires_complete_unambiguous_contract() -> None:

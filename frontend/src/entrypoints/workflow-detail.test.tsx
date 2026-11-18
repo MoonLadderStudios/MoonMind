@@ -815,119 +815,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText(/No failed Step Execution was fabricated/)).toBeTruthy();
   });
 
-  it('submits an explicit operator-selected budget from the authorized grant', async () => {
-    window.history.pushState(
-      {},
-      'Continuation budget test',
-      '/workflows/test-123/details?source=temporal',
-    );
-    const execution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      runId: '02-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      title: 'Quality gate stopped run',
-      summary: 'Remaining work is preserved.',
-      status: 'failed',
-      state: 'failed',
-      rawState: 'failed',
-      temporalStatus: 'failed',
-      createdAt: '2026-04-09T00:00:00Z',
-      updatedAt: '2026-04-09T00:00:04Z',
-      actions: {
-        canContinueRemediation: true,
-        actionEvidence: {
-          continueRemediation: {
-            controlStopId: 'verify:control-stop:6',
-            candidateRef: 'artifact://workspace/final',
-            remainingWorkRef: 'artifact://remaining/final',
-            sourceBudget: {
-              maxAttempts: 6,
-              consumedAttempts: 6,
-              exhaustedDimension: 'remediation_attempts',
-            },
-            continuationBudget: {
-              grantId: 'grant-authorized',
-              maxAttempts: 4,
-              maxConsecutiveNoProgressAttempts: 2,
-            },
-            destinationWorkflowId: 'control-stop-continuation-linked',
-            restorationEvidenceRef: 'artifact://restore/evidence',
-            hostSessionLifecycle: {
-              activityCleanupCompleted: true,
-              omnigentSessionId: 'session-7',
-            },
-          },
-        },
-      },
-      finishSummary: {
-        finishOutcome: { code: 'FAILED', stage: 'finalizing' },
-        controlStop: {
-          kind: 'workflow_gate',
-          controlStopId: 'verify:control-stop:6',
-          verdict: 'ADDITIONAL_WORK_NEEDED',
-          reasonCode: 'remediation_budget_exhausted',
-          remainingWorkRef: 'artifact://remaining/final',
-          workspaceHeadRef: 'artifact://workspace/final',
-          publicationFeasible: false,
-          publicationAttempted: false,
-        },
-      },
-    };
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith('/actions/continue-remediation') && init?.method === 'POST') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            destinationWorkflowId: 'control-stop-continuation-linked',
-          }),
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => execution,
-      } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-
-    expect(await screen.findByText('4 attempts · 2 consecutive no-progress')).toBeTruthy();
-    expect(screen.getByText('6 / 6 · remediation attempts')).toBeTruthy();
-    expect(screen.getByText('artifact://restore/evidence')).toBeTruthy();
-    fireEvent.change(
-      screen.getByRole('spinbutton', { name: 'Continuation maximum attempts' }),
-      { target: { value: '3' } },
-    );
-    fireEvent.change(
-      screen.getByRole('spinbutton', {
-        name: 'Continuation consecutive no-progress attempts',
-      }),
-      { target: { value: '1' } },
-    );
-    const menu = await openWorkflowActionsMenu('Continue remediation');
-    fireEvent.click(
-      within(menu).getByRole('menuitem', { name: 'Continue remediation' }),
-    );
-
-    await waitFor(() => {
-      const post = fetchSpy.mock.calls.find(
-        ([url, init]) =>
-          String(url).endsWith('/actions/continue-remediation') &&
-          init?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      expect(JSON.parse(String(post?.[1]?.body))).toEqual({
-        proposedContinuationBudget: {
-          maxAttempts: 3,
-          maxConsecutiveNoProgressAttempts: 1,
-        },
-      });
-    });
-  });
-
   function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
     const selectedExecution = {
       taskId: 'test-123',
@@ -9172,7 +9059,6 @@ describe('Workflow Detail Entrypoint', () => {
             workflowId: 'mm:saved-publication',
             runId: 'pub-run',
             publicationIdempotencyKey: 'saved-publication:123',
-            rolloutGeneration: 'g1',
           }),
         } as Response);
       }
@@ -9502,6 +9388,55 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
+  it('renders inline artifact links for publication and clear-reset rows in the bridge raw timeline', async () => {
+    window.history.pushState({}, 'Bridge artifact links', '/workflows/test-123/execution?source=temporal#session-diagnostics');
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default', source: 'temporal',
+      temporalRunId: 'links-run', runId: 'links-run', title: 'Bridge links task',
+      summary: 'Completed through bridge', status: 'completed', state: 'completed', rawState: 'completed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z',
+      actions: {},
+    };
+    const event = (sequence: number, kind: string, text: string, metadata: Record<string, unknown>) => ({
+      sequence, timestamp: `2026-07-09T00:00:0${sequence}Z`, stream: 'session' as const, kind, text,
+      sessionId: 'brs-links', metadata,
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId: 'brs-links', workflowId: 'test-123', status: 'completed',
+      }) } as Response);
+      if (url.includes('/omnigent/bridge-sessions/brs-links/events')) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-links',
+        items: [
+          event(1, 'summary_published', 'Session summary artifact published.', { summaryRef: 'art-summary' }),
+          event(2, 'checkpoint_published', 'Session checkpoint artifact published.', { checkpointRef: 'art-checkpoint' }),
+          event(3, 'session_cleared', 'Session cleared.', { controlEventRef: 'art-control', resetBoundaryRef: 'art-reset' }),
+        ],
+        after: 0, nextCursor: '3', hasMore: false, terminal: true, latestSequence: 3, retentionGap: null,
+        terminalEnvelope: { schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'completed' },
+      }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('link', { name: /open summary artifact/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('link', { name: /open checkpoint artifact/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('link', { name: /open control event artifact/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('link', { name: /open reset boundary artifact/i }).length).toBeGreaterThan(0);
+    });
+    expect(
+      screen.getAllByRole('link', { name: /open summary artifact/i })[0]?.getAttribute('href'),
+    ).toBe('/api/artifacts/art-summary/download');
+    expect(
+      screen.getAllByRole('link', { name: /open checkpoint artifact/i })[0]?.getAttribute('href'),
+    ).toBe('/api/artifacts/art-checkpoint/download');
+  });
+
   it.each([
     ['direct Codex compatibility', 'codex_direct_compat'],
     ['Omnigent', 'omnigent_bridge'],
@@ -9560,6 +9495,10 @@ describe('Workflow Detail Entrypoint', () => {
       act(() => stream.triggerMessage(event(4, 'assistant_message', 'Shared live delta')));
       expect((await screen.findAllByText('Shared live delta')).length).toBeGreaterThan(0);
       expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      // The chat list sticks to the bottom while letting the reader scroll away.
+      const chatList = virtuosoPropsSpy.mock.calls.findLast(([props]) => props.followOutput)?.[0];
+      expect(chatList?.followOutput?.(true)).toBe('smooth');
+      expect(chatList?.followOutput?.(false)).toBe(false);
     } finally {
       window.EventSource = priorEventSource;
     }
@@ -10838,7 +10777,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
-  it('explains Live Logs as timeline history and Session Continuity as durable drill-down evidence', async () => {
+  it('explains Session Continuity as durable drill-down evidence beside the Live Logs line viewer', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -10846,7 +10785,6 @@ describe('Workflow Detail Entrypoint', () => {
           features: {
             temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
-            liveLogsSessionTimelineEnabled: true,
           },
         },
       },
@@ -10951,9 +10889,10 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(liveLogsSummary!);
 
     await waitFor(() => {
-      expect(screen.getByText(/timeline shows what happened/i)).toBeTruthy();
       expect(screen.getByText(/durable evidence and drill-down/i)).toBeTruthy();
     });
+    // The session timeline was removed; Live Logs has no timeline note.
+    expect(screen.queryByText(/timeline shows what happened/i)).toBeNull();
   });
 
   it('routes Session Continuity follow-up and reset controls through the agent-run session control API', async () => {
@@ -11442,82 +11381,13 @@ describe('LiveLogsPanel', () => {
     ...activeExecution,
     targetRuntime: 'codex_cli',
   };
-  const geminiExecution = {
-    ...activeExecution,
-    targetRuntime: 'claude_code',
-  };
-  const sessionTimelinePayload: BootPayload = {
+  const liveLogsPayload: BootPayload = {
     page: 'workflow-detail',
     apiBase: '/api',
     initialData: {
       dashboardConfig: {
         features: {
           logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: true,
-        },
-      },
-    },
-  };
-  const codexManagedRolloutPayload: BootPayload = {
-    page: 'workflow-detail',
-    apiBase: '/api',
-    initialData: {
-      dashboardConfig: {
-        features: {
-          logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: true,
-          liveLogsSessionTimelineRollout: 'codex_managed',
-        },
-      },
-    },
-  };
-  const allManagedRolloutPayload: BootPayload = {
-    page: 'workflow-detail',
-    apiBase: '/api',
-    initialData: {
-      dashboardConfig: {
-        features: {
-          logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: true,
-          liveLogsSessionTimelineRollout: 'all_managed',
-        },
-      },
-    },
-  };
-  const rolloutOffPayload: BootPayload = {
-    page: 'workflow-detail',
-    apiBase: '/api',
-    initialData: {
-      dashboardConfig: {
-        features: {
-          logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: true,
-          liveLogsSessionTimelineRollout: 'off',
-        },
-      },
-    },
-  };
-  const legacyLiveLogsPayload: BootPayload = {
-    page: 'workflow-detail',
-    apiBase: '/api',
-    initialData: {
-      dashboardConfig: {
-        features: {
-          logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: false,
-        },
-      },
-    },
-  };
-  const structuredHistoryDisabledPayload: BootPayload = {
-    page: 'workflow-detail',
-    apiBase: '/api',
-    initialData: {
-      dashboardConfig: {
-        features: {
-          logStreamingEnabled: true,
-          liveLogsSessionTimelineEnabled: true,
-          liveLogsStructuredHistoryEnabled: false,
         },
       },
     },
@@ -11759,72 +11629,6 @@ describe('LiveLogsPanel', () => {
     } finally {
       scrollIntoViewSpy.mockRestore();
     }
-  });
-
-  it('uses Virtuoso follow-output to stick at the bottom while allowing scroll escape', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({ ok: true, json: async () => activeSummary } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            events: [
-              {
-                sequence: 1,
-                timestamp: '2026-04-08T00:00:01Z',
-                stream: 'session',
-                kind: 'assistant_message',
-                text: 'Initial assistant message.',
-              },
-            ],
-            truncated: false,
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await screen.findByTestId('chat-session-blocks');
-
-    await waitForEventSourceInstance();
-    const es = MockEventSource.instances.at(-1)!;
-    act(() => es.triggerOpen());
-    act(() =>
-      es.triggerLogChunk({
-        sequence: 2,
-        stream: 'session',
-        kind: 'assistant_message',
-        text: 'Live assistant update.',
-      }),
-    );
-
-    await waitFor(() => expect(screen.getByText('Live assistant update.')).toBeTruthy());
-    const followOutput = virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput;
-    expect(followOutput?.(true)).toBe('smooth');
-    expect(followOutput?.(false)).toBe(false);
-    act(() =>
-      es.triggerLogChunk({
-        sequence: 3,
-        stream: 'session',
-        kind: 'assistant_message',
-        text: 'Second live update.',
-      }),
-    );
-
-    await waitFor(() => expect(screen.getByText('Second live update.')).toBeTruthy());
-    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput?.(false)).toBe(false);
   });
 
   it('does not create EventSource for ended runs', async () => {
@@ -12176,7 +11980,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={liveLogsPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -12237,7 +12041,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={liveLogsPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -12251,7 +12055,7 @@ describe('LiveLogsPanel', () => {
     expect(publicationRow?.getAttribute('data-row-type')).toBe('publication');
   });
 
-  it('renders standardized chat timeline event families with distinct treatments', async () => {
+  it('renders standardized timeline event families with distinct row types', async () => {
     const events = [
       {
         sequence: 1,
@@ -12388,7 +12192,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={liveLogsPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -12414,149 +12218,16 @@ describe('LiveLogsPanel', () => {
     for (const [kind, rowType] of expectedRowTypes) {
       expect(document.querySelector(`[data-kind="${kind}"]`)?.getAttribute('data-row-type')).toBe(rowType);
     }
-    expect(document.querySelectorAll('[data-chat-block-type="assistant"]').length).toBeGreaterThan(0);
-    expect(document.querySelectorAll('[data-chat-block-type="tool"]').length).toBeGreaterThan(0);
-    expect(document.querySelector('[data-kind="tool_call_failed"]')?.getAttribute('data-row-type')).toBe('tool');
   });
 
-  it('MM-1014 renders chat session blocks, updates paired rows, streams live rows through the same projection, and exposes raw timeline', async () => {
-    const events = [
-      {
-        sequence: 1,
-        timestamp: '2026-04-08T00:00:01Z',
-        stream: 'session',
-        kind: 'user_message_submitted',
-        text: 'Please inspect the run.',
-        turn_id: 'turn-mm-1014',
-      },
-      {
-        sequence: 2,
-        timestamp: '2026-04-08T00:00:02Z',
-        stream: 'session',
-        kind: 'assistant_message',
-        text: 'I will inspect the run.',
-        turn_id: 'turn-mm-1014',
-      },
-      {
-        sequence: 3,
-        timestamp: '2026-04-08T00:00:03Z',
-        stream: 'session',
-        kind: 'tool_call_started',
-        text: 'exec_command: rg -n MM-1014',
-        turn_id: 'turn-mm-1014',
-        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
-      },
-      {
-        sequence: 4,
-        timestamp: '2026-04-08T00:00:04Z',
-        stream: 'session',
-        kind: 'tool_call_output',
-        text: 'MM-1014 evidence line',
-        turn_id: 'turn-mm-1014',
-        metadata: { toolCallId: 'tool-1' },
-      },
-      {
-        sequence: 5,
-        timestamp: '2026-04-08T00:00:05Z',
-        stream: 'session',
-        kind: 'approval_requested',
-        text: 'Approval requested for command execution.',
-        turn_id: 'turn-mm-1014',
-        metadata: { requestId: 'approval-1' },
-      },
-      {
-        sequence: 6,
-        timestamp: '2026-04-08T00:00:06Z',
-        stream: 'session',
-        kind: 'approval_resolved',
-        text: 'Approval resolved by operator.',
-        turn_id: 'turn-mm-1014',
-        metadata: { requestId: 'approval-1' },
-      },
-      {
-        sequence: 7,
-        timestamp: '2026-04-08T00:00:07Z',
-        stream: 'session',
-        kind: 'session_cleared',
-        text: 'Session cleared before the next turn.',
-        metadata: { controlEventRef: 'art-control' },
-      },
-    ];
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            summary: {
-              status: 'running',
-              supportsLiveStreaming: true,
-              liveStreamStatus: 'available',
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ events, truncated: false }),
-        } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
-      expect(screen.getByText('Please inspect the run.')).toBeTruthy();
-      expect(screen.getByText('I will inspect the run.')).toBeTruthy();
-      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(2);
-      expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
-      expect(screen.getByText('Approval resolved by operator.')).toBeTruthy();
-      expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
-    });
-
-    expect(screen.getByText('Raw Timeline')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
-    fireEvent.click(screen.getByText('Raw Timeline'));
-    await waitFor(() => expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy());
-
-    await waitForEventSourceInstance();
-    const es = MockEventSource.instances.at(-1)!;
-    act(() => es.triggerOpen());
-    act(() =>
-      es.triggerLogChunk({
-        sequence: 8,
-        stream: 'session',
-        kind: 'assistant_message',
-        text: 'Live assistant update.',
-        turn_id: 'turn-mm-1014-live',
-      }),
-    );
-
-    await waitFor(() => expect(screen.getAllByText('Live assistant update.').length).toBeGreaterThan(0));
-    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(2);
-    expect(document.querySelectorAll('[data-chat-block-type="tool"]').length).toBeGreaterThan(0);
-  });
-
-  it('MM-1032 validates the MM-977 managed-session chat workflow across history, live controls, refresh, fallback, and one-shot suppression', async () => {
+  it('MM-1032 validates the MM-977 managed-session workflow across history, live controls, refresh, fallback, and one-shot suppression', async () => {
     const payload: BootPayload = {
-      ...sessionTimelinePayload,
+      ...liveLogsPayload,
       initialData: {
         dashboardConfig: {
           features: {
             temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
-            liveLogsSessionTimelineEnabled: true,
           },
         },
       },
@@ -12819,26 +12490,15 @@ describe('LiveLogsPanel', () => {
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
       expect(screen.getByText('Operator asks the managed session to inspect MM-1032.')).toBeTruthy();
       expect(screen.getByText('Inspecting the durable chat workflow.')).toBeTruthy();
-      expect(screen.getAllByText((content) => content.includes('exec_command')).length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Approval requested for validation command.')).toBeTruthy();
       expect(screen.getByText('Approval resolved for validation command.')).toBeTruthy();
       expect(screen.getByText('Managed session turn completed.')).toBeTruthy();
       expect(screen.getByText('Session cleared by operator before the next turn.')).toBeTruthy();
     });
-    expect(document.querySelectorAll('[data-chat-block-type="user"]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-chat-block-type="assistant"]').length).toBeGreaterThan(0);
-    expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(2);
-    expect(document.querySelectorAll('[data-chat-block-type="status"]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-chat-block-type="boundary"]')).toHaveLength(1);
-    fireEvent.click(screen.getByText('Raw Timeline'));
-    await waitFor(() => {
-      expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
-      expect(document.querySelector('[data-kind="session_cleared"]')).toBeTruthy();
-    });
+    expect(document.querySelector('[data-kind="session_cleared"]')).toBeTruthy();
 
     await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
@@ -12910,7 +12570,7 @@ describe('LiveLogsPanel', () => {
     await waitFor(() => {
       expect(historyRequests).toBeGreaterThan(historyRequestsBeforeRefresh);
       expect(screen.getByText('Live append matches durable replay after refresh.')).toBeTruthy();
-      expect(document.querySelectorAll('[data-chat-block-type="assistant"]').length).toBeGreaterThanOrEqual(2);
+      expect(document.querySelectorAll('[data-row-type="assistant"]').length).toBeGreaterThanOrEqual(2);
     });
 
     cleanup();
@@ -12919,7 +12579,6 @@ describe('LiveLogsPanel', () => {
     renderWithClient(<WorkflowDetailPage payload={payload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
     await waitFor(() => {
-      expect(screen.getByText('Raw history fallback active')).toBeTruthy();
       expect(screen.getByText(/Merged fallback line for MM-1032 durable replay/)).toBeTruthy();
     });
 
@@ -12932,114 +12591,6 @@ describe('LiveLogsPanel', () => {
       expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
       expect(screen.queryByLabelText('Follow-up message')).toBeNull();
     });
-  });
-
-  it('renders inline artifact links for publication and clear-reset timeline rows', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            summary: {
-              status: 'completed',
-              supportsLiveStreaming: false,
-              liveStreamStatus: 'ended',
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            events: [
-              {
-                sequence: 1,
-                timestamp: '2026-04-08T00:00:01Z',
-                stream: 'session',
-                kind: 'summary_published',
-                text: 'Session summary artifact published.',
-                metadata: {
-                  summaryRef: 'art-summary',
-                },
-              },
-              {
-                sequence: 2,
-                timestamp: '2026-04-08T00:00:02Z',
-                stream: 'session',
-                kind: 'checkpoint_published',
-                text: 'Session checkpoint artifact published.',
-                metadata: {
-                  checkpointRef: 'art-checkpoint',
-                },
-              },
-              {
-                sequence: 3,
-                timestamp: '2026-04-08T00:00:03Z',
-                stream: 'session',
-                kind: 'session_cleared',
-                text: 'Session cleared.',
-                metadata: {
-                  controlEventRef: 'art-control',
-                  resetBoundaryRef: 'art-reset',
-                },
-              },
-              {
-                sequence: 4,
-                timestamp: '2026-04-08T00:00:04Z',
-                stream: 'session',
-                kind: 'session_reset_boundary',
-                text: 'Epoch boundary reached.',
-                metadata: {
-                  controlEventRef: 'art-control',
-                  resetBoundaryRef: 'art-reset',
-                },
-              },
-            ],
-            truncated: false,
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByRole('link', { name: /open summary artifact/i })).toBeTruthy();
-      expect(screen.getByRole('link', { name: /open checkpoint artifact/i })).toBeTruthy();
-      expect(screen.getAllByRole('link', { name: /open control event artifact/i }).length).toBeGreaterThan(0);
-      expect(screen.getAllByRole('link', { name: /open reset boundary artifact/i }).length).toBeGreaterThan(0);
-    });
-
-    expect(
-      screen.getByRole('link', { name: /open summary artifact/i }).getAttribute('href'),
-    ).toBe('/api/artifacts/art-summary/download');
-    expect(
-      screen.getByRole('link', { name: /open checkpoint artifact/i }).getAttribute('href'),
-    ).toBe('/api/artifacts/art-checkpoint/download');
-  });
-
-  it('uses the legacy line viewer when the session timeline feature flag is disabled', async () => {
-    mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
-    renderWithClient(<WorkflowDetailPage payload={legacyLiveLogsPayload} />);
-
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/legacy fallback line/)).toBeTruthy();
-    });
-
-    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
   });
 
   it('MoonLadderStudios/MoonMind#4870 renders ANSI safely and virtualizes the default log viewer', async () => {
@@ -13072,7 +12623,7 @@ describe('LiveLogsPanel', () => {
     expect(legacyList?.style).toEqual({ height: 400 });
   });
 
-  it('uses the legacy line viewer when the session timeline feature flag is absent', async () => {
+  it('uses the line viewer for Live Logs', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
@@ -13080,62 +12631,6 @@ describe('LiveLogsPanel', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/legacy fallback line/)).toBeTruthy();
-    });
-
-    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
-  });
-
-  it('enables the session timeline for codex managed runs when rollout is codex_managed', async () => {
-    mockFetchSequence(codexExecution, activeSummary, 'codex rollout line\n');
-    renderWithClient(<WorkflowDetailPage payload={codexManagedRolloutPayload} />);
-
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/codex rollout line/)).toBeTruthy();
-    });
-
-    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-legacy-viewer')).toBeNull();
-  });
-
-  it('keeps non-codex runs on the legacy viewer when rollout is codex_managed', async () => {
-    mockFetchSequence(geminiExecution, activeSummary, 'gemini rollout line\n');
-    renderWithClient(<WorkflowDetailPage payload={codexManagedRolloutPayload} />);
-
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/gemini rollout line/)).toBeTruthy();
-    });
-
-    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
-  });
-
-  it('enables the session timeline for managed runs when rollout is all_managed', async () => {
-    mockFetchSequence(geminiExecution, activeSummary, 'all managed line\n');
-    renderWithClient(<WorkflowDetailPage payload={allManagedRolloutPayload} />);
-
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/all managed line/)).toBeTruthy();
-    });
-
-    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
-    expect(screen.queryByTestId('live-logs-legacy-viewer')).toBeNull();
-  });
-
-  it('prefers the legacy viewer when rollout is off even if the boolean flag is true', async () => {
-    mockFetchSequence(codexExecution, activeSummary, 'rollout off line\n');
-    renderWithClient(<WorkflowDetailPage payload={rolloutOffPayload} />);
-
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/rollout off line/)).toBeTruthy();
     });
 
     expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
@@ -13169,50 +12664,12 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={liveLogsPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
       expect(screen.getByText(/empty history fallback line/)).toBeTruthy();
     });
-  });
-
-  it('skips structured history and loads merged logs when structured history is disabled', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({ ok: true, json: async () => noStreamSummary } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({ ok: false, status: 500 } as Response);
-      }
-      if (url.includes('/logs/merged')) {
-        return Promise.resolve({
-          ok: true,
-          text: async () => 'rollback merged history\n',
-        } as unknown as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={structuredHistoryDisabledPayload} />);
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/rollback merged history/)).toBeTruthy();
-    });
-    expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/observability/events')),
-    ).toBe(false);
-    expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).includes('/logs/merged')),
-    ).toBe(true);
   });
 
   it('derives session badges from camelCase historical event metadata', async () => {
@@ -13261,7 +12718,7 @@ describe('LiveLogsPanel', () => {
       return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    renderWithClient(<WorkflowDetailPage payload={liveLogsPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => {
@@ -13293,60 +12750,6 @@ describe('LiveLogsPanel', () => {
       thread_id: 'thread-live-camel',
       active_turn_id: 'turn-live-camel',
     });
-  });
-
-  it('renders the timeline viewer with ANSI-aware output when the session timeline feature flag is enabled', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            summary: {
-              status: 'completed',
-              supportsLiveStreaming: false,
-              liveStreamStatus: 'ended',
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            events: [
-              {
-                sequence: 1,
-                timestamp: '2026-04-08T00:00:01Z',
-                stream: 'stdout',
-                text: '\u001b[31mred output\u001b[0m\n',
-              },
-            ],
-            truncated: false,
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
-    fireEvent.click(await screen.findByText('Live Logs'));
-
-    await waitFor(() => {
-      expect(screen.getByText('red output')).toBeTruthy();
-    });
-
-    expect(virtuosoPropsSpy).toHaveBeenCalled();
-    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0]?.initialItemCount).toBeUndefined();
-    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
-    expect(screen.queryByText('\u001b[31mred output\u001b[0m')).toBeNull();
-    expect(document.querySelector('[data-ansi-fragment="true"]')).toBeTruthy();
   });
 
   it('renders Stdout, Stderr, and Diagnostics panels', async () => {

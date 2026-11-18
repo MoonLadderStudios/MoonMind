@@ -676,7 +676,7 @@ describe('Publish Saved Work uses the saved-work publication contract', () => {
         JSON.stringify({
           detail: {
             code: 'publication_retry_not_admitted',
-            message: 'Publication is not admitted by current rollout policy.',
+            message: 'Publication is not admitted by the publication policy.',
           },
         }),
         { status: 409 },
@@ -685,7 +685,7 @@ describe('Publish Saved Work uses the saved-work publication contract', () => {
     const rejected = await publishSavedWork('/api', 'mm:wf', request).catch((err) => err);
     expect(rejected).toBeInstanceOf(SavedWorkPublicationError);
     expect(rejected.code).toBe('publication_retry_not_admitted');
-    expect(rejected.message).toBe('Publication is not admitted by current rollout policy.');
+    expect(rejected.message).toBe('Publication is not admitted by the publication policy.');
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(url).toBe('/api/executions/mm%3Awf/retry-publication');
     expect(JSON.parse(String(init?.body))).toEqual(request);

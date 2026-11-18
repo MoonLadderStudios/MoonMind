@@ -373,7 +373,6 @@ export function WorkflowRowActionsMenu({
           setActionError(null);
           retryFromStepMutation.mutate();
         },
-        onContinueRemediation: () => navigateTo(detailHref),
         onRetryPublication: () => {
           setActionError(null);
           retryPublicationMutation.mutate();

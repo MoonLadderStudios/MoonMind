@@ -125,6 +125,25 @@ def test_roundtrip_validation_and_compact_ref() -> None:
     assert ref.envelope_ref == "artifact://abc123"
 
 
+def test_retained_envelope_with_retired_observability_values_still_validates() -> None:
+    """A run compiled while the Live Logs timeline flag existed may carry
+    values new compilations never write; its history must still replay."""
+
+    retained = compile_resilience_policy(
+        **_valid_kwargs(
+            observability={
+                "liveLogsTimelineEnabled": True,
+                "structuredHistoryEnabled": False,
+            }
+        )
+    ).model_dump(by_alias=True, mode="json")
+
+    reloaded = ResiliencePolicyEnvelope.model_validate(retained)
+
+    assert reloaded.digest == retained["digest"]
+    assert reloaded.observability.live_logs_timeline_enabled is True
+
+
 def test_tampered_digest_is_rejected() -> None:
     env = compile_resilience_policy(**_valid_kwargs())
     dumped = env.model_dump(by_alias=True, mode="json")

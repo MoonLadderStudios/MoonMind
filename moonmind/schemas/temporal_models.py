@@ -2989,7 +2989,6 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
     can_retry_from_step: bool = Field(False, alias="canRetryFromStep")
-    can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
     can_retry_publication: bool = Field(False, alias="canRetryPublication")
     can_publish_saved_work: bool = Field(False, alias="canPublishSavedWork")
     can_full_retry: bool = Field(False, alias="canFullRetry")
