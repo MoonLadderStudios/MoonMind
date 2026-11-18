@@ -87,7 +87,7 @@ class _FakeDockerBackend:
             if EFFECTIVE_IMAGE in argv:
                 return 0, b"sha256:" + b"b" * 64 + b"\n", b""
             return 1, b"", b"Error: No such image"
-        if "models --refresh" in text:
+        if "integration/{provider}/connect/key" in text:
             self.catalog_calls += 1
             if self.catalog_calls == 1:
                 return 1, b"", b"dial tcp: connection refused"
@@ -255,14 +255,14 @@ async def test_opencode_reliability_journey_uses_compatible_image_and_recovers(
             )
             is True
         )
-        assert (
-            evidence_is_current(row, image_ref=REQUESTED_IMAGE, env={}) is False
-        )
+        assert evidence_is_current(row, image_ref=REQUESTED_IMAGE, env={}) is False
 
     # Every Docker probe ran the effective image; the stale digest was never
     # pulled or executed, and no duplicate launch occurred.
     catalog_probes = [
-        argv for argv in backend.commands if "models --refresh" in " ".join(argv)
+        argv
+        for argv in backend.commands
+        if "integration/{provider}/connect/key" in " ".join(argv)
     ]
     assert len(catalog_probes) == 2
     for probe in catalog_probes:
@@ -276,6 +276,5 @@ async def test_opencode_reliability_journey_uses_compatible_image_and_recovers(
     assert backend.catalog_calls == 2
     assert releases == [PROFILE_ID, PROFILE_ID]
     assert not any(
-        argv[1:2] == ["pull"] and REQUESTED_IMAGE in argv
-        for argv in backend.commands
+        argv[1:2] == ["pull"] and REQUESTED_IMAGE in argv for argv in backend.commands
     )

@@ -5274,7 +5274,7 @@ class MoonMindProviderProfileManagerWorkflow:
         """Reclaim expired validation probes whose owner process is gone.
 
         A ``credential_validation`` lease is a bounded ephemeral probe
-        (``docker run --rm ... opencode models --refresh`` with a 120s
+        (``docker run --rm ...`` isolated OpenCode v2 catalog probe with a 120s
         backend timeout and a 900s purpose lease cap), not a persistent
         host/container. When such an ``activity_owned`` obligation is
         expired past its escalation horizon and its recorded owner

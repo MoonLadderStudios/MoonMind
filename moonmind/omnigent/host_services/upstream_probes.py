@@ -5,8 +5,8 @@ Exact-host attestation prefers the supported tunnel endpoint
 needs have no supported upstream surface yet, so this module is the one place
 that runs upstream helpers inside the admitted host image:
 
-- the OpenCode CLI catalog: the tunnel answers ``opencode-native`` as an
-  unsupported harness;
+- the OpenCode catalog: the tunnel answers ``opencode-native`` as an
+  unsupported harness, so a temporary v2 server supplies sanitized model IDs;
 - whether Claude Code serves a canonical ``claude-`` id that no catalog row
   spells exactly: the tunnel returns rows but no served verdict;
 - the runner environment: Omnigent exposes no command that executes under the
@@ -27,6 +27,7 @@ layout selectors can go once no admitted host runs Omnigent older than 0.13.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from moonmind.omnigent.codex_login import CODEX_CONFIGURATION_READ_PROBE
@@ -166,41 +167,89 @@ async def read_codex_native_default(
 
 
 async def read_opencode_model_options(
-    *, backend: DockerCommandBackend, container_name: str
+    *,
+    backend: DockerCommandBackend,
+    container_name: str,
+    provider_id: str,
+    runtime_version: str = "",
 ) -> dict[str, Any]:
-    """Read the OpenCode CLI catalog with the host's own portable helper.
+    """Read selected-provider IDs from an isolated OpenCode v2 server.
 
-    The selected host already owns the exact image, environment, egress policy,
-    and materialized credential that helper must inspect.
+    This catalog observation is not credential validation. Enrollment owns
+    the provider-side authenticated check. Only the selected materialized key
+    is imported into the probe; the original host credential file is unchanged.
     """
+    version = re.search(r"(?<![0-9])([0-9]+)\.[0-9]+\.[0-9]+\b", runtime_version)
+    if version is None or version.group(1) not in {"1", "2"}:
+        raise _catalog_unavailable("exact host OpenCode runtime version is unavailable")
+    if version.group(1) == "1":
+        # Existing admitted immutable v1 images retain their own helper. This
+        # path can retire after no retained v1 host/session can be resumed.
+        # Never use it as fallback after a v2 API or credential failure.
+        probe = substrate_guarded_probe(
+            "import json; "
+            + _OPENCODE_APP_SERVER_IMPORT
+            + "print(json.dumps({'models': "
+            "opencode_app_server.list_opencode_cli_model_options()}))"
+        )
+        code, stdout, stderr = await backend.run(
+            ["docker", "exec", container_name, "/opt/venv/bin/python", "-c", probe],
+            timeout_seconds=45.0,
+            check=False,
+        )
+        raise_if_probe_substrate_unavailable(
+            code, stderr, boundary="OpenCode model catalog"
+        )
+        if code != 0:
+            raise _catalog_unavailable("retained OpenCode v1 catalog probe failed")
+        try:
+            payload = json.loads(stdout)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise _catalog_unavailable(
+                "retained OpenCode v1 catalog returned invalid JSON"
+            ) from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise _catalog_unavailable(
+                "retained OpenCode v1 catalog returned invalid catalog"
+            )
+        return payload
 
-    probe = substrate_guarded_probe(
-        "import json; " + _OPENCODE_APP_SERVER_IMPORT + "print(json.dumps({'models': "
-        "opencode_app_server.list_opencode_cli_model_options()}))"
+    from moonmind.omnigent.opencode_runtime_validation import (
+        opencode_catalog_probe_argv,
     )
-    code, stdout, stderr = await backend.run(
-        ["docker", "exec", container_name, "/opt/venv/bin/python", "-c", probe],
-        timeout_seconds=45.0,
+
+    probe = opencode_catalog_probe_argv(
+        provider_id=provider_id,
+        credential_target=(
+            None if provider_id == "opencode" else "/home/app/.local/share/opencode"
+        ),
+        verify_credentials=False,
+    )
+    code, stdout, _stderr = await backend.run(
+        ["docker", "exec", container_name, *probe],
+        timeout_seconds=110.0,
         check=False,
     )
-    raise_if_probe_substrate_unavailable(
-        code, stderr, boundary="OpenCode model catalog"
-    )
     if code != 0:
-        # Provider CLI diagnostics can include credential-sensitive context.
-        # Exact-host evidence needs only the typed failure, never raw output.
         raise _catalog_unavailable("exact host OpenCode model catalog probe failed")
     try:
-        payload = json.loads(stdout)
+        models = json.loads(stdout)
     except (TypeError, json.JSONDecodeError) as exc:
         raise _catalog_unavailable(
             "exact host OpenCode model catalog probe returned invalid JSON"
         ) from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+    if (
+        not isinstance(models, list)
+        or not models
+        or any(
+            not isinstance(model, str) or not model.startswith(provider_id + "/")
+            for model in models
+        )
+    ):
         raise _catalog_unavailable(
             "exact host OpenCode model catalog probe returned an invalid catalog"
         )
-    return payload
+    return {"models": models}
 
 
 async def claude_serves_model(

@@ -7854,11 +7854,11 @@ async def test_omnigent_opencode_host_seeds_plugin_npm_cache_before_host_start()
     dockerfile = Path("services/omnigent/moonmind-host/Dockerfile").read_text(
         encoding="utf-8"
     )
-    assert f"ARG OPENCODE_VERSION={manifest['opencodeVersion']}" in dockerfile
+    assert f"ARG OPENCODE_VERSION={expected['currentRuntimeVersion']}" in dockerfile
     assert expected["dockerfileCacheArg"] in dockerfile
     assert expected["dockerfilePackageJson"] in dockerfile
     assert expected["dockerfileOfflineVerify"] in dockerfile
-    assert manifest["coldInstallPackage"] in expected["dockerfilePackageJson"]
+    assert expected["currentPluginPackage"] in expected["dockerfilePackageJson"]
 
     verify_script = Path(expected["releaseVerifyScript"]).read_text(
         encoding="utf-8"

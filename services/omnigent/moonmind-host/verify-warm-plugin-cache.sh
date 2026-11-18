@@ -1,18 +1,6 @@
 #!/bin/sh
-# Prove that the shared Omnigent host image starts `opencode serve` for a
-# plugin-enabled session with the network disabled, using only the image-owned
-# npm cache the Dockerfile warms for `@opencode-ai/plugin`.
-#
-# This is the executable contract behind MoonMind's on-demand OpenCode host.
-# OpenCode runs `npm install @opencode-ai/plugin@<version>` inside every fresh
-# per-session config directory on its first `serve`; MoonMind's host entrypoint
-# copies /opt/moonmind/opencode-npm-cache into the run-owned state volume and
-# writes $HOME/.npmrc so that install resolves from the cache instead of
-# registry.npmjs.org. The check below mirrors that seam inside a throwaway
-# container with a fresh tmpfs home, like a workflow launch, and fails when the
-# image still needs the registry to become ready.
-#
-# Usage: verify-warm-plugin-cache.sh <image-ref> [ready-timeout-seconds]
+# Verify OpenCode 2 with a fresh SDK-backed directory plugin, no network and
+# no credentials. A successful /api/info alone does not prove plugin readiness.
 set -eu
 
 image=${1:?usage: verify-warm-plugin-cache.sh <image-ref> [ready-timeout-seconds]}
@@ -39,42 +27,58 @@ chmod 0600 "$HOME/.npmrc"
 config_home=$(mktemp -d)
 config=$config_home/opencode
 workspace=$(mktemp -d)
-mkdir -p "$config"
-cat > "$config/moonmind-probe.ts" <<EOF
-import type { Plugin } from "@opencode-ai/plugin"
-export const MoonMindProbe: Plugin = async () => ({})
+plugin=$config/moonmind-probe
+mkdir -p "$plugin"
+version=$(opencode --version | sed -n "s/^opencode v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p")
+test -n "$version" || { echo "unexpected OpenCode v2 version output" >&2; exit 1; }
+# The installed binary owns this dependency version, including dispatch overrides.
+printf "{\"name\":\"moonmind-probe\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"@opencode/plugin\":\"%s\"}}\n" "$version" > "$plugin/package.json"
+(cd "$plugin" && npm install --offline --no-audit --no-fund)
+test -f "$plugin/node_modules/@opencode/plugin/package.json"
+cat > "$plugin/server.js" <<EOF
+import { Plugin } from "@opencode/plugin";
+import { writeFileSync } from "node:fs";
+export default Plugin.define({
+  id: "moonmind-offline-probe",
+  setup() { writeFileSync("$workspace/plugin-loaded", "ready"); }
+});
 EOF
 cat > "$config/opencode.json" <<EOF
-{"plugin":["$config/moonmind-probe.ts"],"permission":"ask"}
+{"plugins":["$plugin"],"permissions":[{"action":"*","resource":"*","effect":"ask"}]}
 EOF
 XDG_CONFIG_HOME=$config_home
 XDG_DATA_HOME=$(mktemp -d)
-export XDG_CONFIG_HOME XDG_DATA_HOME
+XDG_CACHE_HOME=$(mktemp -d)
+XDG_STATE_HOME=$(mktemp -d)
+OPENCODE_PASSWORD=moonmind-offline-probe
+export XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME OPENCODE_PASSWORD
 cd "$workspace"
 
 opencode serve --port 4096 --hostname 127.0.0.1 >"$workspace/serve.log" 2>&1 &
 pid=$!
+trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT HUP INT TERM
 deadline=$(( $(date +%s) + MOONMIND_READY_TIMEOUT ))
 ready=
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! kill -0 "$pid" 2>/dev/null; then break; fi
-  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:4096/session || true)
-  if [ -n "$code" ] && [ "$code" != 000 ] && [ "$code" -lt 500 ]; then ready=1; break; fi
+  code=$(curl -s -u "opencode:$OPENCODE_PASSWORD" -o "$workspace/info.json" -w "%{http_code}" --max-time 3 http://127.0.0.1:4096/api/info || true)
+  if [ "$code" = 200 ] && jq -e --arg version "$version" ".version == \$version" "$workspace/info.json" >/dev/null; then
+    # Plugin activation is asynchronous and location-scoped. Poll until our
+    # SDK import and setup execute, not merely until a listener responds.
+    code=$(curl -s -u "opencode:$OPENCODE_PASSWORD" -o "$workspace/plugins.json" -w "%{http_code}" --max-time 3 http://127.0.0.1:4096/api/plugin || true)
+    if [ "$code" = 200 ] && [ -f "$workspace/plugin-loaded" ] && jq -e ".data | any(.id == \"moonmind-offline-probe\" and .state.status == \"active\")" "$workspace/plugins.json" >/dev/null; then ready=1; break; fi
+  fi
   sleep 0.5
 done
-kill "$pid" 2>/dev/null || true
 if [ -z "$ready" ]; then
-  echo "opencode serve did not become ready offline within ${MOONMIND_READY_TIMEOUT}s" >&2
+  echo "opencode v2 plugin did not become active offline within ${MOONMIND_READY_TIMEOUT}s" >&2
   tail -n 40 "$workspace/serve.log" >&2 || true
+  cat "$workspace/plugins.json" >&2 2>/dev/null || true
   exit 1
 fi
-test -f "$config/node_modules/@opencode-ai/plugin/package.json" || {
-  echo "opencode did not install the plugin SDK from the warm cache" >&2
-  exit 1
-}
 test ! -e "$HOME/.npm" || {
   echo "npm ignored the .npmrc cache path and used $HOME/.npm" >&2
   exit 1
 }
-echo "opencode serve became ready offline from the warm plugin npm cache"
+echo "opencode v2 SDK plugin became active offline from the warm npm cache"
 '
