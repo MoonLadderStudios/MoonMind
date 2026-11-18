@@ -179,6 +179,7 @@ async def test_failed_git_command_reports_remote_outage_as_transient(
         (False, "unavailable"),
         (False, "malformed"),
         (False, "wrong_base"),
+        (False, "explicit_base_conflict"),
         (False, "draft"),
     ],
 )
@@ -252,6 +253,9 @@ async def test_checkpoint_restore_reconciles_existing_pr_publication(
         "relativePath": "repo",
     }
     request = AgentExecutionRequest.model_validate(payload)
+    if observation == "explicit_base_conflict":
+        request.parameters["publishBaseBranch"] = "release"
+        git("push", "origin", "main:release", cwd=source)
     materializer = OmnigentWorkspaceMaterializer(
         command_runner=AsyncMock(side_effect=AssertionError("must reuse checkout")),
         workspace_root=tmp_path,
@@ -395,6 +399,7 @@ async def test_checkpoint_restore_reconciles_existing_pr_publication(
         "unavailable",
         "malformed",
         "wrong_base",
+        "explicit_base_conflict",
         "draft",
         "ambiguous",
     }:
@@ -411,6 +416,8 @@ async def test_checkpoint_restore_reconciles_existing_pr_publication(
                 "newer retained progress"
             )
         expected_branches = ["main", candidate]
+        if observation == "explicit_base_conflict":
+            expected_branches.append("release")
         if observation == "ambiguous":
             expected_branches.insert(0, "duplicate-candidate")
         assert (
@@ -1923,3 +1930,77 @@ async def test_admitted_commit_message_reaches_shared_publication_without_rewrit
     assert replay["push_head_sha"] == head
     assert git("rev-parse", "HEAD", cwd=origin) == head
     assert git("rev-list", "--count", "HEAD", cwd=origin) == "2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_base", ["release", "  release  ", "", None])
+@pytest.mark.parametrize("mode", ["pr", "branch"])
+@pytest.mark.parametrize("omitted_checkout", [False, True])
+async def test_admitted_pr_base_preserves_candidate_and_retry(tmp_path, monkeypatch, explicit_base, mode, omitted_checkout):
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    resolve_pr = AsyncMock(return_value=SimpleNamespace(resolved=True, pr_url="https://github.com/example/repository/pull/7"))
+    monkeypatch.setattr("moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector", resolve_pr)
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    request, workspace = _attempt_request(tmp_path, ordinal=1)
+    request.parameters.update(publishMode=mode, publishBaseBranch=explicit_base)
+    workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(workspace), cwd=tmp_path)
+    (workspace / "work.txt").write_text("base\n")
+    git("add", ".", cwd=workspace)
+    git("commit", "-m", "Base", cwd=workspace)
+    git("push", "origin", "HEAD:main", "HEAD:release", cwd=workspace)
+    original = git("rev-parse", "HEAD", cwd=workspace)
+    (workspace / "work.txt").write_text("completed\n")
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    kwargs = dict(request=request, current_workflow_id="workflow-4627", current_step_execution_id=request.step_execution.step_execution_id)
+    result = await publisher.publish_request_workspace(**kwargs)
+    expected_base = "release" if mode == "pr" and explicit_base else "main"
+    assert result["push_base_branch"] == expected_base
+    assert git("rev-parse", "release", cwd=origin) == original
+    if mode == "branch":
+        assert result["push_branch"] == "main"
+        return
+    assert result["push_branch"] not in {"main", "release"}
+    assert resolve_pr.call_args.kwargs["expected_base_branch"] == expected_base
+    request.parameters["acceptedPublishedHead"] = dict(workflowId="workflow-4627", repository="example/repository", branch=result["push_branch"], headSha=result["push_head_sha"], baseBranch=expected_base)
+    # A restored request with no override retains the accepted PR base even
+    # when its checkout still names the original branch.
+    request.parameters["publishBaseBranch"] = ""
+    restored = await publisher.publish_request_workspace(**kwargs)
+    assert restored["push_base_branch"] == expected_base
+    assert restored["push_branch"] == result["push_branch"]
+    assert restored["push_head_sha"] == result["push_head_sha"]
+    request.parameters["publishBaseBranch"] = explicit_base
+    # A later step checks out the accepted candidate, not the comparison base.
+    request.workspace_spec["startingBranch"] = result["push_branch"]
+    if omitted_checkout:
+        request.workspace_spec.pop("startingBranch")
+        git("symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{result['push_branch']}", cwd=workspace)
+    retry = await publisher.publish_request_workspace(**kwargs)
+    assert retry["push_branch"] == result["push_branch"]
+    assert retry["push_head_sha"] == result["push_head_sha"]
+    assert retry["push_base_branch"] == expected_base
+    (workspace / "work.txt").write_text("next accepted candidate change\n")
+    extended = await publisher.publish_request_workspace(**kwargs)
+    assert extended["push_branch"] == result["push_branch"]
+    assert extended["push_base_branch"] == expected_base
+    assert extended["push_head_sha"] != result["push_head_sha"]
+    request.parameters["acceptedPublishedHead"]["headSha"] = extended["push_head_sha"]
+    result = extended
+    # A stale/new override cannot retarget an already accepted PR or push work.
+    request.parameters["publishBaseBranch"] = "main" if expected_base == "release" else "release"
+    (workspace / "work.txt").write_text("must remain local\n")
+    resolve_pr.reset_mock()
+    with pytest.raises(HarnessPlatformError, match="publication base conflicts"):
+        await publisher.publish_request_workspace(**kwargs)
+    assert git("rev-parse", result["push_branch"], cwd=origin) == result["push_head_sha"]
+    assert git("status", "--porcelain", cwd=workspace)
+    resolve_pr.assert_not_called()

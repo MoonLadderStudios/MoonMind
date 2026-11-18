@@ -340,7 +340,9 @@ tier defaults with explicit step parameters taking precedence. Successors retain
 those admitted launch selections; fresh scheduled occurrences resolve current defaults.
 Both shared publication paths use the admitted commit message only for new commits,
 leaving existing commits and verified publication retries intact. Blank messages keep
-the default subject without changing the original task instruction.
+the default subject without changing the original task instruction. Explicit admitted
+PR bases stay separate from checkout/candidate identity; accepted candidates retain
+their recorded base and reject conflicting overrides. Branch-only publication is unchanged.
 Model-only steps retain their existing readmission drift checks and cannot adopt
 new launch defaults during recovery.
 Repository-authority changes and other untranslated native options keep their adapter. These plans are linked
