@@ -211,13 +211,83 @@ def test_overlap_push_interval_and_incomplete_timing_are_reported():
     assert report["pushIntervalSeconds"]["median"] == 240
 
 
-def test_fetch_reads_first_attempt_jobs_with_pagination(tmp_path):
+def test_rerun_is_measured_as_its_superseded_first_attempt():
+    first_attempt = _run(
+        1, "10:00:00", "10:05:00", conclusion="cancelled", latest_run_attempt=2
+    )
+    report = measure(
+        [first_attempt, _run(2, "10:04:00", "10:30:00")],
+        {1: _ungated_jobs(), 2: []},
+    )
+    row = report["runs"][0]
+    assert row["outcome"] == "superseded"
+    assert row["attempts"] == 2
+    assert report["cohorts"]["ungated"]["rerunRuns"] == 1
+
+
+def _pull(number, created, closed=None):
+    return {
+        "number": number,
+        "created_at": f"2026-11-18T{created}Z",
+        "closed_at": f"2026-11-18T{closed}Z" if closed else None,
+    }
+
+
+def test_pull_request_runs_follow_their_pull_request_concurrency_group():
+    # Two PRs share one head branch; each cancels only its own runs.
+    pulls = {"owner/repo:pr-a": [_pull(7, "09:00:00"), _pull(8, "10:02:00")]}
+    report = measure(
+        [
+            _run(1, "10:00:00", "10:05:00", conclusion="cancelled"),
+            _run(2, "10:03:00", "10:30:00"),
+        ],
+        {1: _ungated_jobs(), 2: []},
+        pulls,
+    )
+    by_id = {row["id"]: row for row in report["runs"]}
+    assert by_id[1]["group"] == "pull_request/#7"
+    # Run 2 could belong to either open PR, so it supersedes nothing and adds
+    # no push interval.
+    assert by_id[1]["outcome"] == "cancelled"
+    assert by_id[2]["group"] == "pull_request/ambiguous-run-2"
+    assert report["pushIntervalSeconds"]["samples"] == 0
+    assert report["window"]["ambiguousPullRequestRuns"] == 1
+
+
+def test_sequential_pull_requests_on_one_branch_are_separate_groups():
+    pulls = {
+        "owner/repo:pr-a": [_pull(7, "09:00:00", "10:02:00"), _pull(8, "10:03:00")]
+    }
+    report = measure(
+        [
+            _run(1, "10:00:00", "10:05:00", conclusion="cancelled"),
+            _run(2, "10:04:00", "10:30:00"),
+        ],
+        {1: _ungated_jobs(), 2: []},
+        pulls,
+    )
+    assert [row["group"] for row in report["runs"]] == [
+        "pull_request/#7",
+        "pull_request/#8",
+    ]
+    assert report["runs"][0]["outcome"] == "cancelled"
+    assert report["window"]["ambiguousPullRequestRuns"] == 0
+
+
+def test_fetch_saves_first_attempt_runs_jobs_and_head_pull_requests(tmp_path):
     calls = []
-    runs = [_run(9, "10:00:00", "10:05:00", run_attempt=2)]
+    # The runs list describes a rerun's latest attempt; attempt 1 was cancelled.
+    runs = [_run(9, "10:00:00", "10:50:00", run_attempt=2)]
+    first_attempt = _run(9, "10:00:00", "10:05:00", conclusion="cancelled")
+    pull = {**_pull(7, "09:00:00"), "title": "unused"}
 
     def api(path):
         calls.append(path)
+        if path.endswith("/runs/9/attempts/1"):
+            return first_attempt
         page = int(path.rsplit("&page=", 1)[1])
+        if "/pulls?" in path:
+            return [pull] if page == 1 else []
         if "/runs?" in path:
             return {"workflow_runs": runs if page == 1 else []}
         return {
@@ -231,14 +301,23 @@ def test_fetch_reads_first_attempt_jobs_with_pagination(tmp_path):
     assert (
         "repos/owner/repo/actions/runs/9/attempts/1/jobs?per_page=100&page=2" in calls
     )
+    assert (
+        "repos/owner/repo/pulls?state=all&head=owner:pr-a&per_page=100&page=1" in calls
+    )
     pages = json.loads((tmp_path / "jobs" / "9.json").read_text())
     assert sum(len(page["jobs"]) for page in pages) == 103
-    assert json.loads((tmp_path / "runs.json").read_text()) == runs
+    assert json.loads((tmp_path / "runs.json").read_text()) == [
+        {**first_attempt, "latest_run_attempt": 2}
+    ]
+    assert json.loads((tmp_path / "pulls.json").read_text()) == {
+        "owner/repo:pr-a": [_pull(7, "09:00:00")]
+    }
 
 
 def test_cli_writes_report_from_saved_metadata(tmp_path, capsys):
     (tmp_path / "jobs").mkdir()
     (tmp_path / "runs.json").write_text(json.dumps([_run(1, "10:00:00", "10:30:00")]))
+    (tmp_path / "pulls.json").write_text(json.dumps({}))
     (tmp_path / "jobs" / "1.json").write_text(json.dumps([{"jobs": _ungated_jobs()}]))
     output = tmp_path / "report.json"
 
@@ -248,3 +327,18 @@ def test_cli_writes_report_from_saved_metadata(tmp_path, capsys):
     assert report["schema"] == "moonmind.ci-supersession/v1"
     assert report["cohorts"]["ungated"]["completedCandidates"] == 1
     assert "Superseded" in capsys.readouterr().out
+
+
+def test_cli_refuses_an_interrupted_fetch(tmp_path, capsys):
+    # Missing job metadata must not read as zero-cost completed runs.
+    (tmp_path / "jobs").mkdir()
+    runs = [_run(1, "10:00:00", "10:30:00"), _run(2, "11:00:00", "11:30:00")]
+    (tmp_path / "runs.json").write_text(json.dumps(runs))
+    (tmp_path / "pulls.json").write_text(json.dumps({}))
+    (tmp_path / "jobs" / "1.json").write_text(json.dumps([{"jobs": _ungated_jobs()}]))
+    output = tmp_path / "report.json"
+
+    assert main(["summarize", "--dir", str(tmp_path), "--output", str(output)]) == 1
+
+    assert not output.exists()
+    assert "1 of 2 runs" in capsys.readouterr().err

@@ -7,7 +7,11 @@ are judged by observed runs rather than estimates. Job intervals reuse the
 ``ci-timings`` semantics: only an executed step proves a runner was allocated.
 
 Runs are measured from their first attempt, the candidate a newer push can
-supersede. Cohorts come from observed job creation, not dates. When selection
+supersede. Pull-request runs are grouped by the PR open on their head branch
+when they were created, matching the workflow's per-PR concurrency; a run
+created while several PRs shared that branch cannot be attributed and is kept
+out of supersession and push intervals. Cohorts come from observed job
+creation, not dates. When selection
 finished before ``preflight-policy``, ungated heavy owners are created before
 preflight completes and gated ones after it. Otherwise the run cannot show
 which behavior applied and stays unobserved.
@@ -27,6 +31,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from tools.ci.write_backend_matrix_summary import (
     interval_seconds,
@@ -55,10 +60,25 @@ def _time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _group(run: dict) -> tuple[str, str]:
-    # Mirrors the workflow's isolation: one group per PR head or event ref.
+def _head(run: dict) -> str:
     repository = (run.get("head_repository") or {}).get("full_name", "")
-    return run["event"], f"{repository}:{run.get('head_branch') or ''}"
+    return f"{repository}:{run.get('head_branch') or ''}"
+
+
+def _group(run: dict, pulls: dict[str, list[dict]]) -> tuple[str, str]:
+    # Mirrors the workflow's isolation: one group per PR number or event ref.
+    if run["event"] == "pull_request":
+        open_pulls = [
+            pull
+            for pull in pulls.get(_head(run), [])
+            if pull["created_at"] <= run["created_at"]
+            and (not pull["closed_at"] or run["created_at"] <= pull["closed_at"])
+        ]
+        if len(open_pulls) == 1:
+            return run["event"], f"#{open_pulls[0]['number']}"
+        if open_pulls:
+            return run["event"], f"ambiguous-run-{run['id']}"
+    return run["event"], _head(run)
 
 
 def _distribution(values: list[float]) -> dict:
@@ -119,9 +139,8 @@ def _observe_run(run: dict, jobs: list[dict], successor: dict | None) -> dict:
         gated = all(_time(job["created_at"]) >= _time(preflight_done) for job in heavy)
     return {
         "id": run["id"],
-        "attempts": run.get("run_attempt", 1),
+        "attempts": run.get("latest_run_attempt", run.get("run_attempt", 1)),
         "event": run["event"],
-        "group": "/".join(_group(run)),
         "createdAt": run["created_at"],
         "outcome": outcome,
         "cancellationAgeSeconds": (
@@ -212,13 +231,18 @@ def _cohort(rows: list[dict]) -> dict:
     }
 
 
-def measure(runs: list[dict], jobs_by_run: dict[int, list[dict]]) -> dict:
+def measure(
+    runs: list[dict],
+    jobs_by_run: dict[int, list[dict]],
+    pulls: dict[str, list[dict]] | None = None,
+) -> dict:
     runs = sorted(runs, key=lambda run: run["created_at"])
+    groups = {run["id"]: _group(run, pulls or {}) for run in runs}
     successors: dict[int, dict] = {}
     intervals = []
     last_in_group: dict[tuple[str, str], dict] = {}
     for run in runs:
-        previous = last_in_group.get(_group(run))
+        previous = last_in_group.get(groups[run["id"]])
         if previous:
             if run["event"] == "pull_request":
                 intervals.append(
@@ -229,13 +253,14 @@ def measure(runs: list[dict], jobs_by_run: dict[int, list[dict]]) -> dict:
                 run["created_at"] <= previous["updated_at"]
             ):
                 successors[previous["id"]] = run
-        last_in_group[_group(run)] = run
+        last_in_group[groups[run["id"]]] = run
 
     rows = []
     for run in runs:
         row = _observe_run(
             run, jobs_by_run.get(run["id"], []), successors.get(run["id"])
         )
+        row["group"] = "/".join(groups[run["id"]])
         row["concurrentRunsAtCreation"] = sum(
             1
             for other in runs
@@ -264,6 +289,9 @@ def measure(runs: list[dict], jobs_by_run: dict[int, list[dict]]) -> dict:
             "to": runs[-1]["created_at"] if runs else None,
             "runs": len(runs),
             "events": events,
+            "ambiguousPullRequestRuns": sum(
+                group.startswith("ambiguous-run-") for _, group in groups.values()
+            ),
         },
         "cohorts": cohorts,
         "pushIntervalSeconds": _distribution(intervals),
@@ -275,7 +303,7 @@ def measure(runs: list[dict], jobs_by_run: dict[int, list[dict]]) -> dict:
 
 
 def fetch(api, repository: str, workflow: str, *, runs: int, directory: Path) -> None:
-    """Save raw run metadata and first-attempt jobs for ``summarize``."""
+    """Save first-attempt runs and jobs, and head-branch PRs, for ``summarize``."""
     collected: list[dict] = []
     for page in range(1, 101):
         batch = api(
@@ -285,8 +313,40 @@ def fetch(api, repository: str, workflow: str, *, runs: int, directory: Path) ->
         if len(collected) >= runs or len(batch) < 100:
             break
     collected = collected[:runs]
+    for index, run in enumerate(collected):
+        # The runs list describes a rerun's latest attempt, not the first.
+        if run.get("run_attempt", 1) > 1:
+            collected[index] = {
+                **api(f"repos/{repository}/actions/runs/{run['id']}/attempts/1"),
+                "latest_run_attempt": run["run_attempt"],
+            }
+    # Runs list only PRs still open on their head, so look PRs up by branch.
+    pulls: dict[str, list[dict]] = {}
+    for run in collected:
+        head_repository = (run.get("head_repository") or {}).get("full_name")
+        if run["event"] != "pull_request" or not head_repository:
+            continue
+        head = _head(run)
+        if head in pulls:
+            continue
+        head_filter = quote(
+            f"{head_repository.split('/')[0]}:{run['head_branch']}", safe=":/"
+        )
+        pulls[head] = []
+        for page in range(1, 101):
+            batch = api(
+                f"repos/{repository}/pulls?state=all&head={head_filter}"
+                f"&per_page=100&page={page}"
+            )
+            pulls[head].extend(
+                {key: pull[key] for key in ("number", "created_at", "closed_at")}
+                for pull in batch
+            )
+            if len(batch) < 100:
+                break
     (directory / "jobs").mkdir(parents=True, exist_ok=True)
     (directory / "runs.json").write_text(json.dumps(collected, indent=1) + "\n")
+    (directory / "pulls.json").write_text(json.dumps(pulls, indent=1) + "\n")
     for run in collected:
         pages = []
         for page in range(1, 101):
@@ -308,15 +368,25 @@ def _gh_api(path: str) -> dict:
 
 
 def _render(report: dict) -> str:
+    columns = (
+        "Cohort",
+        "Runs",
+        "Completed",
+        "Superseded",
+        "Superseded w/ heavy start",
+        "Heavy jobs started before preflight",
+        "Runner h",
+        "Superseded runner h",
+        "Superseded heavy runner h (before preflight)",
+        "Cancellation age median/p90 s",
+        "Job queue median/p90 s",
+        "Admission delay median/p90 s",
+    )
     lines = [
         f"Window {report['window']['from']} .. {report['window']['to']}: "
         f"{report['window']['runs']} runs {report['window']['events']}",
         "",
-        "| Cohort | Runs | Completed | Superseded | Superseded w/ heavy start | "
-        "Heavy jobs started before preflight | Runner h | Superseded runner h | "
-        "Superseded heavy runner h (before preflight) | "
-        "Cancellation age median/p90 s | Job queue median/p90 s | "
-        "Admission delay median/p90 s |",
+        "| " + " | ".join(columns) + " |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for name, cohort in report["cohorts"].items():
@@ -365,7 +435,17 @@ def main(argv: list[str] | None = None) -> int:
             jobs_by_run[run["id"]] = [
                 job for page in json.loads(path.read_text()) for job in page["jobs"]
             ]
-    report = measure(runs, jobs_by_run)
+    pulls_path = args.dir / "pulls.json"
+    if len(jobs_by_run) < len(runs) or not pulls_path.exists():
+        # An interrupted fetch must not read as zero-cost or misgrouped runs.
+        print(
+            f"Fetch incomplete: job metadata for {len(jobs_by_run)} of "
+            f"{len(runs)} runs, pulls.json {'present' if pulls_path.exists() else 'missing'}; "
+            "rerun fetch.",
+            file=sys.stderr,
+        )
+        return 1
+    report = measure(runs, jobs_by_run, json.loads(pulls_path.read_text()))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(_render(report))
