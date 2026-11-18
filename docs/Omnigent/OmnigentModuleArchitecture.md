@@ -336,8 +336,10 @@ An admitted shared context cannot fall back to a fresh direct session when a
 later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, including commit-message
-tier defaults with explicit step parameters taking precedence. Successors
-retain the admitted values; fresh scheduled occurrences resolve current defaults.
+tier defaults with explicit step parameters taking precedence. Successors retain
+those admitted launch selections; fresh scheduled occurrences resolve current defaults.
+Model-only steps retain their existing readmission drift checks and cannot adopt
+new launch defaults during recovery.
 Repository-authority changes and other untranslated native options keep their adapter. These plans are linked
 through the existing artifact owner and carried across successor attempts.
 An explicit root rollout target constrains the root plan; independent steps

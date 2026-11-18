@@ -130,6 +130,8 @@ async def compile_step_execution_plans(
             raise ValueError("Selected step native tier options require their native route")
         if (set(defaults) | set(explicit)) - _STEP_LAUNCH_PARAMETER_KEYS:
             raise ValueError("Selected step native tier options require their native route")
+        if recorded_provider_configurations is not None and saved and not frozen and (defaults or explicit):
+            raise ValueError("Selected step launch options changed from its admitted inputs")
         if not foreign_profile and not (defaults or explicit or frozen) and (model, effort) == (
             root_model.qualifiedId, root_model.effort,
         ):
@@ -163,7 +165,10 @@ async def compile_step_execution_plans(
             applied = apply_tier_parameter_defaults(
                 parameters, tier_parameters=defaults, explicit_parameters=explicit,
             )
-            resolution["tierParameterDefaults"] = applied
+            # Only translated launch choices introduce this frozen metadata.
+            # Model-only steps keep their existing readmission drift checks.
+            if defaults or explicit:
+                resolution["tierParameterDefaults"] = applied
         parameters.update(model=model, effort=effort, modelSource=resolution.get("modelSource"))
         # The original snapshot remains unchanged. Resolved selection is the
         # same canonical metadata used by ordinary admission and the adapter.

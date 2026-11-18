@@ -1688,3 +1688,46 @@ async def test_specialized_step_repository_options_keep_native_authority_boundar
             "id": "specialized",
             "runtime": {"mode": "omnigent", "modelTier": 1, "parameters": option},
         }])
+
+
+@pytest.mark.asyncio
+async def test_specialized_step_without_launch_defaults_still_refuses_model_drift(monkeypatch, compiler):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high"}]
+    provider.default_model_tier = 1
+    parameters, _ = await _schedule_parameters(artifacts, provider=provider, steps=[{
+        "id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1},
+    }])
+    provider.model_tiers[0]["model"] = "example/edited-model"
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts),
+    )
+    assert admitted["disposition"] == "recorded"
+    assert "step specialized" in admitted["reason"] and "model" in admitted["reason"]
+
+
+@pytest.mark.asyncio
+async def test_specialized_step_does_not_adopt_new_launch_defaults_on_successor(monkeypatch, compiler):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high"}]
+    provider.default_model_tier = 1
+    parameters, _ = await _schedule_parameters(artifacts, provider=provider, steps=[{
+        "id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1},
+    }])
+    provider.model_tiers[0]["parameters"] = {"commitMessage": "new default"}
+    admitted = await _successor_admission(
+        monkeypatch, artifacts, parameters, _OccurrenceSession(provider, artifacts=artifacts),
+    )
+    assert admitted["disposition"] == "recorded"
+    assert "launch" in admitted["reason"]
+    fresh = await RecurringWorkflowsService(
+        _OccurrenceSession(provider, artifacts=artifacts), artifact_service=artifacts,
+    ).admit_occurrence_execution_plan(
+        workflow_id="mm:schedule-1:occurrence-2", initial_parameters=parameters,
+    )
+    assert fresh["disposition"] == "admitted"
+    assert fresh["omnigentStepExecutionPlans"]["specialized"]["commitMessage"] == "new default"
