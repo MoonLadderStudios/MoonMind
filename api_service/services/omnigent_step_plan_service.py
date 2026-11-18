@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from moonmind.config.settings import settings
 from moonmind.provider_profiles.model_tiers import (
-    SHARED_LAUNCH_PARAMETER_KEYS, apply_tier_parameter_defaults,
+    apply_tier_parameter_defaults,
     ensure_tier_metadata_is_credential_free,
 )
 from moonmind.runtime_intent import merge_runtime_selection, model_selection_fields
@@ -23,11 +23,10 @@ if TYPE_CHECKING:
     )
 
 
-# Work-branch metadata is consumed by dispatch-selected pool requests, not yet
-# by fixed-step workflow handoffs. Keep those choices on their native route.
-_STEP_LAUNCH_PARAMETER_KEYS = SHARED_LAUNCH_PARAMETER_KEYS - {
-    "workBranch", "workBranchId", "workBranchOrigin",
-}
+# Commit messages already cross the fixed-step request handoff without changing
+# repository authority. Other native launch options need their own equivalent
+# admission/consumer path before this compiler can translate them.
+_STEP_LAUNCH_PARAMETER_KEYS = frozenset({"commitMessage"})
 
 
 @dataclass(frozen=True)

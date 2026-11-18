@@ -1668,3 +1668,23 @@ async def test_specialized_tier_rejects_generated_branch_without_name(monkeypatc
     with pytest.raises(ValueError, match="native tier options require their native route"):
         await _schedule_parameters(_ArtifactService(), provider=provider,
             steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", [
+    {"publishMode": "branch"}, {"publishMode": "pr"},
+    {"publishBaseBranch": "another-base"}, {"githubOperations": ["write"]},
+    {"repository": "other/repo"},
+])
+async def test_specialized_step_repository_options_keep_native_authority_boundary(
+    monkeypatch, compiler, option
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high", "parameters": {}}]
+    provider.default_model_tier = 1
+    with pytest.raises(ValueError, match="native tier options require their native route"):
+        await _schedule_parameters(_ArtifactService(), provider=provider, steps=[{
+            "id": "specialized",
+            "runtime": {"mode": "omnigent", "modelTier": 1, "parameters": option},
+        }])

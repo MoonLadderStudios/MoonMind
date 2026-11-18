@@ -39,7 +39,6 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 )
 from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
 from moonmind.provider_profiles.model_tiers import (
-    SHARED_LAUNCH_PARAMETER_KEYS as _LAUNCH_PARAMETER_KEYS,
     apply_tier_parameter_defaults,
     ensure_tier_metadata_is_credential_free,
 )
@@ -69,7 +68,11 @@ from moonmind.workflows.temporal.artifacts import (
 
 # These settings already have consumers on both launch paths. Unknown native
 # options remain with their current adapter until their behavior is translated.
-
+_LAUNCH_PARAMETER_KEYS = frozenset({
+    "requiredCapabilities", "githubOperations", "publishMode", "commitMessage",
+    "publishBaseBranch", "repository",
+    "workBranch", "workBranchId", "workBranchOrigin",
+})
 _MODEL_SELECTION_KEYS = frozenset({"model", "effort", "modelTierResolution", "metadata"})
 
 
