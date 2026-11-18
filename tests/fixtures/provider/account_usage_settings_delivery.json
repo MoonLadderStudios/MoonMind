@@ -1,0 +1,2253 @@
+{
+  "now": "2026-11-18T20:00:00Z",
+  "initial": [
+    {
+      "profile_id": "claude-a",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-a-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-a",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-a",
+        "credential_generation": 1,
+        "snapshot_revision": 0,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": false,
+        "status": "unknown",
+        "account": {
+          "status": "unknown",
+          "email": null,
+          "display_name": null,
+          "plan": null,
+          "source": null,
+          "observed_at": null
+        },
+        "usage": {
+          "completeness": null,
+          "primary_window_key": null,
+          "full_observed_at": null,
+          "windows": []
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": null,
+          "last_success_at": null,
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "claude-b",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-b-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-b",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-b",
+        "credential_generation": 1,
+        "snapshot_revision": 0,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": false,
+        "status": "unknown",
+        "account": {
+          "status": "unknown",
+          "email": null,
+          "display_name": null,
+          "plan": null,
+          "source": null,
+          "observed_at": null
+        },
+        "usage": {
+          "completeness": null,
+          "primary_window_key": null,
+          "full_observed_at": null,
+          "windows": []
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": null,
+          "last_success_at": null,
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-a",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-a-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-a",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-a",
+        "credential_generation": 1,
+        "snapshot_revision": 0,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": false,
+        "status": "unknown",
+        "account": {
+          "status": "unknown",
+          "email": null,
+          "display_name": null,
+          "plan": null,
+          "source": null,
+          "observed_at": null
+        },
+        "usage": {
+          "completeness": null,
+          "primary_window_key": null,
+          "full_observed_at": null,
+          "windows": []
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": null,
+          "last_success_at": null,
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-b",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-b-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-b",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-b",
+        "credential_generation": 1,
+        "snapshot_revision": 0,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": false,
+        "status": "unknown",
+        "account": {
+          "status": "unknown",
+          "email": null,
+          "display_name": null,
+          "plan": null,
+          "source": null,
+          "observed_at": null
+        },
+        "usage": {
+          "completeness": null,
+          "primary_window_key": null,
+          "full_observed_at": null,
+          "windows": []
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": null,
+          "last_success_at": null,
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    }
+  ],
+  "refresh": {
+    "results": [
+      {
+        "profile_id": "codex-a",
+        "credential_generation": 1,
+        "outcome": "accepted",
+        "refresh_state": "queued",
+        "request_id": "00000000000000000000000000000003",
+        "coalesced": false,
+        "retry_after_seconds": null,
+        "next_allowed_at": null
+      },
+      {
+        "profile_id": "codex-b",
+        "credential_generation": 1,
+        "outcome": "accepted",
+        "refresh_state": "queued",
+        "request_id": "00000000000000000000000000000004",
+        "coalesced": false,
+        "retry_after_seconds": null,
+        "next_allowed_at": null
+      },
+      {
+        "profile_id": "claude-a",
+        "credential_generation": 1,
+        "outcome": "accepted",
+        "refresh_state": "queued",
+        "request_id": "00000000000000000000000000000001",
+        "coalesced": false,
+        "retry_after_seconds": null,
+        "next_allowed_at": null
+      },
+      {
+        "profile_id": "claude-b",
+        "credential_generation": 1,
+        "outcome": "accepted",
+        "refresh_state": "queued",
+        "request_id": "00000000000000000000000000000002",
+        "coalesced": false,
+        "retry_after_seconds": null,
+        "next_allowed_at": null
+      }
+    ]
+  },
+  "refreshed": [
+    {
+      "profile_id": "claude-a",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-a-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-a",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-a",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-a name",
+          "plan": null,
+          "source": "claude_oauth_profile",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "seven_day",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "seven_day",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 42.0,
+              "remaining_percent": 58.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "five_hour",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 7.0,
+              "remaining_percent": 93.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "claude-b",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-b-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-b",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-b",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-b name",
+          "plan": null,
+          "source": "claude_oauth_profile",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "seven_day",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "seven_day",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 81.0,
+              "remaining_percent": 19.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "five_hour",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 7.0,
+              "remaining_percent": 93.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-a",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-a-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-a",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-a",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-a",
+          "plan": "plus",
+          "source": "codex_account",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "codex.weekly",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "codex.weekly",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 42.0,
+              "remaining_percent": 58.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "codex.5h",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 3.0,
+              "remaining_percent": 97.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-b",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-b-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-b",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-b",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-b",
+          "plan": "plus",
+          "source": "codex_account",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "codex.weekly",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "codex.weekly",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 81.0,
+              "remaining_percent": 19.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "codex.5h",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 3.0,
+              "remaining_percent": 97.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    }
+  ],
+  "rebound": [
+    {
+      "profile_id": "claude-a",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 2,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-a-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-a",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-a",
+        "credential_generation": 2,
+        "snapshot_revision": 1,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "new-account@example.com",
+          "display_name": "workspace-a name",
+          "plan": null,
+          "source": "claude_oauth_profile",
+          "observed_at": "2026-11-18T20:02:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "seven_day",
+          "full_observed_at": "2026-11-18T20:02:00Z",
+          "windows": [
+            {
+              "key": "seven_day",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 42.0,
+              "remaining_percent": 58.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:02:00Z",
+              "fresh_until": "2026-11-18T20:07:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "five_hour",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 7.0,
+              "remaining_percent": 93.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:02:00Z",
+              "fresh_until": "2026-11-18T20:07:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:02:00Z",
+          "last_success_at": "2026-11-18T20:02:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "claude-b",
+      "runtime_id": "claude_code",
+      "provider_id": "anthropic",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "claude-b-volume",
+      "volume_mount_path": "/home/app/.claude",
+      "account_label": "Editable claude-b",
+      "model_tiers": [
+        {
+          "label": "Fable",
+          "family": "fable",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Opus",
+          "family": "opus",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sonnet",
+          "family": "sonnet",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Haiku",
+          "family": "haiku",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "claude-b",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "anthropic",
+        "runtime_id": "claude_code",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-b name",
+          "plan": null,
+          "source": "claude_oauth_profile",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "seven_day",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "seven_day",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 81.0,
+              "remaining_percent": 19.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "five_hour",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 7.0,
+              "remaining_percent": 93.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "claude_oauth_usage",
+              "source_version": null,
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-a",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 2,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-a-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-a",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-a",
+        "credential_generation": 2,
+        "snapshot_revision": 1,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "new-account@example.com",
+          "display_name": "workspace-a",
+          "plan": "plus",
+          "source": "codex_account",
+          "observed_at": "2026-11-18T20:02:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "codex.weekly",
+          "full_observed_at": "2026-11-18T20:02:00Z",
+          "windows": [
+            {
+              "key": "codex.weekly",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 42.0,
+              "remaining_percent": 58.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:02:00Z",
+              "fresh_until": "2026-11-18T20:07:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "codex.5h",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 3.0,
+              "remaining_percent": 97.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:02:00Z",
+              "fresh_until": "2026-11-18T20:07:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:02:00Z",
+          "last_success_at": "2026-11-18T20:02:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    },
+    {
+      "profile_id": "codex-b",
+      "runtime_id": "codex_cli",
+      "provider_id": "openai",
+      "credential_generation": 1,
+      "credential_source": "oauth_volume",
+      "runtime_materialization_mode": "oauth_home",
+      "volume_ref": "codex-b-volume",
+      "volume_mount_path": "/home/app/.codex",
+      "account_label": "Editable codex-b",
+      "model_tiers": [
+        {
+          "label": "Astra",
+          "family": "astra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Sol",
+          "family": "sol",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Terra",
+          "family": "terra",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        },
+        {
+          "label": "Luna",
+          "family": "luna",
+          "model_mode": "automatic",
+          "model": null,
+          "effort": "medium",
+          "parameters": {},
+          "annotations": {}
+        }
+      ],
+      "default_model_tier": 2,
+      "max_parallel_runs": 1,
+      "cooldown_after_429_seconds": 900,
+      "rate_limit_policy": "backoff",
+      "enabled": true,
+      "is_default": false,
+      "secret_refs": {},
+      "readiness": {
+        "status": "blocked",
+        "launch_ready": false,
+        "reason_code": "configuration_required",
+        "summary": "Provider profile has launch blockers.",
+        "checks": [
+          {
+            "id": "required_fields",
+            "label": "Required fields",
+            "status": "pass",
+            "message": "Required provider profile fields are present."
+          },
+          {
+            "id": "credential_capability",
+            "label": "Credential capability",
+            "status": "pass",
+            "message": "Credential contract matches the launch-ready oauth preset."
+          },
+          {
+            "id": "launch_isolation",
+            "label": "Launch environment isolation",
+            "status": "error",
+            "message": "Launch-safety isolation policy is missing, stale, or invalid; repair clear_env_keys before launch."
+          },
+          {
+            "id": "enabled",
+            "label": "Enabled state",
+            "status": "pass",
+            "message": "Profile is enabled."
+          },
+          {
+            "id": "auth_state",
+            "label": "Activation state",
+            "status": "pass",
+            "message": "Profile credentials are connected."
+          },
+          {
+            "id": "secret_refs",
+            "label": "SecretRef bindings",
+            "status": "pass",
+            "message": "SecretRef bindings are not required for this credential source."
+          },
+          {
+            "id": "oauth_volume",
+            "label": "OAuth volume",
+            "status": "pass",
+            "message": "OAuth volume metadata is present."
+          },
+          {
+            "id": "concurrency",
+            "label": "Concurrency",
+            "status": "pass",
+            "message": "Profile allows 1 parallel run(s)."
+          },
+          {
+            "id": "cooldown",
+            "label": "Cooldown",
+            "status": "pass",
+            "message": "Cooldown after provider rate limit is 900s."
+          },
+          {
+            "id": "provider_validation",
+            "label": "Provider validation",
+            "status": "warning",
+            "message": "No provider-specific validation metadata is available."
+          }
+        ]
+      },
+      "auth_state": "connected",
+      "authentication_method": "oauth",
+      "launch_ready": false,
+      "account_usage": {
+        "schema_version": 1,
+        "profile_id": "codex-b",
+        "credential_generation": 1,
+        "snapshot_revision": 1,
+        "provider_id": "openai",
+        "runtime_id": "codex_cli",
+        "binding_verified": true,
+        "status": "fresh",
+        "account": {
+          "status": "verified",
+          "email": "person@example.com",
+          "display_name": "workspace-b",
+          "plan": "plus",
+          "source": "codex_account",
+          "observed_at": "2026-11-18T20:00:00Z"
+        },
+        "usage": {
+          "completeness": "full",
+          "primary_window_key": "codex.weekly",
+          "full_observed_at": "2026-11-18T20:00:00Z",
+          "windows": [
+            {
+              "key": "codex.weekly",
+              "period": "weekly",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 604800,
+              "used_percent": 81.0,
+              "remaining_percent": 19.0,
+              "exhausted": false,
+              "reset_at": "2026-11-20T09:00:00Z",
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            },
+            {
+              "key": "codex.5h",
+              "period": "short",
+              "scope": "general",
+              "model_label": null,
+              "duration_seconds": 18000,
+              "used_percent": 3.0,
+              "remaining_percent": 97.0,
+              "exhausted": false,
+              "reset_at": null,
+              "source": "codex_rate_limits",
+              "source_version": "0.170.0",
+              "observed_at": "2026-11-18T20:00:00Z",
+              "fresh_until": "2026-11-18T20:05:00Z",
+              "freshness": "fresh",
+              "last_known": false
+            }
+          ]
+        },
+        "refresh": {
+          "state": "idle",
+          "request_id": null,
+          "last_attempt_at": "2026-11-18T20:00:00Z",
+          "last_success_at": "2026-11-18T20:00:00Z",
+          "last_failure_at": null,
+          "last_failure": null,
+          "next_allowed_at": null
+        }
+      }
+    }
+  ]
+}
