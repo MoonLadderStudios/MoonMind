@@ -24,3 +24,17 @@ def test_legacy_api_first_routes_are_absent_from_openapi() -> None:
         or path.startswith("/v1/documents")
         for path in paths
     )
+
+
+def test_session_compat_routes_are_retired_but_resources_remain() -> None:
+    paths = app.openapi()["paths"]
+    for suffix in (
+        "",
+        "/items",
+        "/stream",
+        "/events",
+        "/elicitations/{elicitation_id}/resolve",
+    ):
+        assert f"/api/sessions/{{session_id}}{suffix}" not in paths
+    assert "/api/sessions/{session_id}/resources" in paths
+    assert "/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}" in paths

@@ -185,40 +185,6 @@ class TestFeatureFlagsSettings:
 
         monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
-    def test_session_api_compat_flag_defaults_off(self, monkeypatch):
-        monkeypatch.delenv("MOONMIND_SESSION_API_COMPAT_ENABLED", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__SESSION_API_COMPAT_ENABLED", raising=False
-        )
-        monkeypatch.delenv("SESSION_API_COMPAT_ENABLED", raising=False)
-
-        settings = FeatureFlagsSettings(_env_file=None)
-
-        assert settings.session_api_compat_enabled is False
-
-    @pytest.mark.parametrize(
-        "env_name",
-        [
-            "MOONMIND_SESSION_API_COMPAT_ENABLED",
-            "FEATURE_FLAGS__SESSION_API_COMPAT_ENABLED",
-        ],
-    )
-    def test_session_api_compat_flag_accepts_configured_env(
-        self,
-        monkeypatch,
-        env_name,
-    ):
-        monkeypatch.delenv("MOONMIND_SESSION_API_COMPAT_ENABLED", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__SESSION_API_COMPAT_ENABLED", raising=False
-        )
-        monkeypatch.delenv("SESSION_API_COMPAT_ENABLED", raising=False)
-        monkeypatch.setenv(env_name, "true")
-
-        settings = FeatureFlagsSettings(_env_file=None)
-
-        assert settings.session_api_compat_enabled is True
-
     def test_retired_jira_create_page_env_is_ignored(self, monkeypatch):
         # Operators upgrading with the retired Create-page Jira browser rollout
         # still in their .env must start cleanly, even with values the old
