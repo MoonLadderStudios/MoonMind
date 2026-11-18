@@ -1069,7 +1069,6 @@ describe('Workflow Detail Entrypoint', () => {
           pollIntervalsMs: { detail: 60000, list: 60000 },
           features: {
             temporalDashboard: {
-              listEnabled: true,
               workspaceShellEnabled: true,
             },
           },
@@ -1700,34 +1699,6 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
-  it('MM-997 keeps workflow detail standalone when the workflow list is disabled', async () => {
-    window.history.pushState({}, 'Workspace List Disabled Test', '/workflows/test-123?source=temporal');
-    mockDesktopViewport(true);
-    mockWorkflowWorkspaceFetches();
-
-    renderWithClient(
-      <WorkflowDetailEntrypoint
-        payload={{
-          ...stepsPayload,
-          initialData: {
-            dashboardConfig: {
-              pollIntervalsMs: { detail: 1 },
-              features: {
-                temporalDashboard: {
-                  listEnabled: false,
-                },
-              },
-            },
-          },
-        }}
-      />,
-    );
-
-    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
-    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
-    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
-  });
-
   it.each([
     ['/workflows/test-123/steps?source=temporal', 'Workflow Steps'],
     ['/workflows/test-123/artifacts?source=temporal', 'Workflow Artifacts'],
@@ -1796,7 +1767,6 @@ describe('Workflow Detail Entrypoint', () => {
               features: {
                 temporalDashboard: {
                   workspaceShellEnabled: true,
-                  listEnabled: true,
                 },
               },
             },

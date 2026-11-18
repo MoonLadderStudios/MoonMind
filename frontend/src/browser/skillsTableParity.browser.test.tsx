@@ -40,7 +40,6 @@ const uiInfo = {
   limits: {}, endpoints: {},
   dashboardConfig: {
     pollIntervalsMs: { list: 60_000, detail: 60_000 },
-    features: { temporalDashboard: { listEnabled: true } },
   },
 };
 let fetchSpy: MockInstance;

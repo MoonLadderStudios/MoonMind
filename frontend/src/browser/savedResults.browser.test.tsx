@@ -156,7 +156,6 @@ const uiInfo = {
     features: {
       temporalDashboard: {
         actionsEnabled: true,
-        listEnabled: false,
         workspaceShellEnabled: false,
       },
     },

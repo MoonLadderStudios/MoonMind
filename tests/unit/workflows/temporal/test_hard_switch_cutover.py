@@ -45,23 +45,10 @@ from moonmind.workflows.temporal.workflows.run import (
 def _renamed_contract_settings():
     return settings.temporal.model_copy(
         update={
-            "user_workflow_contract_mode": "renamed_contract",
             "workflow_task_queue": "mm.workflow",
             "user_workflow_v2_task_queue": "mm.workflow.user.v2",
         }
     )
-
-
-def test_current_build_rejects_legacy_run_contract_mode() -> None:
-    temporal_settings = settings.temporal.model_copy(
-        update={
-            "user_workflow_contract_mode": "legacy_run",
-            "workflow_task_queue": "mm.workflow",
-        }
-    )
-
-    with pytest.raises(HardSwitchCutoverError, match="renamed_contract"):
-        resolve_user_workflow_start_contract(temporal_settings)
 
 
 def test_renamed_contract_resolves_without_cutover_files(tmp_path) -> None:

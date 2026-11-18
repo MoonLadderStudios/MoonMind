@@ -173,7 +173,7 @@ Temporal-backed rows and details carry `dashboardStatus` for compatibility group
 
 ### 9.3 Feature flags
 
-Feature flags in the boot payload gate areas such as Temporal list/detail, actions, submit flows, debug fields, agent skill selection and detail, scheduling on submit, and log streaming. For example, the list is disabled when `features.temporalDashboard.listEnabled` is false, and `logStreamingEnabled` (default `true`, from `MOONMIND_LOG_STREAMING_ENABLED`) is the operator-visible switch for live log follow.
+Feature flags in the boot payload gate areas such as actions, submit flows, workflow editing, debug fields, agent skill selection and detail, scheduling on submit, and log streaming. The workflow list and detail are always on, and the Temporal source routes are fixed in the view model rather than configurable. `logStreamingEnabled` (default `true`, from `MOONMIND_LOG_STREAMING_ENABLED`) is the operator-visible switch for live log follow.
 
 ---
 

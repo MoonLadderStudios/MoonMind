@@ -23,7 +23,7 @@ const uiInfo = {
   limits: {}, endpoints: {},
   dashboardConfig: {
     pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 },
-    features: { temporalDashboard: { listEnabled: true, workspaceShellEnabled: true } },
+    features: { temporalDashboard: { workspaceShellEnabled: true } },
   },
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {

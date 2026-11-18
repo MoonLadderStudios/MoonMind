@@ -8,7 +8,7 @@ from moonmind.config.settings import settings
 def ensure_preset_catalog_enabled() -> None:
     """Raise a 404 when the preset catalog is disabled."""
 
-    if settings.feature_flags.preset_catalog_enabled:
+    if settings.feature_flags.preset_catalog:
         return
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,

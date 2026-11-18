@@ -26,7 +26,6 @@ def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app.dependency_overrides[_get_save_service] = lambda: saver
     app.dependency_overrides[get_instance_access] = lambda: None
     settings.feature_flags.preset_catalog = True
-    settings.feature_flags.disable_preset_catalog = False
     return TestClient(app, client=("127.0.0.1", 50000)), catalog, saver
 
 
@@ -191,12 +190,12 @@ def test_save_from_workflow_success() -> None:
 
 def test_list_templates_returns_404_when_catalog_disabled() -> None:
     client, _, _ = _build_app()
-    settings.feature_flags.disable_preset_catalog = True
+    settings.feature_flags.preset_catalog = False
 
     try:
         response = client.get("/api/presets")
     finally:
-        settings.feature_flags.disable_preset_catalog = False
+        settings.feature_flags.preset_catalog = True
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "preset_catalog_disabled"
@@ -244,7 +243,6 @@ def test_presets_keep_account_free_local_admission_without_loading_user(
     from api_service.services import single_user_conversion
     monkeypatch.setattr(single_user_conversion, "completed_guarded_upgrade", AsyncMock(return_value=object()))
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
-    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
     response = TestClient(app, base_url="http://localhost", client=(peer, 50000)).get(
         "/api/presets"
     )

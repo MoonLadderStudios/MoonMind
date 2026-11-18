@@ -81,10 +81,6 @@ class TemporalSettings(BaseSettings):
         "mm.workflow.merge_automation",
         validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE",
     )
-    user_workflow_contract_mode: Literal["renamed_contract"] = Field(
-        "renamed_contract",
-        validation_alias="TEMPORAL_USER_WORKFLOW_CONTRACT_MODE",
-    )
     user_workflow_v2_task_queue: str = Field(
         "mm.workflow.user.v2",
         validation_alias="TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE",
@@ -116,10 +112,6 @@ class TemporalSettings(BaseSettings):
     activity_deployment_task_queue: str = Field(
         "mm.activity.deployment",
         validation_alias="TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE",
-    )
-    temporal_authoritative_read_enabled: bool = Field(
-        True,
-        alias="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
     )
     workflow_worker_concurrency: int | None = Field(
         8,
@@ -266,27 +258,10 @@ class TemporalSettings(BaseSettings):
             )
         return normalized
 
-    @field_validator("user_workflow_contract_mode", mode="before")
-    @classmethod
-    def _normalize_user_workflow_contract_mode(cls, value: Any) -> str:
-        return str(value or "renamed_contract").strip().lower()
-
 
 class TemporalDashboardSettings(BaseSettings):
-    """Workflow-console Temporal source contract and rollout flags."""
+    """Workflow-console operator switches and Temporal read timeouts."""
 
-    enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ENABLED"),
-    )
-    list_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENABLED"),
-    )
-    detail_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENABLED"),
-    )
     actions_enabled: bool = Field(
         True,
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ACTIONS_ENABLED"),
@@ -296,7 +271,7 @@ class TemporalDashboardSettings(BaseSettings):
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SUBMIT_ENABLED"),
     )
     temporal_workflow_editing_enabled: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("TEMPORAL_WORKFLOW_EDITING_ENABLED"),
     )
     debug_fields_enabled: bool = Field(
@@ -320,59 +295,6 @@ class TemporalDashboardSettings(BaseSettings):
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_COUNT_TIMEOUT_SECONDS"),
         gt=0,
     )
-    list_endpoint: str = Field(
-        "/api/executions",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENDPOINT"),
-    )
-    create_endpoint: str = Field(
-        "/api/executions",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CREATE_ENDPOINT"),
-    )
-    detail_endpoint: str = Field(
-        "/api/executions/{workflowId}",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENDPOINT"),
-    )
-    update_endpoint: str = Field(
-        "/api/executions/{workflowId}/update",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_UPDATE_ENDPOINT"),
-    )
-    signal_endpoint: str = Field(
-        "/api/executions/{workflowId}/signal",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT"),
-    )
-    cancel_endpoint: str = Field(
-        "/api/executions/{workflowId}/cancel",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CANCEL_ENDPOINT"),
-    )
-    artifacts_endpoint: str = Field(
-        "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT"),
-    )
-    artifact_create_endpoint: str = Field(
-        "/api/artifacts",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT"),
-    )
-    artifact_metadata_endpoint: str = Field(
-        "/api/artifacts/{artifactId}",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT"),
-    )
-    artifact_presign_download_endpoint: str = Field(
-        "/api/artifacts/{artifactId}/presign-download",
-        validation_alias=AliasChoices(
-            "TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT"
-        ),
-    )
-    artifact_download_endpoint: str = Field(
-        "/api/artifacts/{artifactId}/download",
-        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT"),
-    )
-
-    @property
-    def steps_endpoint(self) -> str:
-        detail_endpoint = str(self.detail_endpoint or "").strip()
-        if not detail_endpoint:
-            return "/api/executions/{workflowId}/steps"
-        return f"{detail_endpoint.rstrip('/')}/steps"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
@@ -1595,27 +1517,10 @@ class FeatureFlagsSettings(BaseSettings):
             "PRESET_CATALOG",
         ),
         description=(
-            "Enable toggle for preset catalog endpoints + UI wiring. "
-            "Defaults on."
+            "Expose preset catalog endpoints and UI wiring. Defaults on; "
+            "false turns them off."
         ),
     )
-    disable_preset_catalog: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG",
-            "DISABLE_PRESET_CATALOG",
-        ),
-        description="Disable preset catalog endpoints + UI wiring.",
-    )
-
-    @property
-    def preset_catalog_enabled(self) -> bool:
-        """Return whether presets should be exposed for this runtime."""
-
-        return bool(
-            self.preset_catalog and not self.disable_preset_catalog
-        )
-
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="FEATURE_FLAGS__",

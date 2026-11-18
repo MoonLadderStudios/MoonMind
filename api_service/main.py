@@ -2968,7 +2968,7 @@ def teardown_providers():
 async def _sync_preset_seed_catalog() -> None:
     """Ensure YAML-backed default task presets exist in the catalog."""
 
-    if not settings.feature_flags.preset_catalog_enabled:
+    if not settings.feature_flags.preset_catalog:
         return
     if not _PRESET_SEED_DIR.exists():
         logger.info(

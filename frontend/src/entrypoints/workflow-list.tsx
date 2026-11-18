@@ -49,7 +49,6 @@ type ListDashboardConfig = {
   pollIntervalsMs?: { list?: number };
   features?: {
     temporalDashboard?: {
-      listEnabled?: boolean;
       actionsEnabled?: boolean;
       temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
@@ -1452,7 +1451,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     const candidate = dashboardCfg?.pollIntervalsMs?.list;
     return typeof candidate === 'number' && candidate > 0 ? candidate : POLL_MS_DEFAULT;
   }, [dashboardCfg]);
-  const listEnabled = dashboardCfg?.features?.temporalDashboard?.listEnabled !== false;
   const actionsEnabled = Boolean(dashboardCfg?.features?.temporalDashboard?.actionsEnabled);
   const taskEditingEnabled = Boolean(
     dashboardCfg?.features?.temporalDashboard?.temporalWorkflowEditing ??
@@ -1611,7 +1609,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: listQueryKey,
-    enabled: listEnabled && filterValidationErrors.length === 0,
+    enabled: filterValidationErrors.length === 0,
     queryFn: async () => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
@@ -1620,7 +1618,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       return ExecutionListResponseSchema.parse(await response.json());
     },
     refetchInterval:
-      listEnabled && liveUpdatesPref && !drawerOpen && desktopFilterField === null
+      liveUpdatesPref && !drawerOpen && desktopFilterField === null
         ? listPollMs
         : false,
     // Honour the live-updates pause on tab focus too: without this the shared
@@ -1647,7 +1645,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return {
       queryKey: ['workflow-list-facet', facet, facetFilters] as const,
       enabled:
-        listEnabled &&
         filterValidationErrors.length === 0 &&
         (drawerOpen || facetForFilterField(desktopFilterField) === facet),
       queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam?: unknown }) => {
@@ -2078,9 +2075,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const resultsFooter = (
     <div className="queue-results-toolbar workflow-list-results-footer">
       <div className="workflow-list-footer-live">
-        {!listEnabled ? (
-          <span className="small">Live updates unavailable while the list is disabled.</span>
-        ) : !liveUpdatesPref ? (
+        {!liveUpdatesPref ? (
           <span className="small">Live updates paused.</span>
         ) : null}
         {sortedItems.length > 0 ? (
@@ -2090,7 +2085,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       <div className="queue-pagination workflow-list-footer-pagination">
         <PageSizeSelector
           pageSize={pageSize}
-          disabled={!listEnabled}
           onPageSizeChange={handlePageSizeChange}
         />
         <div className="workflow-list-footer-page-summary" aria-label="Pagination summary">
@@ -2101,7 +2095,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <Button variant="secondary"
             type="button"
             className="queue-pagination-button"
-            disabled={!listEnabled || cursorStack.length === 0}
+            disabled={cursorStack.length === 0}
             onClick={goPrev}
             aria-label="Previous page"
           >
@@ -2110,7 +2104,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <Button variant="secondary"
             type="button"
             className="queue-pagination-button"
-            disabled={!listEnabled || !data?.nextPageToken}
+            disabled={!data?.nextPageToken}
             onClick={goNext}
             aria-label="Next page"
           >
@@ -2133,7 +2127,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
   const hasActiveFilters = activeFilters.length > 0;
   const hasWorkflowListNotices =
-    !listEnabled ||
     Boolean(ignoredWorkflowScopeState) ||
     filterValidationErrors.length > 0 ||
     workspaceCursorResetNotice;
@@ -2277,7 +2270,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           label={field === 'targetSkill' ? 'Skill' : 'Repo'}
           filterParams={facetScopeParams(clearFilterField(filters, field))}
           selected={selected}
-          disabled={!listEnabled}
           onSelect={(value) => {
             if (field === 'targetSkill') {
               updateDraftValues('targetSkill', [...draftFilters.targetSkill.values, value]);
@@ -2307,7 +2299,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <input
               type="text"
               value={draft.contains || ''}
-              disabled={!listEnabled}
               placeholder={field === 'workflowId' ? 'id starts with…' : 'title word…'}
               title={
                 field === 'workflowId'
@@ -2329,7 +2320,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             Status filter mode
             <select
               value={draft.mode}
-              disabled={!listEnabled}
               onChange={(event) => updateDraftValueMode('status', event.target.value as ValueFilter['mode'])}
             >
               <option value="include">Include selected</option>
@@ -2341,7 +2331,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
             renderValue={(value) => <WorkflowLifecycleStatusPill status={value} enableMotion={false} />}
-            disabled={!listEnabled}
             ariaLabelAdd="Status filter value"
             ariaLabelSelected="Selected status filters"
             addPlaceholder="Add status"
@@ -2365,7 +2354,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 min="0"
                 max="100"
                 value={draft.pctFrom || ''}
-                disabled={!listEnabled}
                 onChange={(event) => updateDraftProgress({ pctFrom: event.target.value })}
               />
             </label>
@@ -2376,7 +2364,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 min="0"
                 max="100"
                 value={draft.pctTo || ''}
-                disabled={!listEnabled}
                 onChange={(event) => updateDraftProgress({ pctTo: event.target.value })}
               />
             </label>
@@ -2388,7 +2375,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 <input
                   type="checkbox"
                   checked={draft.bucketIn.includes(bucket)}
-                  disabled={!listEnabled}
                   onChange={(event) => {
                     const bucketIn = event.target.checked
                       ? ([...draft.bucketIn, bucket].filter((value, index, values) => values.indexOf(value) === index) as ProgressBucket[])
@@ -2407,7 +2393,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 <input
                   type="checkbox"
                   checked={draft.signalIn.includes(signal)}
-                  disabled={!listEnabled}
                   onChange={(event) => {
                     const signalIn = event.target.checked
                       ? ([...draft.signalIn, signal].filter((value, index, values) => values.indexOf(value) === index) as ProgressSignal[])
@@ -2424,7 +2409,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <input
               type="text"
               value={draft.stepTitleContains || ''}
-              disabled={!listEnabled}
               placeholder="contains text..."
               onChange={(event) => updateDraftProgress({ stepTitleContains: event.target.value })}
             />
@@ -2433,7 +2417,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             Progress blank values
             <select
               value={draft.blank || ''}
-              disabled={!listEnabled}
               onChange={(event) =>
                 updateDraftProgress({
                   blank: event.target.value as NonNullable<ProgressFilter['blank']>,
@@ -2458,7 +2441,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <input
               type="text"
               value={draftFilters.repository.exactText || ''}
-              disabled={!listEnabled}
               placeholder="repo starts with…"
               title="Prefix match: finds repository names that start with this text."
               onChange={(event) => updateDraftRepository(event.target.value)}
@@ -2470,7 +2452,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               <select
                 aria-label="Repository value selection"
                 value={draftFilters.repository.values[0] || ''}
-                disabled={!listEnabled}
                 onChange={(event) => {
                   setDraftFilters((current) => ({
                     ...current,
@@ -2521,7 +2502,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             Provider Profile filter mode
             <select
               value={draft.mode}
-              disabled={!listEnabled}
               onChange={(event) =>
                 updateDraftProviderProfile({ mode: event.target.value as ProviderProfileFilter['mode'] })
               }
@@ -2538,7 +2518,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               const count = profileCounts.get(id);
               return typeof count === 'number' ? `${label} (${count})` : label;
             }}
-            disabled={!listEnabled}
             ariaLabelAdd="Provider Profile filter value"
             ariaLabelSelected="Selected Provider Profile filters"
             addPlaceholder="Add Provider Profile"
@@ -2554,7 +2533,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   <input
                     type="checkbox"
                     checked={selection.states.includes(state)}
-                    disabled={!listEnabled || opposite.states.includes(state)}
+                    disabled={opposite.states.includes(state)}
                     onChange={(event) =>
                       updateDraftProviderProfileSelection({
                         states: event.target.checked
@@ -2574,7 +2553,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           {providerProfileFacetQuery.hasNextPage ? (
             <Button variant="secondary"
               type="button"
-              disabled={!listEnabled || providerProfileFacetQuery.isFetching}
+              disabled={providerProfileFacetQuery.isFetching}
               onClick={() => {
                 if (!providerProfileFacetQuery.isFetching) {
                   void providerProfileFacetQuery.fetchNextPage({ cancelRefetch: false });
@@ -2602,7 +2581,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </p>
           <Button variant="secondary"
             type="button"
-            disabled={!listEnabled}
             onClick={() =>
               setDraftFilters((current) => ({ ...current, targetRuntime: emptyValueFilter() }))
             }
@@ -2622,7 +2600,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             Skill filter mode
             <select
               value={draft.mode}
-              disabled={!listEnabled}
               onChange={(event) => updateDraftValueMode('targetSkill', event.target.value as ValueFilter['mode'])}
             >
               <option value="include">Include selected</option>
@@ -2632,7 +2609,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <FilterPillMultiSelect
             values={draft.values}
             options={skillOptions}
-            disabled={!listEnabled}
             ariaLabelAdd="Skill filter value"
             ariaLabelSelected="Selected skill filters"
             addPlaceholder="Add skill"
@@ -2661,7 +2637,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <input
               type="date"
               value={draft.from || ''}
-              disabled={!listEnabled}
               onChange={(event) => updateDraftDate(field, { from: event.target.value })}
             />
           </label>
@@ -2670,7 +2645,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <input
               type="date"
               value={draft.to || ''}
-              disabled={!listEnabled}
               onChange={(event) => updateDraftDate(field, { to: event.target.value })}
             />
           </label>
@@ -2679,7 +2653,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               {label} blank values
               <select
                 value={draft.blank || ''}
-                disabled={!listEnabled}
                 onChange={(event) =>
                   updateDraftDate(field, { blank: event.target.value as NonNullable<DateFilter['blank']> })
                 }
@@ -2914,9 +2887,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
       {hasWorkflowListNotices ? (
         <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
-          {!listEnabled ? (
-            <div className="notice error">Temporal workflow list is disabled in server configuration.</div>
-          ) : null}
           {ignoredWorkflowScopeState ? (
             <div className="notice warning">
               Workflow scope filters are not available on Workflows. Showing workflow runs only.
@@ -3062,7 +3032,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               <Button variant="ghost"
                 type="button"
                 onClick={resetDraftFilters}
-                disabled={!listEnabled || !hasActiveFilters}
+                disabled={!hasActiveFilters}
                 aria-label="Reset filters"
               >
                 Reset
@@ -3077,7 +3047,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               <Button variant="secondary"
                 type="button"
                 onClick={applyDraftFilters}
-                disabled={!listEnabled}
                 aria-label="Apply filters"
               >
                 Apply
@@ -3255,7 +3224,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                         <Button variant="ghost"
                                           type="button"
                                           onClick={() => removeActiveFilter(filterField)}
-                                          disabled={!listEnabled || !filterValue}
+                                          disabled={!filterValue}
                                           aria-label={`Reset ${label} filter`}
                                         >
                                           Reset
@@ -3270,7 +3239,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                         <Button variant="secondary"
                                           type="button"
                                           onClick={applyDraftFilters}
-                                          disabled={!listEnabled}
                                           aria-label={`Apply ${label} filter`}
                                         >
                                           Apply

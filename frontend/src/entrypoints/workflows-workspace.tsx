@@ -53,7 +53,6 @@ function isCreatePath(pathname: string): boolean {
 type WorkflowsWorkspaceDashboardConfig = {
   features?: {
     temporalDashboard?: {
-      listEnabled?: boolean;
       workspaceShellEnabled?: boolean;
     };
   };
@@ -80,7 +79,6 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   const cfg = readWorkflowsWorkspaceDashboardConfig(payload);
   const temporalDashboard = cfg?.features?.temporalDashboard;
   const workspaceShellEnabled = temporalDashboard?.workspaceShellEnabled !== false;
-  const listEnabled = temporalDashboard?.listEnabled !== false;
   const displayMode = readWorkflowListDisplayMode(payload);
   const displayStatus = readWorkflowListDisplayStatus(payload);
 
@@ -133,7 +131,7 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
+  if (!isDesktop || !workspaceShellEnabled) {
     return (
       <Suspense fallback={<DetailLoading />}>
         <WorkflowDetailEntrypoint payload={payload} />

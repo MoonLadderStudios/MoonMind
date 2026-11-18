@@ -2589,7 +2589,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+          features: { temporalDashboard: { actionsEnabled: true } },
         },
       },
     };
@@ -2625,7 +2625,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+          features: { temporalDashboard: { actionsEnabled: true } },
         },
       },
     };
@@ -2672,7 +2672,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+          features: { temporalDashboard: { actionsEnabled: true } },
         },
       },
     };
@@ -2722,7 +2722,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+          features: { temporalDashboard: { actionsEnabled: true } },
         },
       },
     };
@@ -2766,7 +2766,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: false } },
+          features: { temporalDashboard: { actionsEnabled: false } },
         },
       },
     };
@@ -2807,7 +2807,7 @@ describe('Workflows Entrypoint', () => {
       apiBase: '/api',
       initialData: {
         dashboardConfig: {
-          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+          features: { temporalDashboard: { actionsEnabled: true } },
         },
       },
     };

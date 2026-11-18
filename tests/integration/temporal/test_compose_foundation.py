@@ -749,6 +749,20 @@ def test_local_compose_enables_temporal_workflow_editing_readiness():
     )
 
 
+def test_bare_app_settings_match_compose_workflow_editing_default(monkeypatch):
+    from moonmind.config.settings import AppSettings
+
+    monkeypatch.delenv("TEMPORAL_WORKFLOW_EDITING_ENABLED", raising=False)
+    api_env = _env_map(_load_compose()["services"]["api"]["environment"])
+    compose_default = api_env["TEMPORAL_WORKFLOW_EDITING_ENABLED"].rsplit(":-", 1)[1]
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.temporal_dashboard.temporal_workflow_editing_enabled is (
+        compose_default.rstrip("}") == "true"
+    )
+
+
 def test_omnigent_server_runs_without_static_host_services():
     compose = _load_compose()
     services = compose["services"]

@@ -212,7 +212,6 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
 
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
-    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
     async with template_db(tmp_path) as maker:
         async with maker() as session:
             await run_guarded_upgrade(session, operator_authorized=True)

@@ -14,7 +14,11 @@ from api_service.services.settings_catalog import (
     EffectiveSettingValue,
     SettingDiagnostic,
 )
-from moonmind.config.settings import FeatureFlagsSettings, settings
+from moonmind.config.settings import (
+    FeatureFlagsSettings,
+    TemporalDashboardSettings,
+    settings,
+)
 
 def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
     assert (
@@ -113,9 +117,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "jiraIntegration" not in config["system"]
     assert "external" not in config["statusMaps"]
     temporal_dashboard = config["features"]["temporalDashboard"]
-    assert temporal_dashboard["enabled"] is True
-    assert temporal_dashboard["listEnabled"] is True
-    assert temporal_dashboard["detailEnabled"] is True
+    assert not {"enabled", "listEnabled", "detailEnabled"} & temporal_dashboard.keys()
     assert temporal_dashboard["actionsEnabled"] is True
     assert temporal_dashboard["submitEnabled"] is True
     assert temporal_dashboard["temporalWorkflowEditing"] is False
@@ -1202,51 +1204,49 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
     ]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
-    monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
-    monkeypatch.setattr(settings.temporal_dashboard, "list_enabled", False)
-    monkeypatch.setattr(settings.temporal_dashboard, "detail_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", False)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
-    monkeypatch.setattr(
-        settings.temporal_dashboard,
-        "list_endpoint",
-        "/api/temporal/executions",
-    )
-    monkeypatch.setattr(
-        settings.temporal_dashboard,
-        "detail_endpoint",
-        "/gateway/api/executions/{workflowId}",
-    )
-    monkeypatch.setattr(
-        settings.temporal_dashboard,
-        "artifact_download_endpoint",
-        "/api/temporal/artifacts/{artifactId}/download",
-    )
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
     assert config["features"]["temporalDashboard"] == {
-        "enabled": False,
-        "listEnabled": False,
-        "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,
         "temporalWorkflowEditing": False,
         "debugFieldsEnabled": True,
         "workspaceShellEnabled": True,
     }
-    assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
-    assert (
-        config["sources"]["temporal"]["steps"]
-        == "/gateway/api/executions/{workflowId}/steps"
-    )
-    assert (
-        config["sources"]["temporal"]["artifactDownload"]
-        == "/api/temporal/artifacts/{artifactId}/download"
-    )
     assert "temporal" not in config["system"]["supportedRuntimes"]
+
+def test_build_runtime_config_temporal_routes_are_fixed(monkeypatch) -> None:
+    monkeypatch.setenv("TEMPORAL_DASHBOARD_LIST_ENDPOINT", "/api/temporal/executions")
+    monkeypatch.setenv(
+        "TEMPORAL_DASHBOARD_DETAIL_ENDPOINT", "/gateway/api/executions/{workflowId}"
+    )
+    monkeypatch.setattr(
+        settings, "temporal_dashboard", TemporalDashboardSettings(_env_file=None)
+    )
+
+    config = dashboard_view_model.build_runtime_config("/workflows")
+
+    assert config["sources"]["temporal"] == {
+        "list": "/api/executions",
+        "create": "/api/executions",
+        "detail": "/api/executions/{workflowId}",
+        "steps": "/api/executions/{workflowId}/steps",
+        "update": "/api/executions/{workflowId}/update",
+        "signal": "/api/executions/{workflowId}/signal",
+        "cancel": "/api/executions/{workflowId}/cancel",
+        "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+        "artifactCreate": "/api/artifacts",
+        "artifactMetadata": "/api/artifacts/{artifactId}",
+        "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
+        "artifactDownload": "/api/artifacts/{artifactId}/download",
+    }
+    config["sources"]["temporal"]["list"] = "/changed"
+    assert dashboard_view_model.TEMPORAL_SOURCE_ROUTES["list"] == "/api/executions"
 
 def test_build_runtime_config_never_advertises_retired_jules(monkeypatch) -> None:
     monkeypatch.setenv("JULES_ENABLED", "true")

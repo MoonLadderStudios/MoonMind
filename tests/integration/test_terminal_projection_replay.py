@@ -58,11 +58,10 @@ async def session(tmp_path, monkeypatch):
     ],
 )
 async def test_terminal_describe_repairs_metadata_skew(
-    session, monkeypatch, query, terminal_status, expected
+    session, query, terminal_status, expected
 ):
     from api_service.api.routers import executions
     from api_service.db.base import get_async_session
-    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.service import TemporalExecutionService
 
     started = datetime.fromisoformat(REPLAY["startedAt"])
@@ -136,7 +135,6 @@ async def test_terminal_describe_repairs_metadata_skew(
                 "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
-    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://test"
     ) as client:

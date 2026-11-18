@@ -7,8 +7,12 @@ from moonmind.config.settings import (
     FeatureFlagsSettings,
     GoogleSettings,
     OpenAISettings,
-    WorkflowSettings,
     TemporalDashboardSettings,
+    TemporalSettings,
+    WorkflowSettings,
+)
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    resolve_user_workflow_start_contract,
 )
 
 # Fixture for default settings, can be customized in tests
@@ -92,10 +96,12 @@ class TestAtlassianSettings:
         monkeypatch.delenv("ATLASSIAN_URL", raising=False)
 
 class TestTemporalDashboardSettings:
-    def test_default_values(self):
+    def test_default_values(self, monkeypatch):
+        monkeypatch.delenv("TEMPORAL_WORKFLOW_EDITING_ENABLED", raising=False)
         settings = TemporalDashboardSettings(_env_file=None)
         assert settings.actions_enabled is True
         assert settings.submit_enabled is True
+        assert settings.temporal_workflow_editing_enabled is True
         assert settings.terminal_step_ledger_query_timeout_seconds == 30.0
 
     def test_env_overrides(self, monkeypatch):
@@ -119,71 +125,23 @@ class TestTemporalDashboardSettings:
         )
 
 class TestFeatureFlagsSettings:
-    def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
-        monkeypatch.setenv("FEATURE_FLAGS__PRESET_CATALOG", "1")
-        monkeypatch.delenv("PRESET_CATALOG", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
-        )
-        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
-
-        settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.preset_catalog is True
-        assert settings.preset_catalog_enabled is True
-
-        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
-
-    def test_preset_catalog_keeps_legacy_env_fallback(self, monkeypatch):
-        monkeypatch.setenv("PRESET_CATALOG", "1")
-        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
-        )
-        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
-
-        settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.preset_catalog is True
-        assert settings.preset_catalog_enabled is True
-
-        monkeypatch.delenv("PRESET_CATALOG", raising=False)
-
     def test_preset_catalog_defaults_enabled_without_env(self, monkeypatch):
         monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
         monkeypatch.delenv("PRESET_CATALOG", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
-        )
-        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
 
         settings = FeatureFlagsSettings(_env_file=None)
         assert settings.preset_catalog is True
-        assert settings.preset_catalog_enabled is True
 
-    def test_preset_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "name", ["FEATURE_FLAGS__PRESET_CATALOG", "PRESET_CATALOG"]
+    )
+    def test_preset_catalog_can_be_disabled(self, monkeypatch, name):
         monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
         monkeypatch.delenv("PRESET_CATALOG", raising=False)
-        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_PRESET_CATALOG", "1")
-        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+        monkeypatch.setenv(name, "false")
 
         settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.preset_catalog_enabled is False
-
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
-        )
-
-    def test_preset_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
-        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
-        monkeypatch.delenv("PRESET_CATALOG", raising=False)
-        monkeypatch.delenv(
-            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
-        )
-        monkeypatch.setenv("DISABLE_PRESET_CATALOG", "1")
-
-        settings = FeatureFlagsSettings(_env_file=None)
-        assert settings.preset_catalog_enabled is False
-
-        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+        assert settings.preset_catalog is False
 
     def test_retired_jira_create_page_env_is_ignored(self, monkeypatch):
         # Operators upgrading with the retired Create-page Jira browser rollout
@@ -201,6 +159,65 @@ class TestFeatureFlagsSettings:
         assert not any(
             name.startswith("jira_create_page") for name in settings.model_dump()
         )
+
+_REMOVED_SETTING_VALUES = {
+    "TEMPORAL_USER_WORKFLOW_CONTRACT_MODE": "legacy_run",
+    "TEMPORAL_AUTHORITATIVE_READ_ENABLED": "false",
+    "TEMPORAL_DASHBOARD_ENABLED": "false",
+    "TEMPORAL_DASHBOARD_LIST_ENABLED": "false",
+    "TEMPORAL_DASHBOARD_DETAIL_ENABLED": "false",
+    "TEMPORAL_DASHBOARD_LIST_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_CREATE_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_DETAIL_ENDPOINT": "/broken/{workflowId}",
+    "TEMPORAL_DASHBOARD_UPDATE_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_CANCEL_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT": "/broken",
+    "TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT": "/broken",
+    "DISABLE_PRESET_CATALOG": "true",
+    "FEATURE_FLAGS__DISABLE_PRESET_CATALOG": "true",
+}
+
+
+@pytest.mark.parametrize("source", ["environment", "dotenv"])
+def test_removed_settings_still_start(monkeypatch, tmp_path, source):
+    # Deployments upgrading with a removed name still in their .env must start
+    # cleanly and keep the default behaviour.
+    for name in (
+        *_REMOVED_SETTING_VALUES,
+        "TEMPORAL_WORKFLOW_EDITING_ENABLED",
+        "PRESET_CATALOG",
+        "FEATURE_FLAGS__PRESET_CATALOG",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    env_file = None
+    if source == "environment":
+        for name, value in _REMOVED_SETTING_VALUES.items():
+            monkeypatch.setenv(name, value)
+    else:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "".join(
+                f"{name}={value}\n" for name, value in _REMOVED_SETTING_VALUES.items()
+            ),
+            encoding="utf-8",
+        )
+
+    settings = AppSettings(_env_file=env_file)
+    temporal = TemporalSettings(_env_file=env_file)
+    dashboard = TemporalDashboardSettings(_env_file=env_file)
+    feature_flags = FeatureFlagsSettings(_env_file=env_file)
+
+    assert resolve_user_workflow_start_contract(temporal).contract_mode == (
+        "renamed_contract"
+    )
+    assert dashboard.temporal_workflow_editing_enabled is True
+    assert settings.feature_flags.preset_catalog is True
+    assert feature_flags.preset_catalog is True
+
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)

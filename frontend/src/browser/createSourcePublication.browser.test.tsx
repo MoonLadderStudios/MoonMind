@@ -48,7 +48,7 @@ const uiInfo = {
       presetCatalog: { enabled: true, list: '/api/presets' },
     },
     features: {
-      temporalDashboard: { actionsEnabled: true, listEnabled: false, workspaceShellEnabled: false, temporalWorkflowEditing: true },
+      temporalDashboard: { actionsEnabled: true, workspaceShellEnabled: false, temporalWorkflowEditing: true },
     },
   },
 };

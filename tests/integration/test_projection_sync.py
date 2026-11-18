@@ -90,12 +90,11 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
     assert len(records) == 1
 
 @pytest.mark.asyncio
-async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
+async def test_list_executions_router_sync_behavior(db_session):
     """MoonLadderStudios/MoonMind#3927: HTTP reads repair persisted drift."""
     from api_service.api.routers import executions
     from api_service.auth_providers import get_instance_access
     from api_service.db.base import get_async_session
-    from moonmind.config.settings import settings
 
     now = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
@@ -148,7 +147,6 @@ async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
                 "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
-    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -173,9 +171,9 @@ async def test_product_list_repairs_included_rows_and_excludes_persisted_interna
     from temporalio import workflow
     from api_service.api.routers import executions
     from api_service.auth_providers import get_instance_access
+    from api_service.core import sync
     from api_service.db.base import get_async_session
     from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalWorkflowType
-    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.service import TemporalExecutionService
     from moonmind.workflows.temporal.workflow_registry import (
         STATIC_WORKFLOW_REGISTRATIONS,
@@ -208,7 +206,6 @@ async def test_product_list_repairs_included_rows_and_excludes_persisted_interna
 
     app.dependency_overrides[get_async_session] = session_dependency
     app.dependency_overrides[executions._get_service] = lambda: service
-    # Projection-mode list does not access Temporal; accidental access must fail.
     app.dependency_overrides[executions.get_temporal_client] = lambda: None
     user = SimpleNamespace(id=owner, is_superuser=False)
     app.dependency_overrides[get_instance_access] = lambda: user
@@ -223,7 +220,12 @@ async def test_product_list_repairs_included_rows_and_excludes_persisted_interna
                 "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
-    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
+
+    # Registry policy is owned by the projection read; Temporal sync is out of scope.
+    async def _skip_temporal_sync(_session, items, _client):
+        return items
+
+    monkeypatch.setattr(sync, "sync_temporal_executions_safely", _skip_temporal_sync)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         response = await client.get("/api/executions")
     assert response.status_code == 200, response.text

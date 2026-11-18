@@ -117,7 +117,6 @@ async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch)
 
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
-    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
     async with template_db(tmp_path) as maker:
 
         async def session_dependency():
