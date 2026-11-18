@@ -115,13 +115,16 @@ function savedAccountUsage() {
   };
 }
 
+// A Codex OAuth login: only subscription logins report weekly usage.
 function savedProfile(tiers: SavedTier[], defaultTier: number) {
   return {
     profile_id: LONG_ID,
     runtime_id: 'codex_cli',
     provider_id: 'openai',
-    credential_source: 'secret_ref',
-    runtime_materialization_mode: 'api_key_env',
+    credential_source: 'oauth_volume',
+    runtime_materialization_mode: 'oauth_home',
+    volume_ref: 'codex_auth_volume',
+    volume_mount_path: '/home/app/.codex',
     secret_refs: {},
     max_parallel_runs: 1,
     cooldown_after_429_seconds: 300,
@@ -254,9 +257,16 @@ function policyResponse(url: URL, method: string, init?: RequestInit): Response 
 // API-key enrollment drawers. They carry no secret values.
 const CLAUDE_PROFILE_ID = 'claude-team-api-key-profile-with-a-long-unbroken-identifier-0123456789';
 const OPENCODE_PROFILE_ID = 'opencode-go-api-key-profile-with-a-long-unbroken-identifier-0123456789';
+const API_KEY_CREDENTIAL = {
+  credential_source: 'secret_ref',
+  runtime_materialization_mode: 'api_key_env',
+  volume_ref: null,
+  volume_mount_path: null,
+};
 const enrollmentProfiles = [
   {
     ...savedProfile([{ label: 'Default', model: null, effort: null }], 1),
+    ...API_KEY_CREDENTIAL,
     profile_id: CLAUDE_PROFILE_ID,
     runtime_id: 'claude_code',
     provider_id: 'anthropic',
@@ -265,6 +275,7 @@ const enrollmentProfiles = [
   },
   {
     ...savedProfile([{ label: 'Default', model: null, effort: null }], 1),
+    ...API_KEY_CREDENTIAL,
     profile_id: OPENCODE_PROFILE_ID,
     runtime_id: 'opencode',
     provider_id: 'opencode-go',
