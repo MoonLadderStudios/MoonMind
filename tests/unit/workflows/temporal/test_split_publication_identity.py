@@ -14,7 +14,14 @@ from moonmind.workflows.temporal.activities import (
 
 
 @pytest.mark.asyncio
-async def test_split_session_publication_keeps_admitted_identity(monkeypatch):
+@pytest.mark.parametrize("remediation", [False, True], ids=["ordinary", "remediation"])
+@pytest.mark.parametrize(
+    "commit_message", [None, "", " \t ", "  Admitted commit message  "],
+    ids=["absent", "empty", "whitespace", "admitted"],
+)
+async def test_split_session_publication_keeps_admitted_identity(
+    monkeypatch, remediation, commit_message
+):
     identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
     from tests.helpers.publication_identity import recorded_publication_identity
 
@@ -42,6 +49,15 @@ async def test_split_session_publication_keeps_admitted_identity(monkeypatch):
             },
         },
     )
+    if commit_message is not None:
+        request.parameters["commitMessage"] = commit_message
+    expected_locator = dict(request.workspace_spec["workspaceLocator"])
+    if remediation:
+        expected_locator = {
+            "kind": "sandbox", "workspaceId": "retained-remediation", "relativePath": "candidate",
+        }
+        request.remediation_workspace = {"destinationWorkspaceLocator": expected_locator}
+    original_parameters = dict(request.parameters)
     session = SimpleNamespace(
         terminal_state="succeeded",
         terminal_evidence_ref=None,
@@ -102,3 +118,10 @@ async def test_split_session_publication_keeps_admitted_identity(monkeypatch):
         )
     assert observed.get("publication_git_identity") == identity
     assert observed.get("github_token") == "fixture-credential"
+    # Message normalization/fallback belongs to the publisher. This port must
+    # carry the admitted string rather than inventing or replacing a message.
+    assert observed.get("commit_message") == commit_message
+    assert observed["workspace_locator"] == expected_locator
+    assert observed["publish_mode"] == "pr"
+    assert observed["base_branch"] == "main"
+    assert request.parameters == original_parameters
