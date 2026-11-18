@@ -84,6 +84,7 @@ describe('Recurring layout and navigation', () => {
         expect(screen.queryByRole('region', { name: 'Schedule summary' })).toBeNull();
         expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
         if (width > 720) {
+          expect(screen.queryByRole('button', { name: 'Filter recurring schedules' })).toBeNull();
           const table = screen.getByRole('table', { name: 'Recurring schedules' });
           const slab = table.parentElement!;
           const header = table.querySelector('th')!;
@@ -106,6 +107,7 @@ describe('Recurring layout and navigation', () => {
           expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(width);
         } else {
           expect(screen.queryByRole('table', { name: 'Recurring schedules' })).toBeNull();
+          expect(screen.getByRole('button', { name: 'Filter recurring schedules' })).toBeTruthy();
           const cards = screen.getByRole('list', { name: 'Recurring schedule cards' });
           for (const label of ['Provider Profile', 'Repository', 'Model', 'Effort']) {
             expect(within(cards).getAllByText(label)).toHaveLength(2);
@@ -157,6 +159,21 @@ describe('Recurring layout and navigation', () => {
     await userEvent.click(page.getByRole(system ? 'menuitem' : 'link', { name: 'Skills', exact: true }));
     await screen.findByText('Review code');
     expect(window.location.pathname).toBe('/skills');
+  });
+
+  it('filters an initially unfiltered mobile card list without a desktop toolbar', async () => {
+    await page.viewport(390, 844);
+    mount();
+    await screen.findByRole('link', { name: /Nightly repository sweep/ });
+    await userEvent.click(page.getByRole('button', { name: 'Filter recurring schedules' }));
+    await userEvent.fill(page.getByRole('textbox', { name: 'Schedule filter value' }), 'nightly');
+    await waitFor(() => expect(window.location.search).toContain('schedule=nightly'));
+    await userEvent.click(page.getByRole('button', { name: 'Close filters' }));
+    expect(screen.queryByRole('dialog', { name: 'Recurring filters' })).toBeNull();
+    await userEvent.click(page.getByRole('button', { name: 'Remove Schedule filter' }));
+    await waitFor(() => expect(window.location.search).not.toContain('schedule='));
+    await userEvent.click(page.getByRole('button', { name: 'Filter recurring schedules' }));
+    expect(screen.getByRole('dialog', { name: 'Recurring filters' })).toBeTruthy();
   });
 
   it('opens standalone detail on mobile without a hidden sidebar', async () => {

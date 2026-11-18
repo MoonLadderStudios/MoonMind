@@ -298,7 +298,7 @@ Updated
 Rules:
 
 1. Filter controls should belong to columns where possible.
-2. There is no standalone Filters button. Existing active chips can reopen their filter sheet, including filters retained in older URLs.
+2. There is no standalone desktop Filters button. On the mobile card layout, an icon-only filter entry opens the filter sheet even before a filter is applied. Existing active chips can also reopen their filter sheet, including filters retained in older URLs.
 3. Active filter chips should summarize applied filters and reopen the corresponding filter section.
 4. Filter changes reset pagination to the first page.
 5. Page-size changes reset pagination to the first page.

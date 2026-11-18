@@ -1,4 +1,4 @@
-import { CirclePlay, Pause, Plus } from 'lucide-react';
+import { CirclePlay, ListFilter, Pause, Plus } from 'lucide-react';
 import { AssessmentEngagementReview } from '../components/workflows/AssessmentEngagementReview';
 import { copyAssessmentReview, reviewAssessmentProposal, type AssessmentEngagementReview as EngagementReview } from '../lib/assessmentEngagement';
 import { Button } from '../components/Button';
@@ -2171,6 +2171,16 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
       <RecurringTableTitle />
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
+        <Button
+          variant="icon"
+          className="schedules-mobile-filter-entry"
+          aria-label="Filter recurring schedules"
+          aria-haspopup="dialog"
+          aria-expanded={mobileFiltersOpen}
+          onClick={() => setMobileFiltersOpen(true)}
+        >
+          <ListFilter size={18} aria-hidden="true" />
+        </Button>
         {activeFilters.length > 0 ? (
           <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
             {activeFilters.map(([key, value]) => (

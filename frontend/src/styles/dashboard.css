@@ -2194,6 +2194,7 @@ h1 {
   gap: 0.75rem;
 }
 
+.schedules-table-panel .schedules-mobile-filter-entry,
 .schedules-mobile-card-list {
   display: none;
 }
@@ -4108,6 +4109,11 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
 }
 
 @media (max-width: 720px) {
+  .schedules-table-panel .schedules-mobile-filter-entry {
+    display: inline-flex;
+    justify-self: end;
+  }
+
   .schedules-table-panel .data-table-slab {
     display: none;
   }

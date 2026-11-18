@@ -849,6 +849,18 @@ describe("SchedulesPage", () => {
     });
   });
 
+  it("opens mobile filters from an initially unfiltered list and can reopen after closing", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    await screen.findByText('Daily repository sweep');
+    const opener = screen.getByRole('button', { name: 'Filter recurring schedules' });
+    fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'Recurring filters' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    expect(screen.queryByRole('dialog', { name: 'Recurring filters' })).toBeNull();
+    fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'Recurring filters' })).toBeTruthy();
+  });
+
   it("keeps column filters without a standalone Filters button", async () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
     await screen.findByText('Daily repository sweep');
