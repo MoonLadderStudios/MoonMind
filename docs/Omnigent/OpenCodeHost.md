@@ -218,16 +218,25 @@ Enrollment launches a short-lived isolated v2 server and reads `/api/model`,
 returning only selected-provider model IDs. Raw catalog settings can contain
 API keys and must never be stored as evidence. Catalog availability and
 `/api/integration/<provider>/connect/key` do not prove that a key is valid:
-the latter only stores it. Credentialed enrollment separately performs the
-provider's authenticated, non-generation check (OpenCode Go usage or OpenRouter
-key information). A 401 rejects the credential; redirects, malformed responses,
+the latter only stores it. Go and OpenRouter enrollment separately perform
+the provider's authenticated, non-generation check (usage or key information).
+Other registered API-key providers use v2's native integration key connection
+and model discovery without a fabricated external verification endpoint. Their
+keys are explicitly unverified, with authentication enforced when the provider
+executes the request; catalog readiness is not account authentication. Rotation
+resets that distinction, while a catalog refresh preserves verified evidence
+for the same credential generation. A 401 from a provider check rejects the
+credential; redirects, malformed responses,
 WAF blocks, rate limits and transport failures leave verification unavailable,
 not falsely valid or permanently invalid. The exact-host catalog observation
 reuses the isolated probe without repeating enrollment's credential verdict.
 
 Publish both architectures through the default shared-image workflow and verify
 that no temporary base override still selects a pre-v2 image. Retain normal
-readiness and offline-plugin gates. After deployment, a genuine existing
+readiness and offline-plugin gates. Publication requires OpenCode v2; bootstrap
+selects the functional v1 or v2 plugin smoke from the actual immutable image's
+CLI version, so retained v1 images can still recover without bypassing the
+offline gate. Remove that branch only after retained v1 hosts are drained. After deployment, a genuine existing
 provider-profile session must verify successful model use, policy approval,
 streaming and cleanup. An offline smoke pass alone is not that acceptance.
 Original credential materializations and recorded prior sessions remain intact;

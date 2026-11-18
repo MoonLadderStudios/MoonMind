@@ -4613,11 +4613,13 @@ async def test_real_api_key_probe_reasons_reach_api_manager_and_recover(
     "provider_id",
     ["openrouter", "future.v2_provider-1", "opencode-go", "openai", "anthropic"],
 )
+@pytest.mark.parametrize("verification_status", ["verified", "unverified"])
 async def test_opencode_create_enroll_and_routing_data(
     client_app: AsyncClient,
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
     provider_id: str,
+    verification_status: str,
 ) -> None:
     from datetime import UTC, datetime
 
@@ -4628,10 +4630,11 @@ async def test_opencode_create_enroll_and_routing_data(
         OpenCodeProviderRuntimeValidationService,
     )
 
-    profile_id = f"generic-{provider_id}"
+    profile_id = f"generic-{provider_id}-{verification_status}"
     raw_key = "provider-specific-test-key"
     image_ref = "registry.test/opencode@sha256:" + "a" * 64
     evidence = {
+        "credentialVerification": {"status": verification_status},
         "credentialGeneration": 1,
         "imageRef": image_ref,
         "validatedAt": datetime.now(UTC).isoformat(),
@@ -4643,7 +4646,7 @@ async def test_opencode_create_enroll_and_routing_data(
     async def _validate(self, **kwargs):
         assert kwargs["profile"].provider_id == provider_id
         assert kwargs["candidate_secret"] == raw_key
-        assert kwargs["candidate_generation"] == 1
+        assert kwargs["candidate_generation"] == evidence["credentialGeneration"]
         assert kwargs["lease"].lease_id == "generic-enrollment"
         runtime_calls.append(kwargs["profile"].profile_id)
         return evidence
@@ -4664,16 +4667,14 @@ async def test_opencode_create_enroll_and_routing_data(
         "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
         AsyncMock(),
     )
-    monkeypatch.setattr(
-        OpenCodeProviderRuntimeValidationService, "validate", _validate
-    )
+    monkeypatch.setattr(OpenCodeProviderRuntimeValidationService, "validate", _validate)
     monkeypatch.setattr(
         "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
         lambda: image_ref,
     )
-    app.dependency_overrides[
-        provider_profiles_router._credential_validation_guard
-    ] = _maintenance_guard_override
+    app.dependency_overrides[provider_profiles_router._credential_validation_guard] = (
+        _maintenance_guard_override
+    )
 
     async with client_app as client:
         preset_response = await client.get(
@@ -4715,6 +4716,18 @@ async def test_opencode_create_enroll_and_routing_data(
     assert payload["provider_id"] == provider_id
     assert payload["runtime_id"] == "opencode"
     assert payload["launch_ready"] is True
+    assert (payload["last_validated_at"] is not None) == (
+        verification_status == "verified"
+    )
+    assert (payload["first_authenticated_at"] is not None) == (
+        verification_status == "verified"
+    )
+    assert (
+        enrolled.json()["readiness"]["credential_verification"] == verification_status
+    )
+    assert enrolled.json()["readiness"]["observation"] == (
+        "confirmed" if verification_status == "verified" else "unverified"
+    )
     assert payload["model_catalog_evidence"] == evidence
     assert payload["credential_generation"] == 1
     assert payload["runtime_materialization_mode"] == "composite"
@@ -4740,6 +4753,9 @@ async def test_opencode_create_enroll_and_routing_data(
         ).scalar_one()
         assert secret.ciphertext == raw_key
         assert secret.details["provider_id"] == provider_id
+        assert (secret.details["last_validated_at"] is not None) == (
+            verification_status == "verified"
+        )
     assert routing["launch_ready"] is True
     assert routing["provider_id"] == provider_id
     assert routing["default_model"] == f"{provider_id}/model"
@@ -4748,6 +4764,43 @@ async def test_opencode_create_enroll_and_routing_data(
         materializer_ref_for_provider(routing["runtime_id"], routing["provider_id"])
         == "opencode-auth-json@1"
     )
+
+    # Rotate a previously verified generation to a catalog-only key. Account
+    # verification must not transfer merely because the provider is unchanged.
+    raw_key = "replacement-provider-specific-key"
+    evidence = {
+        **evidence,
+        "credentialGeneration": 2,
+        "credentialVerification": {"status": "unverified"},
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as rotation_client:
+        rotated = await rotation_client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+        assert rotated.status_code == 200, rotated.text
+        assert rotated.json()["readiness"]["last_validated_at"] is None
+        assert rotated.json()["readiness"]["observation"] == "unverified"
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row.credential_generation == 2
+        secret = (
+            await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == secret_ref.removeprefix("db://")
+                )
+            )
+        ).scalar_one()
+        assert secret.ciphertext == raw_key
+        assert secret.details["last_validated_at"] is None
+        assert row.last_validated_at is None
+        assert (
+            row.model_catalog_evidence_json["credentialVerification"]["status"]
+            == "unverified"
+        )
+        assert row.command_behavior["auth_readiness"]["launch_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -6760,3 +6813,44 @@ async def test_tier_preview_reports_an_unavailable_family_without_substituting(
     assert items["astra"]["model"] is None
     assert items["astra"]["familyResolutionStatus"] == "unavailable"
     assert "Astra" in items["astra"]["unavailableReason"]
+
+
+@pytest.mark.parametrize("previously_verified", [False, True])
+@pytest.mark.parametrize(
+    "provider_id", ["openrouter", "anthropic", "future.v2_provider-1"]
+)
+def test_generic_api_key_setup_does_not_claim_account_verification(
+    previously_verified, provider_id
+):
+    from datetime import UTC, datetime
+
+    profile = ManagedAgentProviderProfile(
+        profile_id="generic-opencode-verification",
+        runtime_id="opencode",
+        provider_id=provider_id,
+        provider_label=provider_id,
+        secret_refs={},
+        env_template={},
+        clear_env_keys=[],
+        file_templates=[],
+        command_behavior={},
+        home_path_overrides={},
+    )
+    when = datetime.now(UTC)
+    profile.first_authenticated_at = when if previously_verified else None
+    profile.last_validated_at = when if previously_verified else None
+    mapping = provider_profiles_router._api_key_mapping_for_profile(profile)
+    provider_profiles_router._apply_api_key_setup_to_profile(
+        profile,
+        mapping=mapping,
+        secret_ref="db://generic-key",
+        account_label=None,
+        validated_at=when,
+        enabled=True,
+        credential_verification="unverified",
+    )
+    assert profile.last_validated_at is None
+    assert profile.first_authenticated_at == (when if previously_verified else None)
+    assert profile.command_behavior["auth_readiness"]["observation"] == "unverified"
+    assert profile.command_behavior["auth_readiness"]["launch_ready"] is True
+    assert "not verified" in profile.command_behavior["auth_status_label"]

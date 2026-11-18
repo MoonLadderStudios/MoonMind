@@ -74,7 +74,8 @@ RUN --mount=type=cache,target=/root/.npm \
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --filter web
 COPY omnigent/web/ ./web/
-RUN pnpm --filter web run build
+COPY tools/native-ui/apply-sidebar-presentation.mjs /build/apply-sidebar-presentation.mjs
+RUN node /build/apply-sidebar-presentation.mjs && pnpm --filter web run build
 
 # ---------------------------------------------------------------------------
 FROM ${PYTHON_BASE} AS python-requirements

@@ -362,7 +362,9 @@ def verify_provider_key(provider, key):
         "opencode-go": "https://opencode.ai/zen/go/v1/usage",
     }.get(provider)
     if endpoint is None:
-        raise RuntimeError("OpenCode credential verification unavailable for selected provider")
+        # v2 has no universal account-verification operation. Importing a key
+        # and observing models establishes configuration, not authentication.
+        return "unverified"
     provider_opener = urllib.request.build_opener(NoRedirect())
     req = urllib.request.Request(endpoint, headers={
         "Authorization": "Bearer " + key, "Accept": "application/json",
@@ -394,6 +396,7 @@ def verify_provider_key(provider, key):
         valid = isinstance(usage, dict) and all(meter(usage.get(k)) for k in ("rolling", "weekly", "monthly"))
     if not valid:
         raise RuntimeError("OpenCode credential verification unavailable: unexpected provider response")
+    return "verified"
 
 
 with (root / "serve.log").open("w+b") as log:
@@ -422,6 +425,7 @@ with (root / "serve.log").open("w+b") as log:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("OpenCode startup timeout") from None
                 time.sleep(.25)
+        verification = "not_required" if provider == "opencode" and not credential_dir else "unverified"
         if credential_dir and not (Path(credential_dir) / "auth.json").is_file():
             if mode == "catalog" and provider == "opencode":
                 credential_dir = ""
@@ -433,7 +437,7 @@ with (root / "serve.log").open("w+b") as log:
             if entry.get("type") != "api" or not isinstance(entry.get("key"), str) or not entry["key"]:
                 raise RuntimeError("OpenCode credential materialization missing selected provider key")
             if mode == "validate":
-                verify_provider_key(provider, entry["key"])
+                verification = verify_provider_key(provider, entry["key"])
             try:
                 request(f"integration/{provider}/connect/key", {"key": entry["key"]})
             except urllib.error.HTTPError as error:
@@ -454,7 +458,8 @@ with (root / "serve.log").open("w+b") as log:
                 and row.get("enabled") is not False})
             if models:
                 # API rows can include provider keys in settings. Emit IDs only.
-                print(json.dumps(models))
+                print(json.dumps({"models": models, "credentialVerification": {"status": verification}}
+                    if mode == "validate" else models))
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError("OpenCode catalog settlement timeout: no models for selected provider")
@@ -735,6 +740,19 @@ class OpenCodeProviderRuntimeValidationService:
             models = _validated_models(
                 parsed, provider_id=str(profile.provider_id or "")
             )
+            verification = (
+                parsed.get("credentialVerification")
+                if isinstance(parsed, dict)
+                else None
+            )
+            if not isinstance(verification, dict) or verification.get("status") not in {
+                "verified",
+                "unverified",
+                "not_required",
+            }:
+                verification = {"status": "unverified"}
+            # Only the authenticated probe result certifies the current key.
+            verification = {"status": verification["status"]}
             versions: dict[str, str] = {}
             for binary in ("opencode", "omnigent"):
                 version_code, version_out, _version_err = await self._backend.run(
@@ -769,6 +787,7 @@ class OpenCodeProviderRuntimeValidationService:
             evidence: dict[str, Any] = {
                 "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
                 "models": [{"qualifiedId": item} for item in models],
+                "credentialVerification": verification,
                 "imageRef": effective_image_ref,
                 "runtimeVersions": versions,
                 "validatedAt": datetime.now(UTC).isoformat(),

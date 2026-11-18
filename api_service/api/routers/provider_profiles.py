@@ -820,10 +820,16 @@ class ClaudeManualAuthCommitResponse(BaseModel):
     secret_ref: str
 
 
+class ProviderApiKeyReadiness(ClaudeManualAuthReadiness):
+    last_validated_at: str | None = None
+    credential_verification: str = "verified"
+    observation: str = "confirmed"
+
+
 class ProviderApiKeySetupResponse(BaseModel):
     status: str
     status_label: str
-    readiness: ClaudeManualAuthReadiness
+    readiness: ProviderApiKeyReadiness
     profile_id: str
     secret_ref: str
 
@@ -2618,6 +2624,16 @@ async def setup_provider_api_key(
                     reason="OpenCode credential rejected by the provider.",
                 )
             raise _opencode_validation_http_error(exc) from exc
+    verification_status = (
+        str(
+            (runtime_evidence.get("credentialVerification") or {}).get(
+                "status", "unverified"
+            )
+        )
+        if is_opencode and runtime_evidence is not None
+        else "verified"
+    )
+    account_verified = verification_status == "verified"
     await _upsert_managed_secret(
         session=session,
         slug=secret_slug,
@@ -2628,7 +2644,7 @@ async def setup_provider_api_key(
             "provider_id": profile.provider_id,
             "auth_strategy": mapping.auth_strategy,
             "secret_role": mapping.secret_role,
-            "last_validated_at": validated_at.isoformat(),
+            "last_validated_at": validated_at.isoformat() if account_verified else None,
         },
     )
 
@@ -2639,6 +2655,7 @@ async def setup_provider_api_key(
         account_label=body.account_label,
         validated_at=validated_at,
         enabled=body.enable_after_validation,
+        credential_verification=verification_status,
     )
     profile.credential_generation = candidate_generation
 
@@ -2695,15 +2712,17 @@ async def setup_provider_api_key(
 
     return {
         "status": "ready",
-        "status_label": mapping.ready_label,
+        "status_label": profile.command_behavior["auth_status_label"],
         "profile_id": profile.profile_id,
         "secret_ref": secret_ref,
         "readiness": {
             "connected": True,
-            "last_validated_at": validated_at.isoformat(),
+            "last_validated_at": validated_at.isoformat() if account_verified else None,
             "backing_secret_exists": True,
             "launch_ready": True,
             "failure_reason": None,
+            "credential_verification": verification_status,
+            "observation": "confirmed" if account_verified else "unverified",
         },
     }
 
@@ -3154,6 +3173,7 @@ def _apply_api_key_setup_to_profile(
     account_label: str | None,
     validated_at: datetime,
     enabled: bool,
+    credential_verification: str = "verified",
 ) -> None:
     row.credential_source = ProviderCredentialSource.SECRET_REF
     # OpenCode uses file-based auth (opencode-auth-json@1), not env
@@ -3231,9 +3251,10 @@ def _apply_api_key_setup_to_profile(
     row.disabled_reason = (
         None if enabled else ProviderProfileDisabledReason.USER_DISABLED
     )
-    if row.first_authenticated_at is None:
+    account_verified = credential_verification == "verified"
+    if account_verified and row.first_authenticated_at is None:
         row.first_authenticated_at = validated_at
-    row.last_validated_at = validated_at
+    row.last_validated_at = validated_at if account_verified else None
     row.last_auth_method = ProviderProfileAuthMethod.SECRET_REF
     behavior = dict(row.command_behavior or {})
     behavior.update(
@@ -3241,13 +3262,20 @@ def _apply_api_key_setup_to_profile(
             "auth_strategy": mapping.auth_strategy,
             "auth_state": "connected",
             "auth_actions": ["use_api_key"],
-            "auth_status_label": mapping.ready_label,
+            "auth_status_label": (
+                mapping.ready_label
+                if account_verified
+                else "API key configured; account not verified"
+            ),
             "auth_readiness": {
                 "connected": True,
-                "last_validated_at": validated_at.isoformat(),
+                "last_validated_at": (
+                    validated_at.isoformat() if account_verified else None
+                ),
                 "backing_secret_exists": True,
                 "launch_ready": True,
-                "observation": "confirmed",
+                "observation": "confirmed" if account_verified else "unverified",
+                "credential_verification": credential_verification,
             },
         }
     )

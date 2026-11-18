@@ -1903,3 +1903,58 @@ async def test_recovery_after_transient_failures_refreshes_without_new_budget(
     )
     assert refreshed.refreshed == ("opencode-go-default",)
     assert rows[0].model_catalog_evidence_json["imageRef"] == CURRENT_IMAGE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prior_status,prior_generation,expected",
+    [
+        ("verified", 3, "verified"),
+        ("verified", 2, "unverified"),
+        ("unverified", 3, "unverified"),
+    ],
+)
+async def test_catalog_refresh_preserves_only_same_generation_account_verification(
+    monkeypatch, prior_status, prior_generation, expected
+):
+    from moonmind.omnigent.bootstrap.provider_revalidation import _persist_evidence
+
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_OPENCODE", CURRENT_IMAGE)
+    profile = _profile()
+    profile.model_catalog_evidence_json["credentialVerification"] = {
+        "status": prior_status
+    }
+    profile.model_catalog_evidence_json["credentialGeneration"] = prior_generation
+    evidence = _evidence(profile, CURRENT_IMAGE)
+    evidence["credentialVerification"] = {"status": "unverified"}
+    assert await _persist_evidence(
+        session_factory=_session_factory([profile]),
+        profile_id=profile.profile_id,
+        evidence=evidence,
+        image_ref=CURRENT_IMAGE,
+    )
+    assert (
+        profile.model_catalog_evidence_json["credentialVerification"]["status"]
+        == expected
+    )
+    readiness = profile.command_behavior["auth_readiness"]
+    assert readiness["launch_ready"] is True
+    assert readiness["observation"] == (
+        "confirmed" if expected == "verified" else "unverified"
+    )
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_cannot_revive_rejected_credentials():
+    from moonmind.omnigent.bootstrap.provider_revalidation import _persist_evidence
+
+    profile = _profile(auth_state="validation_failed", disabled_reason="auth_invalid")
+    previous = profile.model_catalog_evidence_json
+    assert not await _persist_evidence(
+        session_factory=_session_factory([profile]),
+        profile_id=profile.profile_id,
+        evidence=_evidence(profile, CURRENT_IMAGE),
+        image_ref=CURRENT_IMAGE,
+    )
+    assert profile.auth_state == "validation_failed"
+    assert profile.model_catalog_evidence_json == previous

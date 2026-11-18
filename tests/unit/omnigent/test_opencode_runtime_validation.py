@@ -112,7 +112,9 @@ async def test_credentialless_zen_validation_never_resolves_or_mounts_a_secret()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
-@pytest.mark.parametrize("probe_result", ["accepted", "rejected", "sibling-only"])
+@pytest.mark.parametrize(
+    "probe_result", ["accepted", "verified", "rejected", "sibling-only"]
+)
 async def test_generic_validation_preserves_route_and_cleans_up(
     provider_id, probe_result
 ) -> None:
@@ -134,6 +136,19 @@ async def test_generic_validation_preserves_route_and_cleans_up(
                 if probe_result == "rejected":
                     return 1, b"", b"invalid api key"
                 catalog = f"{provider_id}-other/model\nother/model\n"
+                if probe_result == "verified":
+                    import json
+
+                    return (
+                        0,
+                        json.dumps(
+                            {
+                                "models": [f"{provider_id}/author/model:free"],
+                                "credentialVerification": {"status": "verified"},
+                            }
+                        ).encode(),
+                        b"",
+                    )
                 if probe_result == "accepted":
                     catalog += f"{provider_id}/author/model:free\n"
                 return 0, catalog.encode(), b""
@@ -165,13 +180,16 @@ async def test_generic_validation_preserves_route_and_cleans_up(
         candidate_secret="candidate-key",
         candidate_generation=2,
     )
-    if probe_result == "accepted":
+    if probe_result in {"accepted", "verified"}:
         evidence = await validation
         assert evidence["models"] == [
             {"qualifiedId": f"{provider_id}/author/model:free"}
         ]
         assert evidence["materializerRef"] == "opencode-auth-json@1"
         assert evidence["credentialGeneration"] == 2
+        assert evidence["credentialVerification"] == {
+            "status": "verified" if probe_result == "verified" else "unverified"
+        }
         assert "candidate-key" not in str(evidence)
     else:
         with pytest.raises(HarnessPlatformError) as exc:
@@ -634,8 +652,9 @@ def test_plain_403_is_not_a_credential_rejection() -> None:
 
 
 @pytest.mark.parametrize("credentials", [False, True])
+@pytest.mark.parametrize("provider", ["openrouter", "anthropic", "vendor.v2_test"])
 def test_v2_catalog_probe_executes_authenticated_api_and_projects_only_ids(
-    tmp_path, credentials
+    tmp_path, credentials, provider
 ):
     """Execute the actual embedded probe against a tiny v2 contract server."""
     import json
@@ -671,11 +690,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(204); self.end_headers()
 http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
 """)
+    binary.write_text(binary.read_text().replace("openrouter", provider))
     binary.chmod(0o755)
     staging = tmp_path / "credentials"
     staging.mkdir()
     (staging / "auth.json").write_text(
-        json.dumps({"openrouter": {"type": "api", "key": "candidate-key"}})
+        json.dumps({provider: {"type": "api", "key": "candidate-key"}})
     )
     result = subprocess.run(
         [
@@ -692,7 +712,7 @@ http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
                 "urllib.request.build_opener = lambda *args: ProviderResponse() if args and isinstance(args[0], urllib.request.HTTPRedirectHandler) else original_build_opener(*args)\n"
                 + _OPENCODE_V2_CATALOG_PROBE
             ),
-            "openrouter",
+            provider,
             str(staging) if credentials else "",
             "validate",
         ],
@@ -707,13 +727,20 @@ http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
         timeout=15,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == ["openrouter/author/model"]
+    assert json.loads(result.stdout) == {
+        "models": [f"{provider}/author/model"],
+        "credentialVerification": {
+            "status": (
+                "verified" if credentials and provider == "openrouter" else "unverified"
+            )
+        },
+    }
     assert "do-not-record" not in result.stdout + result.stderr
     assert receipt.exists() is credentials
     if credentials:
         assert json.loads(receipt.read_text()) == {"key": "candidate-key"}
         assert (
-            json.loads((staging / "auth.json").read_text())["openrouter"]["key"]
+            json.loads((staging / "auth.json").read_text())[provider]["key"]
             == "candidate-key"
         )
 

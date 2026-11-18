@@ -43,7 +43,7 @@ async def test_image_admission_checks_bootstrap_contents_not_only_version(monkey
         if argv[0] == "sh":
             probes.append(argv)
             assert argv[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
-            assert argv[3] == "60" and timeout == 90
+            assert argv[3:] == ["60", "auto"] and timeout == 90
             assert HOST_REF in argv
             return probe_exit, "", ""
         return 0, "amd64", ""

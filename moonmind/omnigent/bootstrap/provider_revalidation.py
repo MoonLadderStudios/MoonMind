@@ -1087,6 +1087,23 @@ async def _persist_evidence(
             # The credential rotated while validation ran; that rotation owns
             # the authoritative evidence for its own generation.
             return False
+        # Catalog availability is not authentication and cannot resurrect a
+        # credential that execution or a provider check has rejected.
+        if getattr(profile, "disabled_reason", None) == "auth_invalid":
+            return False
+        previous = profile.model_catalog_evidence_json or {}
+        evidence = dict(evidence)
+        verification = dict(
+            evidence.get("credentialVerification") or {"status": "unverified"}
+        )
+        if (
+            verification.get("status") == "unverified"
+            and previous.get("credentialGeneration") == profile.credential_generation
+            and (previous.get("credentialVerification") or {}).get("status")
+            == "verified"
+        ):
+            verification = dict(previous["credentialVerification"])
+        evidence["credentialVerification"] = verification
         models = [
             str(item.get("qualifiedId") or "")
             for item in evidence.get("models", [])
@@ -1125,11 +1142,20 @@ async def _persist_evidence(
             profile.command_behavior = behavior
             await session.commit()
             return launchable
+        verification_status = (
+            "not_required"
+            if credentialless
+            else verification.get("status", "unverified")
+        )
         readiness.update(
             {
                 "connected": launchable,
                 "backing_secret_exists": not credentialless,
                 "launch_ready": launchable,
+                "credential_verification": verification_status,
+                "observation": (
+                    "unverified" if verification_status == "unverified" else "confirmed"
+                ),
             }
         )
         if launchable:
@@ -1137,7 +1163,13 @@ async def _persist_evidence(
             profile.auth_state = ProviderProfileAuthState.CONNECTED
             behavior["auth_state"] = "connected"
             behavior["auth_status_label"] = (
-                "No API key required" if credentialless else "OpenCode API key ready"
+                "No API key required"
+                if credentialless
+                else (
+                    "OpenCode API key ready"
+                    if verification_status == "verified"
+                    else "API key configured; account not verified"
+                )
             )
         else:
             readiness["failure_reason"] = (
