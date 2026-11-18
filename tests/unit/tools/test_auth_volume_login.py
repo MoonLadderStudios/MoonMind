@@ -164,8 +164,6 @@ def test_login_runs_cli_in_one_off_shared_host_container(
         expected = [
             *container,
             "-e",
-            "MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth",
-            "-e",
             "ANTHROPIC_API_KEY=",
             "-e",
             "CLAUDE_API_KEY=",
