@@ -473,132 +473,145 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
     legacy_history = None
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[
-                MoonMindAgentRun,
-                MockProviderProfileManager,
-                DummyCodexSessionWorkflow,
-            ],
-            workflow_runner=UnsandboxedWorkflowRunner(),
-        ):
+        # This scenario advances through signals and immediate Activities, not
+        # timers. Awaiting either AgentRun with automatic time skipping can
+        # expire the still-live peer fixtures before their shutdown signals.
+        with env.auto_time_skipping_disabled():
             async with Worker(
                 env.client,
-                task_queue=settings.temporal.activity_artifacts_task_queue,
-                activities=[
-                    mock_provider_profile_list,
-                    mock_provider_profile_ensure_manager,
-                    mock_provider_profile_reset_manager,
-                    mock_provider_profile_manager_state,
+                task_queue="agent-run-task-queue",
+                workflows=[
+                    MoonMindAgentRun,
+                    MockProviderProfileManager,
+                    DummyCodexSessionWorkflow,
                 ],
+                workflow_runner=UnsandboxedWorkflowRunner(),
             ):
                 async with Worker(
                     env.client,
-                    task_queue=settings.temporal.activity_agent_runtime_task_queue,
+                    task_queue=settings.temporal.activity_artifacts_task_queue,
                     activities=[
-                        mock_publish_artifacts,
-                        mock_cancel,
-                        build_launch_context,
-                        load_session_snapshot,
-                        launch_session,
-                        prepare_turn_instructions,
-                        send_turn,
-                        fetch_session_summary,
-                        publish_session_artifacts,
-                        publish_bridge_events,
-                        fetch_result,
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
                     ],
                 ):
-                    manager_handle = await env.client.start_workflow(
-                        MockProviderProfileManager.run,
-                        {"runtime_id": "codex_cli"},
-                        id="provider-profile-manager:codex_cli",
-                        task_queue="agent-run-task-queue",
-                    )
-                    session_handle = await env.client.start_workflow(
-                        DummyCodexSessionWorkflow.run,
-                        request.managed_session.model_dump(mode="json", by_alias=True),
-                        id=request.managed_session.workflow_id,
-                        task_queue="agent-run-task-queue",
-                    )
-
-                    try:
-                        # Record a real AgentRun history from before the bridge-events
-                        # Activity patch. Replaying this history with current workflow
-                        # code must not schedule the newly introduced Activity.
-                        legacy_request = request.model_copy(deep=True)
-                        legacy_request.correlation_id = "corr-codex-rollout-legacy"
-                        legacy_request.idempotency_key = "idem-codex-rollout-legacy"
-
-                        def patched_without_bridge_activity(patch_id: str) -> bool:
-                            if patch_id in {
-                                agent_run_module.MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID,
-                                "agent-run-supported-runtime-admission-v1",
-                            }:
-                                return False
-                            return original_patched(patch_id)
-
-                        monkeypatch.setattr(
-                            agent_run_module.workflow,
-                            "patched",
-                            patched_without_bridge_activity,
-                        )
-                        legacy_handle = await env.client.start_workflow(
-                            MoonMindAgentRun.run,
-                            legacy_request,
-                            id="test-agent-run-managed-codex-rollout-pre-bridge-patch",
+                    async with Worker(
+                        env.client,
+                        task_queue=settings.temporal.activity_agent_runtime_task_queue,
+                        activities=[
+                            mock_publish_artifacts,
+                            mock_cancel,
+                            build_launch_context,
+                            load_session_snapshot,
+                            launch_session,
+                            prepare_turn_instructions,
+                            send_turn,
+                            fetch_session_summary,
+                            publish_session_artifacts,
+                            publish_bridge_events,
+                            fetch_result,
+                        ],
+                    ):
+                        manager_handle = await env.client.start_workflow(
+                            MockProviderProfileManager.run,
+                            {"runtime_id": "codex_cli"},
+                            id="provider-profile-manager:codex_cli",
                             task_queue="agent-run-task-queue",
                         )
-                        legacy_result = await legacy_handle.result()
-                        assert isinstance(legacy_result, AgentRunResult)
-                        assert legacy_result.failure_class is None
-                        legacy_history = await legacy_handle.fetch_history()
-                        assert bridge_event_payloads == []
-                        monkeypatch.setattr(
-                            agent_run_module.workflow,
-                            "patched",
-                            original_patched,
-                        )
-
-                        result = await env.client.execute_workflow(
-                            MoonMindAgentRun.run,
-                            request,
-                            id="test-agent-run-managed-codex-rollout-recovery",
+                        session_handle = await env.client.start_workflow(
+                            DummyCodexSessionWorkflow.run,
+                            request.managed_session.model_dump(mode="json", by_alias=True),
+                            id=request.managed_session.workflow_id,
                             task_queue="agent-run-task-queue",
                         )
-                    finally:
-                        await _shutdown_fixture_workflow(
-                            session_handle, DummyCodexSessionWorkflow.shutdown
-                        )
-                        await _shutdown_fixture_workflow(
-                            manager_handle, MockProviderProfileManager.shutdown
-                        )
 
-                    assert isinstance(result, AgentRunResult)
-                    assert result.failure_class is None
-                    assert result.summary == "Recovered final answer without vendor turn id"
-                    assert isinstance(result.metadata, dict)
-                    assert result.metadata["sessionSummary"]["metadata"][
-                        "lastAssistantText"
-                    ] == "Recovered final answer without vendor turn id"
-                    assert [item["phase"] for item in bridge_event_payloads] == [
-                        "started", "terminal"
-                    ]
-                    bridge_payload = bridge_event_payloads[1]
-                    assert bridge_payload["compatibilityProfile"] == (
-                        "moonmind.codex_direct_compat.v1"
-                    )
-                    assert bridge_payload["producer"] == "direct_codex_managed_session"
-                    assert bridge_payload["request"]["parameters"]["communication"][
-                        "mode"
-                    ] == "omnigent_bridge"
-                    assert bridge_payload["locator"]["sessionId"] == (
-                        "sess:test-codex-session-workflow"
-                    )
-                    assert bridge_payload["turnResponse"]["metadata"][
-                        "assistantText"
-                    ] == "Recovered final answer without vendor turn id"
+                        try:
+                            # Record a real AgentRun history from before the bridge-events
+                            # Activity patch. Replaying this history with current workflow
+                            # code must not schedule the newly introduced Activity.
+                            legacy_request = request.model_copy(deep=True)
+                            legacy_request.correlation_id = "corr-codex-rollout-legacy"
+                            legacy_request.idempotency_key = "idem-codex-rollout-legacy"
+
+                            def patched_without_bridge_activity(patch_id: str) -> bool:
+                                if patch_id in {
+                                    agent_run_module.MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID,
+                                    "agent-run-supported-runtime-admission-v1",
+                                }:
+                                    return False
+                                return original_patched(patch_id)
+
+                            monkeypatch.setattr(
+                                agent_run_module.workflow,
+                                "patched",
+                                patched_without_bridge_activity,
+                            )
+                            legacy_handle = await env.client.start_workflow(
+                                MoonMindAgentRun.run,
+                                legacy_request,
+                                id="test-agent-run-managed-codex-rollout-pre-bridge-patch",
+                                task_queue="agent-run-task-queue",
+                            )
+                            legacy_result = await asyncio.wait_for(legacy_handle.result(), timeout=30)
+                            assert isinstance(legacy_result, AgentRunResult)
+                            assert legacy_result.failure_class is None
+                            legacy_history = await legacy_handle.fetch_history()
+                            assert (await manager_handle.describe()).status == WorkflowExecutionStatus.RUNNING
+                            assert (await session_handle.describe()).status == WorkflowExecutionStatus.RUNNING
+                            assert bridge_event_payloads == []
+                            monkeypatch.setattr(
+                                agent_run_module.workflow,
+                                "patched",
+                                original_patched,
+                            )
+
+                            result = await asyncio.wait_for(
+                                env.client.execute_workflow(
+                                    MoonMindAgentRun.run,
+                                    request,
+                                    id="test-agent-run-managed-codex-rollout-recovery",
+                                    task_queue="agent-run-task-queue",
+                                ),
+                                timeout=30,
+                            )
+                            assert (await manager_handle.describe()).status == WorkflowExecutionStatus.RUNNING
+                            assert (await session_handle.describe()).status == WorkflowExecutionStatus.RUNNING
+                        finally:
+                            await asyncio.wait_for(
+                                _shutdown_fixture_workflow(session_handle, DummyCodexSessionWorkflow.shutdown),
+                                timeout=10,
+                            )
+                            await asyncio.wait_for(
+                                _shutdown_fixture_workflow(manager_handle, MockProviderProfileManager.shutdown),
+                                timeout=10,
+                            )
+
+                        assert isinstance(result, AgentRunResult)
+                        assert result.failure_class is None
+                        assert result.summary == "Recovered final answer without vendor turn id"
+                        assert isinstance(result.metadata, dict)
+                        assert result.metadata["sessionSummary"]["metadata"][
+                            "lastAssistantText"
+                        ] == "Recovered final answer without vendor turn id"
+                        assert [item["phase"] for item in bridge_event_payloads] == [
+                            "started", "terminal"
+                        ]
+                        bridge_payload = bridge_event_payloads[1]
+                        assert bridge_payload["compatibilityProfile"] == (
+                            "moonmind.codex_direct_compat.v1"
+                        )
+                        assert bridge_payload["producer"] == "direct_codex_managed_session"
+                        assert bridge_payload["request"]["parameters"]["communication"][
+                            "mode"
+                        ] == "omnigent_bridge"
+                        assert bridge_payload["locator"]["sessionId"] == (
+                            "sess:test-codex-session-workflow"
+                        )
+                        assert bridge_payload["turnResponse"]["metadata"][
+                            "assistantText"
+                        ] == "Recovered final answer without vendor turn id"
 
     assert legacy_history is not None
     await Replayer(
