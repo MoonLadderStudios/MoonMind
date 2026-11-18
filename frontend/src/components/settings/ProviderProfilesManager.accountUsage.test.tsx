@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import deliveryFixture from '../../../../tests/fixtures/provider/account_usage_settings_delivery.json';
 import type { components } from '../../generated/openapi';
 import { DashboardToastProvider } from '../dashboard/DashboardToast';
 import { accountUsageProjection, usageWindow, type ProjectionOverrides } from './accountUsageTestFixtures';
@@ -607,5 +608,77 @@ describe('Provider Profile account usage in Settings', () => {
       'Subscription weekly usage not available for this authentication method',
     );
     expect(harness.refreshRequests).toHaveLength(0);
+  });
+});
+
+// This fixture is emitted and checked against actual API/collector/persistence
+// responses by test_provider_account_usage_delivery.py, not authored UI quota data.
+describe('two-provider account usage delivery contract', () => {
+  it('delivers four isolated provider accounts through cached refresh without losing an editor draft', async () => {
+    const initial = deliveryFixture.initial as unknown as ProviderProfile[];
+    const refreshed = deliveryFixture.refreshed as unknown as ProviderProfile[];
+    const harness = renderLiveManager(initial, {
+      respond: () => deliveryFixture.refresh.results as RefreshResult[],
+      nextList: () => refreshed,
+    });
+    fireEvent.click(profileAction('Edit', 'claude-a'));
+    const label = screen.getByLabelText(/Account label/) as HTMLInputElement;
+    fireEvent.change(label, { target: { value: 'Unsaved Claude account label' } });
+    label.focus();
+
+    await advance(10);
+    expect(harness.refreshRequests).toHaveLength(1);
+    expect([...harness.refreshRequests[0]!.body.profile_ids].sort()).toEqual([
+      'claude-a', 'claude-b', 'codex-a', 'codex-b',
+    ]);
+    await advance(2_000);
+    expect(harness.listFetches()).toBe(1);
+    for (const profile of refreshed) {
+      const group = usageGroup(profile.profile_id);
+      const usage = profile.account_usage!;
+      expect(text(group)).toContain(usage.account.email!);
+      expect(text(group)).toContain(usage.account.display_name!);
+      const primary = (usage.usage.windows ?? []).find((window) => window.key === usage.usage.primary_window_key)!;
+      expect(within(group).getByRole('meter', { name: 'Weekly allowance remaining' }).getAttribute('aria-valuenow'))
+        .toBe(String(primary.remaining_percent));
+      expect(text(group)).toContain('Resets');
+      expect(text(group)).toContain('Updated');
+      expect(within(group).queryByRole('status')).toBeNull();
+    }
+    expect(refreshed.filter((profile) => profile.provider_id === 'openai')).toHaveLength(2);
+    expect(refreshed.filter((profile) => profile.provider_id === 'anthropic')).toHaveLength(2);
+    expect((screen.getByLabelText(/Account label/) as HTMLInputElement).value).toBe('Unsaved Claude account label');
+    expect(document.activeElement).toBe(screen.getByLabelText(/Account label/));
+    expect(within(screen.getByRole('region', { name: 'Account & usage' })).getByRole('meter')).toBeTruthy();
+    expect(harness.allRequests.filter((request) => request.method !== 'GET' && request.url !== ACCOUNT_USAGE_REFRESH_PATH)).toEqual([]);
+  });
+
+  it('renders the fenced replacement account while ignoring a late old-generation refresh reply', async () => {
+    let answer!: (results: RefreshResult[]) => void;
+    const refreshed = deliveryFixture.refreshed as unknown as ProviderProfile[];
+    const rebound = deliveryFixture.rebound as unknown as ProviderProfile[];
+    const harness = renderLiveManager(refreshed, {
+      respond: () => new Promise((resolve) => (answer = resolve)),
+    });
+    await advance(10);
+    fireEvent.click(within(usageGroup('codex-a')).getByRole('button', {
+      name: 'Refresh account usage for codex-a',
+    }));
+    await advance(10);
+    expect(harness.refreshRequests).toHaveLength(1);
+    harness.setProfiles(rebound);
+    await advance(10);
+    await act(async () => {
+      answer(deliveryFixture.refresh.results.filter((result) => result.profile_id === 'codex-a') as RefreshResult[]);
+    });
+    await advance(10_000);
+    const replacement = rebound.find((profile) => profile.profile_id === 'codex-a')!.account_usage!;
+    expect(text(usageGroup('codex-a'))).toContain(replacement.account.email!);
+    expect(within(usageGroup('codex-a')).queryByRole('status')).toBeNull();
+    expect(harness.listFetches()).toBe(0);
+    expect(text(usageGroup('claude-a'))).toContain(rebound.find((profile) => profile.profile_id === 'claude-a')!.account_usage!.account.email!);
+    for (const id of ['codex-b', 'claude-b']) {
+      expect(text(usageGroup(id))).toContain(refreshed.find((profile) => profile.profile_id === id)!.account_usage!.account.display_name!);
+    }
   });
 });
