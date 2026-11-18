@@ -95,7 +95,7 @@ The dashboard relies on two generated outputs:
 | `/skills` | Agent skill management |
 | `/settings/*` | Configuration pages (see [SettingsPage.md](./SettingsPage.md)) |
 | `/oauth-terminal` | OAuth terminal sessions (the only place xterm.js is used) |
-| `/artifacts`, `/remediations`, `/omnigent/agents`, `/omnigent/policies` | Supporting console pages |
+| `/artifacts`, `/omnigent/agents`, `/omnigent/policies` | Supporting console pages |
 
 The detail subroutes `steps` and `runs` are aliases for `execution`, and `artifacts` is an alias for `evidence` (`frontend/src/lib/workflowDetailRoutes.ts`). `/secrets` redirects to `/settings/providers-secrets` and `/workers` to `/settings/operations`.
 

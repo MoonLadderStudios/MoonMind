@@ -1,10 +1,11 @@
+import { CirclePlay, ListFilter, Pause, Plus } from 'lucide-react';
 import { AssessmentEngagementReview } from '../components/workflows/AssessmentEngagementReview';
 import { copyAssessmentReview, reviewAssessmentProposal, type AssessmentEngagementReview as EngagementReview } from '../lib/assessmentEngagement';
 import { Button } from '../components/Button';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
-import { PageHeader } from '../components/dashboard/PageHeader';
+import { PageHeader, useDocumentTitle } from '../components/dashboard/PageHeader';
 import { PageSizeSelector } from '../components/PageSizeSelector';
 import {
   activeRecurringFilterEntries,
@@ -338,10 +339,6 @@ function cronPreview(cron: string, timezone: string): string {
   return zone ? `${text} (${zone})` : text;
 }
 
-function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function displayValue(value: string | null | undefined): string {
   const normalized = String(value || '').trim();
   return normalized || '-';
@@ -557,17 +554,48 @@ function targetKind(schedule: Schedule): string {
   return typeof raw === 'string' && raw.trim() ? titleCaseLabel(formatStatusLabel(raw)) : 'Queue task';
 }
 
+function targetParameters(schedule: Schedule): Record<string, unknown> | null {
+  const target = schedule.target;
+  return asRecord(target?.initialParameters) ?? asRecord(target?.initial_parameters)
+    ?? asRecord(asRecord(target?.job)?.payload);
+}
+
 function targetRepository(schedule: Schedule): string {
-  const job = schedule.target?.job;
-  if (!job || typeof job !== 'object' || !('payload' in job)) {
-    return '-';
-  }
-  const payload = (job as { payload?: unknown }).payload;
-  if (!payload || typeof payload !== 'object' || !('repository' in payload)) {
-    return '-';
-  }
-  const repository = (payload as { repository?: unknown }).repository;
-  return typeof repository === 'string' && repository.trim() ? repository : '-';
+  const repository = targetParameters(schedule)?.repository;
+  if (typeof repository === 'string') return repository.trim() || '-';
+  return stringValue(asRecord(asRecord(repository)?.repository), ['name']) || '-';
+}
+
+function targetRuntime(schedule: Schedule): Record<string, unknown> | null {
+  const parameters = targetParameters(schedule);
+  const workflow = asRecord(parameters?.workflow) ?? asRecord(parameters?.task);
+  return asRecord(workflow?.runtime);
+}
+
+function targetProviderProfile(schedule: Schedule): string {
+  const parameters = targetParameters(schedule);
+  const runtime = targetRuntime(schedule);
+  const profileKeys = ['providerProfileRef', 'profileId', 'providerProfile', 'executionProfileRef', 'execution_profile_ref', 'profile_id', 'provider_profile'];
+  return stringValue(asRecord(parameters?.agentProfileSnapshot), ['providerProfileRef'])
+    || stringValue(parameters, ['profileId'])
+    || stringValue(runtime, profileKeys)
+    || stringValue(asRecord(runtime?.agentProfile), ['providerProfileRef'])
+    || stringValue(asRecord(parameters?.agentProfile), ['providerProfileRef'])
+    || stringValue(parameters, ['providerProfileRef', 'providerProfile', 'executionProfileRef'])
+    || '-';
+}
+
+function targetModel(schedule: Schedule): string {
+  const runtime = targetRuntime(schedule);
+  const model = stringValue(targetParameters(schedule), ['model']) || stringValue(runtime, ['model']);
+  if (model) return model;
+  if (typeof runtime?.modelTier === 'number') return `Tier ${runtime.modelTier}`;
+  return '-';
+}
+
+function targetEffort(schedule: Schedule): string {
+  return stringValue(targetParameters(schedule), ['effort'])
+    || stringValue(targetRuntime(schedule), ['effort']) || '-';
 }
 
 function policySummary(schedule: Schedule): string {
@@ -580,18 +608,6 @@ function policySummary(schedule: Schedule): string {
     ? String((catchup as { mode?: unknown }).mode || '').trim()
     : '';
   return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
-}
-
-function dispatchAttentionLabel(schedule: Schedule): string {
-  const error = schedule.lastDispatchError?.trim();
-  const status = schedule.lastDispatchStatus?.trim();
-  if (scheduleState(schedule) === 'attention') {
-    return error
-      ? `Needs attention: ${error}`
-      : 'Needs attention';
-  }
-  const statusLabel = status ? titleCaseLabel(formatStatusLabel(status)) : 'No dispatch attention';
-  return error ? `${statusLabel}: ${error}` : statusLabel;
 }
 
 function formatJsonValue(value: unknown): string {
@@ -846,12 +862,17 @@ async function responseErrorMessage(response: Response, fallback: string): Promi
   return `${fallback}: ${response.statusText}`;
 }
 
-function isDueSoon(schedule: Schedule, now: number): boolean {
-  if (!schedule.enabled || !schedule.nextRunAt) {
-    return false;
-  }
-  const nextRun = new Date(schedule.nextRunAt).getTime();
-  return Number.isFinite(nextRun) && nextRun >= now && nextRun <= now + 24 * 60 * 60 * 1000;
+function RecurringScheduleStateIcon({ schedule }: { schedule: Schedule }) {
+  const Icon = schedule.enabled ? CirclePlay : Pause;
+  const label = schedule.enabled ? 'Active' : 'Paused';
+  return <span className={`schedules-sidebar-state schedules-sidebar-state--${label.toLowerCase()}`} role="img" aria-label={label} title={label}>
+    <Icon size={16} aria-hidden="true" />
+  </span>;
+}
+
+function RecurringTableTitle() {
+  useDocumentTitle('Recurring Schedules');
+  return <h1 className="sr-only" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h1>;
 }
 
 function RecurringScheduleSidebar({
@@ -873,14 +894,14 @@ function RecurringScheduleSidebar({
     id: schedule.id,
     href: `/schedules/${encodeURIComponent(schedule.id)}`,
     primaryText: schedule.name,
-    metadata: <>{stateLabel(schedule)} · next {formatWhen(schedule.nextRunAt)}</>,
+    metadata: <RecurringScheduleStateIcon schedule={schedule} />,
   })), [schedules]);
   const pinnedRow = useMemo(
     (): CollectionSidebarRow | null => (pinnedSchedule ? {
       id: pinnedSchedule.id,
       href: `/schedules/${encodeURIComponent(pinnedSchedule.id)}`,
       primaryText: pinnedSchedule.name,
-      metadata: <>{stateLabel(pinnedSchedule)} · next {formatWhen(pinnedSchedule.nextRunAt)}</>,
+      metadata: <RecurringScheduleStateIcon schedule={pinnedSchedule} />,
     } : null),
     [pinnedSchedule],
   );
@@ -889,6 +910,19 @@ function RecurringScheduleSidebar({
       landmarkLabel="Recurring schedule navigation"
       tableLabel="Recurring schedule list table slice"
       header="Recurring"
+      className="recurring-collection-sidebar"
+      headerContent={(
+        <div role="rowgroup" className="workflow-workspace-sidebar-header">
+          <div role="row" className="workflow-workspace-sidebar-header-row">
+            <div role="columnheader" className="workflow-workspace-sidebar-header-cell recurring-sidebar-heading">
+              <span className="workflow-workspace-sidebar-header-title">Recurring</span>
+              <a href="/workflows/new?scheduleMode=recurring" className="mm-button mm-button--primary skills-create-nav-button" aria-label="Create recurring schedule" title="Create recurring schedule">
+                <Plus size={18} aria-hidden="true" />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
       filterLabel="Recurring schedule sidebar filter"
       filterPlaceholder="Filter recurring schedules"
       rows={rows}
@@ -1204,6 +1238,7 @@ function ScheduleDetailPage({
     <EntityDetailFrame entity="recurring" main={(
       <div className="schedules-page schedules-detail-page stack">
       <div className="schedules-detail-title">
+        {listDisplayMode === 'sidebar' ? <p className="schedules-detail-context">Schedule</p> : null}
         <nav className="page-meta" aria-label="Breadcrumb">
           <a href="/schedules">Recurring</a>
           <span>/</span>
@@ -1749,15 +1784,20 @@ function RecurringScheduleMobileList({
               <dd>{formatWhen(schedule.nextRunAt)}</dd>
             </div>
             <div>
-              <dt>Target</dt>
-              <dd>
-                <strong>{targetKind(schedule)}</strong>
-                <span>{targetRepository(schedule)}</span>
-              </dd>
+              <dt>Provider Profile</dt>
+              <dd>{targetProviderProfile(schedule)}</dd>
             </div>
             <div>
-              <dt>Dispatch</dt>
-              <dd>{dispatchAttentionLabel(schedule)}</dd>
+              <dt>Repository</dt>
+              <dd>{targetRepository(schedule)}</dd>
+            </div>
+            <div>
+              <dt>Model</dt>
+              <dd>{targetModel(schedule)}</dd>
+            </div>
+            <div>
+              <dt>Effort</dt>
+              <dd>{targetEffort(schedule)}</dd>
             </div>
           </dl>
         </li>
@@ -2017,21 +2057,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const activeFilters = activeRecurringFilterEntries(filters);
   const nextCursor = cleanCursor(data?.nextPageToken || null);
   const pageIndex = cursorStack.length;
-  const totalCount = typeof data?.count === 'number' ? data.count : schedules.length;
-  const stats = useMemo(() => {
-    const now = Date.now();
-    const active = schedules.filter((schedule) => schedule.enabled).length;
-    const attention = schedules.filter((schedule) => scheduleState(schedule) === 'attention').length;
-    const dueSoon = schedules.filter((schedule) => isDueSoon(schedule, now)).length;
-    return {
-      active: typeof data?.activeCount === 'number' ? data.activeCount : active,
-      attention: typeof data?.attentionCount === 'number' ? data.attentionCount : attention,
-      dueSoon: typeof data?.next24hCount === 'number' ? data.next24hCount : dueSoon,
-      total: totalCount,
-    };
-  }, [data?.activeCount, data?.attentionCount, data?.next24hCount, schedules, totalCount]);
   const isMobileLayout = useSchedulesMobileLayout();
 
+  const pendingOwnSearches = useRef<string[]>([]);
   const listUrlQuery = recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir });
   useEffect(() => {
     if (typeof window === 'undefined' || routeDefinitionId) {
@@ -2040,7 +2068,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     const timer = window.setTimeout(() => {
       const nextUrl = `${window.location.pathname}${listUrlQuery ? `?${listUrlQuery}` : ''}`;
       if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
-        // Through the router, so the shell's location matches the address bar.
+        // Remember writes until the router observes them: an older echo
+        // must not replace input entered while its transition was pending.
+        pendingOwnSearches.current.push(listUrlQuery ? `?${listUrlQuery}` : '');
         navigateTo(nextUrl, { replace: true });
       }
     }, 250);
@@ -2050,6 +2080,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   // Follow URL changes this table did not write (the Recurring nav link,
   // Back/Forward): the page stays mounted across query changes.
   const adoptUrlSearch = (search: string) => {
+    const ownWrite = pendingOwnSearches.current.indexOf(search);
+    if (ownWrite >= 0) {
+      // A coalesced observation also supersedes earlier writes.
+      pendingOwnSearches.current.splice(0, ownWrite + 1);
+      return;
+    }
+    pendingOwnSearches.current = [];
     const next = recurringListUrlStateFromSearch(new URLSearchParams(search));
     if (recurringListUrlQuery(next) === listUrlQuery) {
       return;
@@ -2145,65 +2182,18 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   return (
     <div className="schedules-page stack">
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
-      <PageHeader
-        className="schedules-toolbar"
-        title="Recurring Schedules"
-        description="Managed recurring schedules for workflow targets."
-        headingProps={{ tabIndex: -1, 'data-recurring-table-title': '' }}
-        actions={(
-        <>
-          <Button variant="secondary" type="button" onClick={() => void refetch()} disabled={isFetching}>
-            {isFetching ? 'Refreshing' : 'Refresh'}
-          </Button>
-          <a
-            href="/workflows/new?scheduleMode=recurring"
-            className="mm-button mm-button--primary queue-step-icon-button"
-            aria-label="Create recurring schedule"
-          >
-            +
-          </a>
-        </>
-        )}
-      />
-
-      <section className="schedules-summary-line" aria-label="Schedule summary">
-        {isLoading ? (
-          <LoadingPlaceholder
-            surface="schedules"
-            region="summary"
-            variant="metric-strip"
-            density="compact"
-            preserveContext
-          />
-        ) : (
-          <p className="page-meta">
-            {[
-              pluralize(stats.total, 'schedule'),
-              `${stats.active} active`,
-              stats.dueSoon > 0 ? `${stats.dueSoon} due in the next 24 hours` : null,
-            ].filter(Boolean).join(' · ')}
-            {stats.attention > 0 ? (
-              <>
-                {' '}
-                <span className="schedules-state schedules-state--attention">
-                  {stats.attention === 1 ? '1 needs attention' : `${stats.attention} need attention`}
-                </span>
-              </>
-            ) : null}
-          </p>
-        )}
-      </section>
-
+      <RecurringTableTitle />
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
-        <div className="workflow-list-filter-toolbar">
-          <Button variant="secondary"
-            type="button"
-            onClick={() => setMobileFiltersOpen(true)}
-            aria-label="Filters"
-          >
-            Filters
-          </Button>
-        </div>
+        <Button
+          variant="icon"
+          className="schedules-mobile-filter-entry"
+          aria-label="Filter recurring schedules"
+          aria-haspopup="dialog"
+          aria-expanded={mobileFiltersOpen}
+          onClick={() => setMobileFiltersOpen(true)}
+        >
+          <ListFilter size={18} aria-hidden="true" />
+        </Button>
         {activeFilters.length > 0 ? (
           <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
             {activeFilters.map(([key, value]) => (
@@ -2323,22 +2313,24 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 ),
               },
               {
-                key: 'target',
-                header: (
-                  <RecurringColumnFilter
-                    filterKey="target"
-                    filters={filters}
-                    openFilter={openFilter}
-                    setOpenFilter={setOpenFilter}
-                    setFilter={setFilter}
-                  />
-                ),
-                render: (item) => (
-                  <div className="schedules-secondary-cell">
-                    <strong>{targetKind(item)}</strong>
-                    <span>{targetRepository(item)}</span>
-                  </div>
-                ),
+                key: 'providerProfile',
+                header: 'Provider Profile',
+                render: targetProviderProfile,
+              },
+              {
+                key: 'repository',
+                header: <RecurringColumnFilter filterKey="repository" filters={filters} openFilter={openFilter} setOpenFilter={setOpenFilter} setFilter={setFilter} />,
+                render: targetRepository,
+              },
+              {
+                key: 'model',
+                header: 'Model',
+                render: targetModel,
+              },
+              {
+                key: 'effort',
+                header: 'Effort',
+                render: targetEffort,
               },
               {
                 key: 'cron',
@@ -2364,41 +2356,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 ariaSort: sort === 'nextRunAt' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
                 render: (item) => formatWhen(item.nextRunAt),
               },
-              {
-                key: 'lastScheduledFor',
-                header: sortableHeader('lastScheduledFor', 'Last Scheduled'),
-                ariaSort: sort === 'lastScheduledFor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
-                render: (item) => formatWhen(item.lastScheduledFor),
-              },
-              {
-                key: 'lastDispatchStatus',
-                header: (
-                  <RecurringColumnFilter
-                    filterKey="dispatch"
-                    filters={filters}
-                    openFilter={openFilter}
-                    setOpenFilter={setOpenFilter}
-                    setFilter={setFilter}
-                  />
-                ),
-                render: (item) => (
-                  <div className="schedules-secondary-cell">
-                    <strong>{item.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(item.lastDispatchStatus)) : '-'}</strong>
-                    <span>{displayValue(item.lastDispatchError)}</span>
-                  </div>
-                ),
-              },
-              {
-                key: 'policy',
-                header: 'Policy',
-                render: (item) => policySummary(item),
-              },
-              {
-                key: 'updatedAt',
-                header: sortableHeader('updatedAt', 'Updated'),
-                ariaSort: sort === 'updatedAt' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
-                render: (item) => formatWhen(item.updatedAt),
-              },
             ]}
             rowActions={(item) => (
               <ScheduleRowActions
@@ -2414,7 +2371,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         <div className="queue-pagination workflow-list-footer-pagination">
           <PageSizeSelector pageSize={pageSize} onPageSizeChange={changePageSize} disabled={isLoading || isFetching} />
           <span className="workflow-list-footer-page-summary">
-            Page {pageIndex + 1} · {schedules.length} shown{typeof data?.count === 'number' ? ` · ${totalCount} total` : ''}
+            Page {pageIndex + 1} · {schedules.length} shown
           </span>
           <Button variant="secondary"
             type="button"

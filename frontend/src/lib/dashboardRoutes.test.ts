@@ -10,7 +10,6 @@ import {
   isDashboardInternalUrl,
   legacySettingsRedirect,
   matchesDashboardDestinationRegistry,
-  payloadForDashboardRoute,
   resolveAuthorizedLegacySettingsTarget,
   resolveDashboardRoute,
   visiblePrimaryDestinations,
@@ -21,10 +20,10 @@ describe('dashboard route resolution', () => {
   it('keeps one canonical typed inventory for every major destination', () => {
     expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
       'workflows', 'create', 'recurring', 'skills',
-      'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts',
+      'omnigent-agents', 'omnigent-policies', 'artifacts',
       'settings-providers-secrets', 'settings-instance', 'settings-operations',
     ]);
-    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(11);
+    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(10);
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
       Array.from(new Set([
         ...DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns),
@@ -61,7 +60,7 @@ describe('dashboard route resolution', () => {
       'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
-      'recurring', 'skills', 'omnigent-agents', 'remediation', 'artifacts',
+      'recurring', 'skills', 'omnigent-agents', 'artifacts',
       'settings-providers-secrets', 'settings-instance', 'settings-operations',
     ]);
   });
@@ -76,7 +75,6 @@ describe('dashboard route resolution', () => {
   it.each([
     ['/artifacts/run/1', 'artifacts'],
     ['/observability/run/1', 'artifacts'],
-    ['/remediations/mm:1', 'remediation'],
     ['/settings/providers-secrets', 'settings-providers-secrets'],
     ['/settings/instance', 'settings-instance'],
     ['/settings/operations', 'settings-operations'],
@@ -116,7 +114,7 @@ describe('dashboard route resolution', () => {
     const reworded = serverInventory.map((item) => ({
       ...item,
       label: `${item.label} (renamed)`,
-      iconKey: 'wrench' as const,
+      iconKey: 'settings' as const,
       navigationGroup: 'operations' as const,
       pageClassification: 'utility' as const,
     }));
@@ -154,7 +152,7 @@ describe('dashboard route resolution', () => {
     }
   });
 
-  it.each(['/artifacts/report/123', '/observability/runs/today', '/remediations/mm%3A123', '/omnigent/agents/coding']) (
+  it.each(['/artifacts/report/123', '/observability/runs/today', '/omnigent/agents/coding']) (
     'resolves the extensionless collection deep link %s',
     (path) => expect(resolveDashboardRoute(path)).not.toBeNull(),
   );
@@ -258,34 +256,10 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it('resolves the remediation collection as a data-wide route', () => {
-    expect(resolveDashboardRoute('/remediations')).toEqual({
-      page: 'remediations',
-      dataWidePanel: true,
-      currentPath: '/remediations',
-    });
-  });
-
-  it('attaches the remediation capability and compact endpoint contract to route payloads', () => {
-    const route = resolveDashboardRoute('/remediations');
-
-    expect(route).not.toBeNull();
-    expect(payloadForDashboardRoute(
-      { page: 'dashboard', apiBase: '/api' },
-      route!,
-      {
-        features: { remediationCollection: true },
-        endpoints: { remediations: '/api/executions/remediations' },
-      },
-    )).toMatchObject({
-      page: 'remediations',
-      features: { remediationCollection: true },
-      initialData: {
-        dashboardConfig: { initialPath: '/remediations' },
-        layout: { dataWidePanel: true },
-        uiEndpoints: { remediations: '/api/executions/remediations' },
-      },
-    });
+  it.each(['/remediations', '/remediations/mm%3A123'])('does not route the retired Remediation page: %s', (path) => {
+    expect(resolveDashboardRoute(path)).toBeNull();
+    expect(destinationForPath(path)).toBeNull();
+    expect(DASHBOARD_DESTINATIONS.some(({ key }) => key === 'remediation')).toBe(false);
   });
 
   it('redirects legacy /secrets and /workers preserving safe filters and dropping section', () => {

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from tests.helpers.route_dependencies import _resolve_user_dependency_overrides
-
 import json
 import os
 import tempfile
 import zipfile
-from io import BytesIO
 from contextlib import contextmanager
 from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
@@ -22,15 +20,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import workflow_console as workflow_console_router
-from moonmind.security.operator_admission import OperatorAdmission
-from api_service.db.base import get_async_session
-from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
     DASHBOARD_DESTINATIONS,
     _get_temporal_service,
     _is_allowed_path,
     router,
 )
+from api_service.db.base import get_async_session
+from api_service.main import app as main_app
+from moonmind.security.operator_admission import OperatorAdmission
+from tests.helpers.route_dependencies import _resolve_user_dependency_overrides
 
 
 class _BootPayloadParser(HTMLParser):
@@ -189,8 +188,6 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/omnigent/policies",
         "/omnigent/agents/{dashboard_path:path}",
         "/omnigent/policies/{dashboard_path:path}",
-        "/remediations",
-        "/remediations/{dashboard_path:path}",
         "/artifacts",
         "/artifacts/{dashboard_path:path}",
         "/observability",
@@ -218,7 +215,6 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/settings/operations",
         "/omnigent/agents",
         "/omnigent/policies",
-        "/remediations",
         "/artifacts",
         "/observability",
     } <= registry_paths
@@ -334,7 +330,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["apiBase"] == "/api"
     assert "settingsPermissions" not in payload
     assert payload["features"]["workflowLiveUpdates"] is True
-    assert payload["features"]["remediationCollection"] is True
+    assert "remediationCollection" not in payload["features"]
     assert isinstance(payload["features"]["omnigentAgents"], bool)
     assert payload["features"]["omnigentPolicies"] is True
     assert "manifests" not in payload["features"]
@@ -346,7 +342,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
-    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 11
+    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 10
     configuration_destinations = [
         item
         for item in payload["destinations"]
@@ -377,7 +373,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     # each dashboard query owns its own polling.
     assert "workflowUpdatesStream" not in payload["endpoints"]
     assert "workflowEventsStream" not in payload["endpoints"]
-    assert payload["endpoints"]["remediations"] == "/api/executions/remediations"
+    assert "remediations" not in payload["endpoints"]
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",
         "post": "/api/system/worker-pause",
@@ -388,7 +384,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     for path in (
         "/artifacts/report/123",
         "/observability/runs/today",
-        "/remediations/mm:123",
         "/omnigent/agents/coding",
         "/omnigent/policies/default",
     ):
@@ -397,6 +392,8 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         assert "moonmind-ui-boot" in deep_link.text
 
     for path in (
+        "/remediations",
+        "/remediations/mm:123",
         "/artifacts/report.json",
         "/api/not-a-real-route",
         "/auth/not-a-real-route",
@@ -418,7 +415,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "/skills",
         "/settings",
         "/oauth-terminal",
-        "/remediations",
         "/omnigent/agents",
         "/omnigent/policies",
     ):
@@ -635,9 +631,7 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
 
 
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
-    for path in (
-        "/schedules/123e4567-e89b-12d3-a456-426614174000",
-    ):
+    for path in ("/schedules/123e4567-e89b-12d3-a456-426614174000",):
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
@@ -658,7 +652,9 @@ def test_retired_manifest_routes_are_not_dashboard_surfaces(
         assert response.status_code == 404
 
 
-def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient) -> None:
+def test_retired_follow_up_routes_are_not_dashboard_surfaces(
+    client: TestClient,
+) -> None:
     for path in (
         "/proposals",
         "/proposals/123e4567-e89b-12d3-a456-426614174000",
@@ -667,8 +663,7 @@ def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient)
         assert response.status_code == 404
 
 
-def test_legacy_settings_subroutes_redirect_to_canonical_routes(
-) -> None:
+def test_legacy_settings_subroutes_redirect_to_canonical_routes() -> None:
     with _client_with_mock_service() as (client, _mock_service):
         workers = client.get("/workers", follow_redirects=False)
         secrets = client.get("/secrets", follow_redirects=False)
@@ -1115,7 +1110,13 @@ def test_skills_api_exposes_backend_publish_contract(
     )
     monkeypatch.setattr(
         "api_service.api.routers.workflow_console.list_available_skill_names",
-        lambda: ("batch-pr-resolver", "fix-ci", "jira-verify", "pr-resolver", "moonspec-verify"),
+        lambda: (
+            "batch-pr-resolver",
+            "fix-ci",
+            "jira-verify",
+            "pr-resolver",
+            "moonspec-verify",
+        ),
     )
 
     response = client.get("/api/workflows/skills")
@@ -1458,12 +1459,16 @@ def test_skill_import_api_rejects_malformed_frontmatter_opening_delimiter(
         files={
             "file": (
                 "zip-skill.zip",
-                _skill_zip({"zip-skill/SKILL.md": f"""{opening_delimiter}
+                _skill_zip(
+                    {
+                        "zip-skill/SKILL.md": f"""{opening_delimiter}
 name: zip-skill
 description: Uploaded from a zip.
 ---
 # Zip Skill
-"""}),
+"""
+                    }
+                ),
                 "application/zip",
             )
         },
@@ -1487,12 +1492,16 @@ def test_skill_import_api_rejects_manifest_name_mismatch(
         files={
             "file": (
                 "zip-skill.zip",
-                _skill_zip({"zip-skill/SKILL.md": """---
+                _skill_zip(
+                    {
+                        "zip-skill/SKILL.md": """---
 name: other-skill
 description: Wrong parent.
 ---
 # Zip Skill
-"""}),
+"""
+                    }
+                ),
                 "application/zip",
             )
         },

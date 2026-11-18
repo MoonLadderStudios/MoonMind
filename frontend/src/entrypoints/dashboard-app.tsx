@@ -88,7 +88,6 @@ const PAGE_IMPORTS = {
   artifacts: () => import('./artifacts'),
   'omnigent-inventory': () => import('./omnigent-inventory'),
   'oauth-terminal': () => import('./oauth-terminal'),
-  remediations: () => import('./remediations'),
   schedules: () => import('./schedules'),
   'settings-entry': async () => ({
     default: (await import('./settings')).SettingsEntryPage,
@@ -528,6 +527,7 @@ function DashboardNavigation({
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
   const normalizedPath = location.pathname.replace(/\/$/, '');
+  const isRecurringRoute = normalizedPath === '/schedules' || normalizedPath.startsWith('/schedules/');
   const isSkillsRoute = normalizedPath === '/skills' || normalizedPath.startsWith('/skills/');
   const visiblePrimaryKeys = new Set(visiblePrimaryDestinations(uiInfo).map(({ key }) => key));
   // Shares the shell's cached query; only its error state is read here.
@@ -678,6 +678,11 @@ function DashboardNavigation({
             availabilityUnknown={uiInfoFailed}
             mobileDrawerOpen={open}
           />
+          {isRecurringRoute && uiInfo?.features?.schedules === true && listDisplayMode !== 'sidebar' ? (
+            <Link to="/workflows/new?scheduleMode=recurring" className="mm-button mm-button--primary skills-create-nav-button" aria-label="Create recurring schedule" title="Create recurring schedule">
+              <Plus size={18} aria-hidden="true" />
+            </Link>
+          ) : null}
           {isSkillsRoute && uiInfo?.features?.skills === true ? (
             <Button variant="primary"
               type="button"

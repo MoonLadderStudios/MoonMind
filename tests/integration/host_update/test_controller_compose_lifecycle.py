@@ -624,12 +624,30 @@ def test_compose_migration_waits_for_live_standalone_owner(tmp_path):
         assert blocked["secretHash"] == before["secretHash"]
         assert blocked["operation"]["status"] == "applying"
         (state / "fixture-release").write_text("complete")
-        result = command(
-            *compose, "up", "-d", "--wait", "--wait-timeout", "90", check=False
-        )
-        if result.returncode:
+        # Startup deliberately failed while the old owner held the lock.
+        # Compose --wait can fail immediately on that unhealthy observation,
+        # before Docker's restart policy retries it. Observe the existing
+        # candidate recovering without recreating either owner.
+        candidate_id = command(
+            *compose, "ps", "--all", "-q", "controller"
+        ).stdout.strip()
+        assert candidate_id
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            health = command(
+                "docker", "inspect", "--format",
+                "{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+                candidate_id, check=False,
+            )
+            if health.returncode == 0 and health.stdout.strip() == "healthy":
+                break
+            time.sleep(1)
+        else:
             logs = command(*compose, "logs", "--no-color", "controller", check=False)
-            pytest.fail(result.stdout + result.stderr + logs.stdout + logs.stderr)
+            pytest.fail(
+                "Controller did not recover after owner release\n"
+                + logs.stdout + logs.stderr
+            )
         assert command("docker", "inspect", legacy_id, check=False).returncode != 0
         after = state_evidence()
         assert (

@@ -5,7 +5,6 @@ export type DashboardPage =
   | 'artifacts'
   | 'omnigent-inventory'
   | 'oauth-terminal'
-  | 'remediations'
   | 'schedules'
   | 'settings-entry'
   | 'settings-operations'
@@ -37,7 +36,7 @@ export type DashboardPageClassification = 'collection' | 'create' | 'workspace' 
 export type DashboardDisplayMode = 'workflow-list' | 'recurring-list' | 'skills-list';
 export type DashboardIconKey =
   | 'archive' | 'bot' | 'manifest' | 'moon' | 'rocket' | 'scroll-text'
-  | 'settings' | 'shield-check' | 'sparkles' | 'wrench';
+  | 'settings' | 'shield-check' | 'sparkles';
 
 export type DashboardDestinationInfo = {
   key: string;
@@ -87,7 +86,6 @@ export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
   { key: 'skills', label: 'Skills', iconKey: 'sparkles', canonicalPath: '/skills', pathPatterns: ['/skills/*'], navigationGroup: 'system', pageClassification: 'workspace', capabilityKey: 'skills', endpointKey: 'skills', displayMode: 'skills-list', page: 'skills', dataWidePanel: true },
   { key: 'omnigent-agents', label: 'Agents', iconKey: 'bot', canonicalPath: '/omnigent/agents', pathPatterns: ['/omnigent/agents/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentAgents', endpointKey: 'omnigentAgents', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'omnigent-policies', label: 'Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
-  { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
   { key: 'artifacts', label: 'Artifacts', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
   { key: 'settings-providers-secrets', label: 'Providers & Secrets', iconKey: 'settings', canonicalPath: '/settings/providers-secrets', pathPatterns: ['/settings/providers-secrets'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsProvidersSecrets', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-providers-secrets', dataWidePanel: true },
   { key: 'settings-instance', label: 'Instance', iconKey: 'settings', canonicalPath: '/settings/instance', pathPatterns: ['/settings/instance'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsInstance', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-instance', dataWidePanel: true },

@@ -178,20 +178,6 @@ vi.mock('lucide-animated', async () => {
   };
 });
 
-// MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
-// so we can assert the route boundary's Retry recreates the lazy import instead
-// of replaying React.lazy's cached rejection. The factory rejects the first time
-// it is evaluated and resolves to a real component afterward. The remediations
-// page carries the failure because no other test imports it first.
-const remediationsImport = vi.hoisted(() => ({ attempts: 0 }));
-vi.mock('./remediations', () => {
-  remediationsImport.attempts += 1;
-  if (remediationsImport.attempts === 1) {
-    throw new Error('Failed to fetch dynamically imported module: remediations');
-  }
-  return { default: () => <div>Remediation page recovered</div> };
-});
-
 // Rows the mocked Workflows and Skills tables report as visible (after their
 // filters and sort); null means the table has not settled.
 const visibleItemsMock = vi.hoisted(() => ({
@@ -560,7 +546,6 @@ describe('Dashboard shared entry', () => {
   it.each([
     ['/artifacts/example', 'Artifacts'],
     ['/observability/example', 'Artifacts'],
-    ['/remediations/example', 'Remediation'],
     ['/settings/providers-secrets', 'Settings'],
     ['/settings/instance', 'Settings'],
     ['/settings/operations', 'Settings'],
@@ -1313,9 +1298,11 @@ describe('Dashboard shared entry', () => {
     expect(cardList.textContent).toContain('Needs attention');
     expect(cardList.textContent).toContain('Daily at 09:00');
     expect(cardList.textContent).toContain('UTC');
-    expect(cardList.textContent).toContain('Queue Task');
+    expect(cardList.textContent).toContain('Provider Profile');
+    expect(cardList.textContent).toContain('Model');
+    expect(cardList.textContent).toContain('Effort');
     expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
-    expect(cardList.textContent).toContain('Provider queue rejected the run');
+    expect(cardList.textContent).toContain('Needs attention');
     expect(cardList.querySelector('a')?.getAttribute('href')).toBe('/schedules/schedule-one');
   });
 
@@ -2082,27 +2069,6 @@ describe('Dashboard shared entry', () => {
     ).toBeTruthy();
     expect(screen.queryByText(/Unknown dashboard page:/i)).toBeNull();
     expect(document.querySelector('.panel--data-wide')).toBeTruthy();
-  });
-
-  it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      window.history.replaceState({}, '', '/remediations');
-      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
-
-      // First dynamic import rejects -> styled route error with a Retry action.
-      expect(await screen.findByText('This page failed to load')).toBeTruthy();
-      expect(screen.queryByText('Remediation page recovered')).toBeNull();
-
-      // Retry must recreate the lazy import (a cached rejection would re-throw).
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-      expect(await screen.findByText('Remediation page recovered')).toBeTruthy();
-      expect(screen.queryByText('This page failed to load')).toBeNull();
-      expect(remediationsImport.attempts).toBeGreaterThanOrEqual(2);
-    } finally {
-      consoleErrorSpy.mockRestore();
-    }
   });
 
   it('clears a route error when the operator navigates to another workflow', async () => {
@@ -3496,25 +3462,13 @@ describe('Dashboard shared entry', () => {
     expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
   });
 
-  it('MM-1149 switches recurring schedules from reduced tablet columns to mobile cards', async () => {
+  it('MM-1149 switches recurring schedules from the full table to mobile cards', async () => {
     const recurringMediaRule = (selector: string, maxWidth: string) => (rule: Rule) =>
       rule.selector.split(',').map(normalizeCssSelector).includes(selector) &&
       rule.parent?.type === 'atrule' &&
       rule.parent.name === 'media' &&
       rule.parent.params.includes(`max-width: ${maxWidth}`);
 
-    const tabletPolicyHeaderBlock = cssRuleBlockMatching(
-      dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="policy"]', '1180px'),
-    );
-    const tabletUpdatedCellBlock = cssRuleBlockMatching(
-      dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="updatedAt"]', '1180px'),
-    );
-    const narrowLastScheduledBlock = cssRuleBlockMatching(
-      dashboardCss,
-      recurringMediaRule('.schedules-table-panel .data-table [data-column-key="lastScheduledFor"]', '980px'),
-    );
     const mobileTableBlock = cssRuleBlockMatching(
       dashboardCss,
       recurringMediaRule('.schedules-table-panel .data-table-slab', '720px'),
@@ -3525,9 +3479,6 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(cssRuleBlock(dashboardCss, '.schedules-mobile-card-list')).toContain('display: none');
-    expect(tabletPolicyHeaderBlock).toContain('display: none');
-    expect(tabletUpdatedCellBlock).toContain('display: none');
-    expect(narrowLastScheduledBlock).toContain('display: none');
     expect(mobileTableBlock).toContain('display: none');
     expect(mobileCardListBlock).toContain('display: grid');
   });

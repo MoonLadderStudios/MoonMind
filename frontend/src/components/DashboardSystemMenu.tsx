@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import {
@@ -23,7 +23,6 @@ const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   settings: Settings,
   'shield-check': ShieldCheck,
   sparkles: Sparkles,
-  wrench: Wrench,
 };
 
 type MenuDestinationState = DashboardDestinationState | 'unknown';
@@ -31,7 +30,7 @@ type MenuDestinationState = DashboardDestinationState | 'unknown';
 const SECTION_LABELS: Record<string, string> = {
   recurring: 'Workflow resources',
   'omnigent-agents': 'Omnigent',
-  remediation: 'Operations',
+  artifacts: 'Operations',
 };
 
 function DestinationLink({ destination, state, onSelect, menuItem = true }: {
@@ -152,6 +151,7 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const pointerInside = useRef(false);
   const location = useLocation();
   const unknown = availabilityUnknown && !uiInfo;
   const destinations = unknown
@@ -173,15 +173,26 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
   const triggerIconKey = activeDestinationGroup?.triggerIconKey ?? activeDestination?.iconKey;
   const TriggerIcon = active && triggerIconKey ? (ICONS[triggerIconKey] ?? Settings) : Settings;
 
-  useEffect(() => setOpen(false), [location.pathname, location.search]);
+  // List pages may normalize their query after the menu is opened. Only
+  // leaving the page should dismiss it; link selection also closes directly.
+  useEffect(() => setOpen(false), [location.pathname]);
 
   useEffect(() => {
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      pointerInside.current = Boolean(rootRef.current?.contains(event.target as Node));
+      if (!pointerInside.current) setOpen(false);
     };
+    const releasePointer = () => { pointerInside.current = false; };
     document.addEventListener('pointerdown', closeOutside);
-    return () => document.removeEventListener('pointerdown', closeOutside);
+    document.addEventListener('pointerup', releasePointer);
+    document.addEventListener('pointercancel', releasePointer);
+    return () => {
+      pointerInside.current = false;
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('pointerup', releasePointer);
+      document.removeEventListener('pointercancel', releasePointer);
+    };
   }, [open]);
 
   if (destinations.length === 0) return null;
@@ -224,6 +235,10 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnkn
         ref={rootRef}
         className="dashboard-system-menu"
         onBlur={(event) => {
+          // WebKit may blur without focusing a pointer-selected menu link.
+          // Keep that link mounted through its click; genuine focus departures
+          // and outside pointer presses still dismiss the menu.
+          if (!event.relatedTarget && pointerInside.current) return;
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
         }}
       >

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 
-import { fireEvent, renderWithClient, screen, within } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, within } from '../utils/test-utils';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
 import { DashboardSystemMenu } from './DashboardSystemMenu';
 
@@ -30,6 +30,48 @@ describe('DashboardSystemMenu without UI info', () => {
       expect(item.getAttribute('href')).toBeTruthy();
       expect(item.textContent).toContain('availability unknown');
     }
+  });
+
+  it('keeps a pointer-selected link mounted when WebKit blurs without a related target', () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={null} availabilityUnknown mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    const skills = screen.getByRole('menuitem', { name: /Skills/ });
+    // WebKit can blur the trigger without focusing the clicked link.
+    fireEvent.pointerDown(skills);
+    fireEvent.blur(trigger, { relatedTarget: null });
+    expect(screen.getByRole('menuitem', { name: /Skills/ })).toBe(skills);
+    fireEvent.pointerUp(skills);
+    fireEvent.click(skills);
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
+    fireEvent.blur(screen.getByRole('menuitem', { name: /Skills/ }), { relatedTarget: null });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('keeps an opened menu through query normalization but closes on page navigation', () => {
+    let navigate: ReturnType<typeof useNavigate>;
+    function NavigationProbe() {
+      navigate = useNavigate();
+      return null;
+    }
+    renderWithClient(
+      <MemoryRouter initialEntries={['/schedules']}>
+        <NavigationProbe />
+        <DashboardSystemMenu uiInfo={null} availabilityUnknown mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Recurring' }));
+    const skills = screen.getByRole('menuitem', { name: /Skills/ });
+    act(() => { void navigate('?limit=50&sort=updatedAt&sortDir=desc', { replace: true }); });
+    expect(screen.getByRole('menuitem', { name: /Skills/ })).toBe(skills);
+    act(() => { void navigate('/skills'); });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('offers the same fallback in the mobile drawer', () => {
