@@ -1036,27 +1036,15 @@ def test_supplied_image_runs_each_consumer_without_a_pass_through_job(name):
 
 
 @pytest.mark.parametrize("name", CONSUMERS)
+@pytest.mark.parametrize("phase", ["full", "source", "artifact", "recovery"])
 @pytest.mark.parametrize(
-    "phase,preflight,accepted",
-    [
-        ("full", "success", True),
-        ("full", "skipped", False),
-        ("source", "skipped", False),
-        ("artifact", "skipped", True),
-        ("recovery", "skipped", True),
-        ("artifact", "failure", False),
-        ("recovery", "cancelled", False),
-        ("artifact", "", False),
-    ],
+    "selection", ["success", "failure", "cancelled", "skipped", ""]
 )
-def test_supplied_image_consumer_preserves_source_preflight_gate(
-    name, phase, preflight, accepted
-):
+def test_supplied_image_consumer_preserves_selector_gate(name, phase, selection):
     job = _workflow("pytest-unit-tests.yml")["jobs"][name]
-    context = _consumer_context(
-        CANDIDATE, "skipped", preflight=preflight, phase=phase
-    )
-    assert _job_runs(job, context) is accepted
+    context = _consumer_context(CANDIDATE, "skipped", phase=phase)
+    context["needs"]["select-test-suites"]["result"] = selection
+    assert _job_runs(job, context) is (selection == "success")
 
 
 def _pull_step(job):
