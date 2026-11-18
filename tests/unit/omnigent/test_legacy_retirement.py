@@ -552,3 +552,32 @@ def test_a_retired_rollout_control_fails_startup_unless_it_keeps_its_default(
         assert_obsolete_configuration({name: "deployment-value"})
     # The previous default selects what omitting the variable now selects.
     assert assert_obsolete_configuration({name: previous_default}) == ()
+
+
+@pytest.mark.parametrize("prefix", ("", "FEATURE_FLAGS__"))
+@pytest.mark.parametrize(
+    "variable",
+    sorted(
+        name
+        for name, default in RETIRED_ROLLOUT_CONTROLS.items()
+        if default in ("true", "false")
+    ),
+)
+def test_a_retired_boolean_control_accepts_any_spelling_of_its_default(
+    prefix: str, variable: str
+) -> None:
+    """Settings parsed these as booleans, so CONTROL_STOP_CONTINUATION_ENABLED=0
+    selected the same default as false and must not fail startup."""
+
+    name = f"{prefix}{variable}"
+    false_spellings = ("0", "off", "no", "f", "N", "False")
+    true_spellings = ("1", "on", "yes", "t", "Y", "TRUE")
+    if RETIRED_ROLLOUT_CONTROLS[variable] == "true":
+        default_spellings, other_spellings = true_spellings, false_spellings
+    else:
+        default_spellings, other_spellings = false_spellings, true_spellings
+    for spelling in default_spellings:
+        assert assert_obsolete_configuration({name: spelling}) == (), spelling
+    for spelling in other_spellings:
+        with pytest.raises(ObsoleteConfigurationError, match=f"{name} is obsolete"):
+            assert_obsolete_configuration({name: spelling})

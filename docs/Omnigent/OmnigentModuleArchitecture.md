@@ -462,7 +462,8 @@ Workflow cutover paths, `MEMORY_LONG_TERM`, and the retired rollout controls
 for publication recovery, control-stop continuation and Live Logs) fail startup
 for one release, since ignoring a credential alias would silently fall back to a
 default and a kept shadow or canary setting would silently go live. Each
-retired control's previous default still counts as omitted.
+retired control's previous default still counts as omitted, in any spelling
+settings parsed as that boolean (`0`, `off` and `no` for false).
 
 ## 6. Adding an approved harness
 
