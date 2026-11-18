@@ -255,6 +255,49 @@ an enable requires `launch_ready`. A patch enabling a profile with readiness
 blockers fails with "Provider profile cannot be enabled until OAuth or API-key
 credentials are verified."
 
+### 5.6 Account and usage observations
+
+Settings also shows the connected account and its provider-reported usage. This
+is an observation, not configuration: `ProviderAccountUsageService` runs in the
+API process on the existing database and keeps the latest snapshot per profile
+in `provider_account_usage_observations`. Writes there never change the
+profile's `updated_at`, readiness, defaults, tiers, priority, enablement, or
+scheduler cooldowns. List and detail return a nullable `account_usage`
+projection loaded in one batched query, and never collect.
+
+Collectors publish one schema-versioned contract
+(`moonmind/provider_profiles/account_usage.py`) that accepts allowlisted fields
+only, so provider bodies, tokens, and headers cannot be stored. Stable account
+and workspace IDs stay internal. Remaining percentage derives only from a finite
+used percentage (1 means 1%) and is clamped for overage while `used_percent`
+keeps the real value. Weekly, short, and model-scoped windows stay separate;
+only a general weekly window can be primary.
+
+An observation is bound to the profile's `credential_generation` and to the
+first trusted account/workspace binding. Stale generations, account mismatches,
+expired attempt or runtime-owner authority, and out-of-order snapshots are
+rejected before anything is written, and a new generation invalidates the cache.
+A full snapshot replaces the window set; a partial native observation updates
+only the windows it carries. Identity, each window, and refresh state update
+independently, and times come from the observation, so re-delivered telemetry
+keeps its time.
+
+`POST /api/v1/provider-profiles/account-usage/refresh` requests collection for up
+to 50 profiles. Per profile it reports `already_fresh`, `accepted` (requested,
+not refreshed), `deferred_busy`, `backoff`, `not_supported`, `not_connected`, or
+`disabled`. Coordination is a compare-and-set on the observation row. Tabs, API
+workers, retries, and profiles on the same verified account therefore coalesce
+onto one attempt; equal email never pools profiles. A visibility request
+collects once the last success is five minutes old, or once per passed reset
+boundary. Manual requests are limited to one per minute per verified account and
+never beat a provider `Retry-After`. Each attempt has an ID and a two-minute
+deadline, so a lost acknowledgment expires instead of staying running. OAuth
+success requests an initial collection after the session workflow releases
+enrollment ownership. Nothing polls, and disabled or disconnected profiles never
+collect automatically. Collection runs through the installed
+`AccountUsageDispatcher`; until a credential-owning executor installs one, every
+provider reports `not_supported`.
+
 ---
 
 ## 6. OAuth-Backed Profiles

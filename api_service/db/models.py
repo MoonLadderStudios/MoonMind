@@ -3867,6 +3867,101 @@ class ManagedAgentProviderProfile(Base):
     )
 
 
+class ProviderAccountUsageObservation(Base):
+    """Latest cached account identity and usage observation for one profile.
+
+    Kept apart from the profile row so observation writes never change
+    profile settings, ``updated_at``, readiness, scheduling, or manager
+    payloads. ``credential_generation`` binds the cache to one credential
+    binding; a newer profile generation invalidates it. ``row_version`` is the
+    compare-and-set token every writer uses, so coordination holds across API
+    workers and processes. Allowlisted fields only; no provider bodies,
+    tokens, or headers.
+    """
+
+    __tablename__ = "provider_account_usage_observations"
+    __table_args__ = (
+        Index("ix_provider_account_usage_account_key", "account_key"),
+        CheckConstraint(
+            "refresh_state IN ('idle', 'queued', 'running', 'deferred')",
+            name="ck_provider_account_usage_refresh_state",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_provider_account_usage_generation_positive",
+        ),
+    )
+
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    snapshot_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    bound_account_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    bound_workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    # Digest of a verified provider/account/workspace identity. Only rows
+    # sharing it may coalesce collection or share usage; email never does.
+    account_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    identity_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    usage_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    refresh_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="idle", server_default=text("'idle'")
+    )
+    refresh_trigger: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    refresh_attempt_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    refresh_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refresh_deadline_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_failure_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_failure_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    next_allowed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_manual_request_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reset_requested_for: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class ProviderCapacityScope(Base):
     """Durable provider-capacity aggregate shared by compatible profiles.
 
