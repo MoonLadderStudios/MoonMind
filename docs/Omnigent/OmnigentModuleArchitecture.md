@@ -335,7 +335,10 @@ environment overrides and other tier options retain their adapter.
 An admitted shared context cannot fall back to a fresh direct session when a
 later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
-their own immutable plans compiled by the same admission owner, linked
+their own immutable plans compiled by the same admission owner, including supported
+tier launch defaults with explicit step parameters taking precedence. Successors
+retain the admitted values; fresh scheduled occurrences resolve current defaults.
+Unsupported native options keep their adapter. These plans are linked
 through the existing artifact owner and carried across successor attempts.
 An explicit root rollout target constrains the root plan; independent steps
 validate their own targets against their selected Profiles.

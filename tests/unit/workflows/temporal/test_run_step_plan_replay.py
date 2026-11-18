@@ -35,11 +35,18 @@ async def _request(implementation, *, forged=False):
                 "verify": {
                     "omnigentExecutionPlan": _binding("2"),
                     "resolvedSkillsetRef": "art_step_skills",
+                    "commitMessage": "admitted step commit",
                     "model": "step-model", "effort": "high",
                 },
             },
         },
     )
+    expected_commit = (
+        "admitted step commit"
+        if request.omnigent_execution_plan.plan_ref == _binding("2")["planRef"]
+        else None
+    )
+    assert request.parameters.get("commitMessage") == expected_commit
     await workflow.sleep(1)
     return request.omnigent_execution_plan.plan_ref
 

@@ -318,6 +318,13 @@ def ensure_tier_metadata_is_credential_free(value: Any) -> None:
         raise ValueError("tier metadata must not contain raw credential-like keys")
 
 
+# Launch options already consumed by both direct and shared execution paths.
+SHARED_LAUNCH_PARAMETER_KEYS = frozenset({
+    "requiredCapabilities", "githubOperations", "publishMode", "commitMessage",
+    "publishBaseBranch", "repository", "workBranch", "workBranchId", "workBranchOrigin",
+})
+
+
 def apply_tier_parameter_defaults(
     parameters: dict[str, Any],
     *,

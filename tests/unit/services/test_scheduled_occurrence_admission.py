@@ -1599,3 +1599,72 @@ async def test_scheduled_assessment_denial_preserves_validation_reason(
     readmit.assert_awaited_once()
     reserve.assert_not_awaited()
     plan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_specialized_tier_launch_defaults_remain_frozen_for_successor(
+    monkeypatch, compiler, successor, explicit
+):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"commitMessage": "admitted"}}]
+    provider.default_model_tier = 1
+    runtime = {"mode": "omnigent", "modelTier": 1}
+    if explicit:
+        runtime["parameters"] = {"commitMessage": "authored"}
+    parameters, _ = await _schedule_parameters(
+        artifacts, provider=provider,
+        steps=[{"id": "specialized", "runtime": runtime}],
+    )
+    saved = deepcopy(parameters["omnigentStepExecutionPlans"]["specialized"])
+    assert saved["commitMessage"] == ("authored" if explicit else "admitted")
+    provider.model_tiers[0]["parameters"]["commitMessage"] = "edited"
+    if successor:
+        provider.model_tiers[0]["model"] = "example/edited-model"
+        provider.model_tiers[0]["parameters"]["nativeOnlyOption"] = True
+    session = _OccurrenceSession(provider, artifacts=artifacts)
+    if successor:
+        admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+    else:
+        admitted = await RecurringWorkflowsService(session, artifact_service=artifacts).admit_occurrence_execution_plan(
+            workflow_id="mm:schedule-1:occurrence-2", initial_parameters=parameters,
+        )
+    assert admitted["disposition"] == "admitted"
+    step = admitted["omnigentStepExecutionPlans"]["specialized"]
+    assert step["commitMessage"] == ("authored" if explicit else "admitted" if successor else "edited")
+    plan = _PlanStore.plans[step["omnigentExecutionPlan"]["planRef"]].payload
+    assert plan.modelConfig.qualifiedId == "example/tier-model"
+    assert plan.modelConfig.tierResolution == step["modelTierResolution"]
+    assert parameters["omnigentStepExecutionPlans"]["specialized"] == saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_specialized_tier_unsupported_launch_option_keeps_native_boundary(monkeypatch, compiler, explicit):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {} if explicit else {"nativeOnlyOption": True}}]
+    provider.default_model_tier = 1
+    runtime = {"mode": "omnigent", "modelTier": 1}
+    if explicit:
+        runtime["parameters"] = {"nativeOnlyOption": True}
+    with pytest.raises(ValueError, match="native tier options require their native route"):
+        await _schedule_parameters(_ArtifactService(), provider=provider,
+            steps=[{"id": "specialized", "runtime": runtime}])
+
+
+@pytest.mark.asyncio
+async def test_specialized_tier_rejects_generated_branch_without_name(monkeypatch, compiler):
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    provider = _provider()
+    provider.model_tiers = [{"model": "example/tier-model", "effort": "high",
+                             "parameters": {"workBranchOrigin": "generated"}}]
+    provider.default_model_tier = 1
+    with pytest.raises(ValueError, match="native tier options require their native route"):
+        await _schedule_parameters(_ArtifactService(), provider=provider,
+            steps=[{"id": "specialized", "runtime": {"mode": "omnigent", "modelTier": 1}}])
