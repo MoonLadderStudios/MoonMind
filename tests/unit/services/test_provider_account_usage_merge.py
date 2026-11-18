@@ -126,6 +126,34 @@ def test_full_snapshot_keeps_a_window_updated_after_it_was_taken() -> None:
     assert snapshot.usage["windows"]["weekly"]["used_percent"] == 11
 
 
+def test_older_partial_cannot_restore_a_window_a_full_snapshot_removed() -> None:
+    base = _merge(
+        None, "full", T0, window("weekly"), window("five-hour", period="short")
+    )
+    removed = _merge(
+        base.usage, "full", T0 + timedelta(minutes=2), window("weekly", used=12)
+    )
+    assert set(removed.usage["windows"]) == {"weekly"}
+
+    delayed = _merge(
+        removed.usage,
+        "partial",
+        T0 + timedelta(minutes=1),
+        window("five-hour", period="short", used=40),
+    )
+    assert not delayed.changed
+    assert set(delayed.usage["windows"]) == {"weekly"}
+
+    later = _merge(
+        removed.usage,
+        "partial",
+        T0 + timedelta(minutes=3),
+        window("five-hour", period="short", used=45),
+    )
+    assert later.changed
+    assert later.usage["windows"]["five-hour"]["used_percent"] == 45
+
+
 def test_out_of_order_and_duplicate_observations_do_not_replace_newer_values() -> None:
     newest = _merge(None, "full", T0 + timedelta(minutes=10), window("weekly", used=30))
     older_full = _merge(newest.usage, "full", T0, window("weekly", used=5))
@@ -504,6 +532,40 @@ async def test_sharing_requires_verified_provider_account_identity(env) -> None:
     gamma = await env["project"]("gamma")
     assert gamma["usage"]["windows"][0]["used_percent"] == 60
     assert (await env["project"]("delta"))["usage"]["windows"] == []
+
+
+@pytest.mark.asyncio
+async def test_workspace_learned_after_account_binding_splits_sharing(env) -> None:
+    sessions = env["sessions"]
+    await add_profiles(sessions, make_profile("beta"))
+    for profile_id in ("alpha", "beta"):
+        await env["call"](
+            "ingest_observation", observation(profile_id, account_id="acct-1")
+        )
+    for profile_id, workspace in (("alpha", "ws-1"), ("beta", "ws-2")):
+        learned = await env["call"](
+            "ingest_observation",
+            observation(profile_id, account_id="acct-1", workspace_id=workspace),
+        )
+        assert learned.accepted
+    alpha_row = await observation_row(sessions, "alpha")
+    beta_row = await observation_row(sessions, "beta")
+    assert alpha_row["bound_workspace_id"] == "ws-1"
+    assert beta_row["bound_workspace_id"] == "ws-2"
+    assert alpha_row["account_key"] != beta_row["account_key"]
+
+    shared = await env["call"](
+        "ingest_observation",
+        observation("alpha", usage=usage("full", T0, window("weekly", used=60))),
+    )
+    assert shared.accepted and shared.shared_with == ()
+    assert (await env["project"]("beta"))["usage"]["windows"] == []
+
+    mismatch = await env["call"](
+        "ingest_observation",
+        observation("alpha", account_id="acct-1", workspace_id="ws-2"),
+    )
+    assert mismatch.rejection is ObservationRejection.ACCOUNT_MISMATCH
 
 
 @pytest.mark.asyncio

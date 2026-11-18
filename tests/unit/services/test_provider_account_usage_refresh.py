@@ -207,6 +207,77 @@ async def test_verified_shared_account_coalesces_and_shares_one_collection(env) 
     assert peer_manual.outcome is RefreshOutcome.BACKOFF
 
 
+async def test_peer_claim_between_read_and_write_still_coalesces(
+    env, monkeypatch
+) -> None:
+    await add_profiles(env.sessions, make_profile("beta"))
+    for profile_id in ("alpha", "beta"):
+        await env.call(
+            "ingest_observation", observation(profile_id, account_id="acct-1")
+        )
+    original = ProviderAccountUsageService._verified_peers
+    interleaved: list = []
+
+    async def peers_then_race(self, profile, account_key):
+        peers = await original(self, profile, account_key)
+        if profile.profile_id == "alpha" and not interleaved:
+            # Another worker claims the peer after alpha read it as idle.
+            interleaved.extend(await env.refresh("beta", trigger=MANUAL))
+        return peers
+
+    monkeypatch.setattr(ProviderAccountUsageService, "_verified_peers", peers_then_race)
+    [alpha] = await env.refresh("alpha", trigger=MANUAL)
+    [beta] = interleaved
+    assert not beta.coalesced and beta.outcome is RefreshOutcome.ACCEPTED
+    assert alpha.coalesced and alpha.request_id == beta.request_id
+    assert [r.profile_id for r in env.dispatcher.requests] == ["beta"]
+
+
+async def test_coalesced_attempt_completes_when_usage_is_unchanged(env) -> None:
+    await add_profiles(env.sessions, make_profile("beta"))
+    cached = usage("full", T0, window("weekly", used=33))
+    for profile_id in ("alpha", "beta"):
+        await env.call(
+            "ingest_observation",
+            observation(profile_id, account_id="acct-1", usage=cached),
+        )
+    env.clock.advance(minutes=6)
+    alpha, beta = await env.refresh("alpha", "beta")
+    assert beta.coalesced and beta.request_id == alpha.request_id
+
+    # The collector re-delivers the observation both profiles already cache.
+    result = await env.call(
+        "ingest_observation",
+        observation("alpha", attempt_id=alpha.request_id, usage=cached),
+    )
+    assert result.accepted and not result.changed
+    env.clock.advance(minutes=3)
+    beta_view = await env.project("beta")
+    assert beta_view["refresh"]["state"] == "idle"
+    assert beta_view["refresh"]["last_failure"] is None
+    assert beta_view["refresh"]["last_success_at"] is not None
+
+
+async def test_native_full_observation_restores_automatic_collection(env) -> None:
+    for _ in range(MAX_AUTOMATIC_FAILURES):
+        [attempt] = await env.refresh("alpha")
+        assert attempt.outcome is RefreshOutcome.ACCEPTED
+        failure = await env.fail(attempt, retry_after=1)
+        env.clock.now = failure.next_allowed_at
+    [stopped] = await env.refresh("alpha")
+    assert stopped.outcome is RefreshOutcome.BACKOFF
+
+    native = await env.call(
+        "ingest_observation",
+        observation("alpha", usage=usage("full", env.clock.now, window("weekly"))),
+    )
+    assert native.accepted
+    assert (await env.project("alpha"))["refresh"]["last_failure"] is None
+    env.clock.advance(minutes=6)
+    [automatic] = await env.refresh("alpha")
+    assert automatic.outcome is RefreshOutcome.ACCEPTED
+
+
 async def test_abandoned_attempts_recover_without_stuck_running_state(env) -> None:
     [first] = await env.refresh("alpha", trigger=MANUAL)
     assert await env.call(

@@ -891,7 +891,7 @@ async def test_replacing_imported_volume_increments_and_reconciles_generation(
     )
     monkeypatch.setattr(
         provider_profiles_router,
-        "_reconcile_imported_credential_generation",
+        "_reconcile_credential_generation",
         _reconcile,
     )
     async with db_base.async_session_maker() as session:
@@ -929,6 +929,59 @@ async def test_replacing_imported_volume_increments_and_reconciles_generation(
     assert response.json()["volume_ref"] == "replacement-codex-home"
     assert response.json()["credential_generation"] == 5
     assert reconciled == [(profile_id, 5)]
+
+
+@pytest.mark.asyncio
+async def test_credential_binding_edits_advance_generation_only_on_change(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = f"mm5362-binding-edit-{uuid4().hex}"
+    reconciled: list[tuple[str, int]] = []
+
+    async def _reconcile(profile: ManagedAgentProviderProfile) -> None:
+        reconciled.append((profile.profile_id, profile.credential_generation))
+
+    monkeypatch.setattr(
+        provider_profiles_router, "_reconcile_credential_generation", _reconcile
+    )
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"OPENAI_API_KEY": "env://first_account_key"},
+                max_parallel_runs=1,
+                enabled=False,
+                credential_generation=2,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        unchanged = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"secret_refs": {"OPENAI_API_KEY": "env://first_account_key"}},
+        )
+        replaced = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"secret_refs": {"OPENAI_API_KEY": "env://second_account_key"}},
+        )
+        unrelated = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}", json={"priority": 7}
+        )
+
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["credential_generation"] == 2
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["credential_generation"] == 3
+    assert unrelated.status_code == 200, unrelated.text
+    assert unrelated.json()["credential_generation"] == 3
+    assert reconciled == [(profile_id, 3)]
 
 
 class _TrackedProfile:

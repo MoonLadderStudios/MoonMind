@@ -1158,7 +1158,19 @@ def _activate_selected_api_key_refs(
     )
 
 
-async def _reconcile_imported_credential_generation(
+def _credential_binding(profile: ManagedAgentProviderProfile) -> tuple[Any, ...]:
+    """The fields that decide which credentials a profile reads."""
+
+    return (
+        profile.provider_id,
+        profile.credential_source,
+        profile.volume_ref,
+        profile.volume_mount_path,
+        dict(profile.secret_refs or {}),
+    )
+
+
+async def _reconcile_credential_generation(
     profile: ManagedAgentProviderProfile,
 ) -> None:
     """Refresh bindings and fence hosts issued for an older credential home."""
@@ -1718,6 +1730,7 @@ async def update_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     _require_profile_management(profile, current_user)
+    credential_binding_before = _credential_binding(profile)
 
     update_data = body.model_dump(exclude_unset=True)
     execution_configuration = update_data.get(
@@ -2176,7 +2189,6 @@ async def update_profile(
                 profile_id,
                 exc_info=True,
             )
-        profile.credential_generation = int(profile.credential_generation) + 1
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
     legacy_default_supplied = (
@@ -2290,6 +2302,15 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    # A new generation invalidates per-profile credential caches (such as
+    # cached account usage) and fences hosts issued for the old binding. A
+    # re-import always advances it: the volume's contents may have changed.
+    credential_generation_advanced = (
+        import_existing_credential_volume
+        or _credential_binding(profile) != credential_binding_before
+    )
+    if credential_generation_advanced:
+        profile.credential_generation = int(profile.credential_generation) + 1
     if operator_disable_requested:
         profile.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
     try:
@@ -2369,8 +2390,8 @@ async def update_profile(
     )
     await session.commit()
     await session.refresh(profile)
-    if import_existing_credential_volume:
-        await _reconcile_imported_credential_generation(profile)
+    if credential_generation_advanced:
+        await _reconcile_credential_generation(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     secret_ref_results = _secret_ref_results_for_rows([profile])
     secret_statuses = await _managed_secret_statuses_for_rows(

@@ -123,6 +123,43 @@ async def test_concurrent_requests_across_workers_coalesce_to_one_collection(
 
 
 @pytest.mark.asyncio
+async def test_shared_account_claims_across_workers_dispatch_once(pg) -> None:
+    url, engine, _ = pg
+    clock, dispatcher = Clock(), FakeDispatcher()
+    for profile_id in ("alpha", "beta"):
+        await _call(
+            engine,
+            clock,
+            dispatcher,
+            "ingest_observation",
+            observation(profile_id, account_id="acct-shared"),
+        )
+    workers = _workers(url, 4)
+    try:
+        results = await asyncio.gather(
+            *(
+                _call(
+                    workers[i % 4],
+                    clock,
+                    dispatcher,
+                    "request_refresh",
+                    ["alpha" if i % 2 else "beta"],
+                    trigger=RefreshTrigger.MANUAL,
+                )
+                for i in range(16)
+            )
+        )
+    finally:
+        for worker in workers:
+            await worker.dispose()
+    assert len(dispatcher.requests) == 1
+    assert {batch[0].request_id for batch in results} == {
+        dispatcher.requests[0].attempt_id
+    }
+    assert {batch[0].outcome for batch in results} == {RefreshOutcome.ACCEPTED}
+
+
+@pytest.mark.asyncio
 async def test_separate_processes_share_single_flight_ownership(pg) -> None:
     url, _, sessions = pg
     script = textwrap.dedent(

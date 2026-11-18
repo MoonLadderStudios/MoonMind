@@ -429,14 +429,12 @@ class ProviderAccountUsageService:
         logical["runtime_id"] = profile.runtime_id
         return logical
 
-    async def _cas(self, row: Mapping[str, Any], logical: Mapping[str, Any]) -> bool:
-        changes = {
-            column: logical[column]
-            for column in _WRITABLE
-            if logical.get(column) != row.get(column)
-        }
-        if not changes:
-            return True
+    async def _compare_and_set(
+        self,
+        row: Mapping[str, Any],
+        generation: int,
+        changes: Mapping[str, Any],
+    ) -> bool:
         profiles = ManagedAgentProviderProfile.__table__
         result = await self._session.execute(
             update(_TABLE)
@@ -446,20 +444,55 @@ class ProviderAccountUsageService:
                 # Fence the write to the binding the decision was made for.
                 exists().where(
                     profiles.c.profile_id == row["profile_id"],
-                    profiles.c.credential_generation
-                    == logical["credential_generation"],
+                    profiles.c.credential_generation == generation,
                 ),
             )
             .values(**changes, row_version=row["row_version"] + 1)
         )
         return result.rowcount == 1
 
+    async def _cas(
+        self,
+        row: Mapping[str, Any],
+        logical: Mapping[str, Any],
+        peers: Sequence[tuple[AccountUsageProfileRef, Mapping[str, Any]]] = (),
+    ) -> bool:
+        """Compare-and-set the row; a change also fences the peers it read.
+
+        Bumping each peer's ``row_version`` makes a claim on one profile and a
+        concurrent claim on another profile of the same account conflict.
+        Writes go in profile order, so concurrent claims serialize on their
+        first shared row instead of deadlocking.
+        """
+
+        changes = {
+            column: logical[column]
+            for column in _WRITABLE
+            if logical.get(column) != row.get(column)
+        }
+        if not changes:
+            return True
+        writes = [(row, logical["credential_generation"], changes)] + [
+            (peer_row, peer.credential_generation, {}) for peer, peer_row in peers
+        ]
+        for target, generation, values in sorted(
+            writes, key=lambda write: write[0]["profile_id"]
+        ):
+            if not await self._compare_and_set(target, generation, values):
+                return False
+        return True
+
     async def _transact(
         self,
         profile: AccountUsageProfileRef,
-        decide: Callable[[dict[str, Any], datetime], _Decision],
+        decide: Callable[..., _Decision],
+        *,
+        account_scoped: bool = False,
     ) -> _Decision:
         """Read, decide and compare-and-set one row, then commit.
+
+        ``account_scoped`` decisions also receive the verified peers read in
+        the same attempt, and a write fences those peers.
 
         Raises :class:`_ProfileChanged` when the profile disappears or its
         credential generation moves on, so no decision lands on a binding it
@@ -481,8 +514,13 @@ class ProviderAccountUsageService:
                 await self._ensure_rows([profile])
                 continue
             logical = self._logical(row, profile)
-            decision = decide(logical, self._now())
-            if await self._cas(row, logical):
+            peers = []
+            if account_scoped:
+                peers = await self._verified_peers(profile, logical["account_key"])
+                decision = decide(logical, self._now(), [peer for _, peer in peers])
+            else:
+                decision = decide(logical, self._now())
+            if await self._cas(row, logical, peers):
                 await self._session.commit()
                 return decision
             await self._session.rollback()
@@ -727,7 +765,8 @@ class ProviderAccountUsageService:
 
         results: dict[str, RefreshResult] = {}
         pending: list[tuple[AccountUsageProfileRef, CollectionRequest]] = []
-        # Sorted, one committed row at a time: no transaction holds two rows.
+        # Sorted and committed per profile; a claim writes the rows of its
+        # account peers in that same order.
         for profile_id in sorted(profiles):
             profile = profiles[profile_id]
             decision = await self._claim(profile, trigger)
@@ -802,11 +841,9 @@ class ProviderAccountUsageService:
         if blocked is not None:
             return _Decision(result(blocked, RefreshState.IDLE))
 
-        row = (await self._rows([profile.profile_id])).get(profile.profile_id)
-        account_key = self._logical(row, profile)["account_key"] if row else None
-        peers = await self._verified_peers(profile, account_key)
-
-        def decide(row: dict[str, Any], now: datetime) -> _Decision:
+        def decide(
+            row: dict[str, Any], now: datetime, peers: list[dict[str, Any]]
+        ) -> _Decision:
             state = row["refresh_state"]
             deadline = row.get("refresh_deadline_at")
             if state in _INFLIGHT and (deadline is None or deadline <= now):
@@ -838,7 +875,7 @@ class ProviderAccountUsageService:
                         retry_after_seconds=_retry_seconds(deadline, now),
                     )
                 )
-            for _, peer in peers:
+            for peer in peers:
                 peer_deadline = peer.get("refresh_deadline_at")
                 if (
                     peer["refresh_state"] in _INFLIGHT
@@ -865,7 +902,7 @@ class ProviderAccountUsageService:
                 [
                     value
                     for value in [row.get("next_allowed_at")]
-                    + [peer.get("next_allowed_at") for _, peer in peers]
+                    + [peer.get("next_allowed_at") for peer in peers]
                     if value is not None
                 ],
                 default=None,
@@ -889,7 +926,7 @@ class ProviderAccountUsageService:
                     [
                         value
                         for value in [row.get("last_manual_request_at")]
-                        + [peer.get("last_manual_request_at") for _, peer in peers]
+                        + [peer.get("last_manual_request_at") for peer in peers]
                         if value is not None
                     ],
                     default=None,
@@ -964,7 +1001,7 @@ class ProviderAccountUsageService:
                 request=request,
             )
 
-        return await self._transact(profile, decide)
+        return await self._transact(profile, decide, account_scoped=True)
 
     async def _dispatch(self, request: CollectionRequest) -> DispatchResult | None:
         try:
@@ -1263,11 +1300,15 @@ class ProviderAccountUsageService:
                 row["identity_json"], identity_changed = merge_identity(
                     row.get("identity_json"), identity
                 )
-            if trusted_account and not bound_account:
-                row["bound_account_id"] = trusted_account
-                row["bound_workspace_id"] = trusted_workspace
+            account = bound_account or trusted_account
+            workspace = bound_workspace or trusted_workspace
+            if account and (account, workspace) != (bound_account, bound_workspace):
+                # Bind on first trust, and re-key once a workspace is learned
+                # so profiles on different workspaces stop sharing usage.
+                row["bound_account_id"] = account
+                row["bound_workspace_id"] = workspace
                 row["account_key"] = _account_key(
-                    profile.provider_id, trusted_account, trusted_workspace
+                    profile.provider_id, account, workspace
                 )
             changed = usage_changed or identity_changed
             if changed:
@@ -1295,7 +1336,12 @@ class ProviderAccountUsageService:
                         refresh_deadline_at=None,
                     )
                 if full:
-                    row.update(last_success_at=now)
+                    row.update(
+                        last_success_at=now,
+                        last_failure_code=None,
+                        consecutive_failures=0,
+                        next_allowed_at=None,
+                    )
             return _Decision(
                 IngestResult(
                     True, changed=changed, snapshot_revision=row["snapshot_revision"]
@@ -1318,20 +1364,19 @@ class ProviderAccountUsageService:
                 ),
             )
         result: IngestResult = decision.result
-        if not result.accepted or observation.usage is None:
+        attempt_id = (
+            authority.attempt_id if authority.kind == "refresh_attempt" else None
+        )
+        # Profiles coalesced onto this attempt complete with it, even when
+        # the collected usage matches what is already cached.
+        if not result.accepted or not (decision.extra["usage_changed"] or attempt_id):
             return result
-        shared = []
-        if decision.extra.get("usage_changed"):
-            shared = await self._share_usage(
-                profile,
-                decision.extra.get("account_key"),
-                observation.usage,
-                attempt_id=(
-                    authority.attempt_id
-                    if authority.kind == "refresh_attempt"
-                    else None
-                ),
-            )
+        shared = await self._share_usage(
+            profile,
+            decision.extra["account_key"],
+            observation.usage,
+            attempt_id=attempt_id,
+        )
         return IngestResult(
             True,
             changed=result.changed,
@@ -1343,11 +1388,15 @@ class ProviderAccountUsageService:
         self,
         profile: AccountUsageProfileRef,
         account_key: str | None,
-        usage: UsageInput,
+        usage: UsageInput | None,
         *,
         attempt_id: str | None,
     ) -> list[str]:
-        """Share usage only with profiles on the same verified account."""
+        """Share usage only with profiles on the same verified account.
+
+        Peers coalesced onto ``attempt_id`` complete with it, whether or not
+        their cached usage changes.
+        """
 
         shared = []
         for peer, _ in await self._verified_peers(profile, account_key):
@@ -1355,12 +1404,13 @@ class ProviderAccountUsageService:
             def decide(row: dict[str, Any], now: datetime) -> _Decision:
                 if row.get("account_key") != account_key:
                     return _Decision(False)
-                merged = merge_usage(row.get("usage_json"), usage)
-                if merged.rejection is not None:
-                    return _Decision(False)
-                if merged.changed:
-                    row["usage_json"] = merged.usage
-                    row["snapshot_revision"] += 1
+                changed = False
+                if usage is not None:
+                    merged = merge_usage(row.get("usage_json"), usage)
+                    changed = merged.rejection is None and merged.changed
+                    if changed:
+                        row["usage_json"] = merged.usage
+                        row["snapshot_revision"] += 1
                 if attempt_id and row.get("refresh_attempt_id") == attempt_id:
                     row.update(
                         refresh_state=RefreshState.IDLE.value,
@@ -1371,7 +1421,7 @@ class ProviderAccountUsageService:
                         consecutive_failures=0,
                         next_allowed_at=None,
                     )
-                return _Decision(merged.changed)
+                return _Decision(changed)
 
             try:
                 if (await self._transact(peer, decide)).result:

@@ -540,9 +540,10 @@ def merge_usage(stored: Mapping[str, Any] | None, incoming: UsageInput) -> Usage
 
     A full snapshot replaces the window set: windows it omits are removed
     unless a newer partial observation updated them after the snapshot was
-    taken. A partial observation only updates the windows it carries. A
-    window is replaced only by a strictly newer reading; an older full
-    snapshot is rejected as out of order.
+    taken. A partial observation only updates the windows it carries, and
+    cannot restore a window that a newer full snapshot omitted. A window is
+    replaced only by a strictly newer reading; an older full snapshot is
+    rejected as out of order.
     """
 
     current = dict(stored or {})
@@ -562,15 +563,21 @@ def merge_usage(stored: Mapping[str, Any] | None, incoming: UsageInput) -> Usage
         candidate = _stored_window(window, incoming.observed_at)
         incoming_keys.add(window.key)
         existing = windows.get(window.key)
+        candidate_at = parse_stored_instant(candidate["observed_at"])
         if existing is not None:
             existing_at = parse_stored_instant(existing["observed_at"])
-            candidate_at = parse_stored_instant(candidate["observed_at"])
             if (
                 candidate_at is None
                 or existing_at is None
                 or candidate_at <= existing_at
             ):
                 continue
+        elif (
+            not full
+            and full_at is not None
+            and (candidate_at is None or candidate_at <= full_at)
+        ):
+            continue
         windows[window.key] = candidate
         changed = True
 
