@@ -970,7 +970,9 @@ def test_release_image_consumers_wait_only_for_their_own_inputs():
 CONSUMERS = ("integration-ci", "omnigent-exact-artifact", "omnigent-host-recovery")
 
 
-def _consumer_context(candidate, producer, *, selected="true"):
+def _consumer_context(
+    candidate, producer, *, selected="true", preflight="success", phase="full"
+):
     selection = {
         key: selected
         for key in (
@@ -984,9 +986,11 @@ def _consumer_context(candidate, producer, *, selected="true"):
     return {
         "inputs": {
             "candidate_image": candidate,
+            "verification_phase": phase,
             "recovery_images_artifact": "recovery-images-1-1" if candidate else "",
         },
         "needs": {
+            "preflight-policy": {"result": preflight},
             "select-test-suites": {"result": "success", "outputs": selection},
             "prepare-app-image": {"result": producer},
             "prepare-recovery-images": {
@@ -1029,6 +1033,30 @@ def test_supplied_image_runs_each_consumer_without_a_pass_through_job(name):
     assert _evaluate(consumer["env"]["CANDIDATE_ARCHIVE"], supplied) == ""
     assert _evaluate(consumer["env"]["CANDIDATE_IMAGE"], built) == local
     assert _evaluate(consumer["env"]["CANDIDATE_ARCHIVE"], built) == "app-image-1-1"
+
+
+@pytest.mark.parametrize("name", CONSUMERS)
+@pytest.mark.parametrize(
+    "phase,preflight,accepted",
+    [
+        ("full", "success", True),
+        ("full", "skipped", False),
+        ("source", "skipped", False),
+        ("artifact", "skipped", True),
+        ("recovery", "skipped", True),
+        ("artifact", "failure", False),
+        ("recovery", "cancelled", False),
+        ("artifact", "", False),
+    ],
+)
+def test_supplied_image_consumer_preserves_source_preflight_gate(
+    name, phase, preflight, accepted
+):
+    job = _workflow("pytest-unit-tests.yml")["jobs"][name]
+    context = _consumer_context(
+        CANDIDATE, "skipped", preflight=preflight, phase=phase
+    )
+    assert _job_runs(job, context) is accepted
 
 
 def _pull_step(job):
