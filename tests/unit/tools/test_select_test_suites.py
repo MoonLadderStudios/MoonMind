@@ -1269,6 +1269,7 @@ def test_shared_contracts_select_every_integration_lane(path):
         "tests/unit/tools/test_example.py",
         "tests/integration/api/conftest.py",
         "tests/.reliability-test-durations.json",
+        "tests/.hermetic-test-durations.json",
         "tools/verify_test_shard_ownership.py",
         "tools/ci/refresh_reliability_durations.py",
         "tools/ci/write_backend_matrix_summary.py",
@@ -1407,5 +1408,11 @@ def test_assessment_admission_paths_select_integration_ci(changed_path: str) -> 
 
 def test_hermetic_only_selection_requires_aggregate_ownership_manifest():
     result = _outputs(["moonmind/container_job_cli.py"])
+    assert result["integration_hermetic"] == "true"
+    assert result["ownership_full"] == "true"
+
+
+def test_hermetic_duration_data_selects_its_real_execution_and_collection_owners():
+    result = _outputs(["tests/.hermetic-test-durations.json"])
     assert result["integration_hermetic"] == "true"
     assert result["ownership_full"] == "true"

@@ -82,7 +82,7 @@ INTEGRATION_LANE_EXACT = {
 OWNERSHIP_FULL_EXACT = {
     "tools/verify_test_shard_ownership.py",
     "tools/ci/hermetic_shards.py",
-    "tools/ci/hermetic-durations.json",
+    "tests/.hermetic-test-durations.json",
     "tools/ci/refresh_reliability_durations.py",
     "tools/ci/write_backend_matrix_summary.py",
 }

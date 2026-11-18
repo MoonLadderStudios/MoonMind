@@ -18,7 +18,9 @@ case "$HERMETIC_SHARD" in
     TEST_COMPOSE_PROJECT_NAME+="-hermetic-$HERMETIC_SHARD"
     REPORT_PATH="artifacts/integration-ci-hermetic-shard-$HERMETIC_SHARD"
     export MOONMIND_CI_SUITE="integration-hermetic-shard-$HERMETIC_SHARD"
-    export MOONMIND_CI_RECEIPT="$REPORT_PATH/main.receipt.json"
+    if [[ -n "${MOONMIND_CI_RECEIPT:-}" ]]; then
+      export MOONMIND_CI_RECEIPT="$REPORT_PATH/main.receipt.json"
+    fi
     ;;
   *)
     echo "Error: MOONMIND_HERMETIC_SHARD must be 1 or 2 when set." >&2
@@ -234,7 +236,22 @@ rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/storage-restart-*.xml \
   "$REPORT_DIR"/*.receipt.json "$REPORT_DIR"/*.environment.json
 # Partial corpus output must come from this execution, not an earlier attempt.
 # Keep qualification logs written by the independent pre-wrapper phases.
-rm -rf "$REPORT_DIR/security-quality"
+if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
+  # Exports use cp without preserving ownership, so these host copies belong
+  # to the invoking user; the fresh temporary checkout has no old artifacts.
+  rm -rf "$REPORT_DIR/security-quality"
+elif [[ -e "$REPORT_DIR/security-quality" ]]; then
+  # Prior rootful Docker runs can leave non-writable directories on the bind
+  # mount. Remove only this row's generated tree as the producing container
+  # user, without changing permissions or touching sibling/qualification data.
+  evidence_cleanup_bound=()
+  if command -v gnutimeout >/dev/null 2>&1 || command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    evidence_cleanup_bound=("$SCRIPT_DIR/gnu_timeout.sh" --kill-after=10s "${CLEANUP_TIMEOUT}s")
+  fi
+  run_phase "" ${evidence_cleanup_bound[@]+"${evidence_cleanup_bound[@]}"} \
+    "${pipeline_compose[@]}" run --rm --no-deps pytest \
+    bash -lc "rm -rf -- '$REPORT_PATH/security-quality'"
+fi
 
 # Presigned downloads cross the same host-published port boundary as an
 # operator's browser. Never fall back to a possibly installed localhost store

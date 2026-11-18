@@ -41,6 +41,18 @@ if command[:1] == ["run"]:
         (quality / "summary.json").write_text(json.dumps({"passed": status == 0}))
         print("quality evidence checked", flush=True)
         raise SystemExit(status)
+    if command[-2:-1] == ["-lc"] and command[-1].startswith("rm -rf -- "):
+        import shlex, shutil
+        target = directory / shlex.split(command[-1])[-1]
+        assert target == directory / os.environ["MOONMIND_SECURITY_QUALITY_OUTPUT"]
+        time.sleep(config.get("evidence_cleanup_sleep", 0))
+        status = config.get("evidence_cleanup_status", 0)
+        if status == 0:
+            shutil.rmtree(target)
+        raise SystemExit(status)
+    if os.environ.get("MOONMIND_CI_RECEIPT") and not os.environ.get("MOONMIND_CI_EXPECTED_PYTHON"):
+        raise SystemExit(9)
+    print("receipt path: " + os.environ.get("MOONMIND_CI_RECEIPT", ""), flush=True)
     junit = re.search(r"--junitxml=(\S+)", command[-1])
     phase = "seed" if "storage-restart-seed.xml" in command[-1] else "verify" if "storage-restart-verify.xml" in command[-1] else "main"
 
@@ -560,6 +572,12 @@ def test_shard_run_clears_only_its_stale_receipts_and_security_evidence(wrapper)
         (directory / "main.receipt.json").write_text("stale")
         (directory / "main.environment.json").write_text("stale")
         (directory / "qualification.json").write_text("current independent phase")
+    remover = Path(wrapper.env["PATH"].split(os.pathsep)[0]) / "rm"
+    remover.write_text(
+        '#!/bin/sh\ncase "$*" in *security-quality*) echo "Permission denied" >&2; exit 1;; esac\n'
+        f'exec "{shutil.which("rm")}" "$@"\n'
+    )
+    remover.chmod(0o755)
     status, _, _ = wrapper.run(run_status=7, write_junit=False, write_quality=False)
     assert status == 7
     assert not (own / "security-quality").exists()
@@ -583,3 +601,28 @@ def test_storage_restart_state_uses_owned_report_directory(tmp_path, monkeypatch
     expected = Path(report_path or "artifacts/integration-ci") / "storage-restart"
     assert state_dir() == expected
     assert expected.is_dir()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_shard_receipt_is_opt_in(wrapper, enabled):
+    wrapper.env["MOONMIND_HERMETIC_SHARD"] = "2"
+    if enabled:
+        wrapper.env.update(MOONMIND_CI_RECEIPT="artifacts/original.receipt.json", MOONMIND_CI_EXPECTED_PYTHON="3.12")
+    status, output, _ = wrapper.run()
+    assert status == 0
+    expected = "artifacts/integration-ci-hermetic-shard-2/main.receipt.json" if enabled else ""
+    assert f"receipt path: {expected}\n" in output
+
+
+def test_failed_container_owned_evidence_cleanup_is_bounded_and_diagnosed(wrapper):
+    quality = wrapper.repo / REPORT / "security-quality"
+    quality.mkdir(parents=True)
+    (quality / "result.json").write_text("retained prior evidence")
+    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = "2"
+    status, _, elapsed = wrapper.run(evidence_cleanup_sleep=120)
+    assert status == 124
+    assert elapsed < 30
+    assert (quality / "result.json").exists()
+    assert (wrapper.repo / REPORT / "compose-logs.txt").exists()
+    assert not wrapper.started.exists()
+    assert wrapper.downs() == 1

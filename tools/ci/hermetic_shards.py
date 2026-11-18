@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from tools.ci.refresh_reliability_durations import durations_pytest_args  # noqa: E402
 from tools.ci.write_backend_matrix_summary import validate_receipt  # noqa: E402
 
-DURATIONS_PATH = Path("tools/ci/hermetic-durations.json")
+DURATIONS_PATH = Path("tests/.hermetic-test-durations.json")
 ARTIFACT = re.compile(r"integration-ci-hermetic-shard-([12])-attempt-([1-9][0-9]*)")
 STORAGE = {
     "storage-seed.receipt.json": "tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs",
