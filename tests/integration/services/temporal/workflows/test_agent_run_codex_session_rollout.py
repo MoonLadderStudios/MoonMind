@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,7 +42,22 @@ async def _shutdown_fixture_workflow(handle, signal) -> None:
     except RPCError as error:
         if error.status != RPCStatusCode.NOT_FOUND:
             raise
-        if (await handle.describe()).status != WorkflowExecutionStatus.COMPLETED:
+        status = (await handle.describe()).status
+        if status != WorkflowExecutionStatus.COMPLETED:
+            error.add_note(f"Fixture shutdown refused: workflow status={status.name}")
+            if status in {
+                WorkflowExecutionStatus.FAILED,
+                WorkflowExecutionStatus.CANCELED,
+                WorkflowExecutionStatus.TERMINATED,
+                WorkflowExecutionStatus.TIMED_OUT,
+            }:
+                # Preserve the shutdown failure, with the actual terminal cause.
+                # Never await results for a still-running fixture, and bound even
+                # terminal history reads in case the test server becomes unhealthy.
+                try:
+                    await asyncio.wait_for(handle.result(), timeout=5)
+                except Exception as terminal_error:
+                    raise error from terminal_error
             raise
     # A failed, canceled or unreadable result must still fail teardown.
     await handle.result()
@@ -653,7 +669,12 @@ async def test_fixture_cleanup_does_not_hide_rpc_or_terminal_failures(code, stat
     with pytest.raises(RPCError) as raised:
         await _shutdown_fixture_workflow(handle, "shutdown")
     assert raised.value is error
-    handle.result.assert_not_awaited()
+    if code == "NOT_FOUND":
+        assert f"Fixture shutdown refused: workflow status={status}" in error.__notes__
+    if code == "NOT_FOUND" and status != "RUNNING":
+        handle.result.assert_awaited_once_with()
+    else:
+        handle.result.assert_not_awaited()
     if code != "NOT_FOUND":
         handle.describe.assert_not_awaited()
 
@@ -739,3 +760,20 @@ async def test_mock_manager_tolerates_closed_requester():
             await _shutdown_fixture_workflow(
                 manager, MockProviderProfileManager.shutdown
             )
+
+
+async def test_fixture_cleanup_preserves_terminal_failure_as_shutdown_cause():
+    shutdown_error = RPCError("Completed workflow", RPCStatusCode.NOT_FOUND, b"")
+    terminal_error = RuntimeError("fixture manager failure")
+    handle = SimpleNamespace(
+        signal=AsyncMock(side_effect=shutdown_error),
+        describe=AsyncMock(
+            return_value=SimpleNamespace(status=WorkflowExecutionStatus.FAILED)
+        ),
+        result=AsyncMock(side_effect=terminal_error),
+    )
+    with pytest.raises(RPCError) as raised:
+        await _shutdown_fixture_workflow(handle, "shutdown")
+    assert raised.value is shutdown_error
+    assert raised.value.__cause__ is terminal_error
+    assert "Fixture shutdown refused: workflow status=FAILED" in raised.value.__notes__
