@@ -297,9 +297,16 @@ account and never beat a provider `Retry-After`. Each attempt has an ID and a
 two-minute deadline, so a lost acknowledgment expires instead of staying
 running. OAuth success requests an initial collection after the session workflow
 releases enrollment ownership. The server never polls, and disabled or
-disconnected profiles never collect automatically. Collection runs through the
-installed `AccountUsageDispatcher`; until a credential-owning executor installs
-one, every provider reports `not_supported`.
+disconnected profiles never collect automatically. Each accepted attempt starts
+`MoonMind.ProviderAccountUsageCollection`; a runtime without a registered
+collector adapter reports `not_supported`. Credentials are read only through
+their owner: while a generic host binding or ledger lease uses the home, the
+adapter asks that owner, and the attempt is deferred if it cannot answer.
+Otherwise the workflow takes a `usage_observation` grant (§9.3) and runs the
+adapter's bounded probe in the installed host image on the restricted egress
+network, mounting the home read-only unless the adapter's native token recovery
+must persist rotated state. Results are fenced on generation, grant, and attempt
+before access and before persistence; failures change only observation state.
 
 Settings → Providers & Secrets renders the projection in each row's Provider
 cell and in a read-only **Account & usage** editor section, never in the profile
@@ -516,6 +523,12 @@ caller can widen its own authority.
 | `shared_execution` | execution | consumes one of `N` slots |
 | `single_flight_validation` | `credential_validation` with `credential_source: none` | one holder per evidence identity; no execution slot |
 | `exclusive_maintenance` | other maintenance | blocks new consumers, drains credential consumers |
+
+A `usage_observation` grant is exclusive but never waits:
+`TryAcquireUsageObservationLease` refuses at once while any profile bound to the
+same home holds a lease, has queued work, or owes cleanup. Work arriving later
+preempts it. The owner, preempted or cancelled, stops its probe and proves the
+probe container is gone before releasing.
 
 A mutable OAuth home is shared credential state, so validating it is exclusive
 and the profile is capacity one. Exclusive maintenance drains only leases

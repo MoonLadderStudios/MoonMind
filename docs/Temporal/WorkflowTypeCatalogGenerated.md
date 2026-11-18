@@ -54,6 +54,7 @@ present, are listed with their supported condition below.
 | `MoonMind.OmnigentOAuthHostJanitor` <a id="moonmindomnigentoauthhostjanitor"></a> | `moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor.MoonMindOmnigentOAuthHostJanitorWorkflow` | `excluded` | [lifecycle](#moonmindomnigentoauthhostjanitor) |
 | `MoonMind.OmnigentSession` <a id="moonmindomnigentsession"></a> | `moonmind.workflows.temporal.workflows.omnigent_session.MoonMindOmnigentSessionWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#114-moonmindomnigentsession-lifecycle) |
 | `MoonMind.PRResolver` <a id="moonmindprresolver"></a> | `moonmind.workflows.temporal.workflows.pr_resolver.MoonMindPRResolverWorkflow` | `operator` | [lifecycle](#moonmindprresolver) |
+| `MoonMind.ProviderAccountUsageCollection` <a id="moonmindprovideraccountusagecollection"></a> | `moonmind.workflows.temporal.workflows.provider_account_usage.MoonMindProviderAccountUsageCollectionWorkflow` | `excluded` | [lifecycle](#moonmindprovideraccountusagecollection) |
 | `MoonMind.ProviderProfileManager` <a id="moonmindproviderprofilemanager"></a> | `moonmind.workflows.temporal.workflows.provider_profile_manager.MoonMindProviderProfileManagerWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#117-moonmindproviderprofilemanager-lifecycle) |
 | `MoonMind.PublicationRecoveryV1` <a id="moonmindpublicationrecoveryv1"></a> | `moonmind.workflows.temporal.workflows.publication_recovery.MoonMindPublicationRecoveryWorkflow` | `operator` | [lifecycle](#moonmindpublicationrecoveryv1) |
 | `MoonMind.UserWorkflow` <a id="moonminduserworkflow"></a> | `moonmind.workflows.temporal.workflows.run.MoonMindUserWorkflow` | `product` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#111-moonminduserworkflow-lifecycle) |
@@ -236,6 +237,11 @@ with deterministic workflow code, not Temporal Local Activities.
 | `pr_resolver.verify_merged` | `integrations` | `mm.activity.integrations` |
 | `pr_resolver.verify_remote_head` | `integrations` | `mm.activity.integrations` |
 | `pr_resolver.write_terminal_result` | `artifacts` | `mm.activity.artifacts` |
+| `provider_account_usage.cleanup` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `provider_account_usage.collect_from_owner` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `provider_account_usage.probe` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `provider_account_usage.resolve` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `provider_account_usage.try_acquire` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `provider_profile.acquire_credential_maintenance_lease` | `artifacts` | `mm.activity.artifacts` |
 | `provider_profile.ensure_manager` | `artifacts` | `mm.activity.artifacts` |
 | `provider_profile.list` | `artifacts` | `mm.activity.artifacts` |

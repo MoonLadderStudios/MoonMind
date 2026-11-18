@@ -1071,6 +1071,26 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_pending_request_order",
     ),
+    "provider_account_usage.resolve": (
+        "agent_runtime",
+        "provider_account_usage_resolve",
+    ),
+    "provider_account_usage.collect_from_owner": (
+        "agent_runtime",
+        "provider_account_usage_collect_from_owner",
+    ),
+    "provider_account_usage.try_acquire": (
+        "agent_runtime",
+        "provider_account_usage_try_acquire",
+    ),
+    "provider_account_usage.probe": (
+        "agent_runtime",
+        "provider_account_usage_probe",
+    ),
+    "provider_account_usage.cleanup": (
+        "agent_runtime",
+        "provider_account_usage_cleanup",
+    ),
     "oauth_session.prepare_credential_maintenance": ("agent_runtime", "oauth_session_prepare_credential_maintenance"),
     "oauth_session.revalidate_bound_host": ("agent_runtime", "oauth_session_revalidate_bound_host"),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
@@ -8414,6 +8434,68 @@ class TemporalAgentRuntimeActivities:
             kwargs=kwargs,
         )
         return await _prepare(payload)
+
+    async def provider_account_usage_resolve(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            provider_account_usage_activities as usage,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request, activity_type="provider_account_usage.resolve", kwargs=kwargs
+        )
+        return await usage.resolve_collection(payload)
+
+    async def provider_account_usage_collect_from_owner(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            provider_account_usage_activities as usage,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="provider_account_usage.collect_from_owner",
+            kwargs=kwargs,
+        )
+        return await usage.collect_from_owner(payload)
+
+    async def provider_account_usage_try_acquire(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            provider_account_usage_activities as usage,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request, activity_type="provider_account_usage.try_acquire", kwargs=kwargs
+        )
+        return await usage.try_acquire_grant(payload)
+
+    async def provider_account_usage_probe(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            provider_account_usage_activities as usage,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request, activity_type="provider_account_usage.probe", kwargs=kwargs
+        )
+        return await usage.run_idle_probe(payload)
+
+    async def provider_account_usage_cleanup(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            provider_account_usage_activities as usage,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request, activity_type="provider_account_usage.cleanup", kwargs=kwargs
+        )
+        return await usage.cleanup_probe(payload)
 
     async def oauth_session_revalidate_bound_host(
         self, request: Any = None, /, **kwargs: Any

@@ -4,8 +4,9 @@
 processes on the existing database. It owns the latest-snapshot cache in
 ``provider_account_usage_observations``, the cached projection served with
 Provider Profiles, and refresh coordination. It never collects: collection is
-handed to an :class:`AccountUsageDispatcher` (the credential-ownership
-executor installs one; until then every provider reports ``not_supported``).
+handed to an :class:`AccountUsageDispatcher` (by default
+:class:`~api_service.services.provider_account_usage_collection.TemporalAccountUsageDispatcher`);
+a provider without a registered collector reports ``not_supported``.
 
 Every write is an optimistic compare-and-set on ``row_version`` and commits
 per profile, so coalescing and single-flight ownership hold across tabs, API
@@ -197,23 +198,26 @@ class AccountUsageDispatcher(Protocol):
         """
 
 
-class UnsupportedAccountUsageDispatcher:
-    def supports(self, profile: AccountUsageProfileRef) -> bool:
-        return False
-
-    async def dispatch(self, request: CollectionRequest) -> DispatchResult:
-        return DispatchResult.NOT_SUPPORTED
-
-
-_dispatcher: AccountUsageDispatcher = UnsupportedAccountUsageDispatcher()
+_dispatcher: AccountUsageDispatcher | None = None
 
 
 def get_account_usage_dispatcher() -> AccountUsageDispatcher:
+    """The process collection executor; the Temporal dispatcher by default."""
+
+    global _dispatcher
+    if _dispatcher is None:
+        from api_service.services.provider_account_usage_collection import (
+            TemporalAccountUsageDispatcher,
+        )
+
+        _dispatcher = TemporalAccountUsageDispatcher()
     return _dispatcher
 
 
-def install_account_usage_dispatcher(dispatcher: AccountUsageDispatcher) -> None:
-    """Install the process collection executor (owned by credential authority)."""
+def install_account_usage_dispatcher(
+    dispatcher: AccountUsageDispatcher | None,
+) -> None:
+    """Replace the process collection executor; ``None`` restores the default."""
 
     global _dispatcher
     _dispatcher = dispatcher
@@ -1042,27 +1046,19 @@ class ProviderAccountUsageService:
                 next_allowed_at=failure.next_allowed_at,
             )
 
+        if outcome is DispatchResult.BUSY:
+            return (
+                await self.defer_collection(
+                    profile_id=profile.profile_id,
+                    credential_generation=request.credential_generation,
+                    attempt_id=request.attempt_id,
+                )
+                or accepted
+            )
+
         def decide(row: dict[str, Any], now: datetime) -> _Decision:
             if row.get("refresh_attempt_id") != request.attempt_id:
                 return _Decision(None)
-            if outcome is DispatchResult.BUSY:
-                # No waiter: the owning runtime may service the deferred
-                # request, otherwise a later request probes again.
-                retry_at = now + BUSY_RETRY_AFTER
-                row.update(
-                    refresh_state=RefreshState.DEFERRED.value,
-                    refresh_deadline_at=retry_at,
-                )
-                return _Decision(
-                    RefreshResult(
-                        profile_id=profile.profile_id,
-                        credential_generation=request.credential_generation,
-                        outcome=RefreshOutcome.DEFERRED_BUSY,
-                        refresh_state=RefreshState.DEFERRED,
-                        request_id=request.attempt_id,
-                        retry_after_seconds=_retry_seconds(retry_at, now),
-                    )
-                )
             row.update(
                 refresh_state=RefreshState.IDLE.value,
                 refresh_attempt_id=None,
@@ -1083,6 +1079,46 @@ class ProviderAccountUsageService:
             # Rebinding or deletion already voided this attempt.
             return accepted
         return decision.result or accepted
+
+    async def defer_collection(
+        self, *, profile_id: str, credential_generation: int, attempt_id: str
+    ) -> RefreshResult | None:
+        """Defer an attempt whose credential home is busy; cached data is kept.
+
+        No waiter is left: the owning runtime may service the deferred
+        request, otherwise a later request probes again. ``None`` means the
+        attempt no longer owns the row, so nothing changed.
+        """
+
+        profile = (await self._profiles([profile_id])).get(profile_id)
+        if profile is None or profile.credential_generation != credential_generation:
+            return None
+
+        def decide(row: dict[str, Any], now: datetime) -> _Decision:
+            if row.get("refresh_attempt_id") != attempt_id or (
+                row["refresh_state"] not in _INFLIGHT
+            ):
+                return _Decision(None)
+            retry_at = now + BUSY_RETRY_AFTER
+            row.update(
+                refresh_state=RefreshState.DEFERRED.value,
+                refresh_deadline_at=retry_at,
+            )
+            return _Decision(
+                RefreshResult(
+                    profile_id=profile_id,
+                    credential_generation=credential_generation,
+                    outcome=RefreshOutcome.DEFERRED_BUSY,
+                    refresh_state=RefreshState.DEFERRED,
+                    request_id=attempt_id,
+                    retry_after_seconds=_retry_seconds(retry_at, now),
+                )
+            )
+
+        try:
+            return (await self._transact(profile, decide)).result
+        except _ProfileChanged:
+            return None
 
     async def mark_running(
         self, *, profile_id: str, credential_generation: int, attempt_id: str

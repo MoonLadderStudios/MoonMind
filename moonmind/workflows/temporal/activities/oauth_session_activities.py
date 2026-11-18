@@ -41,13 +41,14 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 logger = logging.getLogger(__name__)
 
 
-async def _create_oauth_validation_binding(
-    repository: Any, profile_id: str, binding: Any = None
-) -> Any:
-    """Resolve missing launch metadata from persisted policy, preserving choices.
+async def resolve_on_demand_launch(
+    profile_id: str, binding: Any = None
+) -> tuple[str, str, dict[str, Any]]:
+    """Resolve a profile's installed on-demand host launch without writing.
 
-    A binding retained from static-connected hosts moves to its provider's
-    on-demand default; it is rewritten only while its profile is idle.
+    Returns the execution profile ref, launch policy ref, and effective launch
+    bound to the installed approved host image. A binding's saved policy is
+    honored; otherwise the provider's default on-demand policy applies.
     """
 
     from api_service.db.base import async_session_maker
@@ -96,7 +97,24 @@ async def _create_oauth_validation_binding(
             raise ValueError(
                 f"OAuth policy {policy_ref} does not launch an on-demand host"
             )
+    return execution_profile_ref, policy_ref, effective_launch
 
+
+async def _create_oauth_validation_binding(
+    repository: Any, profile_id: str, binding: Any = None
+) -> Any:
+    """Resolve missing launch metadata from persisted policy, preserving choices.
+
+    A binding retained from static-connected hosts moves to its provider's
+    on-demand default; it is rewritten only while its profile is idle.
+    """
+
+    from moonmind.omnigent.execution_profiles import PROFILES
+
+    execution_profile_ref, policy_ref, effective_launch = (
+        await resolve_on_demand_launch(profile_id, binding)
+    )
+    execution_profile = PROFILES[execution_profile_ref]
     migrating = binding is not None and not binding.host_launch_profile_ref
     return await repository.create_or_update_static_binding(
         profile_id=profile_id,

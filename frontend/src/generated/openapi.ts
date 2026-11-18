@@ -4963,7 +4963,7 @@ export interface components {
          * @description Typed, secret-free collection failures. Provider text is never kept.
          * @enum {string}
          */
-        AccountUsageFailureCode: "timeout" | "rate_limited" | "provider_unavailable" | "malformed_response" | "usage_access_missing" | "reconnect_required" | "dispatch_failed" | "attempt_abandoned" | "internal_error";
+        AccountUsageFailureCode: "timeout" | "rate_limited" | "provider_unavailable" | "malformed_response" | "usage_access_missing" | "reconnect_required" | "dispatch_failed" | "credential_refresh_unavailable" | "attempt_abandoned" | "internal_error";
         /**
          * AccountUsageStatus
          * @description Safe observation states, distinct from refresh-operation state.

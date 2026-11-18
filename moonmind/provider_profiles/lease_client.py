@@ -25,6 +25,9 @@ class CredentialLeasePurpose(str, Enum):
     OAUTH_DISCONNECT = "oauth_disconnect"
     CREDENTIAL_VALIDATION = "credential_validation"
     CREDENTIAL_REPAIR = "credential_repair"
+    #: A bounded idle read of provider account usage. It never queues: the
+    #: manager grants it only through ``TryAcquireUsageObservationLease``.
+    USAGE_OBSERVATION = "usage_observation"
 
     @property
     def is_maintenance(self) -> bool:
@@ -45,7 +48,8 @@ class CredentialLeasePurpose(str, Enum):
         when the scope is under the most pressure. Interactive OAuth login is
         the same: it signs in against the provider's auth service, not the
         rate-limited inference route, and a 429 cooldown is exactly when the
-        operator needs to reconnect or switch accounts.
+        operator needs to reconnect or switch accounts. A usage observation
+        reads account metadata and creates no inference turn.
         """
 
         return self not in {
@@ -53,6 +57,7 @@ class CredentialLeasePurpose(str, Enum):
             CredentialLeasePurpose.OAUTH_CONNECT,
             CredentialLeasePurpose.OAUTH_RECONNECT,
             CredentialLeasePurpose.OAUTH_DISCONNECT,
+            CredentialLeasePurpose.USAGE_OBSERVATION,
         }
 
 
@@ -264,6 +269,49 @@ class CredentialLease:
     evidence_identity: str | None = None
 
 
+def _bind_activity_run(
+    metadata: Mapping[str, Any] | None, *, owner_id: str, owner_is_workflow: bool
+) -> dict[str, Any]:
+    """Return lease metadata bound to the exact run executing this Activity."""
+
+    safe_metadata = dict(metadata or {})
+    # Most callers use an activity idempotency identity. A workflow may
+    # delegate an acknowledged Update through an Activity when the
+    # workflow-context ExternalWorkflowHandle cannot execute Updates; in
+    # that case the stable owner really is the delegating workflow ID.
+    safe_metadata["ownerIsWorkflow"] = owner_is_workflow
+    if not str(safe_metadata.get("runId") or "").strip():
+        # MoonLadderStudios/MoonMind#1089: bind activity-owned grants to
+        # the exact owning run when the acquisition runs inside a Temporal
+        # Activity; the logical workflow ID alone is insufficient across
+        # replacement runs, reset, or Continue-As-New. Outside an activity
+        # (or when the run is unknown) the hint stays absent and the
+        # manager treats a missing hint as reconciliation-needed, never as
+        # proof of no process.
+        try:
+            from temporalio import activity as _temporal_activity
+
+            _info = _temporal_activity.info()
+            _activity_workflow_id = str(getattr(_info, "workflow_id", "") or "").strip()
+            _run_id = str(getattr(_info, "workflow_run_id", "") or "").strip()
+        except Exception:
+            _activity_workflow_id = ""
+            _run_id = ""
+        if _activity_workflow_id and _run_id:
+            if not owner_is_workflow:
+                # The Activity may carry its logical parent's ID. Liveness
+                # belongs to the executing child: copying just its run ID
+                # would create a nonexistent parent/child identity pair.
+                safe_metadata["workflowId"] = _activity_workflow_id
+                safe_metadata["runId"] = _run_id
+            elif (
+                str(safe_metadata.get("workflowId") or owner_id).strip()
+                == _activity_workflow_id
+            ):
+                safe_metadata["runId"] = _run_id
+    return safe_metadata
+
+
 class ProviderProfileLeaseClient:
     """Activity-boundary client for the shared Provider Profile manager."""
 
@@ -312,45 +360,9 @@ class ProviderProfileLeaseClient:
         metadata: Mapping[str, Any] | None,
         owner_is_workflow: bool,
     ) -> CredentialLease:
-        safe_metadata = dict(metadata or {})
-        # Most callers use an activity idempotency identity. A workflow may
-        # delegate an acknowledged Update through an Activity when the
-        # workflow-context ExternalWorkflowHandle cannot execute Updates; in
-        # that case the stable owner really is the delegating workflow ID.
-        safe_metadata["ownerIsWorkflow"] = owner_is_workflow
-        if not str(safe_metadata.get("runId") or "").strip():
-            # MoonLadderStudios/MoonMind#1089: bind activity-owned grants to
-            # the exact owning run when the acquisition runs inside a Temporal
-            # Activity; the logical workflow ID alone is insufficient across
-            # replacement runs, reset, or Continue-As-New. Outside an activity
-            # (or when the run is unknown) the hint stays absent and the
-            # manager treats a missing hint as reconciliation-needed, never as
-            # proof of no process.
-            try:
-                from temporalio import activity as _temporal_activity
-
-                _info = _temporal_activity.info()
-                _activity_workflow_id = str(
-                    getattr(_info, "workflow_id", "") or ""
-                ).strip()
-                _run_id = str(
-                    getattr(_info, "workflow_run_id", "") or ""
-                ).strip()
-            except Exception:
-                _activity_workflow_id = ""
-                _run_id = ""
-            if _activity_workflow_id and _run_id:
-                if not owner_is_workflow:
-                    # The Activity may carry its logical parent's ID. Liveness
-                    # belongs to the executing child: copying just its run ID
-                    # would create a nonexistent parent/child identity pair.
-                    safe_metadata["workflowId"] = _activity_workflow_id
-                    safe_metadata["runId"] = _run_id
-                elif (
-                    str(safe_metadata.get("workflowId") or owner_id).strip()
-                    == _activity_workflow_id
-                ):
-                    safe_metadata["runId"] = _run_id
+        safe_metadata = _bind_activity_run(
+            metadata, owner_id=owner_id, owner_is_workflow=owner_is_workflow
+        )
         result = await self._update_manager(
             runtime_id,
             (
@@ -591,6 +603,51 @@ class ProviderProfileLeaseClient:
             purpose=purpose,
             metadata=metadata,
             owner_is_workflow=owner_is_workflow,
+        )
+
+    async def try_acquire_usage_observation_lease(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner_id: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> CredentialLease | None:
+        """Grant exclusive idle usage-observation authority, or return ``None``.
+
+        One Update, no waiter: a busy credential home answers immediately and
+        leaves nothing queued that could delay execution or maintenance.
+        ``metadata`` carries the owning workflow and the trusted credential
+        resource (``credentialResourceKey`` and ``credentialAliasProfileIds``).
+        """
+
+        purpose = CredentialLeasePurpose.USAGE_OBSERVATION
+        result = await self._update_manager(
+            runtime_id,
+            "TryAcquireUsageObservationLease",
+            {
+                "requester_workflow_id": owner_id,
+                "owner_id": owner_id,
+                "runtime_id": runtime_id,
+                "execution_profile_ref": profile_id,
+                "purpose": purpose.value,
+                "metadata": _bind_activity_run(
+                    metadata, owner_id=owner_id, owner_is_workflow=True
+                ),
+            },
+        )
+        if not result.get("granted"):
+            return None
+        raw_fence = result.get("lease_fencing_generation")
+        return CredentialLease(
+            profile_id=str(result["profile_id"]),
+            runtime_id=runtime_id,
+            lease_id=str(result["lease_id"]),
+            owner_id=owner_id,
+            purpose=purpose,
+            already_held=bool(result.get("already_held")),
+            mode=CredentialLeaseMode.EXCLUSIVE_MAINTENANCE,
+            fencing_generation=int(raw_fence) if raw_fence is not None else None,
         )
 
     async def release_lease(self, lease: CredentialLease) -> None:

@@ -146,6 +146,7 @@ def test_registered_workflow_types_exclude_retired_types():
         "MoonMind.OAuthSession",
         "MoonMind.OAuthCredentialValidation",
         "MoonMind.OmnigentOAuthHostJanitor",
+        "MoonMind.ProviderAccountUsageCollection",
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
         "MoonMind.PublicationRecoveryV1",

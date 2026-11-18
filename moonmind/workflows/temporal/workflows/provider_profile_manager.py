@@ -169,6 +169,10 @@ _OAUTH_LOGIN_PURPOSES = frozenset(
         CredentialLeasePurpose.OAUTH_RECONNECT,
     }
 )
+_USAGE_OBSERVATION = CredentialLeasePurpose.USAGE_OBSERVATION.value
+#: Sent to a usage-observation owner when execution or maintenance needs its
+#: credential home. The owner stops its probe, proves cleanup, then releases.
+USAGE_OBSERVATION_PREEMPT_SIGNAL = "preempt_usage_observation"
 
 
 def _purpose_spends_scope(purpose: str, *, oauth_login_exempt: bool) -> bool:
@@ -459,6 +463,8 @@ _MAX_HANDOFF_RESERVATION_SECONDS = 30
 # a durable workflow. Its safety-net eviction must be short enough that a lost
 # maintainer process cannot stall refresh for an execution-length window.
 _MAX_VALIDATION_LEASE_DURATION_SECONDS = 900
+# An idle usage observation is one bounded probe; its grant lives no longer.
+_MAX_USAGE_OBSERVATION_LEASE_DURATION_SECONDS = 300
 # Adaptive backpressure never edits the operator's configured ceiling. It
 # lowers the effective admission limit, halving on each rate-limit report and
 # restoring one slot per recovery interval until the ceiling is reached again.
@@ -733,6 +739,8 @@ class ProfileSlotState:
             return base
         if purpose == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value:
             return min(base, _MAX_VALIDATION_LEASE_DURATION_SECONDS)
+        if purpose == _USAGE_OBSERVATION:
+            return min(base, _MAX_USAGE_OBSERVATION_LEASE_DURATION_SECONDS)
         return base
 
     def lease_max_duration_seconds(self, lease_id: str) -> int:
@@ -1249,6 +1257,12 @@ class MoonMindProviderProfileManagerWorkflow:
         # ``provider_profile.pending_request_order`` activity from re-hitting the
         # database for the same ids on every drain cycle.
         self._resolved_orders: dict[str, dict[str, Any]] = {}
+        # Activity-owned execution acquisitions waiting inside AcquireSlotV2,
+        # keyed by requester. A usage observation yields to them as it does to
+        # queued signal requests. Transient: a rollover detaches the waiters.
+        self._execution_waiters: dict[
+            str, tuple[str | None, Optional[dict[str, Any]]]
+        ] = {}
 
     @staticmethod
     def _lease_purpose(payload: dict[str, Any], *, maintenance: bool = False) -> str:
@@ -1296,6 +1310,11 @@ class MoonMindProviderProfileManagerWorkflow:
             # Non-secret by contract: it is a digest, never raw credential or
             # provider material.
             "evidenceIdentity",
+            # A usage observation's credential home: a digest of the enrolled
+            # volume and every Provider Profile bound to it, resolved from
+            # trusted state, so aliases cannot admit a second writer.
+            "credentialResourceKey",
+            "credentialAliasProfileIds",
         }
         return {key: source[key] for key in allowed if source.get(key) is not None}
 
@@ -2514,6 +2533,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 finally:
                     self._end_grant_handoff(requester_id)
 
+            self._execution_waiters[requester_id] = (execution_profile_ref, selector)
+            if self._usage_observation_holds():
+                # Wake the loop so a probe on this credential home yields now.
+                self._has_new_events = True
             try:
                 await workflow.wait_condition(
                     lambda: (
@@ -2531,6 +2554,8 @@ class MoonMindProviderProfileManagerWorkflow:
             except TimeoutError:
                 # Periodic wake-up: re-check capacity, cooldowns, and shutdown.
                 continue
+            finally:
+                self._execution_waiters.pop(requester_id, None)
 
         if self._rollover_requested:
             # An acquisition still waiting for capacity would otherwise hold the
@@ -2615,6 +2640,13 @@ class MoonMindProviderProfileManagerWorkflow:
                 non_retryable=True,
             )
         purpose = self._lease_purpose(payload, maintenance=True)
+        if purpose == _USAGE_OBSERVATION:
+            # Observation must never queue behind or ahead of real work.
+            raise exceptions.ApplicationError(
+                "usage observation is granted only by "
+                "TryAcquireUsageObservationLease",
+                non_retryable=True,
+            )
         requested_identity = self._normalize_optional_string(
             self._safe_lease_metadata(payload).get("evidenceIdentity")
         )
@@ -2864,6 +2896,8 @@ class MoonMindProviderProfileManagerWorkflow:
             return "profile_missing"
         if requester_id in profile.current_leases:
             return None
+        if self._usage_observation_guards(profile_id):
+            return "draining_credential_consumers"
         if not profile.purpose_aware_capacity:
             # Pre-ledger histories keep their original "drain everything" rule.
             return (
@@ -3076,6 +3110,368 @@ class MoonMindProviderProfileManagerWorkflow:
         raise exceptions.ApplicationError(
             "provider profile manager is shutting down", non_retryable=True
         )
+
+    @workflow.update(name="TryAcquireUsageObservationLease")
+    async def try_acquire_usage_observation_lease(
+        self, payload: SlotAcquirePayload
+    ) -> dict[str, Any]:
+        """Grant exclusive idle usage-observation authority, or refuse at once.
+
+        A usage observation reads provider account metadata while nothing
+        else uses the credential home. It never joins the maintenance queue
+        and never leaves a waiter: a busy home answers ``granted: false`` with
+        the reason, so a Settings refresh cannot delay task admission. The
+        grant guards every Provider Profile bound to the same enrolled home
+        (``credentialAliasProfileIds``), and execution or maintenance that
+        later needs that home preempts it through
+        :meth:`_preempt_usage_observations`.
+        """
+
+        await self._await_restored_ledger()
+        requester_id = self._normalize_optional_string(
+            payload.get("requester_workflow_id") or payload.get("owner_id")
+        )
+        runtime_id = self._normalize_optional_string(payload.get("runtime_id"))
+        profile_id = self._normalize_optional_string(
+            payload.get("execution_profile_ref")
+        )
+        if not requester_id or not runtime_id or not profile_id:
+            raise exceptions.ApplicationError(
+                "usage observation requires requester_workflow_id, runtime_id, "
+                "and exact profile",
+                non_retryable=True,
+            )
+        if payload.get("profile_selector") or (
+            self._lease_purpose(payload, maintenance=True) != _USAGE_OBSERVATION
+        ):
+            raise exceptions.ApplicationError(
+                "usage observation requires its exact profile and purpose",
+                non_retryable=True,
+            )
+        lease_metadata = self._safe_lease_metadata(payload)
+        aliases = sorted(
+            {
+                str(alias).strip()
+                for alias in lease_metadata.get("credentialAliasProfileIds") or ()
+                if str(alias).strip()
+            }
+            | {profile_id}
+        )
+        lease_metadata["credentialAliasProfileIds"] = aliases
+
+        def refused(reason: str) -> dict[str, Any]:
+            return {"granted": False, "profile_id": profile_id, "reason": reason}
+
+        if self._lease_grant_is_pending(requester_id):
+            return refused("grant_pending")
+        existing_profile_id = self._profile_id_for_lease(requester_id)
+        if existing_profile_id is not None:
+            held = self._profiles[existing_profile_id]
+            if (
+                existing_profile_id != profile_id
+                or held.lease_purpose(requester_id) != _USAGE_OBSERVATION
+            ):
+                raise exceptions.ApplicationError(
+                    "lease owner already holds different credential authority",
+                    type="ProviderProfileLeaseIdentityConflict",
+                    non_retryable=True,
+                )
+            # A retried request after a lost acknowledgment rejoins its grant.
+            return {
+                "granted": True,
+                "profile_id": profile_id,
+                "lease_id": requester_id,
+                "already_held": True,
+                "lease_mode": CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value,
+                **self._fence_result(held.lease_fencing_generation(requester_id)),
+            }
+        reason = self._usage_observation_busy_reason(aliases)
+        if reason is not None:
+            return refused(reason)
+        profile = self._profiles.get(profile_id)
+        if profile is None:
+            # Disabled profiles are pruned from the ledger, yet a manual
+            # refresh may still observe them. Nothing else holds them.
+            profile = ProfileSlotState(
+                profile_id=profile_id,
+                max_parallel_runs=1,
+                cooldown_after_429_seconds=900,
+                rate_limit_policy="backoff",
+                enabled=False,
+                launch_ready=False,
+                purpose_aware_capacity=self._purpose_aware_capacity_ledger,
+                capacity_scope_ref=f"provider-profile:{profile_id}",
+                effective_limit=1,
+            )
+            self._profiles[profile_id] = profile
+        if not profile.purpose_aware_capacity:
+            # The legacy ledger cannot express an exclusive non-execution hold.
+            return refused("ledger_not_purpose_aware")
+        fencing_generation = self._next_fencing_generation()
+        grant_metadata = self._grant_metadata(
+            lease_metadata,
+            fencing_generation=fencing_generation,
+            profile=profile,
+            lease_mode=CredentialLeaseMode.EXCLUSIVE_MAINTENANCE,
+        )
+        if not profile.reserve(
+            requester_id,
+            workflow.now(),
+            purpose=_USAGE_OBSERVATION,
+            metadata=grant_metadata,
+            allow_unready=True,
+        ):
+            return refused("profile_capacity_full")
+        self._index_lease(profile_id, requester_id, requester_id)
+        self._begin_grant_handoff(requester_id)
+        try:
+            persisted = await self._persist_lease_grant(
+                profile,
+                requester_id,
+                purpose=_USAGE_OBSERVATION,
+                metadata=grant_metadata,
+            )
+            if not persisted:
+                profile.release(requester_id)
+                self._unindex_lease(requester_id)
+                return refused("ledger_unavailable")
+            self._has_new_events = True
+            return {
+                "granted": True,
+                "profile_id": profile_id,
+                "lease_id": requester_id,
+                "already_held": False,
+                "lease_mode": CredentialLeaseMode.EXCLUSIVE_MAINTENANCE.value,
+                **self._fence_result(fencing_generation),
+            }
+        finally:
+            self._end_grant_handoff(requester_id)
+
+    def _usage_observation_holds(self) -> list[tuple[str, str, frozenset[str]]]:
+        """``(profile_id, lease_id, guarded profile IDs)`` per held observation."""
+
+        holds = []
+        for profile_id, profile in self._profiles.items():
+            for lease_id in profile.current_leases:
+                if profile.lease_purpose(lease_id) != _USAGE_OBSERVATION:
+                    continue
+                aliases = (profile.lease_metadata.get(lease_id) or {}).get(
+                    "credentialAliasProfileIds"
+                ) or ()
+                guarded = frozenset(
+                    {profile_id, *(str(alias) for alias in aliases if alias)}
+                )
+                holds.append((profile_id, lease_id, guarded))
+        return holds
+
+    def _usage_observation_guards(self, profile_id: str) -> bool:
+        """Whether an observation through an alias holds this profile's home.
+
+        The profile's own observation lease already blocks it as exclusive
+        maintenance; this covers other profiles bound to the same home.
+        """
+
+        return any(
+            owner != profile_id and profile_id in guarded
+            for owner, _lease, guarded in self._usage_observation_holds()
+        )
+
+    def _request_targets(
+        self,
+        profile_ids: frozenset[str] | set[str],
+        *,
+        execution_profile_ref: str | None,
+        selector: Optional[dict[str, Any]],
+    ) -> bool:
+        """Whether a waiting request could be served by one of these profiles.
+
+        Availability is ignored on purpose: a request that is waiting may be
+        waiting precisely for one of them.
+        """
+
+        exact = str(execution_profile_ref or "").strip()
+        if exact:
+            return exact in profile_ids
+        normalized = self._normalize_selector(selector) or {}
+        for profile_id in profile_ids:
+            profile = self._profiles.get(profile_id)
+            if profile is None:
+                continue
+            if normalized.get("providerId") and (
+                profile.provider_id != normalized["providerId"]
+            ):
+                continue
+            if normalized.get("runtimeMaterializationMode") and (
+                profile.runtime_materialization_mode
+                != normalized["runtimeMaterializationMode"]
+            ):
+                continue
+            tags_any = normalized.get("tagsAny") or []
+            if tags_any and not set(tags_any) & set(profile.tags):
+                continue
+            tags_all = normalized.get("tagsAll") or []
+            if tags_all and not set(tags_all) <= set(profile.tags):
+                continue
+            return True
+        return False
+
+    def _usage_observation_contention(
+        self, guarded: frozenset[str] | set[str]
+    ) -> str | None:
+        """Why execution or maintenance is waiting for these profiles, if it is."""
+
+        for profile_id in sorted(guarded):
+            profile = self._profiles.get(profile_id)
+            if profile is not None and profile.exclusive_maintenance_queue:
+                return "maintenance_pending"
+        if any(
+            self._request_targets(
+                guarded,
+                execution_profile_ref=request.execution_profile_ref,
+                selector=request.profile_selector,
+            )
+            for request in self._pending_requests
+        ) or any(
+            self._request_targets(guarded, execution_profile_ref=ref, selector=selector)
+            for ref, selector in self._execution_waiters.values()
+        ):
+            return "execution_pending"
+        return None
+
+    def _usage_observation_busy_reason(self, aliases: list[str]) -> str | None:
+        """Why the credential home bound to ``aliases`` is not idle, or ``None``."""
+
+        guarded = frozenset(aliases)
+        for profile_id in aliases:
+            profile = self._profiles.get(profile_id)
+            if profile is None:
+                continue
+            # Held and cleanup-requested leases both stay in current_leases.
+            if profile.current_leases:
+                return "credential_consumer_active"
+        if any(
+            guarded & held for _owner, _lease, held in self._usage_observation_holds()
+        ):
+            return "credential_consumer_active"
+        if any(
+            str(release.get("profile_id") or "") in guarded
+            for release in self._unresolved_releases.values()
+        ):
+            return "cleanup_unresolved"
+        return self._usage_observation_contention(guarded)
+
+    async def _preempt_usage_observations(self) -> None:
+        """Ask each observation blocking waiting work to stop and clean up.
+
+        The observation keeps its exclusive lease until its owner has proven
+        the probe stopped and released it, so the waiting execution is
+        admitted only after safe cleanup. Each lease is asked once per run.
+        """
+
+        for profile_id, lease_id, guarded in self._usage_observation_holds():
+            profile = self._profiles[profile_id]
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if metadata.get("preemptionRequestedAt"):
+                continue
+            reason = self._usage_observation_contention(guarded)
+            if reason is None:
+                continue
+            metadata["preemptionRequestedAt"] = workflow.now().isoformat()
+            owner_workflow_id = str(metadata.get("workflowId") or "").strip()
+            if not owner_workflow_id:
+                continue
+            try:
+                await workflow.get_external_workflow_handle(owner_workflow_id).signal(
+                    USAGE_OBSERVATION_PREEMPT_SIGNAL,
+                    {
+                        "lease_id": lease_id,
+                        "profile_id": profile_id,
+                        "fencing_generation": profile.lease_fencing_generation(
+                            lease_id
+                        ),
+                        "reason": reason,
+                    },
+                )
+            except Exception as exc:
+                # A closed owner is reclaimed through cleanup verification.
+                self._get_logger().warning(
+                    "Failed to preempt usage observation %s on profile %s: %s",
+                    lease_id,
+                    profile_id,
+                    type(exc).__name__,
+                )
+
+    async def _complete_orphaned_usage_observation_cleanup(self) -> None:
+        """Reclaim usage observations whose exact owner run has closed.
+
+        The probe container kills itself before the observation lease's
+        lifetime ends, so once that lifetime has passed and the exact owning
+        run is terminal, nothing can still read or rotate the credential
+        home. Live owners keep their lease until they prove cleanup.
+        """
+
+        claims = [
+            claim
+            for claim in self._pending_cleanup_claims()
+            if str(claim.get("purpose") or "") == _USAGE_OBSERVATION
+            and str(claim.get("workflowId") or "").strip()
+            and str(claim.get("runId") or "").strip()
+            and int(claim.get("fencing_generation") or 0) > 0
+        ]
+        if not claims:
+            return
+        statuses = await self._verify_workflow_statuses(
+            list(dict.fromkeys(str(claim["workflowId"]) for claim in claims)),
+            run_hints={
+                str(claim["workflowId"]): str(claim["runId"]) for claim in claims
+            },
+        )
+        now = workflow.now()
+        for claim in claims:
+            lease_id = str(claim["lease_id"])
+            status_info = (statuses or {}).get(str(claim["workflowId"]), {})
+            if status_info.get("running", True):
+                continue
+            profile_id = str(claim.get("profile_id") or "")
+            profile = self._profiles.get(profile_id)
+            if profile is None or lease_id not in profile.current_leases:
+                continue
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if str(metadata.get("runId") or "").strip() != str(claim["runId"]).strip():
+                continue
+            age = self._lease_age_seconds(profile, lease_id, now)
+            if age is None or age <= profile.lease_max_duration_seconds(lease_id):
+                continue
+            evidence = {
+                "consumer_stopped": True,
+                "verified_by": "provider-profile-manager-usage-observation-reclamation",
+                "run_id": str(claim["runId"]),
+                "owner_status": str(status_info.get("status") or "NOT_FOUND"),
+            }
+            fence = int(claim.get("fencing_generation") or 0)
+            outcome = await self._release_verified_cleanup(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=fence,
+                teardown_evidence=evidence,
+                _reason="cleanup_verified_usage_observation_owner_terminal",
+            )
+            if outcome not in RELEASING_LEASE_OUTCOMES:
+                self._record_unresolved_release(
+                    lease_id,
+                    profile_id=profile_id,
+                    fencing_generation=fence,
+                    outcome=outcome,
+                    kind="verified_cleanup",
+                    teardown_evidence=evidence,
+                )
+                continue
+            self._unresolved_releases.pop(lease_id, None)
+            self._forget_cleanup_obligation(lease_id)
+            current = self._profiles.get(profile_id)
+            if current is not None and current.release(lease_id):
+                self._unindex_lease(lease_id)
+                self._has_new_events = True
 
     @workflow.update(name="InspectCredentialLease")
     async def inspect_credential_lease(
@@ -3291,6 +3687,9 @@ class MoonMindProviderProfileManagerWorkflow:
             # Drain pending requests against available profiles before any
             # best-effort terminal-workflow verification activity.
             await self._drain_queue()
+            # Work waiting on a credential home under idle usage observation
+            # asks that probe to stop. A no-op unless such a lease is held.
+            await self._preempt_usage_observations()
 
             # Clear expired cooldowns.
             self._clear_expired_cooldowns()
@@ -3335,6 +3734,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     # retained histories that already have validation claims.
                     if workflow.patched(ORPHANED_VALIDATION_CLEANUP_PATCH):
                         await self._complete_orphaned_validation_cleanup_obligations()
+                    # Emits commands only for usage-observation claims, which
+                    # no history recorded before this purpose can contain.
+                    await self._complete_orphaned_usage_observation_cleanup()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
@@ -4772,7 +5174,11 @@ class MoonMindProviderProfileManagerWorkflow:
 
         if exact_profile_id:
             exact_profile = self._profiles.get(exact_profile_id)
-            if exact_profile is None or not exact_profile.is_available():
+            if (
+                exact_profile is None
+                or not exact_profile.is_available()
+                or self._usage_observation_guards(exact_profile_id)
+            ):
                 return None
             reserved_slots = self._reserved_slot_count_for_other_groups(
                 exact_profile.profile_id, normalized_group_id
@@ -4796,6 +5202,8 @@ class MoonMindProviderProfileManagerWorkflow:
         eligible_profiles: list[ProfileSlotState] = []
         for profile in self._profiles.values():
             if not profile.is_available():
+                continue
+            if self._usage_observation_guards(profile.profile_id):
                 continue
             reserved_slots = self._reserved_slot_count_for_other_groups(
                 profile.profile_id, normalized_group_id
@@ -6682,6 +7090,16 @@ class MoonMindProviderProfileManagerWorkflow:
                                         if evidence_identity
                                         else {}
                                     ),
+                                    # A restarted manager keeps guarding every
+                                    # alias of an observed credential home.
+                                    **{
+                                        key: safe[key]
+                                        for key in (
+                                            "credentialResourceKey",
+                                            "credentialAliasProfileIds",
+                                        )
+                                        if safe.get(key)
+                                    },
                                     **(
                                         {"runId": str(admitted_run_id)}
                                         if admitted_run_id
@@ -7062,6 +7480,18 @@ class MoonMindProviderProfileManagerWorkflow:
                             {"runId": str(restored_run_id).strip()}
                             if restored_run_id
                             and str(restored_run_id).strip()
+                            else {}
+                        ),
+                        **(
+                            {
+                                key: safe_metadata[key]
+                                for key in (
+                                    "credentialResourceKey",
+                                    "credentialAliasProfileIds",
+                                )
+                                if safe_metadata.get(key)
+                            }
+                            if isinstance(safe_metadata, dict)
                             else {}
                         ),
                     }

@@ -4403,6 +4403,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.omnigent_session import (
         MoonMindOmnigentSessionWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.provider_account_usage import (
+        MoonMindProviderAccountUsageCollectionWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.github_issue_reconcile import (
         MoonMindGitHubIssueReconcileWorkflow,
     )
@@ -4420,6 +4423,7 @@ async def test_main_async_workflow_fleet(
         MoonMindOAuthSession,
         MoonMindOAuthCredentialValidationWorkflow,
         MoonMindOmnigentOAuthHostJanitorWorkflow,
+        MoonMindProviderAccountUsageCollectionWorkflow,
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
         MoonMindPublicationRecoveryWorkflow,
