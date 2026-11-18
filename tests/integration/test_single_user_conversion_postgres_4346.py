@@ -528,7 +528,7 @@ async def test_postgres_refused_upgrade_keeps_settings_closed_until_resolved(
     from api_service.services import single_user_conversion as suc
     from moonmind.config.settings import settings
 
-    token, canary = "integrations.github.token_ref", "skills.canary_percent"
+    token, operation = "integrations.github.token_ref", "workflow.operation_mode"
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
     monkeypatch.setattr(settings.workflow, "test_mode", False)
@@ -557,9 +557,9 @@ async def test_postgres_refused_upgrade_keeps_settings_closed_until_resolved(
                 SettingsOverride(scope="user", user_id=owner.id, key=token,
                                  value_json="db://stale-personal"),
                 SettingsOverride(scope="workspace", workspace_id=uuid.uuid4(),
-                                 key=canary, value_json=25),
+                                 key=operation, value_json="normal"),
                 SettingsOverride(scope="workspace", workspace_id=uuid.uuid4(),
-                                 key=canary, value_json=40),
+                                 key=operation, value_json="read_only"),
             ])
             await db.commit()
             refused = await suc.run_guarded_upgrade(db, operator_authorized=True)
@@ -577,12 +577,12 @@ async def test_postgres_refused_upgrade_keeps_settings_closed_until_resolved(
             assert "db://" not in str(pending.decision.to_sanitized_dict())
             resolved = await suc.run_guarded_upgrade(
                 db, operator_authorized=True,
-                collision_resolutions={canary: 40})
+                collision_resolutions={operation: "read_only"})
             assert resolved.published, resolved.to_sanitized_dict()
         async with pg_maker() as db:
             rows = (await db.execute(select(SettingsOverride))).scalars().all()
             assert {(r.key, r.scope, r.value_json) for r in rows} == {
-                (token, None, "db://stale-personal"), (canary, None, 40)}
+                (token, None, "db://stale-personal"), (operation, None, "read_only")}
             [event] = (await db.execute(select(SettingsAuditEvent).where(
                 SettingsAuditEvent.key == token,
                 SettingsAuditEvent.event_type == "settings.override.converted",
@@ -1862,7 +1862,7 @@ async def test_postgres_controller_startup_conversion_recovery(
             db.add(
                 SettingsAuditEvent(
                     event_type="settings.override.rejected",
-                    key="skills.canary_percent",
+                    key="workflow.operation_mode",
                     scope="workspace",
                     actor_user_id=audit_actor,
                     redacted=True,

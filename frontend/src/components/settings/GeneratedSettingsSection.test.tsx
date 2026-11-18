@@ -51,9 +51,9 @@ const workspaceCatalog = {
         diagnostics: [],
       },
       {
-        key: 'skills.canary_percent',
-        title: 'Skills Canary Percent',
-        description: 'Percentage of runs routed through skills-first policy.',
+        key: 'test.retry_limit',
+        title: 'Test Retry Limit',
+        description: 'Synthetic numeric descriptor for generic settings control coverage.',
         category: 'Workflow',
         section: 'user-workspace',
         type: 'integer',
@@ -395,9 +395,9 @@ describe('GeneratedSettingsSection', () => {
   it('keeps activation and overrides visible while per-setting metadata sits in Details', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
-    const title = await screen.findByText('Skills Canary Percent');
+    const title = await screen.findByText('Test Retry Limit');
     const row = title.closest<HTMLElement>('[data-setting-key]');
-    expect(row?.getAttribute('data-setting-key')).toBe('skills.canary_percent');
+    expect(row?.getAttribute('data-setting-key')).toBe('test.retry_limit');
     const details = row?.querySelector<HTMLDetailsElement>('details.setting-details');
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
@@ -412,7 +412,7 @@ describe('GeneratedSettingsSection', () => {
     // Source explanation, key and Applies-to targets are one disclosure away,
     // and the affected targets are no longer repeated as both text and chips.
     expect(details?.contains(visible.getByText('Resolved from an instance override.'))).toBe(true);
-    expect(details?.contains(visible.getByText('skills.canary_percent'))).toBe(true);
+    expect(details?.contains(visible.getByText('test.retry_limit'))).toBe(true);
     for (const target of visible.queryAllByText('skills')) {
       expect(details?.contains(target)).toBe(true);
     }
@@ -461,13 +461,13 @@ describe('GeneratedSettingsSection', () => {
   it('offers reset only for instance overrides and resets by key', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
-    await screen.findByText('Skills Canary Percent');
+    await screen.findByText('Test Retry Limit');
     expect(screen.queryByRole('button', { name: 'Reset Default Publish Mode' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Skills Canary Percent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Test Retry Limit' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/v1/settings/skills.canary_percent',
+        '/api/v1/settings/test.retry_limit',
         expect.objectContaining({ method: 'DELETE' }),
       );
     });
@@ -479,7 +479,7 @@ describe('GeneratedSettingsSection', () => {
     await screen.findByText('Default Publish Mode');
 
     fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
-    fireEvent.change(screen.getByLabelText('Skills Canary Percent'), { target: { value: '50' } });
+    fireEvent.change(screen.getByLabelText('Test Retry Limit'), { target: { value: '50' } });
     fireEvent.change(screen.getByLabelText('UI Density'), { target: { value: 'compact' } });
     fireEvent.change(screen.getByLabelText('Notification Channels'), { target: { value: 'email,slack' } });
     fireEvent.change(screen.getByLabelText('Git Author Defaults'), { target: { value: 'name=MoonMind\\nemail=dev@example.com' } });
@@ -487,7 +487,7 @@ describe('GeneratedSettingsSection', () => {
 
     const preview = screen.getByLabelText('Pending settings preview');
     expect(within(preview).getByText('workflow.default_publish_mode')).toBeTruthy();
-    expect(within(preview).getByText('skills.canary_percent')).toBeTruthy();
+    expect(within(preview).getByText('test.retry_limit')).toBeTruthy();
     expect(within(preview).getByText('ui.density')).toBeTruthy();
     expect(within(preview).getByText('notifications.channels')).toBeTruthy();
     expect(within(preview).getByText('git.author_defaults')).toBeTruthy();
@@ -584,10 +584,10 @@ describe('GeneratedSettingsSection', () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
-    const canary = screen.getByLabelText('Skills Canary Percent') as HTMLInputElement;
-    fireEvent.change(canary, { target: { value: '' } });
+    const retryLimit = screen.getByLabelText('Test Retry Limit') as HTMLInputElement;
+    fireEvent.change(retryLimit, { target: { value: '' } });
 
-    expect(canary.value).toBe('');
+    expect(retryLimit.value).toBe('');
     const preview = screen.getByLabelText('Pending settings preview');
     expect(within(preview).getByText('Enter a number.')).toBeTruthy();
     expect((within(preview).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);

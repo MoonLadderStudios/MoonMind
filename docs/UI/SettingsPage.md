@@ -212,7 +212,7 @@ The collapsed summary distinguishes a confirmed recommendation, known custom ove
 
 ### 7.2 Advanced settings and Security
 
-New-work Harness, publish mode and Provider Profile defaults belong to Providers & Secrets → New Work Defaults. Skill policy, canary rollout and remaining descriptor-driven controls belong to Operations → Advanced. Both retain the same catalog keys, validation, reset, audit and draft guards. Collapsing a disclosure retains an edited draft. Browser-local Dashboard preferences can be reset in Operations without changing server configuration.
+New-work Harness, publish mode and Provider Profile defaults belong to Providers & Secrets → New Work Defaults. Skill policy and remaining descriptor-driven controls belong to Operations → Advanced. Both retain the same catalog keys, validation, reset, audit and draft guards. Collapsing a disclosure retains an edited draft. Browser-local Dashboard preferences can be reset in Operations without changing server configuration.
 
 Security is a separate top-level workspace with Assessments, Targets and Reports. Targets reuses the saved assessment project/environment and authorization editors. Target context does not confer access; authorization remains a separate, explicit grant with validity and scope. Assessment launches and resumptions use existing workflow admission and detail actions, not a second runner. Reports link to retained evidence rather than copying it into another store. History and filter coverage is described in the workspace; unsupported global target filtering is not implied.
 
@@ -364,3 +364,5 @@ npm run ui:test:settings-redesign
 ```
 
 These run in CI through the frontend and unit suites. Component tests do not replace backend contract tests or live credential verification.
+
+The obsolete Skills Canary Percent control and stage-specific skill rollout environment flags have been removed. Skill selection continues to use the default skill, allowlist and policy mode through the active resolver. Historical canary overrides are retained only as removed-setting diagnostics; they do not affect resolution or prevent saving current settings.

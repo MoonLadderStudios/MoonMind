@@ -386,7 +386,6 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             session=settings_session,
             workspace_policy=SettingsWorkspacePolicy(
                 allowed_runtimes=("codex", "codex_cli", "omnigent"),
-                skills_canary_enabled=False,
                 allowed_publication_modes=("none", "pr"),
                 allowed_secret_ref_backends=("db",),
                 maintenance_mode=True,
@@ -394,8 +393,8 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             ),
         )
         await service.apply_overrides(
-            changes={"skills.canary_percent": 0},
-            expected_versions={"skills.canary_percent": 1},
+            changes={"skills.policy_mode": "permissive"},
+            expected_versions={"skills.policy_mode": 1},
         )
 
         invalid_cases = [
@@ -436,12 +435,6 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "runtime_policy_denied",
             ),
             (
-                {"skills.canary_percent": 50},
-                {"skills.canary_percent": 2},
-                "skills.canary_percent",
-                "feature_disabled_canary_percent",
-            ),
-            (
                 {"workflow.default_publish_mode": "branch"},
                 {"workflow.default_publish_mode": 1},
                 "workflow.default_publish_mode",
@@ -470,13 +463,13 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             await service.apply_overrides(
                 changes={
                     "workflow.default_publish_mode": "branch",
-                    "skills.canary_percent": 25,
+                    "skills.policy_mode": "allowlist",
                 },
                 expected_versions={
                     "workflow.default_publish_mode": valid.values[
                         "workflow.default_publish_mode"
                     ].value_version,
-                    "skills.canary_percent": 2,
+                    "skills.policy_mode": 2,
                 },
             )
         _assert_validation_issue(
@@ -487,11 +480,11 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
         unchanged = await service.effective_value_async(
             "workflow.default_publish_mode"
         )
-        canary = await service.effective_value_async(
-            "skills.canary_percent"
+        skill_policy = await service.effective_value_async(
+            "skills.policy_mode"
         )
         assert unchanged.value == "none"
-        assert canary.value != 25
+        assert skill_policy.value != "allowlist"
 
 
 @pytest.mark.asyncio
@@ -540,11 +533,9 @@ async def test_mm656_persisted_overrides_surface_policy_diagnostics_after_policy
         await enabled_service.apply_overrides(
             changes={
                 "workflow.default_publish_mode": "branch",
-                "skills.canary_percent": 50,
             },
             expected_versions={
                 "workflow.default_publish_mode": 1,
-                "skills.canary_percent": 1,
             },
         )
 
@@ -552,22 +543,15 @@ async def test_mm656_persisted_overrides_surface_policy_diagnostics_after_policy
             env={},
             session=settings_session,
             workspace_policy=SettingsWorkspacePolicy(
-                skills_canary_enabled=False,
                 allowed_publication_modes=("none",),
             ),
         )
         publish_mode = await restricted_service.effective_value_async(
             "workflow.default_publish_mode"
         )
-        canary = await restricted_service.effective_value_async(
-            "skills.canary_percent"
-        )
 
     assert [diagnostic.code for diagnostic in publish_mode.diagnostics] == [
         "publication_mode_policy_denied"
-    ]
-    assert [diagnostic.code for diagnostic in canary.diagnostics] == [
-        "feature_disabled_canary_percent"
     ]
 
 
@@ -851,14 +835,14 @@ async def test_mm656_write_validates_unchanged_effective_companion(settings_sess
     async with settings_session_maker() as settings_session:
         enabled_service = SettingsCatalogService(env={}, session=settings_session)
         await enabled_service.apply_overrides(
-            changes={"skills.canary_percent": 50},
-            expected_versions={"skills.canary_percent": 1},
+            changes={"workflow.default_runtime": "claude_code"},
+            expected_versions={"workflow.default_runtime": 1},
         )
 
         disabled_service = SettingsCatalogService(
             env={},
             session=settings_session,
-            workspace_policy=SettingsWorkspacePolicy(skills_canary_enabled=False),
+            workspace_policy=SettingsWorkspacePolicy(allowed_runtimes=("omnigent",)),
         )
         with pytest.raises(SettingsValidationError) as exc:
             await disabled_service.apply_overrides(
@@ -868,8 +852,8 @@ async def test_mm656_write_validates_unchanged_effective_companion(settings_sess
 
     _assert_validation_issue(
         exc,
-        key="skills.canary_percent",
-        code="feature_disabled_canary_percent",
+        key="workflow.default_runtime",
+        code="runtime_policy_denied",
     )
 
 
@@ -1100,15 +1084,24 @@ def test_effective_value_reports_environment_source_and_explanation():
 
 def test_environment_values_are_parsed_to_declared_types():
     service = SettingsCatalogService(
-        env={
-            "WORKFLOW_SKILLS_CANARY_PERCENT": "42",
-        }
+        env={"TEST_RETRY_LIMIT": "42"},
+        registry=(
+            SettingRegistryEntry(
+                key="test.retry_limit",
+                title="Retry limit",
+                category="Test",
+                section="user-workspace",
+                value_type="integer",
+                ui="number",
+                default_value=1,
+                env_aliases=("TEST_RETRY_LIMIT",),
+                order=1,
+            ),
+        ),
     )
-
-    canary = service.effective_value("skills.canary_percent")
-
-    assert canary.value == 42
-    assert isinstance(canary.value, int)
+    effective = service.effective_value("test.retry_limit")
+    assert effective.value == 42
+    assert isinstance(effective.value, int)
 
 
 def test_secret_ref_diagnostic_does_not_expose_secret_plaintext():
@@ -1881,11 +1874,11 @@ async def test_async_list_and_batch_write_avoid_per_key_override_queries(
         await service.apply_overrides(
             changes={
                 "workflow.default_publish_mode": "branch",
-                "skills.canary_percent": 25,
+                "skills.policy_mode": "allowlist",
             },
             expected_versions={
                 "workflow.default_publish_mode": 1,
-                "skills.canary_percent": 1,
+                "skills.policy_mode": 1,
             },
         )
 
@@ -1898,18 +1891,18 @@ async def test_async_list_and_batch_write_avoid_per_key_override_queries(
         updated = await service.apply_overrides(
             changes={
                 "workflow.default_publish_mode": "none",
-                "skills.canary_percent": 50,
+                "skills.policy_mode": "permissive",
             },
             expected_versions={
                 "workflow.default_publish_mode": 2,
-                "skills.canary_percent": 2,
+                "skills.policy_mode": 2,
             },
         )
 
     assert listed.values["workflow.default_publish_mode"].value == "branch"
-    assert listed.values["skills.canary_percent"].value == 25
+    assert listed.values["skills.policy_mode"].value == "allowlist"
     assert updated.values["workflow.default_publish_mode"].value == "none"
-    assert updated.values["skills.canary_percent"].value == 50
+    assert updated.values["skills.policy_mode"].value == "permissive"
 
 
 @pytest.mark.asyncio
@@ -1961,11 +1954,11 @@ async def _version_conflict_is_atomic(settings_session):
     await service.apply_overrides(
         changes={
             "workflow.default_publish_mode": "branch",
-            "skills.canary_percent": 25,
+            "skills.policy_mode": "allowlist",
         },
         expected_versions={
             "workflow.default_publish_mode": 1,
-            "skills.canary_percent": 1,
+            "skills.policy_mode": 1,
         },
     )
 
@@ -1973,22 +1966,22 @@ async def _version_conflict_is_atomic(settings_session):
         await service.apply_overrides(
             changes={
                 "workflow.default_publish_mode": "none",
-                "skills.canary_percent": 50,
+                "skills.policy_mode": "permissive",
             },
             expected_versions={
                 "workflow.default_publish_mode": 99,
-                "skills.canary_percent": 1,
+                "skills.policy_mode": 1,
             },
         )
 
     publish_mode = await service.effective_value_async(
         "workflow.default_publish_mode"
     )
-    canary = await service.effective_value_async(
-        "skills.canary_percent"
+    skill_policy = await service.effective_value_async(
+        "skills.policy_mode"
     )
     assert publish_mode.value == "branch"
-    assert canary.value == 25
+    assert skill_policy.value == "allowlist"
 
 
 @pytest.mark.asyncio
@@ -2958,7 +2951,7 @@ def test_settings_registry_default_uses_catalog_key_ledger():
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 9
+    assert len(registry.entries) == 8
     assert "security.assessment_authorizations" in {
         entry.key for entry in registry.entries
     }
@@ -3116,7 +3109,7 @@ def test_workflow_settings_has_moonmind_expose_metadata():
     assert "workflow.default_runtime" in exposed_keys
     assert "workflow.default_publish_mode" in exposed_keys
     assert "skills.policy_mode" in exposed_keys
-    assert "skills.canary_percent" in exposed_keys
+    assert "skills.canary_percent" not in exposed_keys
     assert "live_sessions.default_enabled" not in exposed_keys
 
 
@@ -3190,8 +3183,8 @@ async def test_apply_overrides_does_not_dispatch_when_validation_fails(
         )
         with pytest.raises(SettingsValidationError):
             await service.apply_overrides(
-                changes={"skills.canary_percent": 999},
-                expected_versions={"skills.canary_percent": 1},
+                changes={"skills.policy_mode": 999},
+                expected_versions={"skills.policy_mode": 1},
             )
 
     assert published == []
@@ -3306,3 +3299,34 @@ async def test_reset_generation_does_not_report_pending_override(
         descriptor = (await service.catalog_async()).categories[entry.category][0]
         assert descriptor.value_version == reset.value_version
         assert descriptor.activation_state == "active"
+
+
+@pytest.mark.asyncio
+async def test_removed_skills_canary_override_does_not_block_settings(
+    settings_session_maker,
+):
+    async with settings_session_maker() as session:
+        session.add(
+            SettingsOverride(
+                key="skills.canary_percent", value_json=25, value_version=3,
+            )
+        )
+        await session.commit()
+        service = SettingsCatalogService(env={}, session=session)
+        values = await service.effective_values_async()
+        assert "skills.canary_percent" not in values.values
+        saved = await service.apply_overrides(
+            changes={"skills.policy_mode": "allowlist"},
+            expected_versions={"skills.policy_mode": 1},
+        )
+        assert saved.values["skills.policy_mode"].value == "allowlist"
+        diagnostics = await service.diagnostics()
+        retired = diagnostics.values["skills.canary_percent"]
+        assert retired.source == "deprecated_override"
+        assert retired.diagnostics[0].details["state"] == "removed"
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                changes={"skills.canary_percent": 50},
+                expected_versions={"skills.canary_percent": 3},
+            )
+        assert exc.value.issues[0].code == "setting_not_exposed"

@@ -11,10 +11,6 @@
     "section": "user-workspace",
     "type": "object"
   },
-  "skills.canary_percent": {
-    "section": "user-workspace",
-    "type": "integer"
-  },
   "skills.policy_mode": {
     "section": "user-workspace",
     "type": "enum"

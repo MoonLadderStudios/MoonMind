@@ -522,8 +522,6 @@ class TestWorkflowSettings:
         """Skills-first settings should have stable defaults."""
 
         settings = WorkflowSettings(_env_file=None)
-        assert settings.skills_enabled is True
-        assert settings.skills_canary_percent == 100
         assert settings.default_skill == "auto"
         assert settings.skill_policy_mode == "permissive"
         assert settings.allowed_skills == ("auto",)
@@ -535,18 +533,12 @@ class TestWorkflowSettings:
 
         settings = WorkflowSettings(
             _env_file=None,
-            skills_enabled=False,
-            skills_canary_percent=25,
             default_skill="custom",
             allowed_skills=("speckit", "custom"),
-            submit_skill="custom",
         )
 
-        assert settings.skills_enabled is False
-        assert settings.skills_canary_percent == 25
         assert settings.default_skill == "custom"
         assert settings.allowed_skills == ("speckit", "custom")
-        assert settings.submit_skill == "custom"
 
     def test_skills_mirror_env_overrides(self, monkeypatch):
         """Skill mirror roots should honor explicit WORKFLOW_SKILLS_* env overrides."""

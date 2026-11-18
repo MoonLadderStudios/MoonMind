@@ -508,11 +508,11 @@ async def test_version_conflict_returns_error_and_does_not_partially_persist(set
             json={
                 "changes": {
                     "workflow.default_publish_mode": "branch",
-                    "skills.canary_percent": 25,
+                    "skills.policy_mode": "permissive",
                 },
                 "expected_versions": {
                     "workflow.default_publish_mode": 1,
-                    "skills.canary_percent": 1,
+                    "skills.policy_mode": 1,
                 },
             },
         )
@@ -521,25 +521,25 @@ async def test_version_conflict_returns_error_and_does_not_partially_persist(set
             json={
                 "changes": {
                     "workflow.default_publish_mode": "none",
-                    "skills.canary_percent": 50,
+                    "skills.policy_mode": "allowlist",
                 },
                 "expected_versions": {
                     "workflow.default_publish_mode": 99,
-                    "skills.canary_percent": 1,
+                    "skills.policy_mode": 1,
                 },
             },
         )
         publish_mode = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
         )
-        canary = await client.get(
-            "/api/v1/settings/effective/skills.canary_percent",
+        policy = await client.get(
+            "/api/v1/settings/effective/skills.policy_mode",
         )
 
     assert conflict.status_code == 409
     assert conflict.json()["error"] == "version_conflict"
     assert publish_mode.json()["value"] == "branch"
-    assert canary.json()["value"] == 25
+    assert policy.json()["value"] == "permissive"
 
 
 @pytest.mark.asyncio

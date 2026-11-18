@@ -714,49 +714,6 @@ class WorkflowSettings(BaseSettings):
         alias="WORKFLOW_PROMPT_PACK_VERSION",
         description="Prompt pack version associated with the selected agent.",
     )
-    skills_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS"),
-        description="Enable skills-first orchestration policy for workflow stages.",
-    )
-    skills_shadow_mode: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_SHADOW_MODE", "WORKFLOW_SKILLS_SHADOW_MODE"
-        ),
-        description="Enable shadow-mode telemetry for skills orchestration.",
-    )
-    skills_fallback_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_FALLBACK_ENABLED", "WORKFLOW_SKILLS_FALLBACK_ENABLED"
-        ),
-        description="Allow direct stage fallback when skill adapters fail.",
-    )
-    skills_canary_percent: int = Field(
-        100,
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_CANARY_PERCENT", "WORKFLOW_SKILLS_CANARY_PERCENT"
-        ),
-        description="Percentage of runs routed through skills-first policy (0-100).",
-        ge=0,
-        le=100,
-        json_schema_extra={
-            "moonmind": {
-                "expose": True,
-                "key": "skills.canary_percent",
-                "section": "user-workspace",
-                "category": "Skills",
-                "ui": "number",
-                "type": "integer",
-                "requires_reload": False,
-                "apply_mode": "next_workflow",
-                "title": "Skills Canary Percent",
-                "applies_to": ["workflow_runtime", "skills"],
-                "order": 40,
-            }
-        },
-    )
     default_skill: str = Field(
         "auto",
         validation_alias=AliasChoices(
@@ -764,34 +721,7 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
-        description="Default skill identifier for workflow stage execution.",
-    )
-    discover_skill: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "WORKFLOW_DISCOVER_SKILL",
-            "WORKFLOW_DISCOVER_SKILL",
-            "MOONMIND_DISCOVER_SKILL",
-        ),
-        description="Optional skill override for discovery stage.",
-    )
-    submit_skill: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "WORKFLOW_SUBMIT_SKILL",
-            "WORKFLOW_SUBMIT_SKILL",
-            "MOONMIND_SUBMIT_SKILL",
-        ),
-        description="Optional skill override for submit stage.",
-    )
-    publish_skill: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices(
-            "WORKFLOW_PUBLISH_SKILL",
-            "WORKFLOW_PUBLISH_SKILL",
-            "MOONMIND_PUBLISH_SKILL",
-        ),
-        description="Optional skill override for publish stage.",
+        description="Default skill identifier for run-scoped skill resolution.",
     )
     skill_policy_mode: str = Field(
         "permissive",
@@ -930,9 +860,6 @@ class WorkflowSettings(BaseSettings):
         "git_user_name",
         "git_user_email",
         "default_skill",
-        "discover_skill",
-        "submit_skill",
-        "publish_skill",
         "skills_registry_source",
         mode="before",
     )
@@ -1093,16 +1020,8 @@ class WorkflowSettings(BaseSettings):
         self.allowed_agent_backends = allowed
         self.allowed_skills = tuple(dict.fromkeys(self.allowed_skills or ()))
 
-        for attr in (
-            "default_skill",
-            "discover_skill",
-            "submit_skill",
-            "publish_skill",
-        ):
-            value = getattr(self, attr)
-            if isinstance(value, str):
-                normalized = value.strip()
-                setattr(self, attr, normalized or None)
+        if isinstance(self.default_skill, str):
+            self.default_skill = self.default_skill.strip() or "auto"
 
         if not self.default_skill:
             self.default_skill = "auto"

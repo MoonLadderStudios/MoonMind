@@ -27,8 +27,6 @@ from .contracts import (
     SkillPolicyRetries,
     SkillPolicyTimeouts,
     SkillResult,
-    StageExecutionDecision,
-    StageExecutionOutcome,
     ToolPolicies,
     ToolPolicyRetries,
     ToolPolicyTimeouts,
@@ -64,7 +62,6 @@ from .resolver import (
     resolve_run_skill_selection,
     resolve_skill_markdown_path,
 )
-from .runner import execute_stage
 from .skill_dispatcher import (
     SkillActivityDispatcher,
     SkillDispatchError,
@@ -98,9 +95,6 @@ from .workspace_links import (
 )
 
 __all__ = [
-    "StageExecutionDecision",
-    "StageExecutionOutcome",
-    "execute_stage",
     "ArtifactStore",
     "ArtifactStoreError",
     "FileArtifactStore",

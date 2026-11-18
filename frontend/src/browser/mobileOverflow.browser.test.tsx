@@ -324,7 +324,7 @@ const workspaceCatalog = {
         effective_value: 'pr', options: [{ value: 'none', label: 'None' }, { value: 'pr', label: 'Pull Request' }],
       }),
       settingDescriptor({
-        key: 'skills.canary_percent', title: 'Skills Canary Percent', type: 'integer', ui: 'number', order: 20,
+        key: 'test.retry_limit', title: 'Test Retry Limit', type: 'integer', ui: 'number', order: 20,
         effective_value: 25, constraints: { minimum: 0, maximum: 100 },
         diagnostics: [{ code: 'out_of_range', message: 'The stored override is outside the allowed range.', severity: 'error' }],
       }),
@@ -960,7 +960,7 @@ describe('Operations and advanced settings in the dashboard shell (MoonMind#4559
     api.uiInfo = settingsUiInfo;
     window.history.replaceState({}, '', '/settings/operations#advanced');
     renderDashboard();
-    await screen.findByText('Skills Canary Percent');
+    await screen.findByText('Test Retry Limit');
     await screen.findByText('The stored override is outside the allowed range.');
     await screen.findByRole('button', { name: 'Reset dashboard preferences' });
     await useLayout(width, height);

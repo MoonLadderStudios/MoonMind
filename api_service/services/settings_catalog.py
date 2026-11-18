@@ -197,8 +197,6 @@ class SettingsValidationError(ValueError):
 class SettingsWorkspacePolicy(BaseModel):
     allowed_runtimes: tuple[str, ...] | None = None
     allowed_provider_profile_ids: tuple[str, ...] | None = None
-    skills_canary_enabled: bool = True
-    max_canary_percent: int = 100
     allowed_publication_modes: tuple[str, ...] | None = None
     allowed_secret_ref_backends: tuple[str, ...] = ("env", "db")
     maintenance_mode: bool = False
@@ -600,22 +598,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         order=30,
     ),
     SettingRegistryEntry(
-        key="skills.canary_percent",
-        title="Skills Canary Percent",
-        description="Percentage of runs routed through skills-first policy.",
-        category="Skills",
-        section="user-workspace",
-        value_type="integer",
-        ui="number",
-        default_value=100,
-        settings_path=("workflow", "skills_canary_percent"),
-        env_aliases=("WORKFLOW_SKILLS_CANARY_PERCENT",),
-        apply_mode="next_workflow",
-        constraints=SettingConstraints(minimum=0, maximum=100),
-        applies_to=("workflow_runtime", "skills"),
-        order=40,
-    ),
-    SettingRegistryEntry(
         key="integrations.github.token_ref",
         title="GitHub Token Reference",
         description="Secret reference used for GitHub API access.",
@@ -679,6 +661,11 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
 # The orchestrator copies persisted overrides from old_key to new_key; the read
 # path resolves un-migrated overrides through the rename rule until then.
 _CATALOG_MIGRATION_RULES: tuple[SettingMigrationRule, ...] = (
+    SettingMigrationRule(
+        old_key="skills.canary_percent",
+        state="removed",
+        message="Skills stage rollout was removed; skill resolution uses the active resolver policy.",
+    ),
     SettingMigrationRule(
         old_key="workflow.default_task_runtime",
         new_key="workflow.default_runtime",
@@ -3389,32 +3376,6 @@ class SettingsCatalogService:
                     details={"allowed": sorted(policy.allowed_publication_modes)},
                 )
             )
-        canary = changes.get("skills.canary_percent")
-        if isinstance(canary, int) and not isinstance(canary, bool):
-            if not policy.skills_canary_enabled and canary > 0:
-                issues.append(
-                    self._validation_issue(
-                        self._entries_by_key["skills.canary_percent"],
-                        code="feature_disabled_canary_percent",
-                        message="skills.canary_percent must be zero while skills canary is disabled.",
-                        boundary=boundary,
-                        rule="feature_enabled",
-                    )
-                )
-            if canary > policy.max_canary_percent:
-                issues.append(
-                    self._validation_issue(
-                        self._entries_by_key["skills.canary_percent"],
-                        code="max_canary_percent_exceeded",
-                        message=(
-                            "skills.canary_percent exceeds the workspace policy "
-                            "maximum."
-                        ),
-                        boundary=boundary,
-                        rule="max_canary_percent",
-                        details={"maximum": policy.max_canary_percent},
-                    )
-                )
         for key, value in changes.items():
             entry = self._entries_by_key.get(key)
             if (
