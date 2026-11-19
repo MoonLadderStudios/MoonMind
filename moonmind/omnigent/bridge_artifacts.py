@@ -490,6 +490,14 @@ async def ensure_verified_execution_plan_dependencies(
         )
     for ref, digest in (
         (binding.task_input_snapshot_ref, binding.task_input_snapshot_digest),
+        (
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "artifactRef"
+            ),
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "contentDigest"
+            ),
+        ),
         (plan.payload.policySnapshotRef, plan.payload.policySnapshotDigest),
         (
             plan.payload.effectiveLaunchSnapshotRef,
@@ -725,7 +733,8 @@ def _execution_plan_input_refs(
             plan.payload.agentProfileSnapshotRef,
             (
                 plan.payload.providerConfigurationSnapshot.artifactRef
-                if getattr(plan.payload, "providerConfigurationSnapshot", None) is not None
+                if getattr(plan.payload, "providerConfigurationSnapshot", None)
+                is not None
                 else None
             ),
             plan.payload.policySnapshotRef,
@@ -738,6 +747,9 @@ def _execution_plan_input_refs(
                 else None
             ),
             plan.payload.resolvedSkills.get("resolvedSkillSetRef"),
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "artifactRef"
+            ),
             *(
                 access["artifactRef"]
                 for access in plan.payload.resolvedTools.get(

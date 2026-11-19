@@ -367,9 +367,78 @@ class OmnigentWorkspacePublicationService:
         self.resolve_request_workspace(request)
         workflow_id, step_id = execution_identity(request)
 
+        local_history = False
+        admitted_local_refs = ()
+        if self._plans is not None and request.omnigent_execution_plan is not None:
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                verify_execution_plan_envelope,
+            )
+
+            stored = await self._plans.load(request.omnigent_execution_plan.plan_ref)
+            if stored is None:
+                raise HarnessPlatformError(
+                    "saving work requires its frozen execution plan",
+                    code="WORKSPACE_SAVE_UNAVAILABLE",
+                )
+            admitted = verify_execution_plan_envelope(stored)
+            initial_source = admitted.payload.resolvedTools.get(
+                "initialRepositorySource"
+            )
+            local_history = bool(initial_source)
+            if initial_source:
+                from moonmind.workflows.temporal.runtime.initial_repository_source import (
+                    InitialRepositorySourceSnapshot,
+                )
+
+                snapshot = InitialRepositorySourceSnapshot.model_validate(
+                    initial_source
+                )
+                raw_source = await gateway.read_admitted_input(
+                    snapshot.artifact_ref, request=request
+                )
+                if (
+                    "sha256:" + hashlib.sha256(raw_source).hexdigest()
+                    != snapshot.content_digest
+                ):
+                    raise HarnessPlatformError(
+                        "initial source descriptor changed",
+                        code="WORKSPACE_SAVE_UNAVAILABLE",
+                    )
+                source = json.loads(raw_source)
+                if source.get("kind") != "initial_repository_source" or not isinstance(
+                    source.get("gitRefs"), dict
+                ):
+                    raise HarnessPlatformError(
+                        "initial source reference authority is missing",
+                        code="WORKSPACE_SAVE_UNAVAILABLE",
+                    )
+                admitted_local_refs = tuple(source["gitRefs"])
+
         verified_manifests = {}
 
         class Capture(TemporalSandboxActivities):
+            def _capture_git_history(self, workspace, head, *, high_security_mode):
+                if not local_history:
+                    return super()._capture_git_history(
+                        workspace, head, high_security_mode=high_security_mode
+                    )
+                from moonmind.workflows.temporal.runtime.checkpoint_history import (
+                    capture_initial_source_successor_history,
+                )
+                from moonmind.workflows.temporal.runtime.git_auth import (
+                    build_isolated_git_environment,
+                )
+
+                # Tracking refs are useful local state, not permission to fetch
+                # a vanished source. Every successor save carries its objects.
+                return capture_initial_source_successor_history(
+                    workspace,
+                    head,
+                    high_security_mode=high_security_mode,
+                    admitted_refs=admitted_local_refs,
+                    env=build_isolated_git_environment(None, base_env=dict(os.environ)),
+                )
+
             async def _put_checkpoint_bytes(self, payload, *, content_type, metadata=None):
                 ref = await gateway.write_bytes(
                     request=request, name=str((metadata or {}).get("artifact_kind") or "checkpoint"),

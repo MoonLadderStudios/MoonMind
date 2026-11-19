@@ -888,6 +888,7 @@ def saved_work_artifact_dependencies(
         "saved_work_manifest",
         "checkpoint_manifest",
         "step_execution_checkpoint",
+        "initial_repository_source",
     }:
         return []
     document = json.loads(payload)
@@ -931,6 +932,19 @@ def saved_work_artifact_dependencies(
             "saved_work.source_task",
             False,
         )
+        return dependencies
+
+    if artifact_kind == "initial_repository_source":
+        workspace = document.get("workspace") or {}
+        for field, digest in (
+            ("archiveRef", "archiveDigest"),
+            ("manifestRef", "manifestDigest"),
+        ):
+            if not workspace.get(field) or not workspace.get(digest):
+                raise ValueError(
+                    "Initial source requires its immutable workspace dependencies"
+                )
+            add(workspace[field], workspace[digest], "initial_source." + field)
         return dependencies
 
     if artifact_kind == "step_execution_checkpoint":

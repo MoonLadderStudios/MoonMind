@@ -7,6 +7,8 @@ compact binding returned here.
 
 from __future__ import annotations
 
+from moonmind.core.artifacts import temporal_artifact_id
+
 import hashlib
 import json
 import logging
@@ -399,6 +401,15 @@ async def _persist_binary_artifact(
         content_type=content_type,
     )
     return str(completed.artifact_id), digest
+
+
+@dataclass(frozen=True)
+class PreparedLocalSourcePlan:
+    """Compiler output awaiting source bytes; never an executable plan binding."""
+
+    artifact_ref: str
+    content_digest: str
+    artifact_refs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -1081,6 +1092,8 @@ async def _admit_repository_plan_inputs(
     typed_authority: bool = True,
     native_review: bool = False,
     resolved_skills: AgentResolvedSkillSet | None = None,
+    initial_source_snapshot: Mapping[str, Any] | None = None,
+    prepare_local_source: bool = False,
     access: ArtifactAccessContext,
 ) -> dict[str, Any]:
     """Derive transport/tool roles and freeze selection through existing owners.
@@ -1172,6 +1185,47 @@ async def _admit_repository_plan_inputs(
         selected_github_https_repository_source(_remote)
         if connection_ref and not anonymous and kind == "remote" else None
     )
+    if initial_source_snapshot is not None or prepare_local_source:
+        from moonmind.workflows.temporal.runtime.initial_repository_source import (
+            read_initial_source,
+        )
+
+        descriptor = (
+            await read_initial_source(
+                artifact_service, initial_source_snapshot, access=access
+            )
+            if initial_source_snapshot is not None
+            else None
+        )
+        publication = workflow.get("publish") or {}
+        publish_mode = initial_parameters.get("publishMode", publication.get("mode"))
+        operations = _authored_plan_github_operations(
+            initial_parameters,
+            publish_mode=publish_mode,
+            requires_github=requires_github,
+            resolved_skills=resolved_skills,
+        )
+        if (
+            requires_github
+            or native_review
+            or not typed_authority
+            or str(publish_mode or "none").strip().lower() != "none"
+            or _enabled_merge_automation(initial_parameters)
+            or any(operation != "read" for operation in operations)
+            or (
+                descriptor is not None
+                and descriptor["source"].get("workflowId") != workflow_id
+            )
+            or source.kind not in {"repository", "checkpoint"}
+            or kind != "local"
+        ):
+            raise RepositorySourceHandoffUnavailable(
+                "local source supports only its admitted read-only consumer"
+            )
+        if initial_source_snapshot is not None:
+            result["initialSource"] = dict(initial_source_snapshot)
+        result["localSourceAdmitted"] = True
+        return result
     if kind != "github_https" and anonymous_remote is None and selected_remote is None:
         if native_review:
             raise ValueError(
@@ -1542,9 +1596,14 @@ async def compile_and_persist_execution_plan(
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
     _recorded_step_provider_configurations: Mapping[
         str, ProviderConfigurationSnapshotRef | None
-    ] | None = None,
-    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None | Literal["capture"] = "capture",
+    ]
+    | None = None,
+    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef
+    | None
+    | Literal["capture"] = "capture",
     recorded_skillset_ref: str | None = None,
+    _initial_repository_source_snapshot: Mapping[str, Any] | None = None,
+    _prepare_local_source_digest: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1908,6 +1967,7 @@ async def compile_and_persist_execution_plan(
         access=access,
     )
     repository_access = {}
+    initial_source = None
     if repository_bindings is None:
         repository_inputs = await _admit_repository_plan_inputs(
             session_factory=session_factory,
@@ -1921,6 +1981,8 @@ async def compile_and_persist_execution_plan(
             parent_artifact_access=parent_artifact_access,
             native_review=native_review,
             resolved_skills=agent_resolved_skills,
+            initial_source_snapshot=_initial_repository_source_snapshot,
+            prepare_local_source=_prepare_local_source_digest is not None,
             typed_authority=selected_realizer_consumes_repository_authority(
                 harness_id=harness_id
             ),
@@ -1931,6 +1993,7 @@ async def compile_and_persist_execution_plan(
         workspace_source_kind = workspace_source_kind or repository_inputs["sourceKind"]
         workspace_access_snapshot_ref = repository_inputs.get("anonymousSnapshotRef")
         repository_access = repository_inputs["access"]
+        initial_source = repository_inputs.get("initialSource")
     bridge_capabilities = {
         "repository.read": True,
         "repository.write": True,
@@ -2210,6 +2273,17 @@ async def compile_and_persist_execution_plan(
                 }
             )
         )
+    if initial_source is not None:
+        plan = create_execution_plan_envelope(
+            plan.payload.model_copy(
+                update={
+                    "resolvedTools": {
+                        **plan.payload.resolvedTools,
+                        "initialRepositorySource": initial_source,
+                    },
+                }
+            )
+        )
     # A client may name an exact rollout row, but only the compiled Profile,
     # policy and harness can establish it. Validate before persisting the plan.
     runtime = workflow_mapping.get("runtime") or {}
@@ -2371,6 +2445,40 @@ async def compile_and_persist_execution_plan(
             plan = create_execution_plan_envelope(plan.payload.model_copy(update={
                 "logicalStepPlans": logical_step_plan_digests(step_parameters),
             }))
+    if _prepare_local_source_digest is not None:
+        if not repository_inputs.get("localSourceAdmitted") or _compile_step_plans:
+            raise ValueError(
+                "local source candidate requires its admitted single-step consumer"
+            )
+        refs = tuple(
+            dict.fromkeys(
+                (
+                    policy_artifact_ref,
+                    effective_launch_ref,
+                    profile_snapshot_ref,
+                    *((configuration_ref,) if configuration_ref is not None else ()),
+                    *((support_evidence_ref,) if support_evidence is not None else ()),
+                    *skill_content_refs,
+                    skill_ref,
+                )
+            )
+        )
+        candidate_ref, candidate_digest = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal,
+            artifact_class="omnigent.local_source_candidate",
+            payload={
+                "schemaVersion": "local-source-candidate/v1",
+                "sourceIntentDigest": _prepare_local_source_digest,
+                "payload": plan.payload.model_dump(mode="json", by_alias=True),
+                "artifactRefs": list(refs),
+                "resolvedSkillsetRef": skill_ref,
+                "resolvedSkillsetDigest": skill_digest,
+            },
+        )
+        return PreparedLocalSourcePlan(
+            candidate_ref, candidate_digest, (*refs, candidate_ref)
+        )
     plan_store = execution_plan_store or (
         SessionExecutionPlanStore(db_session)
         if db_session is not None
@@ -2424,6 +2532,7 @@ async def compile_and_persist_execution_plan(
             *_evidence_refs,
             *skill_content_refs,
             *(access["artifactRef"] for access in repository_access.values()),
+            *((initial_source["artifactRef"],) if initial_source is not None else ()),
             skill_ref,
             plan_artifact_ref,
             *(ref for step_plan in step_plans for ref in step_plan.artifact_refs),
@@ -3081,3 +3190,74 @@ __all__ = [
     "selected_skill_names",
     "load_protected_execution_support_evidence",
 ]
+
+
+async def finalize_local_source_candidate(
+    *, candidate, snapshot, artifact_service, plan_store, principal, access
+):
+    """Finish source binding without re-resolving any mutable compiler input."""
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        read_initial_source,
+    )
+
+    _record, body = await artifact_service.read(
+        artifact_id=temporal_artifact_id(candidate["artifactRef"]), access=access
+    )
+    if _sha256(body) != candidate["contentDigest"]:
+        raise ValueError("local source candidate digest differs")
+    frozen = json.loads(body)
+    descriptor = await read_initial_source(artifact_service, snapshot, access=access)
+    if frozen.get("schemaVersion") != "local-source-candidate/v1" or frozen.get(
+        "sourceIntentDigest"
+    ) != descriptor.get("sourceIntentDigest"):
+        raise ValueError("local source receipt differs from its prepared consumer")
+    payload = frozen["payload"]
+    payload["resolvedTools"] = {
+        **payload.get("resolvedTools", {}),
+        "initialRepositorySource": snapshot,
+    }
+    envelope = create_execution_plan_envelope(payload)
+    persisted = await plan_store.persist(envelope)
+    artifact_ref, _ = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.execution_plan",
+        payload=persisted.model_dump(mode="json", by_alias=True),
+    )
+    authority = persisted.payload.authority
+    binding = OmnigentExecutionPlanBinding(
+        planRef=persisted.planRef,
+        planDigest="sha256:" + persisted.planRef.rsplit(":", 1)[-1],
+        planArtifactRef=artifact_ref,
+        taskInputSnapshotRef=authority.taskInputSnapshotRef,
+        taskInputSnapshotDigest=authority.taskInputSnapshotDigest,
+    )
+    from moonmind.omnigent.bridge_artifacts import (
+        ensure_verified_execution_plan_dependencies,
+    )
+
+    await ensure_verified_execution_plan_dependencies(
+        artifacts=artifact_service, plan=persisted, binding=binding, access=access
+    )
+    return PersistedOmnigentExecutionPlan(
+        artifact_access=access,
+        envelope=persisted,
+        binding=binding,
+        artifact_refs=tuple(
+            (
+                *frozen["artifactRefs"],
+                candidate["artifactRef"],
+                snapshot["artifactRef"],
+                artifact_ref,
+            )
+        ),
+        resolved_skillset_ref=frozen["resolvedSkillsetRef"],
+        resolved_skillset_digest=frozen["resolvedSkillsetDigest"],
+        runtime_provider_rollout=(
+            persisted.payload.runtimeProviderRollout.model_dump(
+                mode="json", by_alias=True
+            )
+            if persisted.payload.runtimeProviderRollout is not None
+            else None
+        ),
+    )

@@ -24,6 +24,8 @@ from api_service.services.omnigent_execution_plan_service import (
     changed_admitted_intent,
     changed_repository_selection,
     compile_and_persist_execution_plan,
+    PreparedLocalSourcePlan,
+    finalize_local_source_candidate,
 )
 from api_service.services.profile_execution_selection import (
     profile_harness_id,
@@ -405,15 +407,8 @@ def _shared_request(
     return AgentExecutionRequest.model_validate(body)
 
 
-async def prepare_selected_pool_plan(
-    session, *, runtime_id: str, payload: dict[str, Any], client=None
-):
-    """Persist plan, input grants and lease binding in the same transaction.
-
-    A retry reads the binding on the existing grant; it never recompiles a
-    different plan after a lost commit acknowledgement. Native-only outcomes
-    retain their current adapter, with no early pool selection or new lease.
-    """
+async def _locked_pool_request(session, *, runtime_id, payload, client=None):
+    """Check the live child and its exact current lease before using authority."""
     request = AgentExecutionRequest.model_validate(payload["request"])
     if (
         request.agent_kind != "managed"
@@ -477,6 +472,25 @@ async def prepare_selected_pool_plan(
     reason = selected_pool_grant_error(lease, payload, runtime_id=runtime_id)
     if reason:
         raise ValueError("pool plan handoff was fenced: " + reason)
+    return request, lease
+
+
+async def prepare_selected_pool_plan(
+    session, *, runtime_id: str, payload: dict[str, Any], client=None
+):
+    """Persist plan, input grants and lease binding in the same transaction.
+
+    A retry reads the binding on the existing grant; it never recompiles a
+    different plan after a lost commit acknowledgement. Native-only outcomes
+    retain their current adapter, with no early pool selection or new lease.
+    """
+    request, lease = await _locked_pool_request(
+        session, runtime_id=runtime_id, payload=payload, client=client
+    )
+    owner_id, owner_run_id = str(payload["owner_id"]), str(payload["runId"])
+    profile_id = str(payload["profile_id"])
+    original_profile = payload.get("originalProfileRef")
+    workflow_id = request.step_execution.workflow_id
     request_digest = _request_digest(request, original_profile)
     access = ArtifactAccessContext.for_execution(
         workflow_id, principal="service:execution-plan"
@@ -486,6 +500,8 @@ async def prepare_selected_pool_plan(
         transaction_ownership=ArtifactTransactionOwnership.CALLER,
     )
     saved = (lease.safe_metadata_json or {}).get("preparedPoolPlan")
+    pending_source = (lease.safe_metadata_json or {}).get("initialRepositorySource")
+    credential_generation = lease.credential_generation
     if lease.execution_plan_ref:
         if (
             not isinstance(saved, Mapping)
@@ -502,8 +518,60 @@ async def prepare_selected_pool_plan(
             access=access,
         )
         snapshot, skill_ref = json.loads(body), saved["resolvedSkillsetRef"]
+    elif pending_source is not None:
+        grant = _source_grant(request, lease, payload)
+        if grant.get("unavailableReason"):
+            return {"disposition": "native", "reason": grant["unavailableReason"]}
+        if grant.get("result") is None:
+            return {"disposition": "source_export_required"}
+        candidate = grant["candidate"]
+        verified_access = access._with_verified_inputs(
+            temporal_artifact_id(ref) for ref in candidate["artifactRefs"]
+        )
+        admitted = await finalize_local_source_candidate(
+            candidate=candidate,
+            snapshot=grant["result"],
+            artifact_service=artifacts,
+            plan_store=SessionExecutionPlanStore(session),
+            principal=grant["principal"],
+            access=verified_access,
+        )
+        binding, plan, skill_ref = (
+            admitted.binding,
+            admitted.envelope,
+            admitted.resolved_skillset_ref,
+        )
+        verified_access = verified_access._with_verified_inputs(
+            temporal_artifact_id(ref) for ref in admitted.artifact_refs
+        )
+        for target, run in (
+            (workflow_id, request.step_execution.run_id),
+            (owner_id, owner_run_id),
+        ):
+            await link_verified_execution_plan_inputs_in_session(
+                session=session,
+                plan=plan,
+                binding=binding,
+                workflow_id=target,
+                run_id=run,
+                access=verified_access,
+            )
+        _profile, body = await artifacts.read(
+            artifact_id=temporal_artifact_id(plan.payload.agentProfileSnapshotRef),
+            access=verified_access,
+        )
+        snapshot = json.loads(body)
+        saved = {
+            "requestDigest": request_digest,
+            "binding": binding.model_dump(mode="json", by_alias=True),
+            "resolvedSkillsetRef": skill_ref,
+            "modelResolution": grant["modelResolution"],
+            "launchParameters": grant["launchParameters"],
+        }
+        credential_generation = grant["credentialGeneration"]
     else:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        credential_generation = getattr(profile, "credential_generation", None)
         if profile is None or not profile.enabled or profile.auth_state != "connected":
             raise ValueError("the selected pool account is no longer launch-ready")
         if str(getattr(profile.runtime_id, "value", profile.runtime_id)) != runtime_id:
@@ -547,6 +615,7 @@ async def prepare_selected_pool_plan(
         source = request.workspace_spec.get("workspaceSource") or {}
         locator = request.workspace_spec.get("workspaceLocator") or {}
         selected_enterprise = False
+        selected_local = False
         repository_handoff = (
             request.canonical_repository_workspace_handoff
             and source.get("kind") == "repository"
@@ -598,14 +667,26 @@ async def prepare_selected_pool_plan(
                 and normalize_repository_source(compiled_source.repository_ref or "")[1] == "remote"
                 and selected_github_https_repository_source(compiled_source.repository_ref or "")
             )
+            from moonmind.workflows.temporal.runtime.initial_repository_source import (
+                source_intent,
+            )
+
+            selected_local = bool(
+                payload.get("localSourceHandoff") is True
+                and source_intent(request) is not None
+            )
             repository_handoff = (
                 isinstance(target, Mapping)
                 and target.get("provider") in {None, "git"}
                 and revision_handoff
                 and (
-                    normalize_repository_source(compiled_source.repository_ref or "")[1] == "github_https"
-                    or anonymous and not connection_ref and remote is not None
+                    normalize_repository_source(compiled_source.repository_ref or "")[1]
+                    == "github_https"
+                    or anonymous
+                    and not connection_ref
+                    and remote is not None
                     or selected_enterprise
+                    or selected_local
                 )
             )
         if (
@@ -662,6 +743,45 @@ async def prepare_selected_pool_plan(
                 "disposition": "native",
                 "reason": "selected_profile_has_no_equivalent_shared_configuration",
             }
+        initial_source_snapshot = (
+            (recorded.plan.payload.resolvedTools or {}).get("initialRepositorySource")
+            if recorded
+            else None
+        )
+        # A verified recorded plan already owns its immutable source.
+        # Only genuinely new source admission may reopen the filesystem.
+        prepare_local_source = selected_local and initial_source_snapshot is None
+        if prepare_local_source:
+            if not _validate_local_source_original_input(request, json.loads(_body)):
+                return {
+                    "disposition": "native",
+                    "reason": "local_source_requires_original_dependency_evidence",
+                }
+            from moonmind.config.settings import settings
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+            from moonmind.workflows.temporal.runtime.initial_repository_source import (
+                intent_digest,
+                source_intent,
+            )
+            from moonmind.workflows.temporal.runtime.local_repository_authority import (
+                resolve_source_authority,
+            )
+
+            intent = source_intent(request)
+            source_authority = await resolve_source_authority(
+                request=request,
+                intent=intent,
+                workspace_root=settings.workflow.workspace_root,
+                temporal_client=client or TemporalClientAdapter(),
+                artifact_service=artifacts,
+                access=access,
+                session=session,
+            )
+            if source_authority is None:
+                return {
+                    "disposition": "native",
+                    "reason": "local_source_has_no_transferable_owner",
+                }
         selected = request.model_copy(deep=True)
         from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 
@@ -785,6 +905,16 @@ async def prepare_selected_pool_plan(
                 access=access,
                 model_tier_resolution=resolution,
                 _compile_step_plans=False,
+                **(
+                    {"_initial_repository_source_snapshot": initial_source_snapshot}
+                    if initial_source_snapshot is not None
+                    else {}
+                ),
+                **(
+                    {"_prepare_local_source_digest": intent_digest(intent)}
+                    if prepare_local_source
+                    else {}
+                ),
                 recorded_skillset_ref=request.resolved_skillset_ref
                 or request.step_execution.resolved_skillset_ref,
                 **(
@@ -811,6 +941,47 @@ async def prepare_selected_pool_plan(
                     else "workspace_requires_its_recorded_native_owner"
                 ),
             }
+        if isinstance(admitted, PreparedLocalSourcePlan):
+            from moonmind.config.settings import settings
+            from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+            # The lease owner knows the real run; the pure compiler does not.
+            # Link all frozen inputs before committing the preflight receipt.
+            for ref in admitted.artifact_refs:
+                await artifacts.link_artifact(
+                    artifact_id=temporal_artifact_id(ref),
+                    principal=principal,
+                    execution_ref=ExecutionRef(
+                        namespace=settings.temporal.namespace,
+                        workflow_id=workflow_id,
+                        run_id=canonical.run_id,
+                        link_type="evidence.local_source_candidate",
+                    ),
+                )
+            lease.safe_metadata_json = {
+                **(lease.safe_metadata_json or {}),
+                "initialRepositorySource": {
+                    "version": 1,
+                    "requestDigest": request_digest,
+                    "intent": intent,
+                    "sourceIntentDigest": intent_digest(intent),
+                    "authority": source_authority,
+                    "taskInputSnapshotRef": snapshot_ref,
+                    "taskInputSnapshotDigest": original_digest,
+                    "result": None,
+                    "candidate": {
+                        "artifactRef": admitted.artifact_ref,
+                        "contentDigest": admitted.content_digest,
+                        "artifactRefs": list(admitted.artifact_refs),
+                    },
+                    "principal": principal,
+                    "modelResolution": deepcopy(resolution),
+                    "launchParameters": launch_parameters,
+                    "credentialGeneration": credential_generation,
+                },
+            }
+            await session.commit()
+            return {"disposition": "source_export_required"}
         if recorded:
             changed = changed_admitted_intent(
                 recorded.plan.payload, admitted.envelope.payload
@@ -861,9 +1032,7 @@ async def prepare_selected_pool_plan(
             "executionPlanRef": binding.plan_ref,
             "stepExecutionId": request.step_execution.step_execution_id,
             "idempotencyKey": request.idempotency_key,
-            "credential_generation": lease.credential_generation
-            if lease.execution_plan_ref
-            else profile.credential_generation,
+            "credential_generation": credential_generation,
             "preparedPoolPlan": saved,
         },
         runtime_id=runtime_id,
@@ -886,3 +1055,260 @@ async def prepare_selected_pool_plan(
             "credentialGeneration": lease.credential_generation,
         },
     }
+
+
+def _validate_local_source_original_input(request, snapshot):
+    """Check the bounded literal source before any filesystem export grant.
+
+    Dynamic node references retain their native owner until their original
+    dependency evidence can be revalidated here; this is not a template engine.
+    """
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        source_intent,
+    )
+
+    frozen = snapshot.get("draft") if isinstance(snapshot, Mapping) else None
+    if not isinstance(frozen, Mapping):
+        target = snapshot.get("target") if isinstance(snapshot, Mapping) else None
+        frozen = (
+            target.get("initialParameters") if isinstance(target, Mapping) else None
+        )
+    if not isinstance(frozen, Mapping):
+        return False
+    task = frozen.get("workflow") or frozen.get("task") or {}
+    if not isinstance(task, Mapping):
+        return False
+    steps = task.get("steps") or []
+    node = {}
+    if steps:
+        matching = [
+            step
+            for step in steps
+            if isinstance(step, Mapping)
+            and step.get("id") == request.step_execution.logical_step_id
+        ]
+        if len(matching) != 1:
+            return False
+        node = matching[0]
+    inputs = node.get("inputs") or {}
+    runtime = inputs.get("runtime") or node.get("runtime") or {}
+    if not isinstance(inputs, Mapping) or not isinstance(runtime, Mapping):
+        return False
+    from api_service.services.omnigent_execution_plan_service import (
+        _authored_plan_github_operations,
+    )
+
+    publish = frozen.get("publishMode", (task.get("publish") or {}).get("mode"))
+    if str(publish or "none").strip().lower() != "none":
+        return False
+    frozen_operations = _authored_plan_github_operations(
+        frozen, publish_mode=publish, requires_github=False, resolved_skills=None
+    )
+    if any(operation != "read" for operation in frozen_operations):
+        return False
+    requested_operations = _authored_plan_github_operations(
+        request.parameters,
+        publish_mode=request.parameters.get("publishMode"),
+        requires_github=False,
+        resolved_skills=None,
+    )
+    if any(operation != "read" for operation in requested_operations):
+        raise ValueError("local source tools differ from frozen read-only intent")
+    from moonmind.omnigent.workspace_intent import project_authored_workspace
+
+    # The stored draft may omit canonical workspaceSpec for the root source.
+    # Resolve that root layer first, then use the actual Run projection for
+    # per-node precedence (including omission of nullable root aliases).
+    root_workspace = deepcopy(
+        frozen.get("workspaceSpec")
+        or frozen.get("workspace")
+        or task.get("workspace")
+        or {}
+    )
+    for layer in (task, frozen):
+        for key in (
+            "repository",
+            "repositoryTarget",
+            "repo",
+            "startingBranch",
+            "branch",
+        ):
+            if layer.get(key) is not None:
+                root_workspace[key] = deepcopy(layer[key])
+    if not root_workspace.get("branch") and isinstance(task.get("git"), Mapping):
+        root_workspace["branch"] = task["git"].get("startingBranch")
+    workspace = project_authored_workspace(
+        {"workspaceSpec": root_workspace}, inputs, runtime
+    )
+    # Canonical Run adds the explicit source discriminator to legacy literal
+    # repository input. It does not grant a new source or resolve raw paths.
+    workspace.setdefault("workspaceSource", {"kind": "repository"})
+    try:
+        expected = source_intent(
+            request.model_copy(
+                update={
+                    "workspace_spec": workspace,
+                    "parameters": {"publishMode": "none"},
+                }
+            )
+        )
+    except (ValueError, TypeError):
+        return False
+    if expected is None:
+        return False
+    if expected != source_intent(request):
+        raise ValueError("local source differs from the frozen authored source")
+    return True
+
+
+def _source_grant(request, lease, payload):
+    """The source receipt belongs to the unchanged request and current lease."""
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        InitialRepositorySourceSnapshot,
+        intent_digest,
+        source_intent,
+    )
+
+    grant = (lease.safe_metadata_json or {}).get("initialRepositorySource")
+    intent = source_intent(request)
+    if (
+        not isinstance(grant, Mapping)
+        or grant.get("version") != 1
+        or intent is None
+        or grant.get("intent") != intent
+        or grant.get("sourceIntentDigest") != intent_digest(intent)
+        or grant.get("requestDigest")
+        != _request_digest(request, payload.get("originalProfileRef"))
+        or not isinstance(grant.get("authority"), Mapping)
+    ):
+        raise ValueError("local source grant differs from the admitted request")
+    if grant.get("result") is not None:
+        if grant.get("unavailableReason"):
+            raise ValueError("local source receipt contains conflicting outcomes")
+        result = InitialRepositorySourceSnapshot.model_validate(grant["result"])
+        if result.source_intent_digest != grant["sourceIntentDigest"]:
+            raise ValueError("local source receipt differs from its grant")
+    return deepcopy(dict(grant))
+
+
+async def export_selected_pool_source(
+    *,
+    session_factory,
+    runtime_id,
+    payload,
+    workspace_root,
+    artifact_service,
+    client=None,
+    capture=None,
+):
+    """Export only a live grant; commit the first receipt before acknowledging it.
+
+    No database transaction spans Git or archive I/O. Duplicate attempts may
+    produce unreferenced content-addressed blobs, but only one result is admitted.
+    A committed receipt is read before touching the original source again.
+    """
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        InitialRepositorySourceSnapshot,
+        LocalRepositorySourceUnavailable,
+    )
+
+    if client is None:
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        client = TemporalClientAdapter()
+
+    async with session_factory() as session:
+        request, lease = await _locked_pool_request(
+            session,
+            runtime_id=runtime_id,
+            payload=payload,
+            client=client,
+        )
+        grant = _source_grant(request, lease, payload)
+        await session.commit()
+    if grant.get("result") is not None:
+        return grant["result"]
+    if grant.get("unavailableReason"):
+        return {"disposition": "native", "reason": grant["unavailableReason"]}
+    access = ArtifactAccessContext.for_execution(
+        request.step_execution.workflow_id,
+        principal="service:execution-plan",
+    )
+
+    async def revalidate_authority():
+        from moonmind.workflows.temporal.runtime.local_repository_authority import (
+            resolve_source_authority,
+        )
+
+        async with session_factory() as session:
+            current_request, lease = await _locked_pool_request(
+                session,
+                runtime_id=runtime_id,
+                payload=payload,
+                client=client,
+            )
+            current = _source_grant(current_request, lease, payload)
+            if current["authority"] != grant["authority"]:
+                raise ValueError("local source owner changed during export")
+            authority = await resolve_source_authority(
+                request=current_request,
+                intent=grant["intent"],
+                workspace_root=workspace_root,
+                temporal_client=client,
+                artifact_service=artifact_service,
+                access=access,
+                session=session,
+            )
+            if authority != grant["authority"]:
+                raise ValueError("local source no longer has its admitted owner")
+            await session.commit()
+
+    if capture is None:
+        from moonmind.workflows.temporal.runtime.local_repository_authority import (
+            capture_initial_source,
+        )
+
+        capture = capture_initial_source
+    unavailable = None
+    try:
+        exported = InitialRepositorySourceSnapshot.model_validate(
+            await capture(
+                request=request,
+                intent=grant["intent"],
+                authority=grant["authority"],
+                workspace_root=workspace_root,
+                artifact_service=artifact_service,
+                access=access,
+                revalidate_authority=revalidate_authority,
+            )
+        )
+        if exported.source_intent_digest != grant["sourceIntentDigest"]:
+            raise ValueError("exported source differs from its immutable grant")
+    except LocalRepositorySourceUnavailable:
+        exported = None
+        unavailable = "local_source_requires_native_owner"
+    async with session_factory() as session:
+        current_request, lease = await _locked_pool_request(
+            session,
+            runtime_id=runtime_id,
+            payload=payload,
+            client=client,
+        )
+        current = _source_grant(current_request, lease, payload)
+        if current["authority"] != grant["authority"]:
+            raise ValueError("local source owner changed before receipt acceptance")
+        if current.get("result") is None and not current.get("unavailableReason"):
+            if unavailable:
+                current["unavailableReason"] = unavailable
+            else:
+                current["result"] = exported.model_dump(mode="json", by_alias=True)
+            lease.safe_metadata_json = {
+                **(lease.safe_metadata_json or {}),
+                "initialRepositorySource": current,
+            }
+        await session.commit()
+        return (
+            current["result"]
+            if current.get("result") is not None
+            else {"disposition": "native", "reason": current["unavailableReason"]}
+        )

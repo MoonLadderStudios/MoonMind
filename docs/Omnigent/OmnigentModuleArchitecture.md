@@ -186,9 +186,24 @@ and verified repository assignment, including source-dependent cold restoration.
 They do not admit publication or collaboration operations. Explicit anonymous HTTPS
 sources use that same plan and workspace owner with an exact, case-sensitive
 remote identity and a read-only access snapshot, never a repository credential.
-Clone and cold restore isolate ambient credentials and disable redirects. Local
-paths, SSH, and other authenticated non-GitHub sources retain their native owner until
-an equivalent source-access handoff exists. A separate versioned
+Clone and cold restore isolate ambient credentials and disable redirects.
+An explicit local Git path can use a committed-source handoff when the existing
+workspace owner proves it is a distinct, completed shared workspace in the same
+Workflow Execution, with a terminal step manifest, cleaned runtime/host and no
+active workspace claim. The authored source and selected pool fence are checked
+before reading files. An explicit branch (optionally pinned to its tip) is
+exported with full ancestry and selected local/tracking refs, not dirty or
+untracked files, remote URLs, helpers or publication authority. Unsafe layouts,
+tags, submodules, external filters, unsupported configuration and arbitrary worker-local paths retain
+the native owner before a source receipt is accepted.
+The lease holds a non-executable compiler candidate while the source owner
+exports. The first durable receipt freezes the source; response-loss retries
+reuse it without rereading the original directory. Finalization binds that
+receipt to the already resolved Profile, Skills and policy. Initial restoration
+and later self-contained saves survive both source and predecessor loss; deleted
+refs are not resurrected. Accepted shared work never falls back to a mutable
+local path. SSH and other authenticated non-GitHub sources retain their native
+owner until an equivalent source-access handoff exists. A separate versioned
 controller capability also admits a typed full Git commit SHA with publication
 mode `none`; abbreviated or unsupported revisions retain their existing owner.
 The shared owner verifies the requested commit before first readiness and binds

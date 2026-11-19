@@ -24,6 +24,7 @@ from moonmind.schemas.checkpoint_restore_models import (
     ManagedWorkspaceRestoreRequest,
     ManagedWorkspaceRestoreResult,
     SandboxRestoreDestination,
+    parse_workspace_restore_request,
 )
 from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
@@ -60,6 +61,7 @@ class ManagedCheckpointRestoreService:
         repository_source_root: str | Path | None = None,
         run_store: Any = None,
         anonymous_repository_read_resolver: Any = None,
+        isolate_git: bool = False,
     ) -> None:
         self.root = Path(authority_root).resolve()
         self.artifact_service = artifact_service
@@ -76,7 +78,8 @@ class ManagedCheckpointRestoreService:
 
         self._git_environment = (
             build_isolated_git_environment(None, base_env=dict(os.environ))
-            if anonymous_repository_read_resolver is not None else None
+            if anonymous_repository_read_resolver is not None or isolate_git
+            else None
         )
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -382,7 +385,8 @@ class ManagedCheckpointRestoreService:
 
         if (
             not isinstance(req.destination, SandboxRestoreDestination)
-            or req.workspace_policy != "restore_step_input"
+            or req.workspace_policy
+            not in {"restore_step_input", "restore_initial_source"}
             or not isinstance(projection, Mapping)
             or projection.get("version") != "input-projection-v1"
             or not isinstance(projection.get("entries"), list)
@@ -506,7 +510,7 @@ class ManagedCheckpointRestoreService:
         req = (
             raw
             if isinstance(raw, ManagedWorkspaceRestoreRequest)
-            else ManagedWorkspaceRestoreRequest.model_validate(raw)
+            else parse_workspace_restore_request(raw)
         )
         entries = self._input_projection_entries(req, admitted_projection)
         workspace, _locator = self._destination(req)
@@ -854,6 +858,117 @@ class ManagedCheckpointRestoreService:
             )
         return result.stdout
 
+    def _restore_initial_refs(self, workspace, descriptor, manifest):
+        branch = (manifest.get("git") or {}).get("branch")
+        refs = descriptor.get("gitRefs")
+        allowed = {
+            "refs/heads/" + str(branch),
+            "refs/remotes/origin/" + str(branch),
+            "refs/remotes/origin/HEAD",
+        }
+        if not branch or not isinstance(refs, dict) or not refs:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "initial source refs are absent"
+            )
+        self._git(["check-ref-format", "--branch", branch], workspace)
+        for name, value in refs.items():
+            if (
+                name not in allowed
+                or not isinstance(value, dict)
+                or value.get("commit") != manifest.get("baseCommit")
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED",
+                    "initial source ref exceeds its authority",
+                )
+            target = value.get("symbolicTarget")
+            if target is not None:
+                if (
+                    name != "refs/remotes/origin/HEAD"
+                    or target != "refs/remotes/origin/" + branch
+                ):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_MANIFEST_CORRUPTED",
+                        "initial source symbolic ref exceeds its authority",
+                    )
+                self._git(["symbolic-ref", name, target], workspace)
+            else:
+                self._git(["update-ref", name, value["commit"]], workspace)
+        if "refs/remotes/origin/" + branch in refs:
+            self._git(["config", "branch." + branch + ".remote", "origin"], workspace)
+            self._git(
+                ["config", "branch." + branch + ".merge", "refs/heads/" + branch],
+                workspace,
+            )
+            self._git(
+                [
+                    "config",
+                    "remote.origin.fetch",
+                    "+refs/heads/" + branch + ":refs/remotes/origin/" + branch,
+                ],
+                workspace,
+            )
+
+    def _restore_saved_local_refs(self, workspace, history, manifest):
+        """Restore only bounded local refs, never copied remote URLs or helpers."""
+        refs = history.get("localRefs")
+        if (
+            not isinstance(refs, dict)
+            or len(refs) > 8
+            or history.get("requiresSourceObjects") is not False
+        ):
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "saved local refs are invalid"
+            )
+        for name, value in refs.items():
+            if (
+                not isinstance(name, str)
+                or not name.startswith(("refs/heads/", "refs/remotes/origin/"))
+                or not isinstance(value, dict)
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED", "saved ref exceeds local authority"
+                )
+            commit = value.get("commit")
+            if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED", "saved ref commit is invalid"
+                )
+            self._git(["check-ref-format", name], workspace)
+            self._git(["cat-file", "-e", commit + "^{commit}"], workspace)
+            target = value.get("symbolicTarget")
+            if target is not None and (
+                name != "refs/remotes/origin/HEAD"
+                or target not in refs
+                or not target.startswith("refs/remotes/origin/")
+                or refs[target].get("commit") != commit
+                or refs[target].get("symbolicTarget")
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED",
+                    "saved symbolic ref exceeds local authority",
+                )
+        for name, value in refs.items():
+            if value.get("symbolicTarget"):
+                self._git(["symbolic-ref", name, value["symbolicTarget"]], workspace)
+            else:
+                self._git(["update-ref", name, value["commit"]], workspace)
+        branch = (manifest.get("git") or {}).get("branch")
+        if branch and "refs/remotes/origin/" + branch in refs:
+            self._git(["config", "branch." + branch + ".remote", "origin"], workspace)
+            self._git(
+                ["config", "branch." + branch + ".merge", "refs/heads/" + branch],
+                workspace,
+            )
+            self._git(
+                [
+                    "config",
+                    "remote.origin.fetch",
+                    "+refs/heads/" + branch + ":refs/remotes/origin/" + branch,
+                ],
+                workspace,
+            )
+
     async def restore(
         self,
         raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest,
@@ -865,7 +980,7 @@ class ManagedCheckpointRestoreService:
         req = (
             raw
             if isinstance(raw, ManagedWorkspaceRestoreRequest)
-            else ManagedWorkspaceRestoreRequest.model_validate(raw)
+            else parse_workspace_restore_request(raw)
         )
         # The checkpoint-branch owner may already have renamed a verified
         # candidate before its readiness commit was interrupted. This internal
@@ -1035,11 +1150,15 @@ class ManagedCheckpointRestoreService:
         tmp.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
         os.replace(tmp, record_path)
 
+        initial_source = req.workspace_policy == "restore_initial_source"
+        source_content_type = (
+            "application/vnd.moonmind.initial-repository-source+json;version=1"
+            if initial_source
+            else "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+        )
         checkpoint_bytes = await self._read(
             req.source.checkpoint_ref,
-            content_types={
-                "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
-            },
+            content_types={source_content_type},
             access=access,
         )
         try:
@@ -1053,7 +1172,15 @@ class ManagedCheckpointRestoreService:
                 "CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint must be a JSON object"
             )
         workspace_evidence = checkpoint.get("workspace", {})
-        if checkpoint.get("contentType") != "application/vnd.moonmind.step-execution-checkpoint+json;version=1":
+        if (
+            not initial_source and checkpoint.get("contentType") != source_content_type
+        ) or (
+            initial_source
+            and (
+                checkpoint.get("kind") != "initial_repository_source"
+                or _digest(checkpoint_bytes) != req.source.initial_source_digest
+            )
+        ):
             raise CheckpointRestoreError("CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH", "checkpoint schema content type mismatch")
         if workspace_evidence.get("kind") != "worktree_archive":
             raise CheckpointRestoreError("CHECKPOINT_KIND_UNSUPPORTED", "checkpoint is not a worktree archive")
@@ -1067,7 +1194,10 @@ class ManagedCheckpointRestoreService:
                     "CHECKPOINT_SOURCE_IDENTITY_MISMATCH",
                     f"checkpoint source {key} mismatch",
                 )
-        if checkpoint.get("boundary") != req.source.checkpoint_boundary:
+        if (
+            not initial_source
+            and checkpoint.get("boundary") != req.source.checkpoint_boundary
+        ):
             raise CheckpointRestoreError(
                 "CHECKPOINT_SOURCE_IDENTITY_MISMATCH", "checkpoint boundary mismatch"
             )
@@ -1181,6 +1311,13 @@ class ManagedCheckpointRestoreService:
                 else:
                     repo_url = None
                 history = manifest.get("gitHistory")
+                if initial_source and (
+                    not history or history.get("requiresSourceObjects") is not False
+                ):
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                        "initial source must be self-contained",
+                    )
                 if history and history.get("requiresSourceObjects") is False:
                     # The bundle carries every object: no clone, so no
                     # repository credential is looked up for this restore.
@@ -1229,7 +1366,11 @@ class ManagedCheckpointRestoreService:
                 if history and history.get("ref"):
                     bundle = await self._read(
                         history["ref"],
-                        content_types={"application/x-git-bundle"},
+                        content_types={
+                            "application/x-git-pack"
+                            if history.get("contentType") == "application/x-git-pack"
+                            else "application/x-git-bundle"
+                        },
                         access=access,
                     )
                     if (
@@ -1240,15 +1381,32 @@ class ManagedCheckpointRestoreService:
                             "CHECKPOINT_ARCHIVE_CORRUPTED",
                             "selected history identity mismatch",
                         )
-                    bundle_path = staging / ".git" / "checkpoint.bundle"
-                    bundle_path.write_bytes(bundle)
-                    try:
-                        self._git(["bundle", "verify", str(bundle_path)], staging)
-                        self._git(
-                            ["fetch", "--no-tags", str(bundle_path), "HEAD"], staging
+                    if history.get("contentType") == "application/x-git-pack":
+                        if (
+                            history.get("requiresSourceObjects") is not False
+                            or history.get("shallowCommits")
+                            or self._git_environment is None
+                        ):
+                            raise CheckpointRestoreError(
+                                "CHECKPOINT_MANIFEST_CORRUPTED",
+                                "top-level pack requires isolated complete ancestry",
+                            )
+                        self._git_bytes(
+                            ["index-pack", "--stdin", "--strict"],
+                            staging,
+                            input_bytes=bundle,
                         )
-                    finally:
-                        bundle_path.unlink(missing_ok=True)
+                    else:
+                        bundle_path = staging / ".git" / "checkpoint.bundle"
+                        bundle_path.write_bytes(bundle)
+                        try:
+                            self._git(["bundle", "verify", str(bundle_path)], staging)
+                            self._git(
+                                ["fetch", "--no-tags", str(bundle_path), "HEAD"],
+                                staging,
+                            )
+                        finally:
+                            bundle_path.unlink(missing_ok=True)
                 self._git(
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
@@ -1275,6 +1433,10 @@ class ManagedCheckpointRestoreService:
                         "CHECKPOINT_BASE_COMMIT_MISMATCH",
                         "restored repository base mismatch",
                     )
+                if initial_source:
+                    self._restore_initial_refs(staging, checkpoint, manifest)
+                elif isinstance(history, dict) and "localRefs" in history:
+                    self._restore_saved_local_refs(staging, history, manifest)
                 status_payload = self._git_bytes(
                     ["status", "--porcelain=v1", "-z", "--untracked-files=all"], staging
                 )

@@ -88,6 +88,8 @@ def _git(
     limit=None,
     deadline=None,
     allow_unrelated=False,
+    env=None,
+    executable="git",
 ):
     """Bound output, wall time and stderr without retaining repository secrets."""
     limit = limit or SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"]
@@ -100,7 +102,7 @@ def _git(
         source.seek(0)
         process = subprocess.Popen(
             [
-                "git",
+                executable,
                 "--literal-pathspecs",
                 "-c",
                 f"safe.directory={workspace}",
@@ -111,12 +113,27 @@ def _git(
             stdin=source,
             stdout=subprocess.PIPE,
             stderr=errors,
+            env=env,
+            start_new_session=env is not None,
         )
+
+        def stop_processes():
+            if env is not None:
+                import os
+                import signal
+
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                process.kill()
+
         expired = threading.Event()
 
         def expire():
             expired.set()
-            process.kill()
+            stop_processes()
 
         timer = threading.Timer(remaining, expire)
         timer.start()
@@ -141,8 +158,7 @@ def _git(
             return output.read()
         finally:
             timer.cancel()
-            if process.poll() is None:
-                process.kill()
+            stop_processes()
             process.wait()
             process.stdout.close()
 
@@ -153,6 +169,10 @@ def capture_git_history(
     *,
     high_security_mode: bool = True,
     self_contained: bool = False,
+    full_ancestry: bool = False,
+    env=None,
+    extra_heads: tuple[str, ...] = (),
+    executable="git",
 ):
     """Export only HEAD's ancestry beyond a declared origin baseline.
 
@@ -161,8 +181,21 @@ def capture_git_history(
     A repository without an origin baseline gets a bounded self-contained HEAD.
     An empty boundary walk selects an already published HEAD without more traversal.
     """
+    if extra_heads:
+        import re
+
+        if (
+            not full_ancestry
+            or len(extra_heads) > 8
+            or any(not re.fullmatch(r"[0-9a-f]{40}", value) for value in extra_heads)
+        ):
+            raise ValueError(
+                "additional history roots require bounded full commit identities"
+            )
+    if full_ancestry and not self_contained:
+        raise ValueError("full ancestry requires self-contained history")
     workspace = workspace.resolve()
-    git = partial(_git, workspace, deadline=time.monotonic() + 120)
+    git = partial(_git, workspace, deadline=time.monotonic() + 120, env=env, executable=executable)
     if git(["rev-parse", "HEAD"]).decode().strip() != head:
         raise ValueError("checkpoint HEAD changed before history capture")
     baseline = None
@@ -203,7 +236,12 @@ def capture_git_history(
     }
     if self_contained:
         return _capture_self_contained_history(
-            git, workspace, head, baseline, high_security_mode
+            git,
+            workspace,
+            head,
+            None if full_ancestry else baseline,
+            high_security_mode,
+            extra_heads,
         )
     if baseline == head:
         return None, evidence
@@ -264,14 +302,16 @@ def capture_git_history(
     }
 
 
-def _capture_self_contained_history(git, workspace, head, baseline, high_security_mode):
+def _capture_self_contained_history(
+    git, workspace, head, baseline, high_security_mode, extra_heads=()
+):
     """Keep unpublished ancestry plus a complete, shallow origin boundary.
 
     Submodule remotes are not restore authority. Export their selected objects
     instead of copying .git or requiring a later fetch from a copied URL. A
     clean dependency needs only its current commit/tree, not its entire past.
     """
-    revisions = [head, *([f"^{baseline}"] if baseline else [])]
+    revisions = [head, *extra_heads, *([f"^{baseline}"] if baseline else [])]
     selected = (
         git(["rev-list", "--boundary", *revisions], limit=4 * 1024 * 1024)
         .decode()
@@ -334,3 +374,54 @@ def _capture_self_contained_history(git, workspace, head, baseline, high_securit
         "contentType": "application/x-git-pack",
         "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
     }
+
+
+def capture_initial_source_successor_history(
+    workspace, head, *, admitted_refs, high_security_mode, env
+):
+    """Retain surviving source refs plus this attempt's actual current branch."""
+    git = partial(_git, workspace, deadline=time.monotonic() + 120, env=env)
+    branch = git(["symbolic-ref", "-q", "HEAD"], allow_unrelated=True).decode().strip()
+    names = sorted(set(admitted_refs) | ({branch} if branch else set()))
+    if len(names) > 8 or any(
+        not name.startswith(("refs/heads/", "refs/remotes/origin/")) for name in names
+    ):
+        raise ValueError("initial source reference set exceeds its bound")
+    for name in names:
+        git(["check-ref-format", name])
+    args = ["for-each-ref", "--format=%(refname) %(objectname) %(symref)", "--", *names]
+    before = git(args)
+    refs = {}
+    for line in before.decode().splitlines():
+        fields = line.split()
+        if len(fields) not in {2, 3} or fields[0] not in names:
+            raise ValueError("initial source reference selection changed")
+        refs[fields[0]] = {
+            "commit": fields[1],
+            **({"symbolicTarget": fields[2]} if len(fields) == 3 else {}),
+        }
+    for name, value in refs.items():
+        target = value.get("symbolicTarget")
+        if target is not None and (
+            name != "refs/remotes/origin/HEAD"
+            or target not in refs
+            or not target.startswith("refs/remotes/origin/")
+            or refs[target].get("commit") != value["commit"]
+            or refs[target].get("symbolicTarget")
+        ):
+            raise ValueError(
+                "initial source symbolic reference exceeds saved authority"
+            )
+    payload, evidence = capture_git_history(
+        workspace,
+        head,
+        high_security_mode=high_security_mode,
+        self_contained=True,
+        full_ancestry=True,
+        env=env,
+        extra_heads=tuple(sorted({value["commit"] for value in refs.values()})),
+    )
+    if git(args) != before:
+        raise ValueError("initial source references changed during capture")
+    evidence["localRefs"] = refs
+    return payload, evidence
