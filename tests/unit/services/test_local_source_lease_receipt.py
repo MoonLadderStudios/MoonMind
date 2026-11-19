@@ -216,7 +216,11 @@ async def test_new_source_capability_refusal_is_a_durable_native_decision(
 
 
 @pytest.mark.asyncio
-async def test_verified_recorded_source_bypasses_new_source_preflight(monkeypatch):
+@pytest.mark.parametrize("rotated", [False, True])
+@pytest.mark.parametrize("source_unavailable", [False, True])
+async def test_verified_recorded_source_bypasses_new_source_preflight(
+    monkeypatch, rotated, source_unavailable
+):
     """A loader-verified plan checkpoint is authority, not the old filesystem.
 
     Canonical retries normally replace repository kind with checkpoint kind.
@@ -241,7 +245,19 @@ async def test_verified_recorded_source_bypasses_new_source_preflight(monkeypatc
         )
     )
     frozen_profile = {"providerProfileRef": "p1", "frozen": "unchanged"}
-    recorded = service._RecordedPoolStep(frozen_plan, frozen_profile, resolution(), {})
+    recorded = service._RecordedPoolStep(
+        frozen_plan, None if rotated else frozen_profile, resolution(), {}
+    )
+    if rotated:
+        request.execution_profile_ref = "p2"
+        from moonmind.omnigent.workspace_sources import (
+            replace_repository_workspace_source,
+        )
+
+        request.workspace_spec = replace_repository_workspace_source(
+            request.workspace_spec, "artifact://art_saved"
+        )
+
     lease = SimpleNamespace(
         safe_metadata_json={}, execution_plan_ref=None, credential_generation=1
     )
@@ -251,6 +267,27 @@ async def test_verified_recorded_source_bypasses_new_source_preflight(monkeypatc
         runtime_id="codex_cli",
         credential_generation=1,
     )
+    if rotated:
+        from tests.unit.workflows.executions.test_model_selection_4636 import (
+            profile as make_profile,
+        )
+
+        profile = make_profile()
+        profile.enabled = True
+        profile.auth_state = "connected"
+        profile.runtime_id = "codex_cli"
+        profile.credential_generation = 1
+        profile.profile_id = "p2"
+        profile.default_model_tier = 1
+        profile.model_tiers = [{"model": "new-account-model"}]
+        monkeypatch.setattr(
+            service, "profile_route_runtime", AsyncMock(return_value="omnigent")
+        )
+        monkeypatch.setattr(
+            service,
+            "resolve_default_agent_profile_snapshot",
+            AsyncMock(return_value={"providerProfileRef": "p2"}),
+        )
     canonical = SimpleNamespace(
         memo={"task_input_snapshot_ref": "artifact:art_input"},
         parameters={},
@@ -303,25 +340,36 @@ async def test_verified_recorded_source_bypasses_new_source_preflight(monkeypatc
     class FrozenCompileReached(Exception):
         pass
 
+    from moonmind.omnigent.repository_sources import RepositorySourceHandoffUnavailable
+
+    expected_error = (
+        RepositorySourceHandoffUnavailable if source_unavailable else FrozenCompileReached
+    )
+
     async def compile(**kwargs):
         assert kwargs["_initial_repository_source_snapshot"] == frozen_source
         assert "_prepare_local_source_digest" not in kwargs
-        assert kwargs["agent_profile_snapshot"] is frozen_profile
-        assert (
-            kwargs["initial_parameters"]["model"]
-            == frozen_plan.payload.modelConfig.qualifiedId
-        )
-        raise FrozenCompileReached
+        if rotated:
+            assert kwargs["agent_profile_snapshot"] == {"providerProfileRef": "p2"}
+            assert kwargs["initial_parameters"]["model"] == "new-account-model"
+            assert "_recorded_provider_configuration_snapshot" not in kwargs
+        else:
+            assert kwargs["agent_profile_snapshot"] is frozen_profile
+            assert (
+                kwargs["initial_parameters"]["model"]
+                == frozen_plan.payload.modelConfig.qualifiedId
+            )
+        raise expected_error("recorded source unavailable")
 
     monkeypatch.setattr(service, "compile_and_persist_execution_plan", compile)
-    with pytest.raises(FrozenCompileReached):
+    with pytest.raises(expected_error):
         await service.prepare_selected_pool_plan(
             session,
             runtime_id="codex_cli",
             payload={
                 "owner_id": "child",
                 "runId": "child-run",
-                "profile_id": "p1",
+                "profile_id": "p2" if rotated else "p1",
                 "localSourceHandoff": True,
             },
             client=object(),

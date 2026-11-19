@@ -359,17 +359,20 @@ async def test_account_rotation_does_not_reuse_previous_accounts_tier_policy(
     )
     monkeypatch.setattr(service, "_retained_pool_launch", retained)
     rotated = request("p2")
-    assert (
-        await service._recorded_step_plan(
-            None,
-            artifacts,
-            None,
-            rotated,
-            snapshot_ref="artifact:art_input",
-            snapshot_digest="sha256:" + "b" * 64,
-        )
-        is None
+    recorded = await service._recorded_step_plan(
+        None,
+        artifacts,
+        None,
+        rotated,
+        snapshot_ref="artifact:art_input",
+        snapshot_digest="sha256:" + "b" * 64,
     )
+    # Source authority survives rotation; the previous account's policy does not.
+    assert recorded is not None
+    assert recorded.plan == envelope
+    assert recorded.snapshot is None
+    assert recorded.resolution == {}
+    assert recorded.launch_parameters is None
     current = profile()
     current.profile_id = "p2"
     current.model_tiers = [

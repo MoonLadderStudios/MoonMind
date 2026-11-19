@@ -682,7 +682,20 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         plan=next_plan,
         skill_ref=compiled.resolved_skillset_ref,
     )
-    journey.manager.request = successor
+    if admission == "lease":
+        successor, next_plan = await _rotate_saved_source_account(
+            journey, next_request, next_plan, successor, saved, monkeypatch
+        )
+        journey.server.model = "rotated-model"
+        inspect_grant = journey.manager.update_workflow
+
+        async def inspect_rotated_grant(*args, **kwargs):
+            grant = await inspect_grant(*args, **kwargs)
+            grant["profile_id"] = successor.execution_profile_ref
+            return grant
+
+        monkeypatch.setattr(journey.manager, "update_workflow", inspect_rotated_grant)
+    journey.manager.request, journey.manager.plan = successor, next_plan
     async with journey.session_factory() as session:
         lease = await session.get(ProviderProfileSlotLease, journey.provider_lease_id)
         lease.step_execution_id = successor_id
@@ -943,3 +956,157 @@ async def _exercise_lease_handoff(journey, request, task, ledger, monkeypatch):
             )
 
     return captured, shared, plan, retry_export
+
+
+async def _rotate_saved_source_account(
+    journey, predecessor, plan, successor, saved, monkeypatch
+):
+    """Admit a different account against real saved work, then cold-restore it."""
+    from copy import deepcopy
+
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        ProviderProfileSlotLease,
+    )
+    from api_service.services import native_pool_execution_plan as admission
+    from api_service.services import omnigent_execution_plan_service as plan_writer
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.schemas.temporal_models import StepExecutionIdentityModel
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.step_checkpoints import (
+        build_step_checkpoint_payload,
+    )
+    from tests.unit.services.test_omnigent_execution_plan_service import _snapshot
+
+    binding = predecessor.omnigent_execution_plan
+    rotated_id = native.PROFILE + "-rotated"
+    async with journey.session_factory() as session:
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
+        prior = await session.get(ManagedAgentProviderProfile, native.PROFILE)
+        values = {
+            column.name: deepcopy(getattr(prior, column.name))
+            for column in ManagedAgentProviderProfile.__table__.columns
+            if column.name not in {"profile_id", "created_at", "updated_at"}
+        }
+        values.update(
+            default_model="rotated-model",
+            env_template={},
+            model_tiers=[{"model": "rotated-model"}],
+            default_model_tier=1,
+        )
+        session.add(ManagedAgentProviderProfile(profile_id=rotated_id, **values))
+        await session.commit()
+        body = build_step_checkpoint_payload(
+            identity=StepExecutionIdentityModel(
+                workflowId=predecessor.step_execution.workflow_id,
+                runId=predecessor.step_execution.run_id,
+                logicalStepId=predecessor.step_execution.logical_step_id,
+                executionOrdinal=predecessor.step_execution.execution_ordinal,
+            ),
+            boundary="after_execution",
+            task_input_snapshot_ref=binding.task_input_snapshot_ref,
+            plan_ref=binding.plan_artifact_ref,
+            plan_digest=binding.plan_digest,
+            workspace={
+                "kind": "worktree_archive",
+                "archiveRef": saved["checkpointRef"],
+                "manifestRef": saved["manifestRef"],
+            },
+            created_at=datetime.now(UTC),
+        )
+        checkpoint_ref, _ = await plan_writer.persist_json_artifact(
+            artifact_service=artifacts,
+            principal="system",
+            artifact_class="step_execution_checkpoint",
+            payload=body,
+        )
+        await artifacts.link_artifact(
+            artifact_id=checkpoint_ref.removeprefix("artifact:"),
+            principal="system",
+            execution_ref=ExecutionRef(
+                namespace="default",
+                workflow_id=successor.step_execution.workflow_id,
+                run_id=successor.step_execution.run_id,
+                link_type="evidence.checkpoint",
+            ),
+        )
+        selected = successor.model_copy(deep=True)
+        selected.execution_profile_ref = rotated_id
+        selected.parameters.update(modelTier=1, runtime={"modelTier": 1})
+        selected.parameters.setdefault("metadata", {}).setdefault(
+            "moonmind", {}
+        ).update(
+            sharedStepCheckpointRef=checkpoint_ref,
+            sharedCheckpointRequired=True,
+        )
+        # The controller has already selected a replacement account and grant.
+        lease = await session.get(ProviderProfileSlotLease, journey.provider_lease_id)
+        lease.profile_id = rotated_id
+        lease.capacity_scope_ref = "provider-profile:" + rotated_id
+        lease.execution_plan_ref = lease.step_execution_id = lease.idempotency_key = (
+            None
+        )
+        lease.safe_metadata_json = {"runId": "cold-successor-child"}
+        snapshot = _snapshot(
+            harness="codex-native", policy="codex-on-demand@1", provider_id=rotated_id
+        )
+        snapshot["document"]["skills"] = [native._DURABLE_SKILL_NAME]
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                admission,
+                "_locked_pool_request",
+                AsyncMock(return_value=(selected, lease)),
+            )
+            scoped.setattr(
+                admission,
+                "resolve_default_agent_profile_snapshot",
+                AsyncMock(return_value=snapshot),
+            )
+            scoped.setattr(
+                admission, "profile_route_runtime", AsyncMock(return_value="omnigent")
+            )
+            final = await admission.prepare_selected_pool_plan(
+                session,
+                runtime_id="codex_cli",
+                payload={
+                    "owner_id": lease.owner_id,
+                    "profile_id": rotated_id,
+                    "runId": "cold-successor-child",
+                    "fencing_generation": lease.fencing_generation,
+                    "localSourceHandoff": True,
+                },
+            )
+        assert final["disposition"] == "shared", final
+        shared = AgentExecutionRequest.model_validate(final["request"])
+        rotated = await SessionExecutionPlanStore(session).load(
+            shared.omnigent_execution_plan.plan_ref
+        )
+        assert (
+            rotated.payload.resolvedTools["initialRepositorySource"]
+            == plan.payload.resolvedTools["initialRepositorySource"]
+        )
+        assert (
+            rotated.payload.credentialBindings["primary-model"].providerProfileRef
+            == rotated_id
+        )
+        assert rotated.payload.modelConfig.qualifiedId == "rotated-model"
+        capacity = successor.admitted_provider_capacity
+        shared.admitted_provider_capacity = capacity.model_copy(
+            update={
+                "execution_plan_ref": rotated.planRef,
+                "profiles": [
+                    capacity.profiles[0].model_copy(
+                        update={
+                            "provider_profile_ref": rotated_id,
+                        }
+                    )
+                ],
+            }
+        )
+        await session.commit()
+        return shared, rotated

@@ -80,7 +80,8 @@ _MODEL_SELECTION_KEYS = frozenset({"model", "effort", "modelTierResolution", "me
 
 class _RecordedPoolStep(NamedTuple):
     plan: OmnigentExecutionPlanEnvelope
-    snapshot: Mapping[str, Any]
+    # None on account rotation: retain step/source authority, not account policy.
+    snapshot: Mapping[str, Any] | None
     resolution: dict[str, Any]
     launch_parameters: dict[str, Any] | None
 
@@ -253,8 +254,8 @@ async def _recorded_step_plan(
         raise ValueError("checkpoint plan was not admitted by the execution-plan owner")
     primary = plan.payload.credentialBindings.get("primary-model")
     if primary is None or primary.providerProfileRef != request.execution_profile_ref:
-        # A deliberate pool rotation admits the new account's configuration.
-        return None
+        # Rotation changes account configuration, not the step's verified source.
+        return _RecordedPoolStep(plan, None, {}, None)
     _row, body = await artifacts.read(
         artifact_id=temporal_artifact_id(plan.payload.agentProfileSnapshotRef),
         access=access,
@@ -730,10 +731,15 @@ async def prepare_selected_pool_plan(
         )
         original_digest = "sha256:" + sha256(_body).hexdigest()
         principal = original.created_by_principal
-        recorded = await _recorded_step_plan(
+        recorded_step = await _recorded_step_plan(
             session, artifacts, access, request,
             snapshot_ref=snapshot_ref,
             snapshot_digest=original_digest,
+        )
+        recorded = (
+            recorded_step
+            if recorded_step is not None and recorded_step.snapshot is not None
+            else None
         )
         if (
             recorded is None
@@ -744,8 +750,8 @@ async def prepare_selected_pool_plan(
                 "reason": "selected_profile_has_no_equivalent_shared_configuration",
             }
         initial_source_snapshot = (
-            (recorded.plan.payload.resolvedTools or {}).get("initialRepositorySource")
-            if recorded
+            (recorded_step.plan.payload.resolvedTools or {}).get("initialRepositorySource")
+            if recorded_step
             else None
         )
         # A verified recorded plan already owns its immutable source.
@@ -926,7 +932,7 @@ async def prepare_selected_pool_plan(
                 ),
             )
         except (RepositorySourceHandoffUnavailable, ProviderConfigurationHandoffUnavailable) as error:
-            if recorded is not None:
+            if recorded_step is not None:
                 # Already-shared work must not switch lifecycle owners when
                 # its persisted authority/configuration has changed.
                 raise
