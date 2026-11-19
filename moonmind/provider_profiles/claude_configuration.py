@@ -17,9 +17,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 try:
-    from .template_renderer import ProfileTemplateRenderer, template_context_names
+    from .template_renderer import (
+        ProfileTemplateRenderer,
+        template_context_names,
+        validate_provider_literal_launch_environment,
+    )
 except ImportError:  # Packaged into the run-owned host context.
-    from template_renderer import ProfileTemplateRenderer, template_context_names
+    from template_renderer import (
+        ProfileTemplateRenderer,
+        template_context_names,
+        validate_provider_literal_launch_environment,
+    )
 
 _HOME = "{{runtime_support_dir}}/claude-home"
 _SETTINGS = {
@@ -28,6 +36,7 @@ _SETTINGS = {
     "alwaysThinkingEnabled",
     "spinnerTipsEnabled",
     "permissions",
+    "env",
 }
 
 
@@ -157,6 +166,22 @@ def denied_tools(configuration):
     return []
 
 
+def settings_environment(configuration):
+    """Project final declared settings env without reading enrolled settings."""
+    if configuration is None:
+        return {}
+    home = (configuration.get("homePathOverrides") or {}).get("CLAUDE_CONFIG_DIR")
+    checked = (
+        validate_configuration(configuration)
+        if isinstance(home, str) and home.startswith("{{runtime_support_dir}}/")
+        else validate_oauth_configuration(configuration)
+    )
+    for item in checked["fileTemplates"]:
+        if item["path"].endswith("/settings.json"):
+            return dict(item["content_template"].get("env", {}))
+    return {}
+
+
 def validate_configuration(configuration):
     if set(configuration) != {"homePathOverrides", "fileTemplates"}:
         raise ValueError("unsupported Claude configuration fields")
@@ -217,6 +242,11 @@ def validate_configuration(configuration):
             if item["format"] != "json" or not isinstance(content, dict) or set(content) - _SETTINGS:
                 raise ValueError("Claude settings contain native-only options")
             for key, value in content.items():
+                if key == "env":
+                    if not isinstance(value, dict) or template_context_names(value):
+                        raise ValueError("Claude settings environment requires nonsecret literals")
+                    validate_provider_literal_launch_environment(value)
+                    continue
                 if key == "permissions":
                     if not isinstance(value, dict) or set(value) != {"deny"}:
                         raise ValueError("Claude permissions support deny-only rules")
@@ -246,12 +276,12 @@ def validate_configuration(configuration):
             raise ValueError("Claude file templates require private permissions")
         files.append(item)
     settings = [item for item in files if item["path"] == home + "/settings.json"]
-    if any("permissions" in item["content_template"] for item in settings):
+    if any(set(item["content_template"]) & {"permissions", "env"} for item in settings):
         if settings[0]["merge_strategy"] != "replace" or any(
             item["merge_strategy"] not in {"replace", "deep_merge"}
             for item in settings
         ):
-            raise ValueError("Claude deny settings require an explicit replacement seed")
+            raise ValueError("Claude projected settings require an explicit replacement seed")
         # Resolve only declared templates, using the native renderer's ordering
         # and array-replacement semantics. Never merge ambient enrolled settings
         # or union restrictions superseded by a later template.

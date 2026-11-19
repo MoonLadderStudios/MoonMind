@@ -454,6 +454,12 @@ def _oauth_launch_environment(
     values = dict(getattr(profile, "env_template", None) or {})
     for key in (configuration or {}).get("environmentTemplates") or {}:
         values.pop(key, None)
+    if claude_configuration is not None:
+        from moonmind.provider_profiles.claude_configuration import settings_environment
+
+        # Vendor settings env wins over process env. Freeze that precedence so
+        # Skill filtering cannot discard the selected environment at launch.
+        values.update(settings_environment(claude_configuration))
     templates = {key: value for key, value in values.items() if template_context_names(value)}
     return ProviderLaunchEnvironment(
         launchEnvironment={
@@ -854,6 +860,11 @@ def claude_provider_config_endpoint(
         )
     except ValueError as error:
         return None, str(error)
+    from moonmind.provider_profiles.claude_configuration import settings_environment
+
+    settings_env = settings_environment(configuration)
+    launch_environment.update(settings_env)
+    templates = {key: value for key, value in templates.items() if key not in settings_env}
     return (
         ProviderConfigEndpoint(
             family="anthropic",
