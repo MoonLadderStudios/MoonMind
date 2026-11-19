@@ -147,7 +147,7 @@ async def _run_mounted_repository_script(argv, destination, args, *, fixture_bou
     return result
 
 
-def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False, anonymous_remote=None):
+def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False, anonymous_remote=None, enterprise_remote=None, restored_origins=None):
     remote = tmp_path / "remote"
     subprocess.run(
         ["git", "init", "-q", "-b", "default-branch", str(remote)], check=True
@@ -177,7 +177,7 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
         if list(argv[:2]) == ["docker", "run"] and "clone " in " ".join(argv):
             args = list(argv[argv.index("--") + 1 :])
             selected_branch, source, target = args[:3]
-            assert source == (anonymous_remote or "https://github.com/MoonLadderStudios/MoonMind.git")
+            assert source == (anonymous_remote or enterprise_remote or "https://github.com/MoonLadderStudios/MoonMind.git")
             assert selected_branch == branch
             assert input_bytes == (b"" if anonymous_remote else b"synthetic-repository-credential")
             clones.append((selected_branch, source))
@@ -227,10 +227,12 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
 
     def checkpoint_git(service, args, *positional, **kwargs):
         if args[0] == "clone":
+            if restored_origins is not None:
+                restored_origins.append(args[2])
             assert args == [
                 "clone",
                 "--no-checkout",
-                anonymous_remote or "https://github.com/MoonLadderStudios/MoonMind.git",
+                anonymous_remote or enterprise_remote or "https://github.com/MoonLadderStudios/MoonMind.git",
                 args[-1],
             ]
             if anonymous_remote:
@@ -307,8 +309,8 @@ async def test_root_repository_transport_reproduces_and_repairs_uid_mismatch(tmp
 )
 @pytest.mark.parametrize(
     "source_shape",
-    ["flat", "nested", "default", "pinned", "anonymous-https", "anonymous-pinned"],
-    ids=["flat-repository", "nested-repository-target", "omitted-source-branch", "typed-pinned-repository", "anonymous-https", "anonymous-pinned"],
+    ["flat", "nested", "default", "pinned", "anonymous-https", "anonymous-pinned", "enterprise-https", "enterprise-pinned"],
+    ids=["flat-repository", "nested-repository-target", "omitted-source-branch", "typed-pinned-repository", "anonymous-https", "anonymous-pinned", "enterprise-https", "enterprise-pinned"],
 )
 async def test_repository_context_survives_source_host_and_worker_cleanup(
     native_journey,
@@ -319,13 +321,22 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
 ):
     journey = native_journey
     anonymous = source_shape in {"anonymous-https", "anonymous-pinned"}
+    enterprise = source_shape in {"enterprise-https", "enterprise-pinned"}
+    enterprise_endpoint = "https://git.enterprise.example.test"
+    enterprise_remote = enterprise_endpoint + "/MoonLadderStudios/MoonMind.git" if enterprise else None
+    if enterprise:
+        from moonmind.config.settings import settings
+        monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "git.enterprise.example.test")
     remote_url = "https://gitlab.example.test/group/nested/Project.git" if anonymous else None
+    restored_origins = []
     clones = _repository_transport(
         journey,
         monkeypatch,
         tmp_path,
         branch="" if source_shape == "default" else "main",
         anonymous_remote=remote_url,
+        enterprise_remote=enterprise_remote,
+        restored_origins=restored_origins,
     )
     source = {
         "kind": "repository",
@@ -348,12 +359,15 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
     source["accessMode"] = "explicit"
     if anonymous:
         source.update(repository=remote_url, accessMode="anonymous", connectionRef="")
-    pin = _git(tmp_path / "remote", "rev-parse", "main~1") if source_shape in {"pinned", "anonymous-pinned"} else None
-    if source_shape == "anonymous-pinned":
+    if enterprise:
+        source.update(repository=enterprise_remote, connectionRef="pool-repository")
+    pin = _git(tmp_path / "remote", "rev-parse", "main~1") if source_shape in {"pinned", "anonymous-pinned", "enterprise-pinned"} else None
+    if source_shape in {"anonymous-pinned", "enterprise-pinned"}:
         source = {
-            "kind": "repository", "accessMode": "anonymous",
+            "kind": "repository", "accessMode": "anonymous" if anonymous else "explicit",
             "repositoryTarget": {
-                "provider": "git", "repository": {"name": remote_url},
+                "provider": "git", "repository": {"name": remote_url or enterprise_remote},
+                **({"connectionRef": "pool-repository"} if enterprise else {}),
                 "branch": {"name": "main"},
                 "revision": {"kind": "git_commit", "commitSha": pin},
             },
@@ -368,8 +382,9 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             repository_workspace={"workspaceSource": source},
             bind_parent_context=True,
             repository_at_top=source_shape in {"flat", "pinned"},
-            repository_revision={"kind": "git_commit", "commitSha": pin} if pin and not anonymous else None,
+            repository_revision={"kind": "git_commit", "commitSha": pin} if pin and not anonymous and not enterprise else None,
             pinned_repository_patch=bool(pin),
+            repository_endpoint=enterprise_endpoint if enterprise else "https://github.com",
         )
         selected["first"] = first
         if source_shape == "default":
@@ -403,7 +418,7 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             workspace = Path(native._mounts(list(argv))["/workspaces/run"]["src"])
             assert (workspace / "selected-branch.txt").read_text() == (
                 "Original default branch.\n"
-                if source_shape in {"default", "pinned", "anonymous-pinned"}
+                if source_shape in {"default", "pinned", "anonymous-pinned", "enterprise-pinned"}
                 else "Selected main, not remote default.\n"
             )
             launches.append(workspace)
@@ -452,6 +467,8 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
     if pin:
         assert compiled.repository_commit_sha == pin
     assert clones
+    if enterprise:
+        assert restored_origins == [enterprise_remote]
     if source_shape == "default":
         assert len(clones) == 1
     first = selected["first"]
@@ -958,3 +975,30 @@ async def test_fixture_mount_rejects_symlink_in_explicit_boundary(monkeypatch, t
         with _fixture_mount_traversal(scope / "alias" / "nested-scope" / "repository", scope / "alias" / "nested-scope"):
             pytest.fail("intermediate boundary symlink escaped fixture scope")
     assert stat.S_IMODE(boundary.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize("trusted,publish_mode,hosting_service,capabilities", [
+    (False, "none", "github", []), (True, "branch", "github", []),
+    (True, "pr", "github", []), (True, "none", "generic_git", []),
+    (True, "none", "github", ["gh"]),
+])
+async def test_unmigrated_enterprise_authority_keeps_native_owner(
+    native_journey, monkeypatch, trusted, publish_mode, hosting_service, capabilities
+):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "git.enterprise.example.test" if trusted else "")
+    await pool.execute_selected_pool_source(
+        native_journey, monkeypatch,
+        repository_workspace={"workspaceSource": {
+            "kind": "repository", "accessMode": "explicit",
+            "connectionRef": "pool-repository",
+            "repository": "https://git.enterprise.example.test/MoonLadderStudios/MoonMind.git",
+            "branch": "main",
+        }},
+        repository_at_top=False,
+        submission_parameters={"publishMode": publish_mode, "requiredCapabilities": capabilities},
+        repository_hosting_service=hosting_service,
+        expected_native_reason="workspace_requires_its_recorded_native_owner",
+    )

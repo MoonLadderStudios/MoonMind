@@ -1582,7 +1582,27 @@ class RepositoryConnectionService:
         No match, or a name shared by several assignments, admits nothing.
         """
 
-        wanted = _github_repository_key(repository)
+        # Explicit Enterprise selection has an origin authority. Compare URL
+        # and slug aliases only on that trusted origin; global routing remains
+        # unchanged and cannot infer a hosting provider from an arbitrary URL.
+        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.omnigent.host_services.github_credentials import (
+            normalize_github_repository_remote,
+        )
+
+        enterprise = (
+            connection.provider == "git"
+            and getattr(connection, "hosting_service", None) == "github"
+            and github_api_base_for(connection.endpoint_ref) != "https://api.github.com"
+        )
+
+        def selected_key(value):
+            if not enterprise:
+                return _github_repository_key(value)
+            remote = normalize_github_repository_remote(value, endpoint=connection.endpoint_ref)
+            return remote.casefold() if remote else ""
+
+        wanted = selected_key(repository)
         rows = (
             await self._session.execute(
                 select(RepositoryConnectionAssignment).where(
@@ -1597,8 +1617,9 @@ class RepositoryConnectionService:
             if wanted
             and wanted
             in {
-                _github_repository_key(row.display_name),
-                _github_repository_key(row.canonical_remote),
+                selected_key(row.canonical_remote or row.display_name)
+                if enterprise else _github_repository_key(row.display_name),
+                selected_key(row.canonical_remote),
             }
         ]
         named = repository or "an unnamed repository"
@@ -1624,6 +1645,7 @@ class RepositoryConnectionService:
         principal_scope: tuple[str, str | None],
     ) -> list[Any]:
         """Read permitted recorded routes for a launch, without probing secrets."""
+        from moonmind.auth.bound_acquisition import BoundAccessError
         from moonmind.workflows.executions.repository_contract import (
             ScopedRouteCandidate,
         )
@@ -1644,6 +1666,10 @@ class RepositoryConnectionService:
                 continue
             try:
                 assignment = await self._recorded_launch_assignment(connection, repository)
+            except BoundAccessError:
+                # A revoked endpoint is ineligible for routing, not a failure
+                # of unrelated connections. Explicit selection still raises.
+                continue
             except RepositoryRouteError as exc:
                 if exc.code == REPOSITORY_SETUP_REQUIRED:
                     continue

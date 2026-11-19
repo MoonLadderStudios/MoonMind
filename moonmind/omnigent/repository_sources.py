@@ -13,6 +13,10 @@ class RepositorySourceError(ValueError):
     """The authored source cannot be classified without runtime authority."""
 
 
+class RepositorySourceHandoffUnavailable(ValueError):
+    """An authored source capability must retain its existing native owner."""
+
+
 def normalize_repository_source(repository_source: str) -> tuple[str, str]:
     """Return the canonical clone source and its provider-neutral kind."""
 
@@ -77,8 +81,30 @@ def anonymous_https_repository_source(value: str) -> tuple[str, str] | None:
         return None
 
 
+def selected_github_https_repository_source(value: str) -> tuple[str, str] | None:
+    """Classify a clean trusted GitHub origin; selected grants remain separate.
+
+    GitHub repository routes have exactly owner/name. This does not grant read
+    authority: admission must still resolve the explicitly selected connection
+    and its verified assignment for the complete URL.
+    """
+    remote = anonymous_https_repository_source(value)
+    if remote is None or len(urlsplit(value).path[1:].split("/")) != 2:
+        return None
+    from moonmind.auth.bound_acquisition import BoundAccessError
+    from moonmind.auth.github_app_wiring import github_api_base_for
+
+    try:
+        github_api_base_for(remote[1])
+    except BoundAccessError:
+        # Classification must not strand a previously supported native source.
+        return None
+    return remote
+
+
 __all__ = [
     "RepositorySourceError",
     "anonymous_https_repository_source",
     "normalize_repository_source",
+    "selected_github_https_repository_source",
 ]
