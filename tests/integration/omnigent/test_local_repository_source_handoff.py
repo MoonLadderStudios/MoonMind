@@ -39,7 +39,12 @@ def three_sequential_hosts(monkeypatch):
 
 
 def git(path, *args):
-    return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+    # The real launcher hands this workspace to its selected runtime uid. The
+    # fixture acts as that runtime from the test process (root in CI), so trust
+    # only this exact owned workspace, as the production Git runner does.
+    return subprocess.check_output(
+        ["git", "-c", f"safe.directory={path}", "-C", str(path), *args], text=True
+    ).strip()
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
