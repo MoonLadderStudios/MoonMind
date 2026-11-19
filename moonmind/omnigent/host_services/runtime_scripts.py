@@ -114,30 +114,6 @@ _MOONMIND_RUNTIME_ENV_FILES = {
 }
 
 
-def claude_process_home_from_handles(credential_handles):
-    """Resolve the one frozen process-home projection for this exact host."""
-    configurations = []
-    for handle in credential_handles:
-        configuration = handle.get("claudeProcessHomeConfiguration")
-        if configuration is not None:
-            from moonmind.provider_profiles.claude_configuration import (
-                process_home_configuration,
-            )
-
-            validated = process_home_configuration(configuration)
-            if handle.get("materializerRef") not in {"claude-oauth-home@1", "omnigent-provider-config@1"} or validated != configuration:
-                raise ValueError("process HOME requires its selected Claude configuration")
-            if configuration not in configurations:
-                configurations.append(configuration)
-    if len(configurations) > 1:
-        raise ValueError("conflicting process HOME configurations")
-    if not configurations:
-        return None, None
-    configuration = configurations[0]
-    home = configuration["homePathOverrides"]["HOME"].replace("{{runtime_support_dir}}", _RUNTIME_CONTEXT_DIR)
-    return home, configuration
-
-
 class OmnigentRuntimeScriptService:
     def build_entrypoint(
         self,
@@ -346,6 +322,10 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        from moonmind.provider_profiles.claude_configuration import (
+            claude_process_home_from_handles,
+        )
+
         process_home, process_configuration = claude_process_home_from_handles(credential_handles)
         if process_home and any(
             handle.get("claudeProcessHomeConfiguration") is not None

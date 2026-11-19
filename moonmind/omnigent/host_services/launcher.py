@@ -22,10 +22,10 @@ from moonmind.omnigent.host_services.project_environment import (
 )
 from moonmind.omnigent.host_services.runtime_scripts import (
     OmnigentRuntimeScriptService,
-    claude_process_home_from_handles,
 )
 from moonmind.provider_profiles.claude_configuration import (
     claude_denied_tools_from_handles,
+    claude_process_home_from_handles,
 )
 from moonmind.security.egress import omnigent_proxy_env
 
