@@ -72,6 +72,9 @@ class HarnessPlatformFailure(StrEnum):
     OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE = "OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE"
     OMNIGENT_CURRENT_TURN_NOT_STARTED = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
     OMNIGENT_SESSION_HOST_LOST = "OMNIGENT_SESSION_HOST_LOST"
+    # A workflow step asked for an approval nobody answered within its stall
+    # window. A retry launches the same way and reaches the same prompt.
+    OMNIGENT_APPROVAL_UNANSWERED = "OMNIGENT_APPROVAL_UNANSWERED"
 
 
 class HarnessPlatformError(RuntimeError):
@@ -134,6 +137,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY: "enable_generic_omnigent_after_setup",
     HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_step_execution",
     HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST: "retry_step_execution",
+    HarnessPlatformFailure.OMNIGENT_APPROVAL_UNANSWERED: "do_not_retry",
     HarnessPlatformFailure.OMNIGENT_WORKSPACE_SAVE_FAILED: "do_not_retry",
     HarnessPlatformFailure.OMNIGENT_ARTIFACT_STORAGE_UNAVAILABLE: "retry_step_execution",
 }

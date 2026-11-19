@@ -355,6 +355,56 @@ class OmnigentSessionHostLostError(OmnigentTurnUnrecoverableError):
         }
 
 
+class OmnigentApprovalUnansweredError(OmnigentTurnUnrecoverableError):
+    """Raised when a workflow step waits on an approval nobody answers.
+
+    Workflow steps run unattended, so a harness prompt left pending past the
+    step's stall window would otherwise hold the session (and its budget)
+    until the execution deadline. The failure names the prompt so the operator
+    can fix the launch posture that produced it.
+    """
+
+    code = "OMNIGENT_APPROVAL_UNANSWERED"
+    fallback_summary = "Omnigent session waited on an approval nobody answered"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
+        waited_seconds: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message, snapshot=snapshot)
+        self.waited_seconds = waited_seconds
+        self.timeout_seconds = timeout_seconds
+
+    def terminal_diagnostics(self) -> dict[str, Any]:
+        return {
+            "approvalWaitSeconds": self.waited_seconds,
+            "approvalWaitTimeoutSeconds": self.timeout_seconds,
+        }
+
+
+def _pending_approval_prompt(
+    snapshot: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Return the oldest pending prompt's id and description, if one waits."""
+
+    pending = snapshot.get("pending_elicitations")
+    if not isinstance(pending, list) or not pending:
+        return None
+    first = pending[0] if isinstance(pending[0], Mapping) else {}
+    params = first.get("params") if isinstance(first.get("params"), Mapping) else {}
+    parts = [
+        str(value).strip()
+        for value in (params.get("message"), first.get("reason"))
+        if isinstance(value, str) and value.strip()
+    ]
+    description = " — ".join(parts)[:500] or "an approval prompt"
+    return str(first.get("elicitation_id") or description), description
+
+
 def _snapshot_projects_lost_host(snapshot: Mapping[str, Any]) -> bool:
     """Whether Omnigent reports the session's runner and host gone for good.
 
@@ -404,6 +454,7 @@ class _MarkedTurnStartWatchdog:
         started_at: float | None = None,
         host_loss_grace_seconds: float | None = None,
         stall_timeout_seconds: float | None = None,
+        approval_wait_timeout_seconds: float | None = None,
     ):
         self._loop = loop
         self.started_at = loop.time() if started_at is None else float(started_at)
@@ -418,6 +469,9 @@ class _MarkedTurnStartWatchdog:
             ),
         )
         self.host_offline_since: float | None = None
+        self.approval_wait_timeout_seconds = approval_wait_timeout_seconds
+        self.approval_pending_since: float | None = None
+        self.approval_pending_id: str | None = None
         self.ever_active = False
         self.currently_active = False
         self.active_response_known_terminal = False
@@ -570,6 +624,7 @@ class _MarkedTurnStartWatchdog:
             turn_state,
             observation_started_at=observation_observed_at,
         )
+        self._observe_approval_wait(snapshot, observed_at=observation_observed_at)
         self._observe_progress(
             snapshot,
             turn_state,
@@ -594,6 +649,32 @@ class _MarkedTurnStartWatchdog:
             "exists, retry as a new step execution",
             snapshot=snapshot,
             waited_seconds=waited_seconds,
+        )
+
+    def _observe_approval_wait(
+        self, snapshot: Mapping[str, Any], *, observed_at: float
+    ) -> None:
+        pending = _pending_approval_prompt(snapshot)
+        if pending is None or self.approval_wait_timeout_seconds is None:
+            self.approval_pending_since = self.approval_pending_id = None
+            return
+        prompt_id, prompt = pending
+        if prompt_id != self.approval_pending_id:
+            # An answered prompt restarts the window for the next one.
+            self.approval_pending_id = prompt_id
+            self.approval_pending_since = observed_at
+            return
+        waited_seconds = round(observed_at - self.approval_pending_since, 3)
+        if waited_seconds < self.approval_wait_timeout_seconds:
+            return
+        raise OmnigentApprovalUnansweredError(
+            f"Omnigent session waited {waited_seconds}s for an approval nobody "
+            f"answered (window {self.approval_wait_timeout_seconds:g}s): {prompt}. "
+            "Workflow steps run unattended; launch the harness in a no-prompt "
+            "permission mode",
+            snapshot=snapshot,
+            waited_seconds=waited_seconds,
+            timeout_seconds=self.approval_wait_timeout_seconds,
         )
 
     def _observe_host_liveness(
@@ -2906,6 +2987,19 @@ def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> flo
     return max(1.0, base_seconds - retry_reserve_seconds)
 
 
+def _approval_wait_timeout_seconds(request: AgentExecutionRequest) -> float:
+    """Bound an unanswered approval by the step's progress-stall window."""
+
+    if request.execution_budget is not None:
+        budget = request.execution_budget.budget
+    else:
+        budget = resolve_execution_budget(
+            agent_kind=request.agent_kind,
+            timeout_policy=request.timeout_policy,
+        )
+    return float(budget.progress_stall_seconds)
+
+
 async def run_omnigent_execution(
     request: AgentExecutionRequest,
     *,
@@ -3722,6 +3816,7 @@ async def run_omnigent_execution(
                 # Reserve the existing recovery window before Activity expiry;
                 # the over-base progress-extension grace is not an early kill.
                 stall_timeout_seconds=marked_turn_timeout_seconds,
+                approval_wait_timeout_seconds=_approval_wait_timeout_seconds(request),
             )
             start_watchdog.restore_progress(retry_state)
             start_watchdog.restore_progress_events(normalized_events)
@@ -4897,6 +4992,7 @@ async def run_omnigent_execution(
 
 
 __all__ = [
+    "OmnigentApprovalUnansweredError",
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
     "OmnigentSameSessionContinuationRequired",

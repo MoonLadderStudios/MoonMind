@@ -2261,16 +2261,20 @@ async def assert_native_turn_saved_and_cleaned(
         assert created.get("model_override") is None
     else:
         assert created["model_override"] == plan.payload.modelConfig.qualifiedId
-    assert created["terminal_launch_args"] == (
-        [
+    assert created["terminal_launch_args"] == {
+        "claude-native": [
             "--permission-mode",
             "bypassPermissions",
             "--disallowedTools",
             "ScheduleWakeup",
-        ]
-        if journey.harness == "claude-native"
-        else []
-    )
+        ],
+        "codex-native": [
+            "--sandbox",
+            "danger-full-access",
+            "--ask-for-approval",
+            "never",
+        ],
+    }.get(journey.harness, [])
     messages = [event for event in server.events if event.get("type") == "message"]
     assert len(messages) == expected_messages
     # The harness renderer owns blank lines around a native command. Preserve
