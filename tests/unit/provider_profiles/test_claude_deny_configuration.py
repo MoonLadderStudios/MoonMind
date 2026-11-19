@@ -45,14 +45,70 @@ def test_unsupported_permission_authority_stays_native(permissions):
         config.validate_configuration(configuration(permissions))
 
 
-def test_multiple_or_merged_settings_do_not_guess_effective_deny():
+@pytest.mark.parametrize("strategy", ["deep_merge", "append"])
+def test_unseeded_or_appended_settings_do_not_guess_effective_deny(strategy):
     value = configuration({"deny": ["Read"]})
-    value["fileTemplates"].append(dict(value["fileTemplates"][0]))
-    with pytest.raises(ValueError, match="one replace"):
+    value["fileTemplates"][0]["merge_strategy"] = strategy
+    with pytest.raises(ValueError, match="replacement seed"):
         config.validate_configuration(value)
-    value["fileTemplates"].pop()
-    value["fileTemplates"][0]["merge_strategy"] = "deep_merge"
-    with pytest.raises(ValueError, match="one replace"):
+
+
+@pytest.mark.parametrize("last_strategy", ["deep_merge", "replace"])
+@pytest.mark.parametrize(
+    "last_permissions", [{"deny": ["Bash(curl *)"]}, {"deny": []}, None]
+)
+def test_ordered_settings_match_native_renderer(
+    tmp_path, last_strategy, last_permissions
+):
+    import json
+    from copy import deepcopy
+
+    from moonmind.provider_profiles.template_renderer import ProfileTemplateRenderer
+    from moonmind.schemas.agent_runtime_models import RuntimeFileTemplate
+
+    value = configuration({"deny": ["Read(**/obsolete)"]})
+    value["fileTemplates"][0]["content_template"]["language"] = "English"
+    content = {"spinnerTipsEnabled": False}
+    if last_permissions is not None:
+        content["permissions"] = last_permissions
+    value["fileTemplates"].append(
+        {
+            "path": value["fileTemplates"][0]["path"],
+            "format": "json",
+            "merge_strategy": last_strategy,
+            "content_template": content,
+        }
+    )
+    before = deepcopy(value)
+    renderer = ProfileTemplateRenderer(toml_serializer=lambda _: "")
+    for item in value["fileTemplates"]:
+        renderer._materialize_file_template(
+            RuntimeFileTemplate.model_validate(item),
+            {"runtime_support_dir": str(tmp_path)},
+        )
+    native = json.loads((tmp_path / "claude-home/settings.json").read_text())
+    admitted = config.validate_configuration(value)
+    assert value == before
+    assert len(admitted["fileTemplates"]) == 1
+    assert admitted["fileTemplates"][0]["content_template"] == native
+    assert admitted["fileTemplates"][0]["merge_strategy"] == "replace"
+    assert config.denied_tools(admitted) == native.get("permissions", {}).get(
+        "deny", []
+    )
+    assert config.validate_configuration(admitted) == admitted
+    if "permissions" in native:
+        admitted["fileTemplates"][0]["content_template"]["permissions"]["deny"].append(
+            "Write"
+        )
+        assert value == before
+
+
+def test_append_after_seed_stays_native():
+    value = configuration({"deny": ["Read"]})
+    value["fileTemplates"].append(
+        {**value["fileTemplates"][0], "merge_strategy": "append"}
+    )
+    with pytest.raises(ValueError, match="replacement seed"):
         config.validate_configuration(value)
 
 
