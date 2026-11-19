@@ -101,6 +101,7 @@ session_factory = codex_journey.session_factory
 OWNER = "generic-journey-owner"
 PROFILE = "journey-model"
 SECRET = "synthetic-opencode-journey-key"
+_CLAUDE_KEY_PROCESS_HOME = {"harness": "claude-native-api-key", "processHome": True}
 RESULT_PATH = "report.md"
 GENERATED = (
     "# Native generated result\n\n"
@@ -705,6 +706,7 @@ class NativeDocker(CodexDocker):
                 assert volume in self.volumes
                 if input_bytes:
                     self.auth_json = json.loads(input_bytes)
+                    self.claude_configuration = self.auth_json.pop("_moonmind_claude_configuration", None)
                     self.codex_configuration = self.auth_json.pop(
                         "_moonmind_codex_configuration", None
                     )
@@ -1131,7 +1133,13 @@ async def _compile_plan(
             ),
         ]
     if process_home:
-        assert claude_oauth_files
+        assert runtime_id == "claude_code" and (claude_oauth_files or api_key)
+        if api_key:
+            profile.home_path_overrides = {"CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home"}
+            profile.file_templates = [{
+                "path": "{{runtime_support_dir}}/claude-home/settings.json",
+                "format": "json", "content_template": {"language": "English"},
+            }]
         profile.home_path_overrides = {**profile.home_path_overrides, "HOME": "{{runtime_support_dir}}/process-home"}
         profile.file_templates = [*profile.file_templates, {
             "path": "{{runtime_support_dir}}/process-home/NOTES.md",
@@ -2322,6 +2330,8 @@ async def assert_native_turn_saved_and_cleaned(
                 }
             }
         }
+        if docker.claude_configuration and "HOME" in docker.claude_configuration["homePathOverrides"]:
+            _assert_key_process_home(journey)
         assert materialization["providerBaseUrl"] == base_url
         assert credential_cleanup["removed"] is True
     elif journey.harness == "opencode-native":
@@ -2406,6 +2416,7 @@ async def assert_native_turn_saved_and_cleaned(
 @pytest.mark.parametrize(
     "native_journey",
     [
+        _CLAUDE_KEY_PROCESS_HOME,
         "claude-native-api-key",
         "claude-native-env-bundle",
         "codex-native-api-key",
@@ -2471,6 +2482,7 @@ async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
 @pytest.mark.parametrize(
     "native_journey",
     [
+        _CLAUDE_KEY_PROCESS_HOME,
         "claude-native-api-key",
         "claude-native-env-bundle",
         "codex-native-api-key",
@@ -2494,6 +2506,13 @@ async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
     interrupted = await assert_native_turn_saved_and_cleaned(journey, "failed")
     saved = interrupted.metadata["savedWorkspaceCheckpoint"]
     predecessor_config = docker.auth_json
+    predecessor_claude_configuration = getattr(docker, "claude_configuration", None)
+    if predecessor_claude_configuration and "HOME" in predecessor_claude_configuration["homePathOverrides"]:
+        async with journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+            profile.home_path_overrides = {"HOME": "{{runtime_support_dir}}/later-home", "CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/later-config-home"}
+            profile.file_templates = []
+            await session.commit()
     predecessor_workspace = server.workspace
     predecessor_binding_id = stable_binding_id(
         execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
@@ -2573,6 +2592,9 @@ async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
     ]
     assert len(created_volumes) == 2 and created_volumes[0] != created_volumes[1]
     assert docker.auth_json == predecessor_config
+    if predecessor_claude_configuration and "HOME" in predecessor_claude_configuration["homePathOverrides"]:
+        assert docker.claude_configuration == predecessor_claude_configuration
+        _assert_key_process_home(journey)
     assert docker.volumes == {"journey_oauth": {}}
     binding = await journey.services.runtime_binding_store.get(
         stable_binding_id(
@@ -2819,3 +2841,28 @@ async def test_claude_oauth_files_cancellation_preserves_enrollment_without_succ
         )
     )
     assert binding.state is RuntimeBindingState.cleaned
+
+
+def _assert_key_process_home(journey):
+    configuration = journey.docker.claude_configuration
+    assert configuration["homePathOverrides"] == {
+        "CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home",
+        "HOME": "{{runtime_support_dir}}/process-home",
+    }
+    assert configuration["fileTemplates"][-1]["content_template"] == "Admitted HOME for {{workspace_path}}.\n"
+    assert journey.server.create_payloads[-1]["process_home"] == "/home/app/.omnigent/moonmind/runtime-context/process-home"
+    assert journey.docker.launch_env["HOME"] == "/home/app"
+    assert journey.docker.launch_env.get("CLAUDE_CONFIG_DIR") != "/home/app/.claude"
+    assert SECRET not in journey.docker.script
+
+
+@pytest.mark.parametrize("native_journey", [_CLAUDE_KEY_PROCESS_HOME], indirect=True)
+async def test_api_key_process_home_keeps_frozen_profile_configuration(native_journey):
+    journey = native_journey
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.home_path_overrides = {}
+        profile.file_templates = []
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(journey)
+    _assert_key_process_home(journey)

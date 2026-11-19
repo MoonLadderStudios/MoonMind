@@ -125,8 +125,8 @@ def claude_process_home_from_handles(credential_handles):
             )
 
             validated = process_home_configuration(configuration)
-            if handle.get("materializerRef") != "claude-oauth-home@1" or validated != configuration:
-                raise ValueError("process HOME requires its selected Claude OAuth configuration")
+            if handle.get("materializerRef") not in {"claude-oauth-home@1", "omnigent-provider-config@1"} or validated != configuration:
+                raise ValueError("process HOME requires its selected Claude configuration")
             if configuration not in configurations:
                 configurations.append(configuration)
     if len(configurations) > 1:
@@ -347,7 +347,11 @@ class OmnigentRuntimeScriptService:
                     codex_configuration = True
                 environment[key] = str(value)
         process_home, process_configuration = claude_process_home_from_handles(credential_handles)
-        if process_home:
+        if process_home and any(
+            handle.get("claudeProcessHomeConfiguration") is not None
+            and handle.get("materializerRef") == "claude-oauth-home@1"
+            for handle in credential_handles
+        ):
             # Process HOME never relocates the enrollment-owned credential home.
             provider_environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
             environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
