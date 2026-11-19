@@ -105,6 +105,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `agent_runtime.clear_session` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `agent_runtime.ensure_docker_sidecar` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `agent_runtime.evaluate_terminal_evidence` | `agent_runtime` | `mm.activity.agent_runtime.control` |
+| `agent_runtime.export_initial_source` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `agent_runtime.fetch_result` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `agent_runtime.fetch_session_summary` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `agent_runtime.interrupt_turn` | `agent_runtime` | `mm.activity.agent_runtime` |
