@@ -322,6 +322,28 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        claude_homes = [
+            attachment["targetPath"]
+            for handle in credential_handles
+            if handle.get("materializerRef") == "claude-oauth-home@1"
+            for attachment in handle.get("attachments", [])
+            if attachment.get("accessMode") == "read-write"
+        ]
+        custom_homes = set(claude_homes) - {"/home/app/.claude"}
+        if custom_homes:
+            from moonmind.provider_profiles.volume_mounts import (
+                validate_claude_enrollment_mount,
+            )
+
+            if not enable_claude_runtime or len(claude_homes) != 1:
+                raise ValueError("custom enrollment requires one selected Claude home")
+            selected_home = validate_claude_enrollment_mount(next(iter(custom_homes)))
+            selectors = dict.fromkeys(
+                ("CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_VOLUME_PATH", "MANAGED_AUTH_VOLUME_PATH"),
+                selected_home,
+            )
+            provider_environment.update(selectors)
+            environment.update(selectors)
         process_home, process_configuration = None, None
         if any(
             handle.get("claudeProcessHomeConfiguration") is not None

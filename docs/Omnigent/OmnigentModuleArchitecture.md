@@ -436,6 +436,13 @@ Scoped rules are limited to Read, Edit and Bash. Scoped Write/Glob/Grep rules
 remain native rather than assuming their CLI matching semantics are equivalent.
 Permission grants, ask/default modes, MCP rules, unseeded merges and JSON appends
 remain with their existing owner; this projection grants no tools or credentials.
+Credential-only Claude OAuth profiles may select a dedicated nonhidden
+`/home/app/<name>-auth` enrollment mount. The admitted Profile snapshot binds its
+volume, target and generation; provisioning re-fences generation without replacing
+those coordinates from an edited Profile. Host selectors follow the exact writable
+attachment, token refresh stays in the enrollment volume, and cleanup detaches it.
+Overlapping mounts, custom files and process-HOME overrides retain their native
+route. Historical canonical receipts keep their original delivery.
 Claude OAuth and API-key profiles can also declare an attempt-private process `HOME`
 under the runtime support directory with literal, nonsecret top-level Markdown
 files. The frozen projection initializes that home before runner startup; session

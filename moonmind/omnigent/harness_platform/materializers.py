@@ -373,6 +373,44 @@ class ProviderConfigEndpoint(BaseModel):
         return self
 
 
+class ClaudeEnrollmentHome(BaseModel):
+    """Selected enrollment coordinates, bound by the enclosing Profile slot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    volumeRef: str
+    targetPath: str
+    credentialGeneration: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _validate_layout(self):
+        from moonmind.provider_profiles.volume_mounts import (
+            validate_claude_enrollment_mount,
+            validate_volume_ref,
+        )
+
+        validate_volume_ref(self.volumeRef)
+        validate_claude_enrollment_mount(self.targetPath)
+        return self
+
+
+def _selected_claude_enrollment(profile):
+    if str(getattr(profile, "runtime_id", "")) != "claude_code":
+        return None
+    target = getattr(profile, "volume_mount_path", None)
+    if target in {None, "/home/app/.claude"}:
+        return None
+    overrides = dict(getattr(profile, "home_path_overrides", None) or {})
+    if getattr(profile, "file_templates", None) or any(
+        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR"} or value != target
+        for key, value in overrides.items()
+    ):
+        raise ValueError("custom Claude enrollment requires credential-only selectors")
+    return ClaudeEnrollmentHome(
+        volumeRef=getattr(profile, "volume_ref", None), targetPath=target,
+        credentialGeneration=getattr(profile, "credential_generation", 0),
+    )
+
+
 class ProviderLaunchEnvironment(BaseModel):
     """Admitted nonsecret tuning, independent of an enrolled OAuth home."""
 
@@ -392,6 +430,10 @@ class ProviderLaunchEnvironment(BaseModel):
     claudeConfiguration: dict[str, Any] | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
+    )
+
+    claudeEnrollmentHome: ClaudeEnrollmentHome | None = Field(
+        default=None, exclude_if=lambda value: value is None,
     )
 
     @field_validator("claudeConfiguration")
@@ -437,6 +479,11 @@ class ProviderLaunchEnvironment(BaseModel):
 
     @model_validator(mode="after")
     def _validate_environment_ownership(self):
+        if self.claudeEnrollmentHome is not None and (
+            self.claudeConfiguration is not None or self.codexConfiguration is not None
+            or self.codexNativeDefault is not None
+        ):
+            raise ValueError("custom Claude enrollment cannot replace another configuration owner")
         if self.environmentTemplates and set(self.environmentTemplates) & set(self.launchEnvironment):
             raise ValueError("Profile environment value has conflicting literal/template ownership")
         if self.codexConfiguration and set(self.codexConfiguration.get("environmentTemplates") or {}) & (
@@ -468,6 +515,7 @@ def _oauth_launch_environment(
         environmentTemplates=templates or None,
         codexConfiguration=configuration,
         claudeConfiguration=claude_configuration,
+        claudeEnrollmentHome=_selected_claude_enrollment(profile),
         codexNativeDefault=_codex_native_default_selection(profile),
     )
 
@@ -501,8 +549,14 @@ class ProviderConfigurationSlot(BaseModel):
         exclude_if=lambda value: value is None,
     )
 
+    claudeEnrollmentHome: ClaudeEnrollmentHome | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
     @model_validator(mode="after")
     def _validate_delivery(self):
+        if self.claudeEnrollmentHome is not None and self.materializerRef != "claude-oauth-home@1":
+            raise ValueError("custom Claude enrollment requires its Claude credential owner")
         if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
             if self.endpoint is not None:
                 raise ValueError("OAuth configuration cannot replace its credential owner")
@@ -521,6 +575,7 @@ class ProviderConfigurationSlot(BaseModel):
                 launchEnvironment=self.launchEnvironment,
                 codexConfiguration=self.codexConfiguration,
                 claudeConfiguration=self.claudeConfiguration,
+                claudeEnrollmentHome=self.claudeEnrollmentHome,
                 environmentTemplates=self.environmentTemplates,
             )
         elif (
@@ -558,6 +613,9 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
                 endpoint.codexConfiguration
                 if isinstance(endpoint, ProviderLaunchEnvironment)
                 else None
+            ),
+            claudeEnrollmentHome=(
+                endpoint.claudeEnrollmentHome if isinstance(endpoint, ProviderLaunchEnvironment) else None
             ),
             claudeConfiguration=(
                 endpoint.claudeConfiguration
@@ -609,6 +667,7 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
                 launchEnvironment=saved.launchEnvironment,
                 codexConfiguration=saved.codexConfiguration,
                 claudeConfiguration=saved.claudeConfiguration,
+                claudeEnrollmentHome=saved.claudeEnrollmentHome,
                 environmentTemplates=saved.environmentTemplates,
                 codexNativeDefault=saved.codexNativeDefault,
             )
@@ -634,6 +693,11 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     ):
         return None
     fields = []
+    try:
+        selected_enrollment = _selected_claude_enrollment(profile)
+    except ValueError:
+        selected_enrollment = None
+        fields.append("credential_home")
     private_configuration = None
     if getattr(profile, "file_templates", None) or (
         str(profile.runtime_id) == "claude_code"
@@ -657,7 +721,7 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         except ValueError:
             fields.append("env_template")
     home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})
-    if home_overrides:
+    if home_overrides and selected_enrollment is None:
         # OAuth enrollment records these selectors even for an uncustomized
         # Profile. The shared materializer attaches that same home at the
         # canonical location; these values are equivalent, not extra settings.

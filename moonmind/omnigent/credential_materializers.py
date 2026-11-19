@@ -25,6 +25,7 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_AUTH_GID,
     OPENCODE_AUTH_UID,
     PROVIDER_CONFIG_MATERIALIZER_REF,
+    ClaudeEnrollmentHome,
     ProviderConfigEndpoint,
     ProviderLaunchEnvironment,
     build_opencode_auth_json_bytes,
@@ -463,6 +464,27 @@ def _claude_oauth_projection(acquired, launch_environment):
     return attachments, files
 
 
+def _credential_home_target(materializer_ref, home, launch_environment, generation):
+    expected = _OAUTH_HOME_MATERIALIZER_TARGETS[materializer_ref]
+    selected = getattr(launch_environment, "claudeEnrollmentHome", None)
+    if selected is not None:
+        if (materializer_ref != "claude-oauth-home@1"
+            or selected.credentialGeneration != generation
+            or selected.volumeRef != home.volume_ref
+            or selected.targetPath != home.target_path):
+            raise HarnessPlatformError(
+                "credential home differs from its admitted enrollment",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            )
+        return selected.targetPath
+    if home.target_path.rstrip("/") != expected.rstrip("/"):
+        raise HarnessPlatformError(
+            "credential home target does not match the materializer layout",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+        )
+    return expected
+
+
 def anticipated_credential_handle(
     acquired: AcquiredProviderLease,
     materializer_ref: str,
@@ -481,12 +503,10 @@ def anticipated_credential_handle(
                 "credential home on the Provider Profile",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
             )
-        target = _OAUTH_HOME_MATERIALIZER_TARGETS[materializer_ref]
-        if profile_credential_home.target_path.rstrip("/") != target.rstrip("/"):
-            raise HarnessPlatformError(
-                "credential home target does not match the materializer layout",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
-            )
+        target = _credential_home_target(
+            materializer_ref, profile_credential_home, provider_launch_environment,
+            acquired.credential_generation,
+        )
         if not _CREDENTIAL_VOLUME_RE.fullmatch(profile_credential_home.volume_ref):
             raise HarnessPlatformError(
                 "enrollment-owned credential home volume name is invalid",
@@ -1280,14 +1300,13 @@ for path in [root, *root.rglob('*')]:
                 f"materializer {self.ref} requires an enrollment-owned credential home",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
             )
-        expected_target = OAUTH_HOME_MATERIALIZER_TARGETS[self.ref]
-        if home.target_path.rstrip("/") != expected_target.rstrip("/"):
-            context.secrets.clear()
-            raise HarnessPlatformError(
-                f"credential home target {home.target_path!r} does not match "
-                f"the {self.ref} layout",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE,
+        try:
+            expected_target = _credential_home_target(
+                self.ref, home, launch_environment, acquired.credential_generation,
             )
+        except HarnessPlatformError:
+            context.secrets.clear()
+            raise
         if not _CREDENTIAL_VOLUME_RE.fullmatch(home.volume_ref):
             context.secrets.clear()
             raise HarnessPlatformError(
@@ -1600,15 +1619,17 @@ def build_default_credential_materializer_registry(
 
 
 async def load_profile_credential_home(
-    session_factory: Any, *, profile_id: str, credential_generation: int
+    session_factory: Any, *, profile_id: str, credential_generation: int,
+    selected_home: ClaudeEnrollmentHome | None = None,
 ) -> ProfileCredentialHome:
     """Resolve a Provider Profile's enrollment-owned credential home.
 
     A profile-owned materializer never resolves a secret: the durable
     enrollment volume *is* the credential state. The caller's generation is
     re-fenced against the profile row so a rotated enrollment cannot be
-    attached under stale authority. References come only from the profile
-    row, never from a caller-supplied path or ambient credentials.
+    attached under stale authority. New custom layouts use the admitted Profile
+    snapshot; historical canonical plans resolve their original row-backed layout.
+    Neither route takes a caller-supplied path or ambient credentials.
     """
 
     from api_service.db.models import ManagedAgentProviderProfile
@@ -1624,6 +1645,15 @@ async def load_profile_credential_home(
         raise HarnessPlatformError(
             "Provider Profile credential generation changed after lease acquisition",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    if selected_home is not None:
+        if selected_home.credentialGeneration != credential_generation:
+            raise HarnessPlatformError(
+                "selected enrollment generation changed after admission",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            )
+        return ProfileCredentialHome(
+            volume_ref=selected_home.volumeRef, target_path=selected_home.targetPath,
         )
     volume_ref = str(profile.volume_ref or "").strip()
     if not volume_ref:
@@ -1714,7 +1744,7 @@ class OmnigentCredentialProvisioningService:
             await session.commit()
 
     async def _load_profile_credential_home(
-        self, acquired: AcquiredProviderLease
+        self, acquired: AcquiredProviderLease, *, selected_home=None,
     ) -> ProfileCredentialHome:
         """Resolve the enrollment-owned credential home for one lease."""
 
@@ -1722,6 +1752,7 @@ class OmnigentCredentialProvisioningService:
             self._session_factory,
             profile_id=acquired.provider_profile_ref,
             credential_generation=acquired.credential_generation,
+            selected_home=selected_home,
         )
 
     async def materialize_all(
@@ -1769,8 +1800,11 @@ class OmnigentCredentialProvisioningService:
                     descriptor = get_materializer(binding.materializerRef)
                     profile_credential_home = None
                     if descriptor.state.get("scope") == "profile":
-                        profile_credential_home = (
-                            await self._load_profile_credential_home(acquired)
+                        selected_home = getattr(
+                            (configurations or {}).get(slot), "claudeEnrollmentHome", None
+                        )
+                        profile_credential_home = await self._load_profile_credential_home(
+                            acquired, **({"selected_home": selected_home} if selected_home is not None else {})
                         )
                     secrets = None
                     try:
