@@ -445,7 +445,7 @@ async def test_dedicated_recurring_api_rejects_saved_missing_account(
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                     volume_ref="test-codex-oauth",
-                    volume_mount_path="/root/.codex",
+                    volume_mount_path="/home/app/.codex",
                     max_parallel_runs=1,
                     cooldown_after_429_seconds=0,
                     command_behavior={"auth_readiness": {"launch_ready": True}},
@@ -872,7 +872,7 @@ async def test_dedicated_saved_unavailable_pin_matches_explicit_without_substitu
         row.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
         row.secret_refs = {}
         row.volume_ref = "test-codex-oauth"
-        row.volume_mount_path = "/root/.codex"
+        row.volume_mount_path = "/home/app/.codex"
         row.clear_env_keys = [
             "OPENAI_API_KEY",
             "OPENAI_BASE_URL",
@@ -1150,7 +1150,7 @@ async def test_raw_saved_unavailable_pin_matches_explicit_without_substitution(
         row.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
         row.secret_refs = {}
         row.volume_ref = "test-codex-oauth"
-        row.volume_mount_path = "/root/.codex"
+        row.volume_mount_path = "/home/app/.codex"
         row.clear_env_keys = [
             "OPENAI_API_KEY",
             "OPENAI_BASE_URL",
@@ -1287,7 +1287,7 @@ async def test_ready_configuration_reaches_same_existing_admission_owner(
     row.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
     row.secret_refs = {}
     row.volume_ref = "test-codex-oauth"
-    row.volume_mount_path = "/root/.codex"
+    row.volume_mount_path = "/home/app/.codex"
     row.clear_env_keys = [
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",

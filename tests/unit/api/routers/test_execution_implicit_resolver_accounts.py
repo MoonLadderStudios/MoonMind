@@ -107,7 +107,7 @@ async def test_implicit_resolver_uses_saved_account_before_configuration_fallbac
         row.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
         row.secret_refs = {}
         row.volume_ref = f"{name}-test-codex-oauth"
-        row.volume_mount_path = "/root/.codex"
+        row.volume_mount_path = "/home/app/.codex"
         row.clear_env_keys = [
             "OPENAI_API_KEY",
             "OPENAI_BASE_URL",

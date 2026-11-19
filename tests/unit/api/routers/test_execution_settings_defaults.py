@@ -143,7 +143,7 @@ async def test_saved_profile_default_rejects_unavailable_account_before_effects(
                         runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                         auth_state=ProviderProfileAuthState.CONNECTED,
                         volume_ref="test-codex-oauth",
-                        volume_mount_path="/root/.codex",
+                        volume_mount_path="/home/app/.codex",
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=0,
                         command_behavior={"auth_readiness": {"launch_ready": True}},
