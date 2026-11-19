@@ -6,6 +6,7 @@ workspace ownership, Git preparation and artifact persistence are production own
 
 import asyncio
 import json
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -70,6 +71,13 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         git(source, "branch", "other-native-branch")
         (source / "tracked.txt").write_text("dirty excluded\n")
         (source / "untracked.txt").write_text("untracked excluded\n")
+        # The provider stub runs in the test process. In root CI, match the
+        # real provider's runtime-owned Git metadata rather than hiding the
+        # worker/provider UID boundary behind root-created .git files.
+        if os.geteuid() == 0:
+            owner = source.stat()
+            for path in source.rglob("*"):
+                os.chown(path, owner.st_uid, owner.st_gid, follow_symlinks=False)
 
     journey.server.on_first_message = commit_source_turn
     result = await journey.realizer.execute(journey.request, journey.plan)

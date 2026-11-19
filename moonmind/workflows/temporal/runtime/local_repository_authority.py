@@ -293,6 +293,7 @@ def _capture_source_bytes(source, intent):
     import os
     import tempfile
     import time
+    import shlex
 
     from moonmind.schemas.saved_work_models import (
         SAVED_WORK_FORMAT_SIZE_LIMITS,
@@ -351,6 +352,18 @@ def _capture_source_bytes(source, intent):
                 "clone",
                 "--no-local",
                 "--no-checkout",
+                # Git clears parent configuration before invoking upload-pack.
+                # Quote every fixed executable/validated source argument rather
+                # than granting wildcard ownership trust or ambient shell input.
+                "--upload-pack="
+                + shlex.join(
+                    [
+                        _WORKER_GIT_EXECUTABLE,
+                        "-c",
+                        f"safe.directory={source / '.git'}",
+                        "upload-pack",
+                    ]
+                ),
                 "--template=",
                 "--branch",
                 branch,

@@ -125,6 +125,7 @@ def _git(
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
+                    # The child may have exited before bounded cleanup raced it.
                     pass
             elif process.poll() is None:
                 process.kill()

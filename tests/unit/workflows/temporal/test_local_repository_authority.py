@@ -301,3 +301,36 @@ def test_export_matches_native_selected_branch_refs(
     expected = set(git(native, "for-each-ref", "--format=%(refname)").splitlines())
     assert set(refs) == expected
     assert "refs/remotes/origin/other" not in refs
+
+
+@pytest.mark.parametrize("quoted_source", [False, True])
+def test_source_export_passes_exact_trust_to_upload_pack(
+    source, monkeypatch, quoted_source
+):
+    """Exercise Git's real ownership rejection without requiring a root test runner."""
+    from moonmind.workflows.temporal.runtime import (
+        checkpoint_history,
+        local_repository_authority,
+    )
+
+    import os
+    import shutil
+
+    # Use the system Git selected by the isolated subprocess PATH. In
+    # particular, exercise upload-pack ownership checking on worker Git.
+    system_git = shutil.which("git", path=os.defpath)
+    assert system_git is not None
+    monkeypatch.setattr(
+        local_repository_authority, "_WORKER_GIT_EXECUTABLE", system_git
+    )
+    if quoted_source:
+        source = source.rename(source.with_name("source ' $(false) ;"))
+    actual_git = checkpoint_history._git
+
+    def different_owner_git(path, arguments, **kwargs):
+        kwargs["env"] = {**kwargs["env"], "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+        return actual_git(path, arguments, **kwargs)
+
+    monkeypatch.setattr(checkpoint_history, "_git", different_owner_git)
+    head, *_ = _capture_source_bytes(source, {"branch": "chosen"})
+    assert head == git(source, "rev-parse", "HEAD")
