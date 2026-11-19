@@ -48,6 +48,7 @@ def test_selected_layout_matches_native_without_mutating_profile():
         "/home/app",
         "/home/app/.omnigent",
         "/home/app/.codex",
+        "/root/.codex",
         "/home/app/.claude/nested-auth",
         "/home/app/foo-auth/child",
         "/opt/tool-auth",

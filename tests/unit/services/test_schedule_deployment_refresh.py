@@ -80,6 +80,10 @@ class DeploymentSession(_GenericV2Session):
         super().__init__(provider_runtime_id=runtime, harness_id=harness)
         self.profile.owner_id = None
         self.provider.provider_id = provider
+        if runtime == "claude_code":
+            # The generic fixture starts from a Codex Profile. This refresh
+            # case needs an actual Claude enrollment, not /root/.codex.
+            self.provider.volume_mount_path = "/home/app/.claude"
         self.version.document["credentialSlots"][0]["acceptedProviderIds"] = [provider]
         self.version.document["model"] = {"qualifiedId": "example/default", "effort": "high"}
         self.version.document["allowedLaunchPolicyRefs"] = ["omnigent-on-demand@2"]
