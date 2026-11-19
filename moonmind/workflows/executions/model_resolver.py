@@ -138,11 +138,14 @@ class ModelTierFamilyUnavailableError(ValueError):
         self.family = family
         self.reason = reason
         detail = f" {reason}" if reason else ""
-        super().__init__(
+        # Operator-facing text composed only from the fields above, so API
+        # responses can report it without serializing the exception.
+        self.message = (
             f"Model tier {effective_model_tier} ({family}) cannot run on the "
             f"selected profile.{detail} Choose another tier, pin an available "
             "model, or retry after the profile's model catalog refreshes."
         )
+        super().__init__(self.message)
 
 
 @dataclass(frozen=True)
