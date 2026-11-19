@@ -456,6 +456,7 @@ class OmnigentRuntimeScriptService:
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
             *supplied_runtime_environment,
             *provider_environment,
+            *({"CODEX_HOME"} if codex_source_home != "/home/app/.codex" else set()),
         }
         if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
