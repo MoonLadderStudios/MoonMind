@@ -2990,10 +2990,13 @@ def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> flo
 def _approval_wait_timeout_seconds(request: AgentExecutionRequest) -> float:
     """Bound an unanswered approval by the step's progress-stall window."""
 
-    budget = request.execution_budget or resolve_execution_budget(
-        agent_kind=request.agent_kind,
-        timeout_policy=request.timeout_policy,
-    )
+    if request.execution_budget is not None:
+        budget = request.execution_budget.budget
+    else:
+        budget = resolve_execution_budget(
+            agent_kind=request.agent_kind,
+            timeout_policy=request.timeout_policy,
+        )
     return float(budget.progress_stall_seconds)
 
 
