@@ -861,8 +861,9 @@ async def test_materializer_fails_closed_on_unsafe_branch(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("canonical_suffix", [".git", ""])
 async def test_materializer_clones_remote_default_branch_when_branch_is_omitted(
-    tmp_path,
+    tmp_path, canonical_suffix,
 ):
     """An omitted branch follows the remote's actual default, not ``main``."""
 
@@ -880,10 +881,17 @@ async def test_materializer_clones_remote_default_branch_when_branch_is_omitted(
     async def fake_token(*args, **kwargs):
         return "selected-token"
 
+    class Credentials(_SelectedRepositoryCredentials):
+        async def admitted_repository_identity(self, **_kwargs):
+            return RepositoryIdentity(
+                endpoint="https://github.com", displayName="MoonLadderStudios/MoonMind",
+                canonicalRemote="https://github.com/MoonLadderStudios/MoonMind" + canonical_suffix,
+            )
+
     materializer = OmnigentWorkspaceMaterializer(
         command_runner=runner,
         workspace_root=tmp_path,
-        repository_credential_service=_SelectedRepositoryCredentials(fake_token),
+        repository_credential_service=Credentials(fake_token),
     )
     await materializer.materialize(
         _request(

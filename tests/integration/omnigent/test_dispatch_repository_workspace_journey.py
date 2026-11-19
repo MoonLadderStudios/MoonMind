@@ -234,9 +234,12 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
                 args[-1],
             ]
             if anonymous_remote:
-                assert "GITHUB_TOKEN" not in kwargs["env"]
-                assert "GH_TOKEN" not in kwargs["env"]
-                assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+                # Isolation belongs to every Git operation on this restore
+                # instance, not just an explicit environment on clone.
+                environment = service._git_environment
+                assert "GITHUB_TOKEN" not in environment
+                assert "GH_TOKEN" not in environment
+                assert environment["GIT_TERMINAL_PROMPT"] == "0"
             else:
                 assert kwargs["env"]["GITHUB_TOKEN"] == "synthetic-repository-credential"
             args = [*args[:2], str(remote), args[-1]]

@@ -1023,7 +1023,7 @@ class OmnigentWorkspaceMaterializer:
 
         service = ManagedCheckpointRestoreService(
             authority_root=self._root, artifact_service=self._remediation_artifacts,
-            repository_read_resolver=(
+            anonymous_repository_read_resolver=(
                 admitted_anonymous_read
                 if anonymous_remote and repository_identity.endpoint != "https://github.com"
                 else None
@@ -1525,7 +1525,13 @@ class OmnigentWorkspaceMaterializer:
         # Identity was verified against the admitted source-read snapshot above.
         # Non-GitHub HTTPS identities can only pass that owner with an anonymous
         # grant. Acquire again before cloning, so no credential route is inferred.
-        remote = anonymous_https_repository_source(identity.canonical_remote or "")
+        from moonmind.omnigent.workspace_intent import authored_anonymous_source
+
+        remote = (
+            anonymous_https_repository_source(identity.canonical_remote or "")
+            if authored_anonymous_source(request) and identity.endpoint != "https://github.com"
+            else None
+        )
         clone_source = remote[0] if remote else github_clone_source_from_identity(identity)
         acquired = await self._repository_credentials.acquire_repository_use(
             plan=plan,

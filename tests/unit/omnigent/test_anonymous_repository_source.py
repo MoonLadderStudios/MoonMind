@@ -216,3 +216,57 @@ async def test_admission_freezes_only_anonymous_source_read(
     assert persisted[0]["selection"]["operations"] == ["read"]
     assert persisted[0]["selection"]["connectionId"] == "anonymous"
     assert persisted[0]["repositoryIdentity"]["canonicalRemote"] == remote
+
+
+@pytest.mark.parametrize("bundle_only", [False, True])
+def test_anonymous_restore_isolates_checkout_and_clean_filters(
+    tmp_path, monkeypatch, bundle_only
+):
+    import subprocess
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+        ManagedCheckpointRestoreService,
+    )
+
+    source = tmp_path / "source"
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "test@example.test"],
+        check=True,
+    )
+    (source / ".gitattributes").write_text("tracked.txt filter=ambient\n")
+    (source / "tracked.txt").write_text("retained content\n")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "source"], check=True)
+    bundle = tmp_path / "history.bundle"
+    subprocess.run(
+        ["git", "-C", str(source), "bundle", "create", str(bundle), "HEAD"], check=True
+    )
+    leak = tmp_path / "ambient-leak"
+    monkeypatch.setenv("GH_TOKEN", "must-not-reach-filters")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    for index, phase in enumerate(("smudge", "clean")):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{index}", f"filter.ambient.{phase}")
+        monkeypatch.setenv(
+            f"GIT_CONFIG_VALUE_{index}", f'echo "$GH_TOKEN" >> {leak}; cat'
+        )
+    service = ManagedCheckpointRestoreService(
+        authority_root=tmp_path / "authority",
+        anonymous_repository_read_resolver=AsyncMock(),
+    )
+    destination = tmp_path / "restored"
+    if bundle_only:
+        service._git(["init", str(destination)])
+        service._git(["fetch", str(bundle), "HEAD"], destination)
+        target = "FETCH_HEAD"
+    else:
+        service._git(["clone", "--no-checkout", str(source), str(destination)])
+        target = "HEAD"
+    service._git(["checkout", "--detach", target], destination)
+    service._git_bytes(["status", "--porcelain"], destination)
+    assert (destination / "tracked.txt").read_text() == "retained content\n"
+    assert not leak.exists()
