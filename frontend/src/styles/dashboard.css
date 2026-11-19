@@ -3486,7 +3486,8 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
 .provider-profile-detail-grid {
   display: grid;
   gap: 1rem 1.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  /* Never wider than the record: a 13rem minimum overflows a phone at 200% text. */
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
   padding: 0.85rem 1rem;
   border-radius: 0.75rem;
   background: rgb(var(--mm-panel) / 0.5);
