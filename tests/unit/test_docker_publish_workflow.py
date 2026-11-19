@@ -221,6 +221,17 @@ def test_missing_source_handoff_fails_before_artifact_download(tmp_path):
         assert (result.returncode == 0) == accepted, result.stdout + result.stderr
 
 
+def test_every_release_job_limits_its_token():
+    workflow = _load_workflow()
+    # Without a workflow default, an unscoped job receives the repository's
+    # default GITHUB_TOKEN permissions.
+    if "permissions" not in workflow:
+        unscoped = [
+            name for name, job in workflow["jobs"].items() if "permissions" not in job
+        ]
+        assert unscoped == []
+
+
 def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 

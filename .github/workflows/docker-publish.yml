@@ -245,6 +245,8 @@ jobs:
     if: ${{ !cancelled() && needs.source-checks.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Require the selected source handoff before downloading
         shell: bash

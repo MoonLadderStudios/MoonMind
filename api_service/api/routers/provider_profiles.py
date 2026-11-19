@@ -2454,7 +2454,7 @@ async def preview_model_tiers(
                     "modelFamily": exc.family,
                     "modelMode": "automatic",
                     "familyResolutionStatus": "unavailable",
-                    "unavailableReason": str(exc),
+                    "unavailableReason": exc.message,
                 }
             )
             continue
