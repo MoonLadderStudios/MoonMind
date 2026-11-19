@@ -196,7 +196,7 @@ def test_process_home_handle_keeps_canonical_credential_mount():
         ProfileCredentialHome,
         anticipated_credential_handle,
     )
-    from moonmind.omnigent.host_services.runtime_scripts import (
+    from moonmind.provider_profiles.claude_configuration import (
         claude_process_home_from_handles,
     )
 

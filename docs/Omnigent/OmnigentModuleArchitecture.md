@@ -423,8 +423,9 @@ Claude's terminal `--disallowedTools` arguments, merging runtime restrictions
 rather than replacing the bridge-generated settings. This keeps denies effective
 when Skill filtering ignores user settings. OAuth and API-key attempts, including
 cold replacements, use the admitted rules rather than rereading an edited Profile.
-Ready-host retries reconstruct these restrictions from recorded credential handles
-before session creation, including when older host receipts omit the projection.
+Ready-host retries reconstruct these restrictions and the selected process `HOME`
+from recorded credential handles before session creation, including older receipts
+that omit those projections.
 Scoped rules are limited to Read, Edit and Bash. Scoped Write/Glob/Grep rules
 remain native rather than assuming their CLI matching semantics are equivalent. Permission grants, ask/default modes,
 MCP rules and ambiguous multi-template merges remain with their existing owner;

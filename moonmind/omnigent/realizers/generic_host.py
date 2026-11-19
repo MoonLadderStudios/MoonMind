@@ -1205,16 +1205,24 @@ class GenericOmnigentHostRealizer:
         if host_context is not None:
             from moonmind.provider_profiles.claude_configuration import (
                 claude_denied_tools_from_handles,
+                claude_process_home_from_handles,
             )
 
             # Ready-host receipts predate this projection. Rebuild it from the
             # validated immutable credential handles, never from a live Profile.
-            rules = claude_denied_tools_from_handles(
-                [
-                    handle.model_dump(by_alias=True, mode="json")
-                    for handle in credential_handles
-                ]
-            )
+            handles = [
+                handle.model_dump(by_alias=True, mode="json")
+                for handle in credential_handles
+            ]
+            rules = claude_denied_tools_from_handles(handles)
+            process_home, _ = claude_process_home_from_handles(handles)
+            recorded_home = host_context.get("processHome")
+            if recorded_home is not None and recorded_home != process_home:
+                raise ValueError(
+                    "ready host process HOME differs from its credential authority"
+                )
+            if process_home:
+                host_context["processHome"] = process_home
             recorded = host_context.get("claudeDeniedTools")
             if recorded is not None and recorded != rules:
                 raise ValueError(
