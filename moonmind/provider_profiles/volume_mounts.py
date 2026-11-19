@@ -39,3 +39,15 @@ def credential_volume_mount(
     return f"type=volume,source={volume_ref},target={mount_path}" + (
         ",readonly" if read_only else ""
     )
+
+
+def validate_claude_enrollment_mount(value: str) -> str:
+    """Bound custom auth homes to dedicated, nonhidden app-home children.
+
+    Runtime state, provider config, Skills and executable mounts have separate
+    owners; none may be hidden beneath an enrollment volume.
+    """
+    validate_volume_mount_path(value)
+    if not re.fullmatch(r"/home/app/[A-Za-z0-9][A-Za-z0-9_.-]*-auth", value):
+        raise ValueError("custom Claude enrollment requires a dedicated app-home auth directory")
+    return value

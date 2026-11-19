@@ -602,6 +602,22 @@ class DockerOmnigentHostLauncher:
             *([spec.controlAttachment] if spec.controlAttachment is not None else []),
             spec.stateAttachment,
         ]
+        custom_homes = {
+            attachment["targetPath"]
+            for handle in credential_handles
+            if handle.get("materializerRef") == "claude-oauth-home@1"
+            for attachment in handle.get("attachments", [])
+            if attachment.get("accessMode") == "read-write"
+            and attachment.get("targetPath") != "/home/app/.claude"
+        }
+        for home in custom_homes:
+            overlapping = [item for item in attachments if (
+                item["targetPath"] == home
+                or item["targetPath"].startswith(home + "/")
+                or home.startswith(item["targetPath"].rstrip("/") + "/")
+            )]
+            if len(overlapping) != 1:
+                raise ValueError("selected Claude credential home overlaps another attachment")
         for attachment in attachments:
             kind = str(attachment["kind"])
             if kind == "image":

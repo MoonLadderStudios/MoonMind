@@ -984,6 +984,7 @@ async def _compile_plan(
     claude_oauth_files=False,
     claude_preferences=False,
     process_home=False,
+    claude_credential_mount=None,
     private_profile_config=False,
     private_configuration_home=None,
     declare_configuration_home=True,
@@ -1078,13 +1079,19 @@ async def _compile_plan(
     if api_key_tuning:
         assert api_key and runtime_id in {"codex_cli", "claude_code"}
         fields["env_template"] = {**(fields.get("env_template") or {}), **api_key_tuning}
+    if claude_credential_mount:
+        assert oauth and runtime_id == "claude_code"
+        fields["home_path_overrides"] = {
+            "CLAUDE_HOME": claude_credential_mount,
+            "CLAUDE_CONFIG_DIR": claude_credential_mount,
+        }
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
         provider_id=provider_id,
         **fields,
         volume_ref="journey_oauth" if oauth else None,
-        volume_mount_path=method["imported_volume"]["mount_path"] if oauth else None,
+        volume_mount_path=(claude_credential_mount or method["imported_volume"]["mount_path"]) if oauth else None,
         secret_refs={
             role["role"]: "env://NATIVE_JOURNEY_KEY" for role in method["secret_roles"]
         },
@@ -1351,6 +1358,7 @@ async def native_journey(
                 claude_oauth_files=bool(selection.get("claudeOauthFiles")),
                 claude_preferences=bool(selection.get("claudePreferences")),
                 process_home=bool(selection.get("processHome")),
+                claude_credential_mount=selection.get("claudeCredentialMount"),
                 private_profile_config=bool(
                     selection.get("privateProfileConfiguration")
                 ),
@@ -2194,7 +2202,7 @@ async def test_opencode_session_receives_the_admitted_effort(native_journey):
 
 
 async def assert_native_turn_saved_and_cleaned(
-    journey, terminal_status="idle", *, expected_messages=1
+    journey, terminal_status="idle", *, expected_messages=1, expected_credential_target=None
 ):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
     from moonmind.omnigent.realizers.turn_delivery import admission_epoch
@@ -2358,7 +2366,7 @@ async def assert_native_turn_saved_and_cleaned(
         assert attachment == {
             "kind": "volume",
             "sourceRef": "journey_oauth",
-            "targetPath": f"/home/app/.{runtime}",
+            "targetPath": expected_credential_target or f"/home/app/.{runtime}",
             "accessMode": "read-write",
         }
         assert materialization["secretCopied"] is False
