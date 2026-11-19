@@ -16,6 +16,8 @@ from moonmind.omnigent.harness_platform.materializers import (
 from tests.unit.omnigent.test_claude_api_key_provider_config import _api_key_profile, _provision
 
 
+OUTPUT_STYLE = "---\nname: concise\ndescription: Focused answers\n---\nGive the answer first. Preserve café and final newline.\n"
+
 def configuration(home="{{runtime_support_dir}}/claude-home"):
     result = {
         "homePathOverrides": {"CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home"},
@@ -23,6 +25,7 @@ def configuration(home="{{runtime_support_dir}}/claude-home"):
             {"path": "{{runtime_support_dir}}/claude-home/settings.json", "format": "json", "content_template": {"outputStyle": "concise"}},
             {"path": "{{runtime_support_dir}}/claude-home/settings.json", "format": "json", "merge_strategy": "deep_merge", "content_template": {"alwaysThinkingEnabled": True}},
             {"path": "{{runtime_support_dir}}/claude-home/CLAUDE.md", "format": "text", "merge_strategy": "append", "content_template": "Work in {{workspace_path}}; support {{runtime_support_dir}}"},
+            {"path": "{{runtime_support_dir}}/claude-home/output-styles/concise.md", "format": "text", "content_template": OUTPUT_STYLE},
         ],
     }
     result["homePathOverrides"]["CLAUDE_CONFIG_DIR"] = home
@@ -43,6 +46,9 @@ def test_shared_renderer_initializes_once_and_isolates_siblings(tmp_path):
         assert (home / "CLAUDE.md").read_text() == f"Work in /work/{sibling}; support {root}"
         assert (home / "settings.json").stat().st_mode & 0o777 == 0o600
         assert home.stat().st_mode & 0o777 == 0o700
+        style = home / "output-styles/concise.md"
+        assert style.read_bytes() == OUTPUT_STYLE.encode("utf-8")
+        assert style.stat().st_mode & 0o777 == 0o600
     assert config == original
     with pytest.raises(ValueError, match="already owned"):
         materialize_configuration(config, runtime_support_dir=tmp_path / "a", workspace_path="/changed")
@@ -59,6 +65,13 @@ def test_shared_renderer_initializes_once_and_isolates_siblings(tmp_path):
     ("CLAUDE.md", "{{provider_api_key}}", "text"),
     ("CLAUDE.md", {"from_secret_ref": "key"}, "text"),
     ("rules/{{workspace_path}}.md", "unsafe", "text"),
+    ("output-styles/../.credentials.json", "escape", "text"),
+    ("output-styles/nested/concise.md", "nested", "text"),
+    ("output-styles/{{workspace_path}}.md", "dynamic path", "text"),
+    ("output-styles/concise.sh", "executable", "text"),
+    ("output-styles/concise.md", "{{provider_api_key}}", "text"),
+    ("output-styles/concise.md", {"from_secret_ref": "key"}, "text"),
+    ("output-styles/concise.md", {"name": "concise"}, "json"),
 ])
 def test_untranslated_authority_and_paths_stay_native(path, content, format):
     config = configuration()
@@ -82,9 +95,11 @@ def test_configuration_snapshot_preserves_admitted_files_after_profile_edit(home
     content = provider_configuration_snapshot_bytes(bindings, {"primary-model": endpoint})
     profile.file_templates[0]["content_template"] = {"outputStyle": "changed"}
     profile.home_path_overrides["CLAUDE_CONFIG_DIR"] = "{{runtime_support_dir}}/changed-home"
+    profile.file_templates[-1]["content_template"] = "Later style must not alter the admitted run."
     saved = load_provider_configuration_snapshot(content, SimpleNamespace(contentDigest="sha256:" + hashlib.sha256(content).hexdigest()), bindings)
     assert saved["primary-model"].claudeConfiguration["fileTemplates"][0]["content_template"] == {"outputStyle": "concise"}
     assert saved["primary-model"].claudeConfiguration["homePathOverrides"]["CLAUDE_CONFIG_DIR"] == "{{runtime_support_dir}}/" + home_name
+    assert saved["primary-model"].claudeConfiguration["fileTemplates"][-1]["content_template"] == OUTPUT_STYLE
 
 
 @pytest.mark.asyncio
@@ -119,7 +134,7 @@ def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_
     (projection / ".moonmind-generation").write_text("3\n")
     (binaries / "python3").symlink_to(sys.executable)
     native = binaries / "claude"
-    native.write_text(f"#!{sys.executable}\nimport os,json,pathlib,sys\nhome=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])\nprint(json.dumps({{ 'settings':json.loads((home/'settings.json').read_text()), 'instructions':(home/'CLAUDE.md').read_text(),'args':sys.argv[1:],'configDir':str(home)}}))\n")
+    native.write_text(f"#!{sys.executable}\nimport os,json,pathlib,sys\nhome=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])\nprint(json.dumps({{ 'settings':json.loads((home/'settings.json').read_text()), 'instructions':(home/'CLAUDE.md').read_text(),'args':sys.argv[1:],'configDir':str(home),'style':(home/'output-styles'/(json.loads((home/'settings.json').read_text())['outputStyle']+'.md')).read_text()}}))\n")
     native.chmod(0o700)
     omnigent = binaries / "omnigent"
     omnigent.write_text(f"#!{sys.executable}\nimport os,subprocess\nsubprocess.run([{str(home / '.omnigent/moonmind/bin/claude')!r},'--settings','/private/authority.json','--model','admitted-model'],check=True,env={{'PATH':os.environ['PATH'],'HOME':'/native-home'}})\n")
@@ -141,6 +156,7 @@ def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_
             "instructions": f"Work in /work/admitted; support {home}/.omnigent/moonmind/runtime-context",
             "args": ["--settings", "/private/authority.json", "--model", "admitted-model"],
             "configDir": str(home / ".omnigent/moonmind/runtime-context" / home_name),
+            "style": OUTPUT_STYLE,
         }
 
 
@@ -238,3 +254,11 @@ def test_authored_private_home_moves_equivalent_profile_to_shared_route():
     }}
     assert configuration_accepts_profile(document, profile)
     assert not profile_has_native_inventory_route(profile, [(SimpleNamespace(), SimpleNamespace(document=document))])
+
+
+@pytest.mark.parametrize("permissions", ["0644", "0700", "0601"])
+def test_output_style_cannot_be_public_or_executable(permissions):
+    config = configuration()
+    config["fileTemplates"][-1]["permissions"] = permissions
+    with pytest.raises(ValueError, match="private permissions"):
+        validate_configuration(config)

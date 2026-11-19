@@ -71,7 +71,10 @@ def validate_configuration(configuration):
         elif relative == "CLAUDE.md" or (
             relative.startswith("rules/") and relative.endswith(".md")
             and "{{" not in relative
-        ):
+        ) or re.fullmatch(r"output-styles/[A-Za-z0-9][A-Za-z0-9_.-]*\.md", relative):
+            # Output styles are declarative Markdown selected by outputStyle.
+            # Only literal files in the vendor directory join the shared home;
+            # executable hooks, plugins and credential files remain excluded.
             if item["format"] != "text" or not isinstance(item["content_template"], str):
                 raise ValueError("Claude instruction files require text")
         else:
