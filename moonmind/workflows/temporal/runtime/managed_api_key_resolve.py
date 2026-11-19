@@ -554,13 +554,22 @@ async def _selected_enterprise_source_connection(parameters, source_ref, reposit
         github_host_from_endpoint,
         normalize_github_repository_remote,
     )
-    from moonmind.omnigent.repository_sources import normalize_repository_source
+    from moonmind.omnigent.repository_sources import (
+        normalize_repository_source,
+        selected_github_https_repository_source,
+    )
     from moonmind.workflows.executions.repository_contract import (
         RepositoryContractError,
         authored_repository_access,
     )
 
-    if not source_ref or normalize_repository_source(source_ref)[1] != "remote":
+    # Only the migrated trusted Enterprise HTTPS shape uses this owner.
+    # Historical SSH/public GitHub sources retain their prior authority path.
+    if (
+        not source_ref
+        or selected_github_https_repository_source(source_ref) is None
+        or normalize_repository_source(source_ref)[1] != "remote"
+    ):
         return None
     connection_ref, anonymous = authored_repository_access(parameters)
     if not connection_ref or anonymous or operation != "read":

@@ -68,6 +68,13 @@ async def test_selected_enterprise_url_resolves_same_verified_assignment(
         ("https://github.enterprise.test/Acme/Repo.git?token=secret", True),
         (REMOTE, False),
     ],
+    ids=[
+        "foreign-host",
+        "foreign-owner",
+        "foreign-repository",
+        "url-query",
+        "untrusted-host",
+    ],
 )
 async def test_selected_enterprise_assignment_rejects_foreign_or_untrusted_target(
     monkeypatch, remote, trusted
@@ -222,3 +229,76 @@ async def test_generic_selected_assignment_does_not_gain_enterprise_url_alias(
     selected.hosting_service = "generic_git"
     with pytest.raises(ValueError):
         await service()._recorded_launch_assignment(selected, REMOTE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection", ["selected-public", "repository-connection:git-default", None]
+)
+async def test_recorded_public_github_ssh_read_retains_existing_selection(
+    monkeypatch, selection
+):
+    parameters = {
+        "workspace": {
+            "workspaceSource": {
+                "kind": "repository",
+                "repository": "git@github.com:Acme/Repo.git",
+                "connectionRef": selection,
+                "accessMode": "explicit",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        resolver,
+        "_admitted_repository_record",
+        AsyncMock(return_value=("root", "run", parameters)),
+    )
+    if selection is None:
+        # The historical access owner resolves implicit defaults independently.
+        monkeypatch.setattr(
+            resolver,
+            "load_admitted_repository_access",
+            AsyncMock(return_value=("", False)),
+        )
+    selected = SimpleNamespace(endpoint_ref="https://github.com")
+    access = AsyncMock(
+        return_value=SimpleNamespace(
+            connection=selected, credential=SimpleNamespace(token="recorded-token")
+        )
+    )
+    monkeypatch.setattr(resolver, "select_github_access_for_launch", access)
+    enterprise_load = AsyncMock(
+        side_effect=AssertionError("SSH must retain the existing selection owner")
+    )
+    monkeypatch.setattr(
+        resolver, "load_repository_connection_for_launch", enterprise_load
+    )
+    result = await resolver.resolve_admitted_git_read(
+        "root:step", repository="Acme/Repo"
+    )
+    assert result == resolver.AdmittedGitRead(
+        "https://github.com/Acme/Repo.git", "github.com", "recorded-token"
+    )
+    access.assert_awaited_once_with(
+        selection or "repository-connection:git-default",
+        repository="Acme/Repo",
+        required_operations=("read",),
+    )
+    enterprise_load.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recorded_public_github_ssh_nonread_retains_repository_fence(monkeypatch):
+    parameters = {"repository": "git@github.com:Acme/Repo.git"}
+    monkeypatch.setattr(
+        resolver,
+        "_admitted_repository_record",
+        AsyncMock(return_value=("root", "run", parameters)),
+    )
+    assert await resolver.acquire_admitted_repository_use(
+        "root", repository="Acme/Repo", operation="branch_write"
+    ) == (None, None)
+    with pytest.raises(ValueError, match="conflicts with the recorded run"):
+        await resolver.acquire_admitted_repository_use(
+            "root", repository="Acme/Other", operation="branch_write"
+        )
