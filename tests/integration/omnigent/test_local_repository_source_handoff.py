@@ -364,13 +364,23 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     launcher = ManagedRuntimeLauncher(
         ManagedRunStore(journey.worker_root / "managed_runs")
     )
-    destination = Path(
-        await launcher._prepare_workspace_path(
-            run_id="next-native-attempt",
-            request=request,
-            workspace_path=None,
+    # The native comparator runs in the fixture process rather than the
+    # provider's uid. Give only that comparator exact source trust; the shared
+    # export above and below must supply its own isolated upload-pack trust.
+    with monkeypatch.context() as native_identity:
+        if os.geteuid() == 0:
+            native_identity.setenv("GIT_CONFIG_COUNT", "2")
+            native_identity.setenv("GIT_CONFIG_KEY_0", "safe.directory")
+            native_identity.setenv("GIT_CONFIG_VALUE_0", str(source))
+            native_identity.setenv("GIT_CONFIG_KEY_1", "safe.directory")
+            native_identity.setenv("GIT_CONFIG_VALUE_1", str(source / ".git"))
+        destination = Path(
+            await launcher._prepare_workspace_path(
+                run_id="next-native-attempt",
+                request=request,
+                workspace_path=None,
+            )
         )
-    )
     assert destination != source
     # AgentRun's managed launch calls this preparation owner with the authored
     # branch: it uses --single-branch, unlike the unrelated sandbox checkout API.
