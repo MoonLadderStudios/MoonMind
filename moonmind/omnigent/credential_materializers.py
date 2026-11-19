@@ -94,9 +94,9 @@ class CredentialRuntimeHandle(BaseModel):
             from moonmind.provider_profiles.claude_configuration import (
                 process_home_configuration,
             )
-            if (self.materializerRef != "claude-oauth-home@1"
+            if (self.materializerRef not in {"claude-oauth-home@1", "omnigent-provider-config@1"}
                 or process_home_configuration(self.claudeProcessHomeConfiguration) != self.claudeProcessHomeConfiguration):
-                raise ValueError("process HOME requires its selected Claude OAuth configuration")
+                raise ValueError("process HOME requires its selected Claude configuration")
         return self
 
     cleanupRef: str = Field(alias="cleanupRef")
@@ -435,7 +435,7 @@ def anticipated_credential_handle(
     materializer_ref: str,
     *,
     profile_credential_home: ProfileCredentialHome | None = None,
-    provider_launch_environment: ProviderLaunchEnvironment | None = None,
+    provider_launch_environment: ProviderLaunchEnvironment | ProviderConfigEndpoint | None = None,
 ) -> CredentialRuntimeHandle:
     runtime_ref, digest = credential_runtime_identity(acquired, materializer_ref)
     attachments: list[dict[str, Any]] = []
@@ -1039,6 +1039,7 @@ finally:
                        if endpoint is not None and endpoint.claudeConfiguration is not None else {}),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
+                "claudeProcessHomeConfiguration": _claude_process_home(endpoint),
                 "runtimeEnvironmentTemplates": endpoint.environmentTemplates if endpoint is not None else None,
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
@@ -1722,81 +1723,84 @@ class OmnigentCredentialProvisioningService:
                         profile_credential_home = (
                             await self._load_profile_credential_home(acquired)
                         )
-                    anticipated = anticipated_credential_handle(
-                        acquired,
-                        binding.materializerRef,
-                        profile_credential_home=profile_credential_home,
-                        provider_launch_environment=(
-                            configurations.get(slot)
-                            if configurations is not None
-                            and isinstance(
-                                configurations.get(slot), ProviderLaunchEnvironment
-                            )
-                            else None
-                        ),
-                    )
-                    await self._persist_handle(
-                        anticipated, cleanup_state="materializing"
-                    )
-                    handle_index = len(handles)
-                    handles.append(anticipated)
-                    provider_endpoint = None
-                    if binding.materializerRef == PROVIDER_CONFIG_MATERIALIZER_REF:
-                        admitted = (
-                            {"admitted_endpoint": configurations[slot]}
-                            if configurations is not None else {}
-                        )
-                        (
-                            secrets,
-                            provider_endpoint,
-                        ) = await self._secrets.resolve_provider_config(
-                            acquired=acquired,
-                            allowed_secret_roles=descriptor.requiredSecretRoles,
-                            **admitted,
-                        )
-                    else:
-                        secrets = await self._secrets.resolve(
-                            acquired=acquired,
-                            allowed_secret_roles=descriptor.requiredSecretRoles,
-                        )
-                    implementation = self._registry.require(binding.materializerRef)
+                    secrets = None
                     try:
-                        handle = await implementation.materialize(
-                            CredentialMaterializationContext(
-                                request=request,
-                                acquired=acquired,
-                                secrets=secrets,
-                                writer_image_ref=writer_image_ref,
-                                artifact_gateway=self._artifacts,
-                                model_qualified_id=plan.payload.modelConfig.qualifiedId,
-                                provider_route_ref=plan.payload.modelConfig.routeRef,
-                                profile_credential_home=profile_credential_home,
-                                expected_omnigent_version=str(
-                                    getattr(plan.payload, "omnigentVersion", "") or ""
-                                ),
-                                provider_endpoint=provider_endpoint,
-                                provider_launch_environment=(
-                                    configurations.get(slot)
-                                    if configurations is not None
-                                    and isinstance(configurations.get(slot), ProviderLaunchEnvironment)
-                                    else None
-                                ),
+                        provider_endpoint = None
+                        if binding.materializerRef == PROVIDER_CONFIG_MATERIALIZER_REF:
+                            admitted = (
+                                {"admitted_endpoint": configurations[slot]}
+                                if configurations is not None else {}
                             )
+                            (
+                                secrets,
+                                provider_endpoint,
+                            ) = await self._secrets.resolve_provider_config(
+                                acquired=acquired,
+                                allowed_secret_roles=descriptor.requiredSecretRoles,
+                                **admitted,
+                            )
+                        anticipated = anticipated_credential_handle(
+                            acquired,
+                            binding.materializerRef,
+                            profile_credential_home=profile_credential_home,
+                            provider_launch_environment=provider_endpoint or (
+                                configurations.get(slot)
+                                if configurations is not None
+                                and isinstance(
+                                    configurations.get(slot), ProviderLaunchEnvironment
+                                )
+                                else None
+                            ),
                         )
-                    except TimeoutError as exc:
-                        # Its Docker steps take under a second on a healthy
-                        # host; a timeout is host contention, and no agent
-                        # session exists yet. Type it so the step's bounded
-                        # retry (retry_materialization) owns recovery.
-                        detail = str(exc) or "a Docker step timed out"
-                        raise HarnessPlatformError(
-                            f"{binding.materializerRef} credential "
-                            f"materialization timed out: {detail}",
-                            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-                            transient=True,
-                        ) from exc
+                        await self._persist_handle(
+                            anticipated, cleanup_state="materializing"
+                        )
+                        handle_index = len(handles)
+                        handles.append(anticipated)
+                        if binding.materializerRef != PROVIDER_CONFIG_MATERIALIZER_REF:
+                            secrets = await self._secrets.resolve(
+                                acquired=acquired,
+                                allowed_secret_roles=descriptor.requiredSecretRoles,
+                            )
+                        implementation = self._registry.require(binding.materializerRef)
+                        try:
+                            handle = await implementation.materialize(
+                                CredentialMaterializationContext(
+                                    request=request,
+                                    acquired=acquired,
+                                    secrets=secrets,
+                                    writer_image_ref=writer_image_ref,
+                                    artifact_gateway=self._artifacts,
+                                    model_qualified_id=plan.payload.modelConfig.qualifiedId,
+                                    provider_route_ref=plan.payload.modelConfig.routeRef,
+                                    profile_credential_home=profile_credential_home,
+                                    expected_omnigent_version=str(
+                                        getattr(plan.payload, "omnigentVersion", "") or ""
+                                    ),
+                                    provider_endpoint=provider_endpoint,
+                                    provider_launch_environment=(
+                                        configurations.get(slot)
+                                        if configurations is not None
+                                        and isinstance(configurations.get(slot), ProviderLaunchEnvironment)
+                                        else None
+                                    ),
+                                )
+                            )
+                        except TimeoutError as exc:
+                            # Its Docker steps take under a second on a healthy
+                            # host; a timeout is host contention, and no agent
+                            # session exists yet. Type it so the step's bounded
+                            # retry (retry_materialization) owns recovery.
+                            detail = str(exc) or "a Docker step timed out"
+                            raise HarnessPlatformError(
+                                f"{binding.materializerRef} credential "
+                                f"materialization timed out: {detail}",
+                                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                                transient=True,
+                            ) from exc
                     finally:
-                        secrets.clear()
+                        if secrets is not None:
+                            secrets.clear()
                     if (
                         handle.credentialRuntimeRef != anticipated.credentialRuntimeRef
                         or handle.cleanupRef != anticipated.cleanupRef

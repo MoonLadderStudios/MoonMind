@@ -35,14 +35,33 @@ def validate_configuration(configuration):
     prefix = "{{runtime_support_dir}}/"
     name = home.removeprefix(prefix) if isinstance(home, str) else ""
     if (
-        not isinstance(overrides, dict) or set(overrides) != {"CLAUDE_CONFIG_DIR"}
+        not isinstance(overrides, dict) or set(overrides) - {"CLAUDE_CONFIG_DIR", "HOME"}
         or not isinstance(home, str) or not home.startswith(prefix)
         or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*-home", name)
         or name == "codex-home"
     ):
         raise ValueError("home path overrides require an attempt-private Claude configuration home")
+    process_home = overrides.get("HOME")
+    process_files = []
+    source_files = [
+        raw.model_dump(by_alias=False, mode="json") if hasattr(raw, "model_dump") else raw
+        for raw in configuration["fileTemplates"]
+    ]
+    if any(not isinstance(raw, dict) for raw in source_files):
+        raise ValueError("Claude file templates must be objects")
+    if "HOME" in overrides:
+        if not isinstance(process_home, str):
+            raise ValueError("process HOME requires an isolated private child")
+        if process_home == home:
+            raise ValueError("process HOME and Claude configuration home must be distinct")
+        private = validate_oauth_configuration({
+            "homePathOverrides": {"HOME": process_home},
+            "fileTemplates": [raw for raw in source_files if str(raw.get("path", "")).startswith(str(process_home) + "/")],
+        })
+        process_files = private["fileTemplates"]
+        source_files = [raw for raw in source_files if not str(raw.get("path", "")).startswith(str(process_home) + "/")]
     files = []
-    for raw in configuration["fileTemplates"]:
+    for raw in source_files:
         if hasattr(raw, "model_dump"):
             raw = raw.model_dump(by_alias=False, mode="json")
         if not isinstance(raw, dict):
@@ -88,7 +107,7 @@ def validate_configuration(configuration):
         if ProfileTemplateRenderer._parse_permissions(item["permissions"]) != 0o600:
             raise ValueError("Claude file templates require private permissions")
         files.append(item)
-    return {"homePathOverrides": {"CLAUDE_CONFIG_DIR": home}, "fileTemplates": files}
+    return {"homePathOverrides": dict(overrides), "fileTemplates": files + process_files}
 
 
 def configuration_for_profile(profile):
@@ -106,7 +125,11 @@ def materialize_configuration(
 ):
     """Initialize an attempt's home once; retries never append twice."""
     configuration = validate_configuration(configuration)
-    return _materialize_private_files(configuration, runtime_support_dir=runtime_support_dir, workspace_path=workspace_path, template_support_dir=template_support_dir)
+    home = configuration["homePathOverrides"]["CLAUDE_CONFIG_DIR"]
+    private = {"homePathOverrides": {"CLAUDE_CONFIG_DIR": home}, "fileTemplates": [
+        item for item in configuration["fileTemplates"] if item["path"].startswith(home + "/")
+    ]}
+    return _materialize_private_files(private, runtime_support_dir=runtime_support_dir, workspace_path=workspace_path, template_support_dir=template_support_dir)
 
 
 def _materialize_private_files(configuration, *, runtime_support_dir, workspace_path, template_support_dir=None, process_home=False):
@@ -262,12 +285,15 @@ def render_oauth_files(configuration, *, runtime_support_dir, workspace_path):
 
 
 def process_home_configuration(configuration):
-    """Return the validated process-home projection, separate from OAuth files."""
-    # API-key configurations have their own private configuration-directory owner.
-    # Only an authored process HOME selects this OAuth projection contract.
+    """Return the validated process-home projection, separate from credential files."""
     if "HOME" not in configuration.get("homePathOverrides", {}):
         return None
-    configuration = validate_oauth_configuration(configuration)
+    selector = configuration["homePathOverrides"].get("CLAUDE_CONFIG_DIR")
+    configuration = (
+        validate_configuration(configuration)
+        if selector is not None and selector != _ENROLLED_HOME
+        else validate_oauth_configuration(configuration)
+    )
     home = configuration["homePathOverrides"]["HOME"]
     return {"homePathOverrides": {"HOME": home}, "fileTemplates": [
         item for item in configuration["fileTemplates"] if item["path"].startswith(home + "/")

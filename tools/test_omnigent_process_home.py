@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def verify(upstream: Path, python: Path) -> None:
+def verify(upstream: Path, python: Path, *, api_key: bool = False) -> None:
     from moonmind.omnigent.host_services.runtime_scripts import (
         OmnigentRuntimeScriptService,
     )
@@ -51,19 +51,27 @@ def verify(upstream: Path, python: Path) -> None:
             for path in (runner_home, skills, binaries):
                 path.mkdir(parents=True)
             (binaries / "python3").symlink_to(python)
-            (binaries / "claude").write_text("#!/bin/sh\nexit 0\n")
+            (binaries / "claude").write_text('#!/bin/sh\nprintf "%s\\n" "$HOME" "$CLAUDE_CONFIG_DIR"; cat "$HOME/NOTES.md"\n')
             (binaries / "claude").chmod(0o700)
             private = runner_home / ".omnigent/moonmind/runtime-context/process-home"
+            config_home = runner_home / ".omnigent/moonmind/runtime-context/claude-home" if api_key else runner_home / ".claude"
+            if api_key:
+                projection = runner_home / ".moonmind-provider-config"
+                projection.mkdir()
+                (projection / ".moonmind-generation").write_text("3\n")
+                config = {"homePathOverrides": {**configuration["homePathOverrides"], "CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home"}, "fileTemplates": configuration["fileTemplates"]}
+                (projection / "claude-profile.json").write_text(json.dumps(config))
             workspace = "/work/" + sibling
             expected = str(private) + "\nAdmitted notes for " + workspace + ".\n"
             runner = binaries / "omnigent"
             runner.write_text(f"""#!{python}
-import asyncio, dataclasses, json, os
+import asyncio, dataclasses, json, os, subprocess
+from omnigent.inner.terminal import terminal_pane_environment
 from omnigent.inner.loader import _parse_os_env_spec
 from omnigent.inner.os_env import create_os_environment
 from omnigent.spec.parser import _parse_os_env
 original = os.environ['HOME']
-assert os.environ['CLAUDE_CONFIG_DIR'] == {str(runner_home / ".claude")!r}
+assert os.environ['CLAUDE_CONFIG_DIR'] == {str(config_home)!r}
 spec = _parse_os_env_spec(dataclasses.asdict(_parse_os_env({{'process_home': {str(private)!r}, 'sandbox': {{'type': 'none'}}}})))
 for _ in range(2):
     environment = create_os_environment(spec)
@@ -72,6 +80,9 @@ for _ in range(2):
         assert observed['stdout'] == {expected!r}, observed
     finally:
         environment.close()
+terminal_env = terminal_pane_environment(inherit_env=True, env={{}}, env_unset=[], process_home={str(private)!r})
+cli = subprocess.run([{str(runner_home / '.omnigent/moonmind/bin/claude')!r}], env=terminal_env, capture_output=True, text=True, check=True)
+assert cli.stdout == {str(private) + chr(10) + str(config_home) + chr(10) + 'Admitted notes for ' + workspace + '.' + chr(10)!r}, cli
 assert os.environ['HOME'] == original
 print(json.dumps({{'home': {str(private)!r}, 'runnerHome': original}}))
 """)
@@ -79,7 +90,8 @@ print(json.dumps({{'home': {str(private)!r}, 'runnerHome': original}}))
             script, environment = OmnigentRuntimeScriptService().build_entrypoint(
                 credential_handles=[
                     {
-                        "materializerRef": "claude-oauth-home@1",
+                        "materializerRef": "omnigent-provider-config@1" if api_key else "claude-oauth-home@1",
+                        **({"runtimeEnvironment": {"MOONMIND_CLAUDE_PROFILE_CONFIG_FILE": "/home/app/.moonmind-provider-config/claude-profile.json", "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config"}} if api_key else {}),
                         "credentialGeneration": 3,
                         "attachments": [],
                         "claudeProcessHomeConfiguration": configuration,
@@ -129,8 +141,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream", type=Path, default=ROOT / "omnigent")
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
+    parser.add_argument("--api-key", action="store_true")
     args = parser.parse_args()
-    verify(args.upstream.resolve(), args.python.absolute())
+    verify(args.upstream.resolve(), args.python.absolute(), api_key=args.api_key)
 
 
 if __name__ == "__main__":
