@@ -51,6 +51,7 @@ session_factory = native_fixture.session_factory
         "env_template",
         "file_templates",
         "home_path_overrides",
+        "home_path_overrides_implicit",
         "model_overrides",
         "step_model_overrides",
         "profile_default_tier",
@@ -107,6 +108,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "unavailable_environment": {"REPORT_DIR": "{{unknown_runtime_dir}}/reports"},
         "secret_environment": {"REPORT_DIR": "{{selected_secret}}/reports"},
     }
+    shared_process_home = option == "home_path_overrides" and runtime == "claude_code"
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, native_fixture.PROFILE)
@@ -171,6 +173,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                         {"model": journey.server.model}
                                         if option
                                         in {
+                                            "home_path_overrides",
                                             "claude_oauth_tuning",
                                             "shell_environment",
                                             "templated_environment",
@@ -209,7 +212,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             TemporalExecutionCanonicalRecord, response.json()["workflowId"]
         )
         request = agent_requests(record.parameters)["work"]
-        if field == "model_overrides" or option in {
+        if shared_process_home or field == "model_overrides" or option in {
             "claude_oauth_tuning",
             "shell_environment",
             "templated_environment",
@@ -233,7 +236,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             }.get(option)
             if expected_source:
                 assert record.parameters["modelSource"] == expected_source
-            if option in {
+            if shared_process_home or option in {
                 "templated_environment",
                 "support_environment",
                 "claude_authored_files",
@@ -250,7 +253,13 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                     content, saved, plan.payload.credentialBindings
                 )
                 configuration = configurations["primary-model"]
-                if option == "claude_authored_files":
+                if shared_process_home:
+                    assert (
+                        configuration.claudeConfiguration["homePathOverrides"]
+                        == values[option]
+                    )
+                    assert configuration.claudeConfiguration["fileTemplates"] == []
+                elif option == "claude_authored_files":
                     assert (
                         configuration.claudeConfiguration["fileTemplates"][0][
                             "content_template"

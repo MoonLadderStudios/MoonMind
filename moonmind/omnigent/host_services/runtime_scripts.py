@@ -116,13 +116,14 @@ _MOONMIND_RUNTIME_ENV_FILES = {
 
 def claude_process_home_from_handles(credential_handles):
     """Resolve the one frozen process-home projection for this exact host."""
-    from moonmind.provider_profiles.claude_configuration import (
-        process_home_configuration,
-    )
     configurations = []
     for handle in credential_handles:
         configuration = handle.get("claudeProcessHomeConfiguration")
         if configuration is not None:
+            from moonmind.provider_profiles.claude_configuration import (
+                process_home_configuration,
+            )
+
             validated = process_home_configuration(configuration)
             if handle.get("materializerRef") != "claude-oauth-home@1" or validated != configuration:
                 raise ValueError("process HOME requires its selected Claude OAuth configuration")
