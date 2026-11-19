@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
@@ -53,7 +54,7 @@ class RestoreDestination(BaseModel):
 
 class SandboxRestoreDestination(SandboxWorkspaceLocator):
     relative_path: Literal["repo"] = Field("repo", alias="relativePath")
-    repository: str | None = Field(None, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository: str | None = None
     repository_identity: RepositoryIdentity | None = Field(
         None, alias="repositoryIdentity"
     )
@@ -71,6 +72,19 @@ class SandboxRestoreDestination(SandboxWorkspaceLocator):
 
     @model_validator(mode="after")
     def validate_repository_identity(self) -> "SandboxRestoreDestination":
+        if self.repository is not None and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository):
+            from moonmind.omnigent.repository_sources import (
+                anonymous_https_repository_source,
+            )
+
+            remote = anonymous_https_repository_source(self.repository)
+            if (
+                remote is None or self.repository_identity is None
+                or self.repository_identity.canonical_remote != remote[0]
+                or self.repository_identity.endpoint != remote[1]
+                or self.repository_identity.display_name != remote[0]
+            ):
+                raise ValueError("HTTPS restore repository requires its exact admitted identity")
         if self.repository_identity is not None and (
             not self.repository
             or self.repository.casefold()

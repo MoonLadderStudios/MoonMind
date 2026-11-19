@@ -59,6 +59,7 @@ class ManagedCheckpointRestoreService:
         artifact_store: Any = None,
         repository_source_root: str | Path | None = None,
         run_store: Any = None,
+        anonymous_repository_read_resolver: Any = None,
     ) -> None:
         self.root = Path(authority_root).resolve()
         self.artifact_service = artifact_service
@@ -67,6 +68,16 @@ class ManagedCheckpointRestoreService:
             Path(repository_source_root).resolve() if repository_source_root else None
         )
         self.run_store = run_store
+        self._anonymous_repository_read_resolver = anonymous_repository_read_resolver
+        # This instance is owned by one admitted anonymous restore route. Keep
+        # isolation through checkout, filters, submodule restore and verification,
+        # including bundle-only restores which never acquire source access.
+        from .git_auth import build_isolated_git_environment
+
+        self._git_environment = (
+            build_isolated_git_environment(None, base_env=dict(os.environ))
+            if anonymous_repository_read_resolver is not None else None
+        )
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _destination(self, req):
@@ -785,6 +796,8 @@ class ManagedCheckpointRestoreService:
 
     async def _admitted_git_read(self, req) -> AdmittedGitRead:
         try:
+            if self._anonymous_repository_read_resolver is not None:
+                return await self._anonymous_repository_read_resolver(req.destination.repository)
             return await resolve_admitted_git_read(
                 req.source.workflow_id, repository=req.destination.repository
             )
@@ -810,7 +823,11 @@ class ManagedCheckpointRestoreService:
             text=True,
             capture_output=True,
             check=False,
-            env=dict(env) if env is not None else None,
+            env=(
+                self._git_environment
+                if self._git_environment is not None
+                else dict(env) if env is not None else None
+            ),
         )
         if result.returncode:
             raise CheckpointRestoreError(
@@ -828,6 +845,7 @@ class ManagedCheckpointRestoreService:
             check=False,
             input=input_bytes,
             timeout=120,
+            env=self._git_environment,
         )
         if result.returncode:
             raise CheckpointRestoreError(
@@ -1139,8 +1157,19 @@ class ManagedCheckpointRestoreService:
                     )
 
                     try:
-                        repo_url = github_clone_source_from_identity(
-                            req.destination.repository_identity
+                        from moonmind.omnigent.repository_sources import (
+                            anonymous_https_repository_source,
+                        )
+
+                        remote = anonymous_https_repository_source(
+                            req.destination.repository_identity.canonical_remote or ""
+                        )
+                        repo_url = (
+                            remote[0]
+                            if remote
+                            and req.destination.repository == remote[0]
+                            and req.destination.repository_identity.endpoint == remote[1]
+                            else github_clone_source_from_identity(req.destination.repository_identity)
                         )
                     except ValueError as exc:
                         raise CheckpointRestoreError(
@@ -1175,7 +1204,11 @@ class ManagedCheckpointRestoreService:
                         if (
                             isinstance(req.destination, SandboxRestoreDestination)
                             and req.destination.repository_identity is not None
-                            and admitted.remote.casefold() != repo_url.casefold()
+                            and (
+                                admitted.remote != repo_url
+                                if self._anonymous_repository_read_resolver is not None
+                                else admitted.remote.casefold() != repo_url.casefold()
+                            )
                         ):
                             raise CheckpointRestoreError(
                                 "CHECKPOINT_REPOSITORY_UNAVAILABLE",

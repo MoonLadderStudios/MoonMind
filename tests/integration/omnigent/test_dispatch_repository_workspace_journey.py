@@ -147,7 +147,7 @@ async def _run_mounted_repository_script(argv, destination, args, *, fixture_bou
     return result
 
 
-def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False):
+def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", interrupt_before_pin=False, anonymous_remote=None):
     remote = tmp_path / "remote"
     subprocess.run(
         ["git", "init", "-q", "-b", "default-branch", str(remote)], check=True
@@ -177,9 +177,9 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
         if list(argv[:2]) == ["docker", "run"] and "clone " in " ".join(argv):
             args = list(argv[argv.index("--") + 1 :])
             selected_branch, source, target = args[:3]
-            assert source == "https://github.com/MoonLadderStudios/MoonMind.git"
+            assert source == (anonymous_remote or "https://github.com/MoonLadderStudios/MoonMind.git")
             assert selected_branch == branch
-            assert input_bytes == b"synthetic-repository-credential"
+            assert input_bytes == (b"" if anonymous_remote else b"synthetic-repository-credential")
             clones.append((selected_branch, source))
             destination = journey.worker_root / target.removeprefix("/work/")
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +197,7 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
             result = await asyncio.to_thread(
                 subprocess.run,
                 ["/bin/sh", "-ceu", argv[argv.index("-ceu") + 1], "--", *args],
-                input=input_bytes.decode(), capture_output=True, text=True, check=False,
+                input=(input_bytes or b"").decode(), capture_output=True, text=True, check=False,
             )
             if result.returncode == 0:
                 _git(destination, "remote", "set-url", "origin", source)
@@ -230,10 +230,18 @@ def _repository_transport(journey, monkeypatch, tmp_path, *, branch="main", inte
             assert args == [
                 "clone",
                 "--no-checkout",
-                "https://github.com/MoonLadderStudios/MoonMind.git",
+                anonymous_remote or "https://github.com/MoonLadderStudios/MoonMind.git",
                 args[-1],
             ]
-            assert kwargs["env"]["GITHUB_TOKEN"] == "synthetic-repository-credential"
+            if anonymous_remote:
+                # Isolation belongs to every Git operation on this restore
+                # instance, not just an explicit environment on clone.
+                environment = service._git_environment
+                assert "GITHUB_TOKEN" not in environment
+                assert "GH_TOKEN" not in environment
+                assert environment["GIT_TERMINAL_PROMPT"] == "0"
+            else:
+                assert kwargs["env"]["GITHUB_TOKEN"] == "synthetic-repository-credential"
             args = [*args[:2], str(remote), args[-1]]
         return restore_git(service, args, *positional, **kwargs)
 
@@ -299,8 +307,8 @@ async def test_root_repository_transport_reproduces_and_repairs_uid_mismatch(tmp
 )
 @pytest.mark.parametrize(
     "source_shape",
-    ["flat", "nested", "default", "pinned"],
-    ids=["flat-repository", "nested-repository-target", "omitted-source-branch", "typed-pinned-repository"],
+    ["flat", "nested", "default", "pinned", "anonymous-https", "anonymous-pinned"],
+    ids=["flat-repository", "nested-repository-target", "omitted-source-branch", "typed-pinned-repository", "anonymous-https", "anonymous-pinned"],
 )
 async def test_repository_context_survives_source_host_and_worker_cleanup(
     native_journey,
@@ -310,11 +318,14 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
     fixed_serialized,
 ):
     journey = native_journey
+    anonymous = source_shape in {"anonymous-https", "anonymous-pinned"}
+    remote_url = "https://gitlab.example.test/group/nested/Project.git" if anonymous else None
     clones = _repository_transport(
         journey,
         monkeypatch,
         tmp_path,
         branch="" if source_shape == "default" else "main",
+        anonymous_remote=remote_url,
     )
     source = {
         "kind": "repository",
@@ -335,7 +346,18 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
         source.pop("branch")
         source["connectionRef"] = "pool-repository"
     source["accessMode"] = "explicit"
-    pin = _git(tmp_path / "remote", "rev-parse", "main~1") if source_shape == "pinned" else None
+    if anonymous:
+        source.update(repository=remote_url, accessMode="anonymous", connectionRef="")
+    pin = _git(tmp_path / "remote", "rev-parse", "main~1") if source_shape in {"pinned", "anonymous-pinned"} else None
+    if source_shape == "anonymous-pinned":
+        source = {
+            "kind": "repository", "accessMode": "anonymous",
+            "repositoryTarget": {
+                "provider": "git", "repository": {"name": remote_url},
+                "branch": {"name": "main"},
+                "revision": {"kind": "git_commit", "commitSha": pin},
+            },
+        }
     execute = pool.execute_selected_pool_source
     selected = {}
 
@@ -346,7 +368,7 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             repository_workspace={"workspaceSource": source},
             bind_parent_context=True,
             repository_at_top=source_shape in {"flat", "pinned"},
-            repository_revision={"kind": "git_commit", "commitSha": pin} if pin else None,
+            repository_revision={"kind": "git_commit", "commitSha": pin} if pin and not anonymous else None,
             pinned_repository_patch=bool(pin),
         )
         selected["first"] = first
@@ -359,9 +381,13 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             _git(remote, "add", ".")
             _git(remote, "commit", "-qm", "Change remote default")
         bindings = repository_bindings_of(journey.plan.payload.credentialBindings)
-        assert bindings and all(
-            value.connectionRef == "pool-repository" for value in bindings.values()
-        )
+        if anonymous:
+            assert not bindings
+            assert set(journey.plan.payload.resolvedTools["repositoryAccess"]) == {"source"}
+        else:
+            assert bindings and all(
+                value.connectionRef == "pool-repository" for value in bindings.values()
+            )
         assert all(
             value.repositoryRole != "destination_write" for value in bindings.values()
         )
@@ -377,7 +403,7 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
             workspace = Path(native._mounts(list(argv))["/workspaces/run"]["src"])
             assert (workspace / "selected-branch.txt").read_text() == (
                 "Original default branch.\n"
-                if source_shape in {"default", "pinned"}
+                if source_shape in {"default", "pinned", "anonymous-pinned"}
                 else "Selected main, not remote default.\n"
             )
             launches.append(workspace)
@@ -420,7 +446,7 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
     assert len(launches) == 2
     assert authored_repository_access(
         {"workspaceSpec": journey.request.workspace_spec}
-    ) == ("pool-repository", False)
+    ) == (("", True) if anonymous else ("pool-repository", False))
     compiled = compile_workspace_source(journey.request.workspace_spec)
     assert compiled.kind == "checkpoint"
     if pin:
@@ -437,13 +463,16 @@ async def test_repository_context_survives_source_host_and_worker_cleanup(
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native-api-key"], indirect=True)
+@pytest.mark.parametrize("anonymous", [False, True])
 async def test_repository_cancellation_preserves_sibling_resources(
     native_journey,
     monkeypatch,
     tmp_path,
+    anonymous,
 ):
     journey = native_journey
-    clones = _repository_transport(journey, monkeypatch, tmp_path)
+    remote_url = "https://gitlab.example.test/group/Project.git" if anonymous else None
+    clones = _repository_transport(journey, monkeypatch, tmp_path, anonymous_remote=remote_url)
     sibling = journey.worker_root / "sibling-workflow" / "repo"
     sibling.mkdir(parents=True)
     (sibling / "unpublished.txt").write_text("Another active workflow's work.")
@@ -471,11 +500,13 @@ async def test_repository_cancellation_preserves_sibling_resources(
         monkeypatch,
         bind_parent_context=True,
         terminal_runner=cancel_turn,
+        repository_at_top=not anonymous,
         repository_workspace={
             "workspaceSource": {
                 "kind": "repository",
-                "repository": "MoonLadderStudios/MoonMind",
+                "repository": remote_url or "MoonLadderStudios/MoonMind",
                 "branch": "main",
+                **({"accessMode": "anonymous"} if anonymous else {}),
             }
         },
     )
