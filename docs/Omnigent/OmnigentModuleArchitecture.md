@@ -448,9 +448,12 @@ their original delivery. Codex OAuth profiles may also select a dedicated
 `/home/app/<name>-auth` enrollment with the same frozen volume/generation ownership.
 Qualified `config.toml` preferences apply only to the native private session home;
 credential source selection and hidden-default reads use the admitted mount.
-Custom-enrollment additional files remain native until their full delivery is
-qualified. Private-home detachment rejects sibling links and never edits enrollment
-state.
+Custom-enrollment nonsecret files may use literal, nonoverlapping destinations
+when each file starts with an explicit replacement. Later appends and deep merges
+keep their authored order, so retries and cold replacements retain the frozen
+contents rather than incorporating changed enrollment files. Append-first or
+merge-first files and dynamic destinations remain native. Private-home detachment
+rejects sibling links and never edits enrollment state.
 Claude OAuth and API-key profiles can also declare an attempt-private process `HOME`
 under the runtime support directory with literal, nonsecret top-level Markdown
 files. The frozen projection initializes that home before runner startup; session

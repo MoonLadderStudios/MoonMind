@@ -1094,7 +1094,7 @@ async def _compile_plan(
             fields["file_templates"] = [{
                 "path": codex_credential_mount + "/config.toml", "format": "toml",
                 "content_template": {"model_verbosity": "low"},
-            }]
+            }, *(additional_files or [])]
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,

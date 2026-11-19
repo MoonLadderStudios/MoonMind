@@ -496,13 +496,29 @@ def validate_oauth_configuration(configuration):
     return result
 
 
+def _validate_replacement_seeded_files(files):
+    """Custom enrollment files must not depend on mutable enrolled seed bytes."""
+    destinations = set()
+    for item in files:
+        relative = Path(item["path"].removeprefix("{{runtime_support_dir}}/"))
+        _validate_additional_file_path(relative)
+        if "{{" in str(relative) or "}}" in str(relative):
+            raise ValueError("custom Codex file destinations must be literal")
+        if any(path != relative and (path in relative.parents or relative in path.parents)
+               for path in destinations):
+            raise ValueError("custom Codex file destinations overlap")
+        if relative not in destinations and item["merge_strategy"] != "replace":
+            raise ValueError("custom Codex files require an explicit replacement seed")
+        destinations.add(relative)
+
+
 def oauth_configuration_for_profile(profile):
     parsed, reason = _configuration_document(profile)
     if parsed is None:
         return None, reason
     try:
         if getattr(profile, "volume_mount_path", None) not in {None, _ENROLLED_CODEX_HOME} and parsed["additionalFiles"]:
-            return None, "custom Codex enrollment additional files require native delivery"
+            _validate_replacement_seeded_files(parsed["additionalFiles"])
         # Only template-derived references to the relocated HOME bind late.
         # Absolute literals and generic support/workspace paths retain their owner.
         environment = {}
