@@ -36,8 +36,24 @@ def assert_denied(journey, rules):
 @pytest.mark.parametrize(
     "native_journey",
     [
-        {"harness": harness, "claudePreferences": True, "sessionSettings": SETTINGS}
+        {
+            "harness": harness,
+            "claudePreferences": True,
+            "sessionSettings": (
+                {"language": "English", "permissions": {"deny": ["Read(**/obsolete)"]}}
+                if merged else SETTINGS
+            ),
+            **({"additionalFiles": [{
+                "path": (
+                    "/home/app/.claude/settings.json" if harness == "claude-native"
+                    else "{{runtime_support_dir}}/claude-home/settings.json"
+                ),
+                "format": "json", "merge_strategy": "deep_merge",
+                "content_template": SETTINGS,
+            }]} if merged else {}),
+        }
         for harness in ("claude-native", "claude-native-api-key")
+        for merged in (False, True)
     ],
     indirect=True,
 )
@@ -52,6 +68,12 @@ async def test_frozen_claude_deny_survives_profile_edit_and_cold_successor(
     first = await journey.realizer.execute(journey.request, journey.plan)
     assert first.failure_class is None, first
     assert_denied(journey, DENIED)
+    if not journey.api_key:
+        assert json.loads(journey.docker.claude_preferences["settings.json"]) == SETTINGS
+    else:
+        templates = journey.docker.claude_configuration["fileTemplates"]
+        assert len(templates) == 1
+        assert templates[0]["content_template"] == SETTINGS
     predecessor = await journey.services.runtime_binding_store.get(
         stable_binding_id(
             execution_plan_ref=journey.plan.planRef,

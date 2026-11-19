@@ -113,20 +113,31 @@ def _run_probe(command, env):
         process.wait()
 
 
+_CLI_DENIES = [
+    "Read(**/forbidden file.txt)", "Bash(touch *)", "Edit(**/forbidden-edit/**)"
+]
+
+
 @pytest.mark.parametrize(
     "native_journey",
     [
         {
             "harness": "claude-native",
             "claudePreferences": True,
-            "sessionSettings": {
-                "permissions": {
-                    "deny": ["Read(**/forbidden file.txt)", "Bash(touch *)", "Edit(**/forbidden-edit/**)"]
-                }
-            },
+            "sessionSettings": {"permissions": {"deny": (
+                ["Read(**/allowed file.txt)", "Bash(printf *)"]
+                if merged else _CLI_DENIES
+            )}},
+            **({"additionalFiles": [{
+                "path": "/home/app/.claude/settings.json",
+                "format": "json", "merge_strategy": "deep_merge",
+                "content_template": {"permissions": {"deny": _CLI_DENIES}},
+            }]} if merged else {}),
         }
+        for merged in (False, True)
     ],
     indirect=True,
+    ids=["single-settings", "ordered-settings"],
 )
 @pytest.mark.parametrize("skills_filter", ["all", "none"])
 async def test_installed_cli_enforces_generated_denies_without_blocking_allowed_siblings(

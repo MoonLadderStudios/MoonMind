@@ -7,6 +7,7 @@ This module is portable so hosts run the same validation as admission.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -220,15 +221,6 @@ def validate_configuration(configuration):
                     if not isinstance(value, dict) or set(value) != {"deny"}:
                         raise ValueError("Claude permissions support deny-only rules")
                     validate_denied_tools(value["deny"])
-                    settings_files = [
-                        entry
-                        for entry in source_files
-                        if str(entry.get("path", "")) == home + "/settings.json"
-                    ]
-                    if len(settings_files) != 1 or item["merge_strategy"] != "replace":
-                        raise ValueError(
-                            "Claude deny rules require one replace settings template"
-                        )
                     continue
                 expected = bool if key.endswith("Enabled") else str
                 if type(value) is not expected:
@@ -253,6 +245,34 @@ def validate_configuration(configuration):
         if ProfileTemplateRenderer._parse_permissions(item["permissions"]) != 0o600:
             raise ValueError("Claude file templates require private permissions")
         files.append(item)
+    settings = [item for item in files if item["path"] == home + "/settings.json"]
+    if any("permissions" in item["content_template"] for item in settings):
+        if settings[0]["merge_strategy"] != "replace" or any(
+            item["merge_strategy"] not in {"replace", "deep_merge"}
+            for item in settings
+        ):
+            raise ValueError("Claude deny settings require an explicit replacement seed")
+        # Resolve only declared templates, using the native renderer's ordering
+        # and array-replacement semantics. Never merge ambient enrolled settings
+        # or union restrictions superseded by a later template.
+        renderer = ProfileTemplateRenderer(toml_serializer=lambda _: "")
+        effective = {}
+        for item in settings:
+            effective = (
+                dict(item["content_template"])
+                if item["merge_strategy"] == "replace"
+                else renderer._deep_merge_dicts(effective, item["content_template"])
+            )
+        folded = {
+            **settings[-1],
+            "merge_strategy": "replace",
+            "content_template": copy.deepcopy(effective),
+        }
+        files = [
+            folded if item is settings[-1] else item
+            for item in files
+            if item["path"] != home + "/settings.json" or item is settings[-1]
+        ]
     return {"homePathOverrides": dict(overrides), "fileTemplates": files + process_files}
 
 
