@@ -29,6 +29,7 @@ from moonmind.omnigent.repository_sources import (
     RepositorySourceError,
     normalize_repository_source,
 )
+from moonmind.provider_profiles.claude_configuration import merge_disallowed_tools
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -275,35 +276,6 @@ async def resolve_omnigent_target(
 CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY = "claude-native:disallowedTools"
 
 
-def _merge_disallowed_tools(args: list[str], tools: list[str]) -> None:
-    """Add ``tools`` to the comma-separated ``--disallowedTools`` value.
-
-    Merges into an authored flag (either spelling) so it is not overridden,
-    matching how the Omnigent Claude harness merges its own denies.
-    """
-
-    if not tools:
-        return
-    # Normalize aliases/joined values before upstream augmentation, whose merge
-    # recognizes only the separated canonical spelling. Otherwise its later flag
-    # can replace the authored restrictions in the vendor CLI.
-    for index, arg in enumerate(args):
-        if arg.startswith(("--disallowedTools=", "--disallowed-tools=")):
-            value = arg.split("=", 1)[1]
-            existing = [tool for tool in value.split(",") if tool]
-            args[index : index + 1] = [
-                "--disallowedTools",
-                ",".join(dict.fromkeys([*existing, *tools])),
-            ]
-            return
-        if arg in {"--disallowedTools", "--disallowed-tools"} and index + 1 < len(args):
-            existing = [tool for tool in args[index + 1].split(",") if tool]
-            args[index] = "--disallowedTools"
-            args[index + 1] = ",".join(dict.fromkeys([*existing, *tools]))
-            return
-    args.extend(["--disallowedTools", ",".join(tools)])
-
-
 def build_omnigent_session_create_payload(
     *,
     request: AgentExecutionRequest,
@@ -326,7 +298,7 @@ def build_omnigent_session_create_payload(
             for arg in terminal_launch_args
         ):
             terminal_launch_args.extend(defaults.get("claude-native", []))
-        _merge_disallowed_tools(
+        merge_disallowed_tools(
             terminal_launch_args,
             defaults.get(CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY, []),
         )

@@ -137,12 +137,12 @@ async def test_actual_key_materializer_preserves_frozen_rules(tmp_path):
     ],
 )
 def test_existing_cli_spellings_normalize_for_upstream_merge(authored):
-    from moonmind.workflows.adapters.omnigent_agent_adapter import (
-        _merge_disallowed_tools,
+    from moonmind.provider_profiles.claude_configuration import (
+        merge_disallowed_tools,
     )
 
     args = list(authored)
-    _merge_disallowed_tools(args, ["Bash(git push *)"])
+    merge_disallowed_tools(args, ["Bash(git push *)"])
     assert args == ["--disallowedTools", "Read,Bash(git push *)"]
 
 
@@ -190,3 +190,8 @@ def test_frozen_rules_reject_ambiguous_authored_cli(monkeypatch, arguments):
     monkeypatch.setattr(GenericOmnigentHostRealizer, "_bind_exact_host", bind)
     with pytest.raises(ValueError):
         _bind_generic(_request({"terminalLaunchArgs": arguments}), "claude-native")
+
+
+def test_projection_retains_provider_guard_outside_generic_lifecycle():
+    with pytest.raises(ValueError, match="Claude harness"):
+        config.project_denied_tools(harness_id="codex-native", arguments=[], rules=["Read"])

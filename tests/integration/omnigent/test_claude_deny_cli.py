@@ -19,7 +19,7 @@ from tests.integration.omnigent import test_generic_native_durable_journey as na
 
 session_factory = native.session_factory
 native_journey = native.native_journey
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 _PROBE = r"""
 import json, os, pathlib, shutil, socket, subprocess, sys, time, uuid

@@ -43,6 +43,35 @@ _DENY_TOOLS = {
 }
 
 
+def merge_disallowed_tools(args: list[str], tools: list[str]) -> None:
+    """Add ``tools`` to the comma-separated ``--disallowedTools`` value.
+
+    Merges into an authored flag (either spelling) so it is not overridden,
+    matching how the Omnigent Claude harness merges its own denies.
+    """
+
+    if not tools:
+        return
+    # Normalize aliases/joined values before upstream augmentation, whose merge
+    # recognizes only the separated canonical spelling. Otherwise its later flag
+    # can replace the authored restrictions in the vendor CLI.
+    for index, arg in enumerate(args):
+        if arg.startswith(("--disallowedTools=", "--disallowed-tools=")):
+            value = arg.split("=", 1)[1]
+            existing = [tool for tool in value.split(",") if tool]
+            args[index : index + 1] = [
+                "--disallowedTools",
+                ",".join(dict.fromkeys([*existing, *tools])),
+            ]
+            return
+        if arg in {"--disallowedTools", "--disallowed-tools"} and index + 1 < len(args):
+            existing = [tool for tool in args[index + 1].split(",") if tool]
+            args[index] = "--disallowedTools"
+            args[index + 1] = ",".join(dict.fromkeys([*existing, *tools]))
+            return
+    args.extend(["--disallowedTools", ",".join(tools)])
+
+
 def validate_denied_tools(rules):
     """Literal built-in restrictions representable by the shared CLI transport."""
     if not isinstance(rules, list) or len(rules) > 64:
@@ -60,6 +89,27 @@ def validate_denied_tools(rules):
         }:
             raise ValueError("Claude deny pattern requires a supported built-in tool")
     return list(dict.fromkeys(rules))
+
+
+def project_denied_tools(*, harness_id, arguments, rules):
+    """Apply frozen Claude policy through its thin provider argument adapter."""
+    if harness_id != "claude-native":
+        raise ValueError("Claude deny projection requires the Claude harness")
+    if not isinstance(arguments, list) or any(not isinstance(arg, str) for arg in arguments):
+        raise ValueError("Claude launch arguments must be a string array")
+    flags = [
+        index for index, arg in enumerate(arguments)
+        if arg.split("=", 1)[0] in {"--disallowedTools", "--disallowed-tools"}
+    ]
+    if len(flags) > 1 or any(
+        "=" not in arguments[index]
+        and (index + 1 == len(arguments) or arguments[index + 1].startswith("--"))
+        for index in flags
+    ):
+        raise ValueError("Claude deny projection requires unambiguous tool arguments")
+    projected = list(arguments)
+    merge_disallowed_tools(projected, validate_denied_tools(rules))
+    return projected
 
 
 def denied_tools(configuration):
