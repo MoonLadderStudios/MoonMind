@@ -89,6 +89,11 @@ async def test_fixed_serialized_account_uses_the_same_fenced_plan_owner(
     await execute_selected_pool_source(native_journey, monkeypatch, fixed_serialized=True)
 
 
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_recorded_shared_source_failure_never_switches_to_native(native_journey, monkeypatch):
+    await execute_selected_pool_source(native_journey, monkeypatch, scenario="recorded_source_failure")
+
+
 def _submission(payload, *, fixed_serialized, runtime):
     if not fixed_serialized:
         return payload
@@ -654,6 +659,36 @@ async def execute_selected_pool_source(
         )
         provider.enabled = True
         await session.commit()
+
+        if scenario == "recorded_source_failure":
+            from api_service.services import native_pool_execution_plan as pool_service
+            from moonmind.omnigent.repository_sources import RepositorySourceHandoffUnavailable
+
+            _, profile_bytes = await artifacts.read(
+                artifact_id=plan.payload.agentProfileSnapshotRef.removeprefix("artifact:"),
+                access=access,
+            )
+            # Retain the real admitted plan/configuration while simulating the
+            # checkpoint lookup for a replacement attempt's newly granted slot.
+            saved = row.safe_metadata_json["preparedPoolPlan"]
+            recorded = pool_service._RecordedPoolStep(
+                plan, json.loads(profile_bytes),
+                pool_service._recorded_pool_resolution(plan.payload.modelConfig.tierResolution),
+                saved.get("launchParameters"),
+            )
+            row.execution_plan_ref = None
+            await session.commit()
+            failure = RepositorySourceHandoffUnavailable("recorded source grant no longer supports shared execution")
+            compile_plan = AsyncMock(side_effect=failure)
+            monkeypatch.setattr(pool_service, "_recorded_step_plan", AsyncMock(return_value=recorded))
+            monkeypatch.setattr(pool_service, "compile_and_persist_execution_plan", compile_plan)
+            with pytest.raises(RepositorySourceHandoffUnavailable) as raised:
+                await prepare_selected_pool_plan(session, runtime_id=runtime, payload=payload, client=transport)
+            assert raised.value is failure
+            compile_plan.assert_awaited_once()
+            assert row.execution_plan_ref is None
+            assert await session.scalar(select(func.count(OmnigentExecutionPlanRecord.plan_ref))) == plan_count
+            return None
 
     if publish_scenario or scenario == "explicit_work_branch":
         return None
