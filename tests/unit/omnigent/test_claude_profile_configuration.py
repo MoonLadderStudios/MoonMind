@@ -16,8 +16,8 @@ from moonmind.omnigent.harness_platform.materializers import (
 from tests.unit.omnigent.test_claude_api_key_provider_config import _api_key_profile, _provision
 
 
-def configuration():
-    return {
+def configuration(home="{{runtime_support_dir}}/claude-home"):
+    result = {
         "homePathOverrides": {"CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/claude-home"},
         "fileTemplates": [
             {"path": "{{runtime_support_dir}}/claude-home/settings.json", "format": "json", "content_template": {"outputStyle": "concise"}},
@@ -25,6 +25,10 @@ def configuration():
             {"path": "{{runtime_support_dir}}/claude-home/CLAUDE.md", "format": "text", "merge_strategy": "append", "content_template": "Work in {{workspace_path}}; support {{runtime_support_dir}}"},
         ],
     }
+    result["homePathOverrides"]["CLAUDE_CONFIG_DIR"] = home
+    for item in result["fileTemplates"]:
+        item["path"] = item["path"].replace("{{runtime_support_dir}}/claude-home", home)
+    return result
 
 
 def test_shared_renderer_initializes_once_and_isolates_siblings(tmp_path):
@@ -67,8 +71,9 @@ def test_untranslated_authority_and_paths_stay_native(path, content, format):
     assert endpoint is None and reason
 
 
-def test_configuration_snapshot_preserves_admitted_files_after_profile_edit():
-    config = configuration()
+@pytest.mark.parametrize("home_name", ["claude-home", "authored-claude-home"])
+def test_configuration_snapshot_preserves_admitted_files_after_profile_edit(home_name):
+    config = configuration("{{runtime_support_dir}}/" + home_name)
     profile = _api_key_profile(home_path_overrides=config["homePathOverrides"], file_templates=config["fileTemplates"])
     endpoint, reason = claude_provider_config_endpoint(profile)
     assert endpoint is not None, reason
@@ -76,13 +81,16 @@ def test_configuration_snapshot_preserves_admitted_files_after_profile_edit():
     bindings = {"primary-model": binding}
     content = provider_configuration_snapshot_bytes(bindings, {"primary-model": endpoint})
     profile.file_templates[0]["content_template"] = {"outputStyle": "changed"}
+    profile.home_path_overrides["CLAUDE_CONFIG_DIR"] = "{{runtime_support_dir}}/changed-home"
     saved = load_provider_configuration_snapshot(content, SimpleNamespace(contentDigest="sha256:" + hashlib.sha256(content).hexdigest()), bindings)
     assert saved["primary-model"].claudeConfiguration["fileTemplates"][0]["content_template"] == {"outputStyle": "concise"}
+    assert saved["primary-model"].claudeConfiguration["homePathOverrides"]["CLAUDE_CONFIG_DIR"] == "{{runtime_support_dir}}/" + home_name
 
 
 @pytest.mark.asyncio
-async def test_authored_files_provision_without_extra_secret_resolution(tmp_path):
-    config = configuration()
+@pytest.mark.parametrize("home_name", ["claude-home", "authored-claude-home"])
+async def test_authored_files_provision_without_extra_secret_resolution(tmp_path, home_name):
+    config = configuration("{{runtime_support_dir}}/" + home_name)
     handles, _, backend, _, resolver = await _provision(tmp_path, profile_values={
         "credential_source": "secret_ref", "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
@@ -95,7 +103,8 @@ async def test_authored_files_provision_without_extra_secret_resolution(tmp_path
     assert json.loads(body)["_moonmind_claude_configuration"] == validate_configuration(config)
 
 
-def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_path):
+@pytest.mark.parametrize("home_name", ["claude-home", "authored-claude-home"])
+def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_path, home_name):
     import os
     import subprocess
     import sys
@@ -106,11 +115,11 @@ def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_
         directory.mkdir()
     projection = home / ".moonmind-provider-config"
     projection.mkdir()
-    (projection / "claude-profile.json").write_text(json.dumps(configuration()))
+    (projection / "claude-profile.json").write_text(json.dumps(configuration("{{runtime_support_dir}}/" + home_name)))
     (projection / ".moonmind-generation").write_text("3\n")
     (binaries / "python3").symlink_to(sys.executable)
     native = binaries / "claude"
-    native.write_text(f"#!{sys.executable}\nimport os,json,pathlib,sys\nhome=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])\nprint(json.dumps({{ 'settings':json.loads((home/'settings.json').read_text()), 'instructions':(home/'CLAUDE.md').read_text(),'args':sys.argv[1:]}}))\n")
+    native.write_text(f"#!{sys.executable}\nimport os,json,pathlib,sys\nhome=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])\nprint(json.dumps({{ 'settings':json.loads((home/'settings.json').read_text()), 'instructions':(home/'CLAUDE.md').read_text(),'args':sys.argv[1:],'configDir':str(home)}}))\n")
     native.chmod(0o700)
     omnigent = binaries / "omnigent"
     omnigent.write_text(f"#!{sys.executable}\nimport os,subprocess\nsubprocess.run([{str(home / '.omnigent/moonmind/bin/claude')!r},'--settings','/private/authority.json','--model','admitted-model'],check=True,env={{'PATH':os.environ['PATH'],'HOME':'/native-home'}})\n")
@@ -131,6 +140,7 @@ def test_actual_host_script_and_native_wrapper_preserve_files_and_auth_args(tmp_
             "settings": {"outputStyle": "concise", "alwaysThinkingEnabled": True},
             "instructions": f"Work in /work/admitted; support {home}/.omnigent/moonmind/runtime-context",
             "args": ["--settings", "/private/authority.json", "--model", "admitted-model"],
+            "configDir": str(home / ".omnigent/moonmind/runtime-context" / home_name),
         }
 
 
@@ -157,3 +167,74 @@ def test_queued_configuration_without_files_keeps_its_snapshot_shape():
     saved = load_provider_configuration_snapshot(content, SimpleNamespace(contentDigest="sha256:" + hashlib.sha256(content).hexdigest()), bindings)
     assert saved["primary-model"].claudeConfiguration is None
     assert provider_configuration_snapshot_bytes(bindings, saved) == content
+
+
+@pytest.mark.parametrize("home_name", ["authored-claude-home", "claude.preferences-home"])
+def test_authored_private_home_preserves_files_and_snapshot(tmp_path, home_name):
+    config = configuration("{{runtime_support_dir}}/" + home_name)
+    original = copy.deepcopy(config)
+    profile = _api_key_profile(home_path_overrides=config["homePathOverrides"], file_templates=config["fileTemplates"])
+    endpoint, reason = claude_provider_config_endpoint(profile)
+    assert endpoint is not None, reason
+    for sibling in ("first", "second"):
+        support = tmp_path / sibling
+        for _ in range(2):
+            materialize_configuration(endpoint.claudeConfiguration, runtime_support_dir=support, workspace_path="/work/" + sibling)
+        assert (support / home_name / "CLAUDE.md").read_text() == f"Work in /work/{sibling}; support {support}"
+        assert not (support / "claude-home").exists()
+    assert config == original
+
+
+@pytest.mark.parametrize("home", [
+    "/other/account", "{{workspace_path}}/home", "{{runtime_support_dir}}",
+    "{{runtime_support_dir}}/../sibling", "{{runtime_support_dir}}/nested/home",
+    "{{runtime_support_dir}}/.", "{{runtime_support_dir}}/..",
+    "{{runtime_support_dir}}/provider-REPORT_DIR", "{{runtime_support_dir}}/shell-profile",
+    "{{runtime_support_dir}}/codex-home", "{{runtime_support_dir}}/.moonmind-owned",
+])
+def test_nonprivate_or_other_owner_homes_stay_native(home):
+    config = configuration(home)
+    endpoint, reason = claude_provider_config_endpoint(_api_key_profile(
+        home_path_overrides=config["homePathOverrides"], file_templates=config["fileTemplates"],
+    ))
+    assert endpoint is None and reason
+
+
+@pytest.mark.parametrize("existing", ["directory", "file", "symlink", "dangling_symlink"])
+def test_authored_home_never_takes_over_existing_owner(tmp_path, existing):
+    support = tmp_path / "attempt"
+    support.mkdir()
+    home = support / "custom-home"
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    sentinel = sibling / "settings.json"
+    sentinel.write_text("retained")
+    if existing == "directory":
+        home.mkdir()
+        (home / "settings.json").write_text("owned")
+    elif existing == "file":
+        home.write_text("owned")
+    else:
+        home.symlink_to(sibling if existing == "symlink" else tmp_path / "missing", target_is_directory=True)
+    with pytest.raises(ValueError, match="already owned"):
+        materialize_configuration(configuration("{{runtime_support_dir}}/custom-home"), runtime_support_dir=support, workspace_path="/work")
+    assert sentinel.read_text() == "retained"
+    if existing == "file":
+        assert home.read_text() == "owned"
+    elif existing == "directory":
+        assert (home / "settings.json").read_text() == "owned"
+
+
+
+def test_authored_private_home_moves_equivalent_profile_to_shared_route():
+    from api_service.services.profile_execution_selection import (
+        configuration_accepts_profile, profile_has_native_inventory_route,
+    )
+    config = configuration("{{runtime_support_dir}}/authored-claude-home")
+    profile = _api_key_profile(home_path_overrides=config["homePathOverrides"], file_templates=config["fileTemplates"])
+    document = {"providerRequirements": {
+        "runtimeId": "claude_code", "credentialSource": "secret_ref",
+        "materializationMode": "api_key_env",
+    }}
+    assert configuration_accepts_profile(document, profile)
+    assert not profile_has_native_inventory_route(profile, [(SimpleNamespace(), SimpleNamespace(document=document))])
