@@ -26,7 +26,7 @@ import {
   useNavigationType,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery } from '@tanstack/react-query';
-import { PanelLeft, Plus, Rows3, ScrollText, ShieldCheck, Square } from 'lucide-react';
+import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   RocketIcon,
   type RocketIconHandle,
@@ -669,12 +669,6 @@ function DashboardNavigation({
               >
                 Create
               </AnimatedRouteNavLink>
-            ) : null}
-            {visiblePrimaryKeys.has('security') ? (
-              <NavLink to="/security" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-                <ShieldCheck className="route-nav-icon" size={NAV_ICON_SIZE} aria-hidden="true" />
-                Security
-              </NavLink>
             ) : null}
           </div>
           <DashboardSystemMenu

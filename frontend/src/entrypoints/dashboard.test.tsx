@@ -435,12 +435,13 @@ describe('Dashboard shared entry', () => {
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
     const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
     expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
-      'Workflows', 'Create', 'Security',
+      'Workflows', 'Create',
     ]);
     expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Security' })).toBeNull();
 
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
@@ -450,6 +451,7 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByText('Workflow resources')).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Manifests' })).toBeNull();
     expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Security' }).getAttribute('href')).toBe('/security');
     const configuration = screen.getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
     expect(within(configuration as HTMLElement).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual([
@@ -663,8 +665,21 @@ describe('Dashboard shared entry', () => {
     // Recurring and Skills render as normal inline links, not a nested popover.
     expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
     expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
+    expect(within(inline).getByRole('link', { name: 'Security' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
+  });
+
+  it('labels the System trigger with Security on Security workspace routes', () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/security/targets']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Security' });
+    expect(trigger.classList.contains('active')).toBe(true);
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: 'Security' }).getAttribute('href')).toBe('/security');
   });
 
   it('MoonLadderStudios/MoonMind#3817 scopes the Configuration group to exposed children', () => {
@@ -855,7 +870,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(4);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(3);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
