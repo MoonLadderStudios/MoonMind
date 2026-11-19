@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,8 +27,20 @@ _SETTINGS = {"outputStyle", "language", "alwaysThinkingEnabled", "spinnerTipsEna
 def validate_configuration(configuration):
     if set(configuration) != {"homePathOverrides", "fileTemplates"}:
         raise ValueError("unsupported Claude configuration fields")
-    if configuration["homePathOverrides"] != {"CLAUDE_CONFIG_DIR": _HOME}:
-        raise ValueError("home path overrides require the private Claude configuration home")
+    overrides = configuration["homePathOverrides"]
+    home = overrides.get("CLAUDE_CONFIG_DIR") if isinstance(overrides, dict) else None
+    # A named *-home child of the attempt's support directory has the same isolation
+    # as the stock home. Never remap a credential home, another harness's home,
+    # nested paths or the runtime support owner itself.
+    prefix = "{{runtime_support_dir}}/"
+    name = home.removeprefix(prefix) if isinstance(home, str) else ""
+    if (
+        not isinstance(overrides, dict) or set(overrides) != {"CLAUDE_CONFIG_DIR"}
+        or not isinstance(home, str) or not home.startswith(prefix)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*-home", name)
+        or name == "codex-home"
+    ):
+        raise ValueError("home path overrides require an attempt-private Claude configuration home")
     files = []
     for raw in configuration["fileTemplates"]:
         if hasattr(raw, "model_dump"):
@@ -41,8 +54,8 @@ def validate_configuration(configuration):
             "permissions": raw.get("permissions", "0600"),
         }
         path = str(item["path"] or "")
-        relative = path.removeprefix(_HOME + "/")
-        if (not path.startswith(_HOME + "/") or ".." in Path(relative).parts
+        relative = path.removeprefix(home + "/")
+        if (not path.startswith(home + "/") or ".." in Path(relative).parts
             or any(ord(character) < 32 or ord(character) == 127 for character in path)):
             raise ValueError("Claude file templates must remain within the private home")
         # These are declarative preferences/instructions, not authentication,
@@ -72,7 +85,7 @@ def validate_configuration(configuration):
         if ProfileTemplateRenderer._parse_permissions(item["permissions"]) != 0o600:
             raise ValueError("Claude file templates require private permissions")
         files.append(item)
-    return {"homePathOverrides": {"CLAUDE_CONFIG_DIR": _HOME}, "fileTemplates": files}
+    return {"homePathOverrides": {"CLAUDE_CONFIG_DIR": home}, "fileTemplates": files}
 
 
 def configuration_for_profile(profile):
@@ -91,13 +104,14 @@ def materialize_configuration(
     """Initialize an attempt's home once; retries never append twice."""
     configuration = validate_configuration(configuration)
     support = Path(runtime_support_dir).resolve()
-    home = support / "claude-home"
+    name = configuration["homePathOverrides"]["CLAUDE_CONFIG_DIR"].split("/", 1)[1]
+    home = support / name
     marker = home / ".moonmind-profile-digest"
     digest = hashlib.sha256(json.dumps([configuration, workspace_path], sort_keys=True).encode()).hexdigest()
-    if home.exists():
+    if home.exists() or home.is_symlink():
         if home.is_symlink() or not marker.is_file() or marker.read_text() != digest:
             raise ValueError("Claude private configuration home is already owned")
-        return
+        return str(home)
     support.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=support) as temporary:
         stage = Path(temporary)
@@ -112,12 +126,13 @@ def materialize_configuration(
             staged = {**item, "content_template": rendered,
                       "path": item["path"].replace("{{runtime_support_dir}}", str(stage))}
             renderer._materialize_file_template(SimpleNamespace(**staged), {"runtime_support_dir": str(stage), "workspace_path": workspace_path})
-        staged_home = stage / "claude-home"
+        staged_home = stage / name
         staged_home.mkdir(mode=0o700, exist_ok=True)
         staged_home.chmod(0o700)
         (staged_home / marker.name).write_text(digest)
         (staged_home / marker.name).chmod(0o600)
         os.rename(staged_home, home)
+    return str(home)
 
 
 _ENROLLED_HOME = "/home/app/.claude"

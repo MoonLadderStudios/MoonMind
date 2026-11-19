@@ -479,15 +479,16 @@ class OmnigentRuntimeScriptService:
             initialize = (
                 "import json, sys; sys.path.insert(0, " + repr(runtime_context_dir) + "); "
                 "from claude_configuration import materialize_configuration; "
-                "materialize_configuration(json.load(open(sys.argv[1])), "
-                "runtime_support_dir=" + repr(runtime_context_dir) + ", workspace_path=sys.argv[2])"
+                "print(materialize_configuration(json.load(open(sys.argv[1])), "
+                "runtime_support_dir=" + repr(runtime_context_dir) + ", workspace_path=sys.argv[2]))"
             )
             if not workspace_path:
                 raise ValueError("Claude configuration requires the admitted workspace path")
             claude_setup += (
                 f"printf '%s\\n' {shlex.quote(source_path.read_text())} > {helper}; chmod 0600 {helper}; "
                 f"printf '%s\\n' {shlex.quote(source_path.with_name('template_renderer.py').read_text())} > {renderer}; chmod 0600 {renderer}; "
-                f'python3 -c {shlex.quote(initialize)} "$MOONMIND_CLAUDE_PROFILE_CONFIG_FILE" {shlex.quote(workspace_path)}; '
+                f'CLAUDE_CONFIG_DIR=$(python3 -c {shlex.quote(initialize)} "$MOONMIND_CLAUDE_PROFILE_CONFIG_FILE" {shlex.quote(workspace_path)}); '
+                f"export CLAUDE_CONFIG_DIR; printf '%s\\n' \"$CLAUDE_CONFIG_DIR\" > {runtime_context_dir}/provider-CLAUDE_CONFIG_DIR; "
             )
         if enable_claude_runtime and profile_environment:
             claude_setup += (
