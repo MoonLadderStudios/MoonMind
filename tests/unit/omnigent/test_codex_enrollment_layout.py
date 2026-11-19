@@ -86,6 +86,14 @@ def test_unqualified_custom_options_stay_native(change):
         snapshot_provider_configuration(value)
 
 
+@pytest.mark.parametrize("target", ["/root/.codex", "/home/app/.omnigent"])
+def test_unqualified_enrollment_without_selector_stays_native(target):
+    value = profile()
+    value.volume_mount_path = target
+    value.home_path_overrides = {}
+    assert "credential_home" in untranslated_oauth_launch_options(value)
+
+
 def test_wrong_provider_cannot_claim_selected_enrollment():
     selected = snapshot_provider_configuration(profile())
     with pytest.raises(ValueError):
