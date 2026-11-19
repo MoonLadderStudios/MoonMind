@@ -55,10 +55,7 @@ def validate_denied_tools(rules):
             raise ValueError("Claude deny rules require literal built-in tool patterns")
         if match[2] is not None and match[1] not in {
             "Read",
-            "Write",
             "Edit",
-            "Glob",
-            "Grep",
             "Bash",
         }:
             raise ValueError("Claude deny pattern requires a supported built-in tool")

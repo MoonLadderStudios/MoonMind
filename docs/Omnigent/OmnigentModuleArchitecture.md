@@ -423,8 +423,10 @@ Claude's terminal `--disallowedTools` arguments, merging runtime restrictions
 rather than replacing the bridge-generated settings. This keeps denies effective
 when Skill filtering ignores user settings. OAuth and API-key attempts, including
 cold replacements, use the admitted rules rather than rereading an edited Profile.
-Permission grants, ask/default modes, MCP rules and ambiguous multi-template merges
-remain with their existing owner; this projection grants no tools or credentials.
+Scoped rules are limited to Read, Edit and Bash. Scoped Write/Glob/Grep rules
+remain native rather than assuming their CLI matching semantics are equivalent. Permission grants, ask/default modes,
+MCP rules and ambiguous multi-template merges remain with their existing owner;
+this projection grants no tools or credentials.
 Claude OAuth and API-key profiles can also declare an attempt-private process `HOME`
 under the runtime support directory with literal, nonsecret top-level Markdown
 files. The frozen projection initializes that home before runner startup; session

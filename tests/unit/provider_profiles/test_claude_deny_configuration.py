@@ -35,6 +35,9 @@ def test_literal_deny_configuration_is_admitted_and_extracted():
         {"deny": ["Bash(x\ny)"]},
         {"deny": "Read"},
         {"deny": ["UnknownTool"]},
+        {"deny": ["Write(**/private/**)"]},
+        {"deny": ["Glob(**/private/**)"]},
+        {"deny": ["Grep(**/private/**)"]},
     ],
 )
 def test_unsupported_permission_authority_stays_native(permissions):

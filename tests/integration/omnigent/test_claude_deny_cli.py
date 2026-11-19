@@ -32,6 +32,9 @@ p=pathlib.Path(temporary); home=p/'home';home.mkdir();config=home/'.claude';conf
 forbidden=workspace/'forbidden file.txt';forbidden.write_text('DENIED_READ_SENTINEL')
 allowed=workspace/'allowed file.txt';allowed.write_text('ALLOWED_READ_SENTINEL')
 written=workspace/'forbidden-write'
+forbidden_edit=workspace/'forbidden-edit';forbidden_edit.mkdir()
+allowed_edit=workspace/'allowed-edit';allowed_edit.mkdir()
+for directory in (forbidden_edit,allowed_edit):(directory/'sample.txt').write_text('original text')
 sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close();url=f'http://127.0.0.1:{port}'
 client=httpx.Client(trust_env=False)
 server=subprocess.Popen([sys.executable,str(pathlib.Path(root)/'tests/server/integration/mock_llm_server.py'),str(port)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -48,6 +51,9 @@ try:
  generated=json.loads(pathlib.Path(args[args.index('--settings')+1]).read_text())
  assert generated.get('hooks')
  calls=[('Read',{'file_path':str(forbidden)}),('Read',{'file_path':str(allowed)}),('Bash',{'command':'touch '+str(written),'description':'Forbidden command'}),('Bash',{'command':'printf ALLOWED_COMMAND_SENTINEL','description':'Allowed command'})]
+ calls += [('Read',{'file_path':str(directory/'sample.txt')}) for directory in (forbidden_edit,allowed_edit)]
+ calls += [('Write',{'file_path':str(directory/'new.txt'),'content':'new content'}) for directory in (forbidden_edit,allowed_edit)]
+ calls += [('Edit',{'file_path':str(directory/'sample.txt'),'old_string':'original text','new_string':'changed text'}) for directory in (forbidden_edit,allowed_edit)]
  responses=[{'tool_calls':[{'name':name,'arguments':json.dumps(body)}]} for name,body in calls]+[{'text':'done'}]
  client.post(url+'/mock/configure',json={'responses':responses}).raise_for_status()
  env={'PATH':os.defpath,'HOME':str(home),'CLAUDE_CONFIG_DIR':str(config),'ANTHROPIC_BASE_URL':url,'ANTHROPIC_API_KEY':'mock-key','CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS':'1','HTTP_PROXY':'http://127.0.0.1:1','HTTPS_PROXY':'http://127.0.0.1:1','ALL_PROXY':'http://127.0.0.1:1','NO_PROXY':'127.0.0.1,localhost','PYTHONPATH':os.environ.get('PYTHONPATH','')}
@@ -68,12 +74,16 @@ try:
   assert uses and matched,('tool call was not actually attempted',name,index)
   for result in matched:
    content=json.dumps(result.get('content',''))
-   if index in (0,2):assert result.get('is_error') is True and 'denied' in content.lower(),('expected actual permission refusal',result)
+   if index in (0,2,6,8):assert result.get('is_error') is True and 'denied' in content.lower(),('expected actual permission refusal',result)
    else:
     assert not result.get('is_error'),('allowed sibling was denied',result)
-    assert ('ALLOWED_READ_SENTINEL' if index==1 else 'ALLOWED_COMMAND_SENTINEL') in content,('missing successful allowed output',result)
+    if index in (1,3):assert ('ALLOWED_READ_SENTINEL' if index==1 else 'ALLOWED_COMMAND_SENTINEL') in content,('missing successful allowed output',result)
+ assert not (forbidden_edit/'new.txt').exists()
+ assert (forbidden_edit/'sample.txt').read_text()=='original text'
+ assert (allowed_edit/'new.txt').read_text()=='new content'
+ assert (allowed_edit/'sample.txt').read_text()=='changed text'
  messages=json.dumps(results)
- print(json.dumps({'version':subprocess.check_output([cli,'--version'],text=True,env=env).strip(),'deniedReadLeaked':'DENIED_READ_SENTINEL' in messages,'allowedReadObserved':True,'deniedCommandRan':written.exists(),'allowedCommandObserved':True,'toolResultObserved':True,'bridgeSettingsPreserved':bool(generated.get('hooks'))}))
+ print(json.dumps({'version':subprocess.check_output([cli,'--version'],text=True,env=env).strip(),'deniedReadLeaked':'DENIED_READ_SENTINEL' in messages,'allowedReadObserved':True,'deniedCommandRan':written.exists(),'allowedCommandObserved':True,'editRuleEffectsVerified':True,'toolResultObserved':True,'bridgeSettingsPreserved':bool(generated.get('hooks'))}))
 finally:
  server.terminate();server.wait(timeout=5)
  if bridge:shutil.rmtree(bridge)
@@ -110,7 +120,7 @@ def _run_probe(command, env):
             "claudePreferences": True,
             "sessionSettings": {
                 "permissions": {
-                    "deny": ["Read(**/forbidden file.txt)", "Bash(touch *)"]
+                    "deny": ["Read(**/forbidden file.txt)", "Bash(touch *)", "Edit(**/forbidden-edit/**)"]
                 }
             },
         }
@@ -178,3 +188,4 @@ async def test_installed_cli_enforces_generated_denies_without_blocking_allowed_
     assert evidence["bridgeSettingsPreserved"] and evidence["toolResultObserved"]
     assert not evidence["deniedReadLeaked"] and not evidence["deniedCommandRan"]
     assert evidence["allowedReadObserved"] and evidence["allowedCommandObserved"]
+    assert evidence["editRuleEffectsVerified"]
