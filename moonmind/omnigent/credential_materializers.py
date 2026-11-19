@@ -88,6 +88,10 @@ class CredentialRuntimeHandle(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
 
+    claudeDeniedTools: list[str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
     @model_validator(mode="after")
     def _validate_process_home(self):
         if self.claudeProcessHomeConfiguration is not None:
@@ -97,6 +101,20 @@ class CredentialRuntimeHandle(BaseModel):
             if (self.materializerRef not in {"claude-oauth-home@1", "omnigent-provider-config@1"}
                 or process_home_configuration(self.claudeProcessHomeConfiguration) != self.claudeProcessHomeConfiguration):
                 raise ValueError("process HOME requires its selected Claude configuration")
+        if self.claudeDeniedTools is not None:
+            from moonmind.provider_profiles.claude_configuration import (
+                validate_denied_tools,
+            )
+
+            if (
+                self.materializerRef
+                not in {"claude-oauth-home@1", "omnigent-provider-config@1"}
+                or validate_denied_tools(self.claudeDeniedTools)
+                != self.claudeDeniedTools
+            ):
+                raise ValueError(
+                    "Claude deny rules require their selected configuration"
+                )
         return self
 
     cleanupRef: str = Field(alias="cleanupRef")
@@ -379,6 +397,21 @@ _OAUTH_HOME_MATERIALIZER_TARGETS = OAUTH_HOME_MATERIALIZER_TARGETS
 _CREDENTIAL_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
+def _claude_denied_tools(launch_environment):
+    from moonmind.provider_profiles.claude_configuration import (
+        denied_tools,
+    )
+
+    return (
+        denied_tools(
+            launch_environment.claudeConfiguration
+            if launch_environment is not None
+            else None
+        )
+        or None
+    )
+
+
 def _claude_process_home(launch_environment):
     if launch_environment is None or launch_environment.claudeConfiguration is None:
         return None
@@ -509,7 +542,10 @@ def anticipated_credential_handle(
             "materializerRef": materializer_ref,
             "attachments": attachments,
             "runtimeEnvironment": runtime_environment,
-            "claudeProcessHomeConfiguration": _claude_process_home(provider_launch_environment),
+            "claudeProcessHomeConfiguration": _claude_process_home(
+                provider_launch_environment
+            ),
+            "claudeDeniedTools": _claude_denied_tools(provider_launch_environment),
             "cleanupRef": f"credential-cleanup:sha256:{digest}",
             "attestationRef": None,
             "hostOwned": host_owned,
@@ -1035,12 +1071,22 @@ finally:
                         and endpoint.codexConfiguration is not None
                         else {}
                     ),
-                    **({"MOONMIND_CLAUDE_PROFILE_CONFIG_FILE": self._TARGET + "/claude-profile.json"}
-                       if endpoint is not None and endpoint.claudeConfiguration is not None else {}),
+                    **(
+                        {
+                            "MOONMIND_CLAUDE_PROFILE_CONFIG_FILE": self._TARGET
+                            + "/claude-profile.json"
+                        }
+                        if endpoint is not None
+                        and endpoint.claudeConfiguration is not None
+                        else {}
+                    ),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
                 "claudeProcessHomeConfiguration": _claude_process_home(endpoint),
-                "runtimeEnvironmentTemplates": endpoint.environmentTemplates if endpoint is not None else None,
+                "claudeDeniedTools": _claude_denied_tools(endpoint),
+                "runtimeEnvironmentTemplates": endpoint.environmentTemplates
+                if endpoint is not None
+                else None,
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
             }
@@ -1365,7 +1411,10 @@ for path in [root, *root.rglob('*')]:
                     if launch_environment is not None
                     else {}
                 ),
-                "claudeProcessHomeConfiguration": _claude_process_home(launch_environment),
+                "claudeProcessHomeConfiguration": _claude_process_home(
+                    launch_environment
+                ),
+                "claudeDeniedTools": _claude_denied_tools(launch_environment),
                 "runtimeEnvironmentTemplates": (
                     launch_environment.environmentTemplates
                     if launch_environment is not None
@@ -1805,7 +1854,9 @@ class OmnigentCredentialProvisioningService:
                         handle.credentialRuntimeRef != anticipated.credentialRuntimeRef
                         or handle.cleanupRef != anticipated.cleanupRef
                         or handle.attachments != anticipated.attachments
-                        or handle.claudeProcessHomeConfiguration != anticipated.claudeProcessHomeConfiguration
+                        or handle.claudeProcessHomeConfiguration
+                        != anticipated.claudeProcessHomeConfiguration
+                        or handle.claudeDeniedTools != anticipated.claudeDeniedTools
                     ):
                         raise HarnessPlatformError(
                             "credential materializer changed its anticipated cleanup authority",

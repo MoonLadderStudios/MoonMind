@@ -982,6 +982,7 @@ async def _compile_plan(
     api_key_tuning=None,
     oauth_private_config=False,
     claude_oauth_files=False,
+    claude_preferences=False,
     process_home=False,
     private_profile_config=False,
     private_configuration_home=None,
@@ -1106,30 +1107,39 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
-    if claude_oauth_files:
-        assert oauth and runtime_id == "claude_code"
+    if claude_oauth_files or claude_preferences:
+        assert runtime_id == "claude_code" and (oauth or claude_preferences)
+        configuration_home = (
+            "/home/app/.claude" if oauth else "{{runtime_support_dir}}/claude-home"
+        )
+        if not oauth:
+            profile.home_path_overrides = {"CLAUDE_CONFIG_DIR": configuration_home}
         profile.file_templates = [
             {
-                "path": "/home/app/.claude/settings.json",
+                "path": configuration_home + "/settings.json",
                 "format": "json",
-                "merge_strategy": "deep_merge",
+                "merge_strategy": "replace" if claude_preferences else "deep_merge",
                 "permissions": "0600",
                 "content_template": dict(session_settings or {"language": "English"}),
             },
             *(
                 additional_files
-                or [
-                    {
-                        "path": "/home/app/.claude/CLAUDE.md",
-                        "format": "text",
-                        "content_template": "Admitted instructions for {{workspace_path}}.\n",
-                    },
-                    {
-                        "path": "/home/app/.claude/rules/project.md",
-                        "format": "text",
-                        "content_template": "Use {{runtime_support_dir}} for support.\n",
-                    },
-                ]
+                or (
+                    []
+                    if claude_preferences
+                    else [
+                        {
+                            "path": "/home/app/.claude/CLAUDE.md",
+                            "format": "text",
+                            "content_template": "Admitted instructions for {{workspace_path}}.\n",
+                        },
+                        {
+                            "path": "/home/app/.claude/rules/project.md",
+                            "format": "text",
+                            "content_template": "Use {{runtime_support_dir}} for support.\n",
+                        },
+                    ]
+                )
             ),
         ]
     if process_home:
@@ -1339,6 +1349,7 @@ async def native_journey(
                 api_key_tuning=selection.get("apiKeyTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
                 claude_oauth_files=bool(selection.get("claudeOauthFiles")),
+                claude_preferences=bool(selection.get("claudePreferences")),
                 process_home=bool(selection.get("processHome")),
                 private_profile_config=bool(
                     selection.get("privateProfileConfiguration")

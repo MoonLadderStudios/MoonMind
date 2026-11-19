@@ -2539,6 +2539,41 @@ class GenericOmnigentHostRealizer:
         session.pop("processHome", None)
         if host_context.get("processHome"):
             session["processHome"] = host_context["processHome"]
+        denied_tools = host_context.get("claudeDeniedTools") or []
+        if denied_tools:
+            from moonmind.provider_profiles.claude_configuration import (
+                validate_denied_tools,
+            )
+            from moonmind.workflows.adapters.omnigent_agent_adapter import (
+                _merge_disallowed_tools,
+            )
+
+            if plan.payload.harnessId != "claude-native":
+                raise ValueError("Claude deny projection requires the Claude harness")
+            authored_arguments = session.get("terminalLaunchArgs") or []
+            if not isinstance(authored_arguments, list) or any(
+                not isinstance(arg, str) for arg in authored_arguments
+            ):
+                raise ValueError("Claude launch arguments must be a string array")
+            flags = [
+                index
+                for index, arg in enumerate(authored_arguments)
+                if arg.split("=", 1)[0] in {"--disallowedTools", "--disallowed-tools"}
+            ]
+            if len(flags) > 1 or any(
+                "=" not in authored_arguments[index]
+                and (
+                    index + 1 == len(authored_arguments)
+                    or authored_arguments[index + 1].startswith("--")
+                )
+                for index in flags
+            ):
+                raise ValueError(
+                    "Claude deny projection requires unambiguous tool arguments"
+                )
+            arguments = list(authored_arguments)
+            _merge_disallowed_tools(arguments, validate_denied_tools(denied_tools))
+            session["terminalLaunchArgs"] = arguments
         omnigent["session"] = session
         omnigent["capture"] = dict(plan.payload.capturePolicy)
         primary_lease = binding.providerLeases.get("primary-model")

@@ -284,14 +284,21 @@ def _merge_disallowed_tools(args: list[str], tools: list[str]) -> None:
 
     if not tools:
         return
+    # Normalize aliases/joined values before upstream augmentation, whose merge
+    # recognizes only the separated canonical spelling. Otherwise its later flag
+    # can replace the authored restrictions in the vendor CLI.
     for index, arg in enumerate(args):
-        if arg.startswith("--disallowedTools="):
-            flag, value = arg.split("=", 1)
+        if arg.startswith(("--disallowedTools=", "--disallowed-tools=")):
+            value = arg.split("=", 1)[1]
             existing = [tool for tool in value.split(",") if tool]
-            args[index] = f"{flag}={','.join(dict.fromkeys([*existing, *tools]))}"
+            args[index : index + 1] = [
+                "--disallowedTools",
+                ",".join(dict.fromkeys([*existing, *tools])),
+            ]
             return
-        if arg == "--disallowedTools" and index + 1 < len(args):
+        if arg in {"--disallowedTools", "--disallowed-tools"} and index + 1 < len(args):
             existing = [tool for tool in args[index + 1].split(",") if tool]
+            args[index] = "--disallowedTools"
             args[index + 1] = ",".join(dict.fromkeys([*existing, *tools]))
             return
     args.extend(["--disallowedTools", ",".join(tools)])

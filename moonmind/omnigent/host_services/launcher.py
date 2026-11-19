@@ -22,6 +22,7 @@ from moonmind.omnigent.host_services.project_environment import (
 )
 from moonmind.omnigent.host_services.runtime_scripts import (
     OmnigentRuntimeScriptService,
+    claude_denied_tools_from_handles,
     claude_process_home_from_handles,
 )
 from moonmind.security.egress import omnigent_proxy_env
@@ -646,8 +647,12 @@ class DockerOmnigentHostLauncher:
             "stateCleanupRef": f"state-cleanup:{state_volume}",
             "controlVolumeRef": control_volume or None,
             "launchImageRef": launch_image,
-            **({"processHome": claude_process_home_from_handles(credential_handles)[0]}
-               if claude_process_home_from_handles(credential_handles)[0] else {}),
+            "claudeDeniedTools": claude_denied_tools_from_handles(credential_handles),
+            **(
+                {"processHome": claude_process_home_from_handles(credential_handles)[0]}
+                if claude_process_home_from_handles(credential_handles)[0]
+                else {}
+            ),
         }
 
 

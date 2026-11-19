@@ -21,7 +21,72 @@ except ImportError:  # Packaged into the run-owned host context.
     from template_renderer import ProfileTemplateRenderer, template_context_names
 
 _HOME = "{{runtime_support_dir}}/claude-home"
-_SETTINGS = {"outputStyle", "language", "alwaysThinkingEnabled", "spinnerTipsEnabled"}
+_SETTINGS = {
+    "outputStyle",
+    "language",
+    "alwaysThinkingEnabled",
+    "spinnerTipsEnabled",
+    "permissions",
+}
+
+
+_DENY_TOOLS = {
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "NotebookEdit",
+}
+
+
+def validate_denied_tools(rules):
+    """Literal built-in restrictions representable by the shared CLI transport."""
+    if not isinstance(rules, list) or len(rules) > 64:
+        raise ValueError("Claude deny rules require a bounded list")
+    for rule in rules:
+        if not isinstance(rule, str) or len(rule) > 256:
+            raise ValueError("Claude deny rules require bounded literal strings")
+        match = re.fullmatch(r"([A-Za-z]+)(?:\(([A-Za-z0-9_./*? :~-]+)\))?", rule)
+        if not match or match[1] not in _DENY_TOOLS:
+            raise ValueError("Claude deny rules require literal built-in tool patterns")
+        if match[2] is not None and match[1] not in {
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Bash",
+        }:
+            raise ValueError("Claude deny pattern requires a supported built-in tool")
+    return list(dict.fromkeys(rules))
+
+
+def denied_tools(configuration):
+    """Extract immutable restrictions, never consult a mutable Profile/home."""
+    if configuration is None:
+        return []
+    home = (configuration.get("homePathOverrides") or {}).get("CLAUDE_CONFIG_DIR")
+    checked = (
+        validate_configuration(configuration)
+        if isinstance(home, str) and home.startswith("{{runtime_support_dir}}/")
+        else validate_oauth_configuration(configuration)
+    )
+    for item in checked["fileTemplates"]:
+        if item["path"].endswith("/settings.json"):
+            permissions = item["content_template"].get("permissions")
+            if permissions is not None:
+                rules = validate_denied_tools(permissions["deny"])
+                # Only the worker extracts launch arguments; the portable host
+                # renderer consumes a configuration already scanned here.
+                from moonmind.omnigent.conformance import assert_secret_free
+
+                assert_secret_free(rules)
+                return rules
+    return []
 
 
 def validate_configuration(configuration):
@@ -84,6 +149,20 @@ def validate_configuration(configuration):
             if item["format"] != "json" or not isinstance(content, dict) or set(content) - _SETTINGS:
                 raise ValueError("Claude settings contain native-only options")
             for key, value in content.items():
+                if key == "permissions":
+                    if not isinstance(value, dict) or set(value) != {"deny"}:
+                        raise ValueError("Claude permissions support deny-only rules")
+                    validate_denied_tools(value["deny"])
+                    settings_files = [
+                        entry
+                        for entry in source_files
+                        if str(entry.get("path", "")) == home + "/settings.json"
+                    ]
+                    if len(settings_files) != 1 or item["merge_strategy"] != "replace":
+                        raise ValueError(
+                            "Claude deny rules require one replace settings template"
+                        )
+                    continue
                 expected = bool if key.endswith("Enabled") else str
                 if type(value) is not expected:
                     raise ValueError("invalid Claude session preference")
@@ -112,10 +191,16 @@ def validate_configuration(configuration):
 
 def configuration_for_profile(profile):
     try:
-        return validate_configuration({
-            "homePathOverrides": dict(getattr(profile, "home_path_overrides", None) or {}),
-            "fileTemplates": list(getattr(profile, "file_templates", None) or []),
-        }), ""
+        configuration = validate_configuration(
+            {
+                "homePathOverrides": dict(
+                    getattr(profile, "home_path_overrides", None) or {}
+                ),
+                "fileTemplates": list(getattr(profile, "file_templates", None) or []),
+            }
+        )
+        denied_tools(configuration)
+        return configuration, ""
     except (ValueError, TypeError) as error:
         return None, str(error)
 
@@ -237,19 +322,16 @@ def validate_oauth_configuration(configuration):
 
 def oauth_configuration_for_profile(profile):
     try:
-        return (
-            validate_oauth_configuration(
-                {
-                    "homePathOverrides": dict(
-                        getattr(profile, "home_path_overrides", None) or {}
-                    ),
-                    "fileTemplates": list(
-                        getattr(profile, "file_templates", None) or []
-                    ),
-                }
-            ),
-            "",
+        configuration = validate_oauth_configuration(
+            {
+                "homePathOverrides": dict(
+                    getattr(profile, "home_path_overrides", None) or {}
+                ),
+                "fileTemplates": list(getattr(profile, "file_templates", None) or []),
+            }
         )
+        denied_tools(configuration)
+        return configuration, ""
     except (ValueError, TypeError) as error:
         return None, str(error)
 
