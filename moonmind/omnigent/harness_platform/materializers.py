@@ -38,6 +38,10 @@ FORBIDDEN_AMBIENT_ENV_KEYS = (
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
+class ProviderConfigurationHandoffUnavailable(ValueError):
+    """New work must keep its native owner when delivery is unsupported."""
+
+
 class MaterializerTargetKind(StrEnum):
     generated_file = "generated-file"
     oauth_home = "oauth-home"
@@ -625,7 +629,10 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         return None
     fields = []
     private_configuration = None
-    if getattr(profile, "file_templates", None):
+    if getattr(profile, "file_templates", None) or (
+        str(profile.runtime_id) == "claude_code"
+        and "HOME" in (getattr(profile, "home_path_overrides", None) or {})
+    ):
         if str(profile.runtime_id) == "codex_cli":
             from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
 
@@ -681,7 +688,10 @@ def snapshot_provider_configuration(
                 reason, code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
         configuration = None
-        if getattr(profile, "file_templates", None):
+        if getattr(profile, "file_templates", None) or (
+            str(profile.runtime_id) == "claude_code"
+            and "HOME" in (getattr(profile, "home_path_overrides", None) or {})
+        ):
             if str(profile.runtime_id) == "claude_code":
                 from moonmind.provider_profiles.claude_configuration import (
                     oauth_configuration_for_profile,

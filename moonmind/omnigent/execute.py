@@ -3266,6 +3266,8 @@ async def run_omnigent_execution(
             initial_snapshot_observed_at = asyncio.get_running_loop().time()
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
+            from moonmind.omnigent.session_launch import validate_session_process_home
+            validate_session_process_home(initial_snapshot, selection.session.process_home)
             initial_snapshot_completed_at = asyncio.get_running_loop().time()
             record_session_created = (
                 getattr(run_store, "record_session_created", None)

@@ -402,6 +402,17 @@ Claude preferences and instruction files, including literal `output-styles/*.md`
 paired with `settings.json.outputStyle`, use the frozen configuration and private
 renderer. OAuth delivery projects those files read-only without modifying enrolled
 credentials; a replacement attempt retains its admitted style despite Profile edits.
+Canonical Claude OAuth profiles can also declare an attempt-private process `HOME`
+under the runtime support directory with literal, nonsecret top-level Markdown
+files. The frozen projection initializes that home before runner startup; session
+creation carries it through Omnigent's OS-environment owner for helpers and native
+processes. Runner/bridge HOME and the writable enrolled Claude credential mount
+stay unchanged. The server's `/v1/info` capability gates new admission; parser/restore
+probes and session snapshot roundtrips reject runtimes that cannot preserve this
+field before any task turn is dispatched. New native work retains its route when
+the server lacks support; already-shared work never switches lifecycle owners.
+`tools/test_omnigent_process_home.py` exercises the generated entrypoint and the
+actual pinned Omnigent OS helper without a browser or provider call.
 Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
 uncarried tool/auth configuration and other HOME choices retain their adapter

@@ -31,6 +31,14 @@ class OmnigentLaunchReconciliationError(OmnigentClientError):
     code = "omnigent_launch_reconciliation_failed"
 
 
+def validate_session_process_home(snapshot, expected):
+    """Reject older servers and mismatched recovered sessions before any turn."""
+    if expected is None and not isinstance(snapshot, Mapping):
+        return  # Preserve legacy best-effort snapshots when no HOME is requested.
+    if not isinstance(snapshot, Mapping) or snapshot.get("process_home") != expected:
+        raise OmnigentLaunchReconciliationError("Session did not preserve its admitted process HOME")
+
+
 async def _recover_legacy_session(
     client: OmnigentHttpClient, payload: Mapping[str, Any]
 ) -> str | None:
@@ -113,6 +121,7 @@ async def _recover_legacy_session(
         raise OmnigentClientError(
             "Recovered legacy session conflicts with launch authority"
         )
+    validate_session_process_home(snapshot, payload.get("process_home"))
     return session_id
 
 
@@ -297,10 +306,13 @@ async def _prepare_context_fork(
                 "model_override",
                 "reasoning_effort",
                 "terminal_launch_args",
+                "process_home",
             )
             if key in payload
         }
         fork_payload.update(title=title, host_type="external")
+        if payload.get("process_home") is not None:
+            fork_payload["host_id"] = payload["host_id"]
         for setting in ("model_override", "reasoning_effort"):
             fork_payload.setdefault(setting, "default")
         created = await client.fork_session(source_id, fork_payload)
@@ -315,6 +327,7 @@ async def _prepare_context_fork(
     if run_store is not None and not bridge_session_id:
         await run_store.attach_session(idempotency_key, session_id)
     snapshot = await client.get_session(session_id)
+    validate_session_process_home(snapshot, payload.get("process_home"))
     labels = snapshot.get("labels") or {}
     if not isinstance(labels, Mapping):
         raise OmnigentLaunchReconciliationError(

@@ -123,6 +123,7 @@ class NativeTurnServer(FakeOmnigentServer):
     def __init__(self, harness):
         super().__init__(supports_diff=False, terminal_status="idle")
         self.harness = harness
+        self.process_home_supported = True
         self.registered_harnesses = [harness]
         self.host_id = ""
         self.host_name = ""
@@ -147,6 +148,7 @@ class NativeTurnServer(FakeOmnigentServer):
         app = super().app()
         app.router.add_get("/", self.native_document)
         app.router.add_get("/api/version", self.version)
+        app.router.add_get("/v1/info", self.server_info)
         app.router.add_get("/v1/sessions", self.list_sessions)
         app.router.add_get("/v1/harnesses", self.harnesses)
         app.router.add_get("/v1/hosts/{host_id}", self.get_host)
@@ -160,6 +162,9 @@ class NativeTurnServer(FakeOmnigentServer):
             text="<html><head></head><body><div id='root'></div></body></html>",
             content_type="text/html",
         )
+
+    async def server_info(self, request):
+        return web.json_response({"session_process_home": self.process_home_supported, "single_user": True})
 
     async def version(self, request):
         return web.json_response({"version": "0.10.0"})
@@ -269,6 +274,7 @@ class NativeTurnServer(FakeOmnigentServer):
             "pending_inputs": self.pending_inputs,
             "workspace": "/workspaces/run",
             "active_response_id": None,
+            "process_home": (self.create_payloads[-1].get("process_home") if self.create_payloads else None),
         }
         if self.status == "failed":
             payload["last_task_error"] = {
@@ -974,6 +980,7 @@ async def _compile_plan(
     api_key_tuning=None,
     oauth_private_config=False,
     claude_oauth_files=False,
+    process_home=False,
     private_profile_config=False,
     private_configuration_home=None,
     declare_configuration_home=True,
@@ -1123,6 +1130,13 @@ async def _compile_plan(
                 ]
             ),
         ]
+    if process_home:
+        assert claude_oauth_files
+        profile.home_path_overrides = {**profile.home_path_overrides, "HOME": "{{runtime_support_dir}}/process-home"}
+        profile.file_templates = [*profile.file_templates, {
+            "path": "{{runtime_support_dir}}/process-home/NOTES.md",
+            "format": "text", "content_template": "Admitted HOME for {{workspace_path}}.\n",
+        }]
     if native_default:
         assert runtime_id == "codex_cli"
         profile.default_model = "example/model"
@@ -1317,6 +1331,7 @@ async def native_journey(
                 api_key_tuning=selection.get("apiKeyTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
                 claude_oauth_files=bool(selection.get("claudeOauthFiles")),
+                process_home=bool(selection.get("processHome")),
                 private_profile_config=bool(
                     selection.get("privateProfileConfiguration")
                 ),
@@ -2718,8 +2733,10 @@ async def test_profile_files_keep_queued_and_fresh_configuration_authority(nativ
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeOauthFiles": True}],
+    [{"harness": "claude-native", "claudeOauthFiles": True},
+     {"harness": "claude-native", "claudeOauthFiles": True, "processHome": True}],
     indirect=True,
+    ids=["enrolled-preferences", "private-process-home"],
 )
 @pytest.mark.parametrize("edit_after_admission", [False, True])
 async def test_claude_oauth_files_are_frozen_readonly_overlays(
@@ -2746,6 +2763,12 @@ async def test_claude_oauth_files_are_frozen_readonly_overlays(
         "Use /home/app/.omnigent/moonmind/runtime-context for support.\n"
     )
     assert set(files) == {"settings.json", "CLAUDE.md", "rules/project.md"}
+    process_home = journey.server.create_payloads[0].get("process_home")
+    if process_home:
+        assert process_home == "/home/app/.omnigent/moonmind/runtime-context/process-home"
+        assert "Admitted HOME for {{workspace_path}}." in journey.docker.script
+        assert journey.docker.launch_env["HOME"] == "/home/app"
+        assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == "/home/app/.claude"
     home = journey.docker.mounts["/home/app/.claude"]
     assert home["src"] == "journey_oauth" and "readonly" not in home
     for name in files:
@@ -2759,8 +2782,10 @@ async def test_claude_oauth_files_are_frozen_readonly_overlays(
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeOauthFiles": True}],
+    [{"harness": "claude-native", "claudeOauthFiles": True},
+     {"harness": "claude-native", "claudeOauthFiles": True, "processHome": True}],
     indirect=True,
+    ids=["enrolled-preferences", "private-process-home"],
 )
 async def test_claude_oauth_files_cancellation_preserves_enrollment_without_successor(
     native_journey,

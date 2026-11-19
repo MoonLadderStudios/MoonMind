@@ -4,7 +4,7 @@
   "source": "vendored pinned omnigent server and native workspace UI",
   "evidence": {
     "capture": "stock-ui-and-server-static-analysis",
-    "sourceCommit": "498b21e37c9462c172d980851c3a20c7c51f01f2",
+    "sourceCommit": "ed93f7d4f6649f1c9f38ced8b193a37e126e2815",
     "sourceFiles": [
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
@@ -12,7 +12,7 @@
       },
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_core.py",
-        "sha256": "601991e974c114ef940c824b70fd40b6d233cc8ddb9ae827ab28f1523c7d53b0"
+        "sha256": "80e6a9c93cb9c5ec80b7f7766d338ee0951923383659b246578d80ffd1469bc8"
       },
       {
         "path": "omnigent/omnigent/server/routes/terminal_attach.py",
@@ -60,7 +60,7 @@
       },
       {
         "path": "omnigent/omnigent/runner/app.py",
-        "sha256": "3048b4e2684d0c881aade06a12ea3f85fde8f2c6d0c318111f7833be1c4ef745"
+        "sha256": "2dfe8fbf5fe33cc488b42bd624ec1d0e8648c5da06e88201f4700ebde736863d"
       },
       {
         "path": "omnigent/omnigent/runner/resource_routes.py",

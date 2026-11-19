@@ -113,6 +113,7 @@ async def test_authored_files_provision_without_extra_secret_resolution(tmp_path
         "home_path_overrides": config["homePathOverrides"], "file_templates": config["fileTemplates"],
     }, materializer_ref="omnigent-provider-config@1")
     assert resolver.resolved == ["ANTHROPIC_API_KEY"]
+    assert handles[0].claudeProcessHomeConfiguration is None
     assert handles[0].runtimeEnvironment["MOONMIND_CLAUDE_PROFILE_CONFIG_FILE"] == "/home/app/.moonmind-provider-config/claude-profile.json"
     body, = [data for _, data in backend.calls if data]
     assert json.loads(body)["_moonmind_claude_configuration"] == validate_configuration(config)

@@ -2535,6 +2535,10 @@ class GenericOmnigentHostRealizer:
                 },
             }
         )
+        # Only this exact host's frozen credential projection owns process HOME.
+        session.pop("processHome", None)
+        if host_context.get("processHome"):
+            session["processHome"] = host_context["processHome"]
         omnigent["session"] = session
         omnigent["capture"] = dict(plan.payload.capturePolicy)
         primary_lease = binding.providerLeases.get("primary-model")

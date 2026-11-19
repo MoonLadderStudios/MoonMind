@@ -494,6 +494,19 @@ class OmnigentHttpClient:
             failure_class="integration_error",
         )
 
+    async def supports_session_process_home(self) -> bool:
+        """Require server support and this caller's operator admission authority."""
+        try:
+            info = await self._request("GET", "/v1/info")
+            if not isinstance(info, Mapping) or info.get("session_process_home") is not True:
+                return False
+            if info.get("single_user") is True:
+                return True
+            identity = await self._request("GET", "/v1/me")
+            return isinstance(identity, Mapping) and identity.get("is_admin") is True
+        except (OmnigentClientError, httpx.HTTPError):
+            return False
+
     async def get_version(self) -> str:
         """Return the authenticated endpoint's installed package version."""
 

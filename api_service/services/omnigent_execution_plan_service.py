@@ -1493,6 +1493,27 @@ async def _admit_repository_plan_inputs(
     return result
 
 
+async def _require_process_home_server(configurations):
+    """An unsupported server cannot silently discard the admitted process HOME."""
+    from moonmind.provider_profiles.claude_configuration import (
+        process_home_configuration,
+    )
+    if not any(
+        getattr(value, "claudeConfiguration", None) is not None
+        and process_home_configuration(value.claudeConfiguration) is not None
+        for value in configurations.values()
+    ):
+        return
+    from moonmind.omnigent.harness_platform.materializers import (
+        ProviderConfigurationHandoffUnavailable,
+    )
+    from moonmind.omnigent.settings import resolved_api_token, resolved_server_url
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    client = OmnigentHttpClient(base_url=resolved_server_url(), api_token=resolved_api_token())
+    if not await client.supports_session_process_home():
+        raise ProviderConfigurationHandoffUnavailable("The configured Omnigent server cannot preserve process HOME")
+
+
 async def compile_and_persist_execution_plan(
     *,
     session_factory: Any,
@@ -2082,10 +2103,12 @@ async def compile_and_persist_execution_plan(
             configuration_body, recorded, binding_set.bindings
         )
         provider_configuration_snapshot = recorded.model_dump(mode="json")
+        await _require_process_home_server(admitted_provider_configurations)
     elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] in PROVIDER_CONFIGURATION_MATERIALIZERS:
         admitted_provider_configurations = {
             "primary-model": snapshot_provider_configuration(provider_profile),
         }
+        await _require_process_home_server(admitted_provider_configurations)
         configuration_body = provider_configuration_snapshot_bytes(
             binding_set.bindings, admitted_provider_configurations,
         )

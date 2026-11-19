@@ -15,7 +15,7 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
 from tests.unit.omnigent.test_session_launch_reconciliation import _request
 
 
-def _fork_fixture():
+def _fork_fixture(*, process_home=None, server_preserves_process_home=True):
     phases = {
         "runtimeContextContinuation": {
             "sourceSessionId": "source",
@@ -56,6 +56,8 @@ def _fork_fixture():
     async def fork(source, payload):
         assert source == "source"
         snapshot["title"] = payload["title"]
+        if server_preserves_process_home and "process_home" in payload:
+            snapshot["process_home"] = payload["process_home"]
         sessions.append(snapshot)
         return snapshot
 
@@ -76,6 +78,8 @@ def _fork_fixture():
 
     async def prepare():
         request = _request()
+        if process_home is not None:
+            request.parameters["omnigent"]["session"]["processHome"] = process_home
         return await prepare_workflow_session_create(
             request=request,
             selection=build_omnigent_selection(request),
@@ -644,3 +648,22 @@ def test_controller_distinguishes_sessionless_receipts_from_pre_upgrade_results(
             flow._shared_runtime_context.runtime_binding_ref
             == metadata["runtimeBindingRef"]
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supported", [True, False])
+async def test_context_fork_preserves_process_home_before_launch(supported):
+    from moonmind.omnigent.session_launch import OmnigentLaunchReconciliationError
+    home = "/home/app/.omnigent/moonmind/runtime-context/process-home"
+    client, sink, snapshot, prepare = _fork_fixture(process_home=home, server_preserves_process_home=supported)
+    if supported:
+        _, session_id = await prepare()
+        assert session_id == "fork"
+        assert snapshot["process_home"] == home
+        client.launch_runner.assert_awaited_once()
+    else:
+        with pytest.raises(OmnigentLaunchReconciliationError, match="process HOME"):
+            await prepare()
+        client.launch_runner.assert_not_awaited()
+    assert client.fork_session.await_args.args[1]["process_home"] == home
+    assert client.fork_session.await_args.args[1]["host_id"] == "host"

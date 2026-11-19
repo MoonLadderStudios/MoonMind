@@ -106,14 +106,25 @@ def materialize_configuration(
 ):
     """Initialize an attempt's home once; retries never append twice."""
     configuration = validate_configuration(configuration)
-    support = Path(runtime_support_dir).resolve()
+    return _materialize_private_files(configuration, runtime_support_dir=runtime_support_dir, workspace_path=workspace_path, template_support_dir=template_support_dir)
+
+
+def _materialize_private_files(configuration, *, runtime_support_dir, workspace_path, template_support_dir=None, process_home=False):
+    support = Path(runtime_support_dir).absolute() if process_home else Path(runtime_support_dir).resolve()
+    if process_home and any(path.is_symlink() for path in (support, *support.parents)):
+        raise ValueError("private configuration parent contains a symlink")
     name = configuration["homePathOverrides"]["CLAUDE_CONFIG_DIR"].split("/", 1)[1]
     home = support / name
     marker = home / ".moonmind-profile-digest"
     digest = hashlib.sha256(json.dumps([configuration, workspace_path], sort_keys=True).encode()).hexdigest()
     if home.exists() or home.is_symlink():
-        if home.is_symlink() or not marker.is_file() or marker.read_text() != digest:
+        if (home.is_symlink()
+            or process_home and (not home.is_dir() or home.stat().st_uid != os.getuid()
+                or home.stat().st_mode & 0o777 != 0o700 or marker.is_symlink())
+            or not marker.is_file() or marker.read_text() != digest):
             raise ValueError("Claude private configuration home is already owned")
+        if process_home and any(path.is_symlink() for path in home.rglob("*")):
+            raise ValueError("private configuration contains a symlink")
         return str(home)
     support.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=support) as temporary:
@@ -148,14 +159,35 @@ def validate_oauth_configuration(configuration):
         raise ValueError("unsupported Claude OAuth configuration fields")
     overrides = configuration["homePathOverrides"]
     if not isinstance(overrides, dict) or any(
-        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR"} or value != _ENROLLED_HOME
+        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "HOME"}
+        or key != "HOME" and value != _ENROLLED_HOME
         for key, value in overrides.items()
     ):
         raise ValueError("Claude OAuth preferences require the enrolled home")
+    process_home = overrides.get("HOME")
+    if process_home is not None and (
+        not isinstance(process_home, str)
+        or not re.fullmatch(r"{{runtime_support_dir}}/[A-Za-z0-9][A-Za-z0-9_.-]*-home", process_home)
+        or process_home.rsplit("/", 1)[1] in {"claude-home", "codex-home"}
+    ):
+        raise ValueError("process HOME requires an isolated private child")
     translated = []
+    process_files = []
     for raw in configuration["fileTemplates"]:
         if hasattr(raw, "model_dump"):
             raw = raw.model_dump(by_alias=False, mode="json")
+        if isinstance(raw, dict) and process_home and str(raw.get("path", "")).startswith(process_home + "/"):
+            relative = raw["path"][len(process_home) + 1:]
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.md", relative):
+                raise ValueError("process HOME files must be literal top-level Markdown")
+            # Reuse the existing text/template/permissions validator without
+            # granting new settings or executable configuration authority.
+            checked = validate_configuration({
+                "homePathOverrides": {"CLAUDE_CONFIG_DIR": _HOME},
+                "fileTemplates": [{**raw, "path": _HOME + "/CLAUDE.md"}],
+            })["fileTemplates"][0]
+            process_files.append({**checked, "path": raw["path"]})
+            continue
         if not isinstance(raw, dict) or not str(raw.get("path", "")).startswith(
             _ENROLLED_HOME + "/"
         ):
@@ -176,7 +208,7 @@ def validate_oauth_configuration(configuration):
         "fileTemplates": [
             {**item, "path": _ENROLLED_HOME + item["path"][len(_HOME) :]}
             for item in validated["fileTemplates"]
-        ],
+        ] + process_files,
     }
 
 
@@ -211,6 +243,7 @@ def render_oauth_files(configuration, *, runtime_support_dir, workspace_path):
         "fileTemplates": [
             {**item, "path": _HOME + item["path"][len(_ENROLLED_HOME) :]}
             for item in configuration["fileTemplates"]
+            if item["path"].startswith(_ENROLLED_HOME + "/")
         ],
     }
     with tempfile.TemporaryDirectory() as directory:
@@ -226,3 +259,27 @@ def render_oauth_files(configuration, *, runtime_support_dir, workspace_path):
             for path in sorted(root.rglob("*"))
             if path.is_file() and path.name != ".moonmind-profile-digest"
         }
+
+
+def process_home_configuration(configuration):
+    """Return the validated process-home projection, separate from OAuth files."""
+    # API-key configurations have their own private configuration-directory owner.
+    # Only an authored process HOME selects this OAuth projection contract.
+    if "HOME" not in configuration.get("homePathOverrides", {}):
+        return None
+    configuration = validate_oauth_configuration(configuration)
+    home = configuration["homePathOverrides"]["HOME"]
+    return {"homePathOverrides": {"HOME": home}, "fileTemplates": [
+        item for item in configuration["fileTemplates"] if item["path"].startswith(home + "/")
+    ]}
+
+
+def materialize_process_home(configuration, *, runtime_support_dir, workspace_path):
+    private = process_home_configuration(configuration)
+    if private is None:
+        return None
+    home = private["homePathOverrides"]["HOME"]
+    return _materialize_private_files(
+        {"homePathOverrides": {"CLAUDE_CONFIG_DIR": home}, "fileTemplates": private["fileTemplates"]},
+        runtime_support_dir=runtime_support_dir, workspace_path=workspace_path, process_home=True,
+    )
