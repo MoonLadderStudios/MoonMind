@@ -102,7 +102,10 @@ describe('Recurring layout and navigation', () => {
           expect(Math.abs(slab.getBoundingClientRect().right - contentRight)).toBeLessThan(1);
           expect(getComputedStyle(slab).borderTopWidth).toBe('0px');
           expect(getComputedStyle(slab).borderRadius).toBe('0px');
+          // Like Workflows, only the header carries a panel fill; the table and
+          // rows stay clear so the body shows the page canvas below it.
           expect(getComputedStyle(header).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+          expect(getComputedStyle(table).backgroundColor).toBe('rgba(0, 0, 0, 0)');
           expect(getComputedStyle(table.querySelector('tbody tr:nth-child(2)')!).backgroundColor).toBe('rgba(0, 0, 0, 0)');
           expect(within(table).getByText('codex-primary')).toBeTruthy();
           expect(within(table).getByText('gpt-6')).toBeTruthy();

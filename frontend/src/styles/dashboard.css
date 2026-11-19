@@ -1989,9 +1989,12 @@ h1 {
   box-shadow: none;
 }
 
+/* Clear the generic table fill so, as on Workflows, rows show the page canvas
+ * and only the header row carries the panel color. */
 .schedules-table-panel .data-table {
   width: 100%;
   white-space: normal;
+  background: transparent;
   border-collapse: separate;
   border-spacing: 0;
 }
