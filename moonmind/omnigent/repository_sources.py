@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-
 _GITHUB_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -43,4 +42,42 @@ def normalize_repository_source(repository_source: str) -> tuple[str, str]:
     )
 
 
-__all__ = ["RepositorySourceError", "normalize_repository_source"]
+def anonymous_https_repository_source(value: str) -> tuple[str, str] | None:
+    """A credential-free, unambiguous HTTPS remote and its exact origin.
+
+    This classifies a transport only; callers must separately prove an admitted
+    anonymous read grant. Local paths, userinfo and URL options never qualify.
+    Keep path case and suffix unchanged for non-GitHub hosting services.
+    """
+    try:
+        if not isinstance(value, str) or any(
+            ord(char) <= 32 or ord(char) == 127 for char in value
+        ):
+            return None
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", parsed.netloc)
+            or parsed.netloc != parsed.netloc.lower()
+            or not re.fullmatch(r"/[A-Za-z0-9_.~/-]+", parsed.path)
+            or any(part in {"", ".", ".."} for part in parsed.path[1:].split("/"))
+        ):
+            return None
+        # Validate the port as well as its syntax.
+        _port = parsed.port
+        endpoint = "https://" + parsed.netloc
+        return value, endpoint
+    except (ValueError, TypeError):
+        return None
+
+
+__all__ = [
+    "RepositorySourceError",
+    "anonymous_https_repository_source",
+    "normalize_repository_source",
+]

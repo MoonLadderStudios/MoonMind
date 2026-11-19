@@ -993,8 +993,41 @@ class OmnigentWorkspaceMaterializer:
         # hydration to that generation so a previous completed C1 restore is
         # not mistaken for the newly restored C0 directory after worker loss.
         generation = (remediation or {}).get("restoreEvidenceRef") or "step"
+        from moonmind.omnigent.repository_sources import (
+            anonymous_https_repository_source,
+        )
+        from moonmind.omnigent.workspace_intent import authored_anonymous_source
+
+        anonymous_remote = (
+            anonymous_https_repository_source(repository_identity.canonical_remote or "")
+            if repository_identity is not None and authored_anonymous_source(request) else None
+        )
+
+        async def admitted_anonymous_read(repository):
+            from urllib.parse import urlsplit
+
+            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+                AdmittedGitRead,
+            )
+
+            if repository != anonymous_remote[0]:
+                raise ValueError("restore repository differs from admitted anonymous source")
+            acquired = await self._repository_credentials.acquire_repository_use(
+                plan=plan, request=request, role="source_read", operation="read",
+                repository=repository,
+            )
+            if acquired is not None:
+                acquired.credential.clear()
+                raise ValueError("anonymous restore cannot acquire repository credentials")
+            return AdmittedGitRead(repository, urlsplit(repository).netloc, None)
+
         service = ManagedCheckpointRestoreService(
-            authority_root=self._root, artifact_service=self._remediation_artifacts
+            authority_root=self._root, artifact_service=self._remediation_artifacts,
+            repository_read_resolver=(
+                admitted_anonymous_read
+                if anonymous_remote and repository_identity.endpoint != "https://github.com"
+                else None
+            ),
         )
         restore_request = {
             "schemaVersion": "v1",
@@ -1485,7 +1518,15 @@ class OmnigentWorkspaceMaterializer:
             operation="read",
             repository=source.repository_ref,
         )
-        clone_source = github_clone_source_from_identity(identity)
+        from moonmind.omnigent.repository_sources import (
+            anonymous_https_repository_source,
+        )
+
+        # Identity was verified against the admitted source-read snapshot above.
+        # Non-GitHub HTTPS identities can only pass that owner with an anonymous
+        # grant. Acquire again before cloning, so no credential route is inferred.
+        remote = anonymous_https_repository_source(identity.canonical_remote or "")
+        clone_source = remote[0] if remote else github_clone_source_from_identity(identity)
         acquired = await self._repository_credentials.acquire_repository_use(
             plan=plan,
             request=request,
@@ -1732,7 +1773,13 @@ def build_daemon_git_clone_argv(
             "agent workspace volume name is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    if normalize_github_clone_source(source, endpoint=endpoint) != source:
+    from moonmind.omnigent.repository_sources import anonymous_https_repository_source
+
+    anonymous_remote = anonymous_https_repository_source(source) if not authenticated else None
+    if not (
+        anonymous_remote and anonymous_remote[1] == endpoint
+        or normalize_github_clone_source(source, endpoint=endpoint) == source
+    ):
         raise HarnessPlatformError(
             "sandbox workspace clone source is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
@@ -1747,7 +1794,7 @@ def build_daemon_git_clone_argv(
             "resuming checkout requires an admitted repository pin",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    host = github_host_from_endpoint(endpoint)
+    host = github_host_from_endpoint(endpoint) if authenticated else ""
     identity_name = str(git_user_name or "").strip()
     identity_email = str(git_user_email or "").strip()
     if not identity_name or not identity_email:

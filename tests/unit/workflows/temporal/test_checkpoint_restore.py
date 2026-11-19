@@ -507,9 +507,9 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sandbox_without_origin", [False, True])
+@pytest.mark.parametrize("sandbox_without_origin,invalid_origin", [(False, False), (True, False), (True, True)])
 async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sandbox_without_origin
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sandbox_without_origin, invalid_origin
 ) -> None:
     """A checkpoint without an origin baseline restores with no credential.
 
@@ -586,6 +586,14 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
         workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
         SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
         request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
+        if invalid_origin:
+            request["destination"].update(repository="acme/repo", repositoryIdentity={
+                "endpoint": "https://github.com", "displayName": "acme/repo",
+                "canonicalRemote": "https://other.example.test/acme/repo.git",
+            })
+            with pytest.raises(CheckpointRestoreError, match="admitted repository remote is unsafe"):
+                await service.restore(request, access=access_for_test("workflow:source"))
+            return
 
     await service.restore(request, access=access_for_test("workflow:source"))
 

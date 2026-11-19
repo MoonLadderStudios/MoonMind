@@ -551,9 +551,13 @@ async def prepare_selected_pool_plan(
             and source.get("kind") == "repository"
         )
         if repository_handoff:
-            from moonmind.omnigent.repository_sources import normalize_repository_source
+            from moonmind.omnigent.repository_sources import (
+                anonymous_https_repository_source,
+                normalize_repository_source,
+            )
             from moonmind.omnigent.workspace_sources import (
-                WorkspaceSourceError, compile_workspace_source,
+                WorkspaceSourceError,
+                compile_workspace_source,
                 repository_workspace_commit_sha,
             )
 
@@ -576,15 +580,25 @@ async def prepare_selected_pool_plan(
                 or request.workspace_spec.get("repositoryTarget")
                 or {}
             )
-            # The shared repository materializer consumes admitted GitHub
-            # identity/credentials. Local and other-provider native sources
-            # keep their current adapter rather than acquiring a new meaning.
+            # Only GitHub account grants and explicit credential-free HTTPS
+            # reads have equivalent shared source owners. Local paths and
+            # other authenticated transports keep their native authority.
+            from moonmind.workflows.executions.repository_contract import (
+                authored_repository_access,
+            )
+
+            connection_ref, anonymous = authored_repository_access(
+                {**request.parameters, "workspaceSpec": request.workspace_spec}
+            )
+            remote = anonymous_https_repository_source(compiled_source.repository_ref or "")
             repository_handoff = (
                 isinstance(target, Mapping)
                 and target.get("provider") in {None, "git"}
                 and revision_handoff
-                and normalize_repository_source(compiled_source.repository_ref or "")[1]
-                == "github_https"
+                and (
+                    normalize_repository_source(compiled_source.repository_ref or "")[1] == "github_https"
+                    or anonymous and not connection_ref and remote is not None
+                )
             )
         if (
             (source.get("kind") not in {None, "scratch", "git"} and not repository_handoff)

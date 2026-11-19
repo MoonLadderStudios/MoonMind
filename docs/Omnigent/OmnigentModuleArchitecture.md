@@ -180,7 +180,12 @@ selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. The port uses the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
 Canonical GitHub repository sources use the selected account's shared plan when
-the controller supports repository-to-save handoffs. A separate versioned
+the controller supports repository-to-save handoffs. Explicit anonymous HTTPS
+sources use that same plan and workspace owner with an exact, case-sensitive
+remote identity and a read-only access snapshot, never a repository credential.
+Clone and cold restore isolate ambient credentials and disable redirects. Local
+paths, SSH, and authenticated non-GitHub sources retain their native owner until
+an equivalent source-access handoff exists. A separate versioned
 controller capability also admits a typed full Git commit SHA with publication
 mode `none`; abbreviated or unsupported revisions retain their existing owner.
 The shared owner verifies the requested commit before first readiness and binds

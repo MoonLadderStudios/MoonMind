@@ -8,7 +8,7 @@ import re
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlsplit
 
-from moonmind.auth.bound_acquisition import AcquiredCredential, SelectionSnapshot
+from moonmind.auth.bound_acquisition import AccessMode, AcquiredCredential, SelectionSnapshot
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -17,6 +17,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.repository_sources import anonymous_https_repository_source
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.repository_contract import (
     RepositoryIdentity,
@@ -376,7 +377,20 @@ class OmnigentGithubCredentialService:
             or identity.display_name.lower() != snapshot.repository_display.lower()
         ):
             raise ValueError("repository access snapshot identity conflicts")
-        clone_source = github_clone_source_from_identity(identity)
+        anonymous_remote = (
+            anonymous_https_repository_source(identity.canonical_remote or "")
+            if snapshot.access_mode == AccessMode.ANONYMOUS else None
+        )
+        if anonymous_remote:
+            if (
+                binding is not None or role != "source_read" or operation != "read"
+                or tuple(snapshot.operations) != ("read",)
+                or identity.endpoint != anonymous_remote[1]
+            ):
+                raise ValueError("anonymous source cannot carry other repository authority")
+            clone_source = anonymous_remote[0]
+        else:
+            clone_source = github_clone_source_from_identity(identity)
         # A durable schedule plan can serve several fresh execution owners.
         # Bind to the admitted plan rather than its authoring subject.
         requested_plan_ref = (
@@ -397,7 +411,9 @@ class OmnigentGithubCredentialService:
         )
         direct_name = str(requested_repository or "").strip().rstrip("/")
         direct_name = direct_name.removesuffix(".git")
-        if _REPOSITORY_NAME.fullmatch(direct_name):
+        if anonymous_remote and identity.endpoint != "https://github.com":
+            target_matches = requested_repository == clone_source
+        elif _REPOSITORY_NAME.fullmatch(direct_name):
             target_matches = direct_name.lower() == snapshot.repository_display.lower()
         elif str(requested_repository).startswith("git@github.com:"):
             target_matches = (
