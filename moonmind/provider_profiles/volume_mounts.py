@@ -41,7 +41,7 @@ def credential_volume_mount(
     )
 
 
-def validate_claude_enrollment_mount(value: str) -> str:
+def validate_provider_enrollment_mount(value: str) -> str:
     """Bound custom auth homes to dedicated, nonhidden app-home children.
 
     Runtime state, provider config, Skills and executable mounts have separate
@@ -49,5 +49,9 @@ def validate_claude_enrollment_mount(value: str) -> str:
     """
     validate_volume_mount_path(value)
     if not re.fullmatch(r"/home/app/[A-Za-z0-9][A-Za-z0-9_.-]*-auth", value):
-        raise ValueError("custom Claude enrollment requires a dedicated app-home auth directory")
+        raise ValueError("custom provider enrollment requires a dedicated app-home auth directory")
     return value
+
+
+# Retain the existing Claude caller interface for recorded integrations.
+validate_claude_enrollment_mount = validate_provider_enrollment_mount

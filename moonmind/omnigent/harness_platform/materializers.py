@@ -373,7 +373,7 @@ class ProviderConfigEndpoint(BaseModel):
         return self
 
 
-class ClaudeEnrollmentHome(BaseModel):
+class ProviderEnrollmentHome(BaseModel):
     """Selected enrollment coordinates, bound by the enclosing Profile slot."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -384,13 +384,17 @@ class ClaudeEnrollmentHome(BaseModel):
     @model_validator(mode="after")
     def _validate_layout(self):
         from moonmind.provider_profiles.volume_mounts import (
-            validate_claude_enrollment_mount,
+            validate_provider_enrollment_mount,
             validate_volume_ref,
         )
 
         validate_volume_ref(self.volumeRef)
-        validate_claude_enrollment_mount(self.targetPath)
+        validate_provider_enrollment_mount(self.targetPath)
         return self
+
+
+# Compatibility name for existing Claude integrations.
+ClaudeEnrollmentHome = ProviderEnrollmentHome
 
 
 def _selected_claude_enrollment(profile):
@@ -407,6 +411,21 @@ def _selected_claude_enrollment(profile):
     ):
         raise ValueError("custom Claude enrollment requires matching credential selectors")
     return ClaudeEnrollmentHome(
+        volumeRef=getattr(profile, "volume_ref", None), targetPath=target,
+        credentialGeneration=getattr(profile, "credential_generation", 0),
+    )
+
+
+def _selected_codex_enrollment(profile):
+    if str(getattr(profile, "runtime_id", "")) != "codex_cli":
+        return None
+    target = getattr(profile, "volume_mount_path", None)
+    if target in {None, "/home/app/.codex"}:
+        return None
+    overrides = dict(getattr(profile, "home_path_overrides", None) or {})
+    if any(key != "CODEX_HOME" or value != target for key, value in overrides.items()):
+        raise ValueError("custom Codex enrollment requires matching credential selectors")
+    return ProviderEnrollmentHome(
         volumeRef=getattr(profile, "volume_ref", None), targetPath=target,
         credentialGeneration=getattr(profile, "credential_generation", 0),
     )
@@ -434,6 +453,9 @@ class ProviderLaunchEnvironment(BaseModel):
     )
 
     claudeEnrollmentHome: ClaudeEnrollmentHome | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    codexEnrollmentHome: ProviderEnrollmentHome | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
 
@@ -480,6 +502,10 @@ class ProviderLaunchEnvironment(BaseModel):
 
     @model_validator(mode="after")
     def _validate_environment_ownership(self):
+        if self.codexEnrollmentHome is not None and (
+            self.claudeEnrollmentHome is not None or self.claudeConfiguration is not None
+        ):
+            raise ValueError("custom Codex enrollment cannot replace another configuration owner")
         if self.claudeEnrollmentHome is not None and (
             self.codexConfiguration is not None or self.codexNativeDefault is not None
         ):
@@ -516,6 +542,7 @@ def _oauth_launch_environment(
         codexConfiguration=configuration,
         claudeConfiguration=claude_configuration,
         claudeEnrollmentHome=_selected_claude_enrollment(profile),
+        codexEnrollmentHome=_selected_codex_enrollment(profile),
         codexNativeDefault=_codex_native_default_selection(profile),
     )
 
@@ -552,9 +579,14 @@ class ProviderConfigurationSlot(BaseModel):
     claudeEnrollmentHome: ClaudeEnrollmentHome | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+    codexEnrollmentHome: ProviderEnrollmentHome | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def _validate_delivery(self):
+        if self.codexEnrollmentHome is not None and self.materializerRef != "codex-oauth-home@1":
+            raise ValueError("custom Codex enrollment requires its Codex credential owner")
         if self.claudeEnrollmentHome is not None and self.materializerRef != "claude-oauth-home@1":
             raise ValueError("custom Claude enrollment requires its Claude credential owner")
         if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
@@ -576,6 +608,7 @@ class ProviderConfigurationSlot(BaseModel):
                 codexConfiguration=self.codexConfiguration,
                 claudeConfiguration=self.claudeConfiguration,
                 claudeEnrollmentHome=self.claudeEnrollmentHome,
+                codexEnrollmentHome=self.codexEnrollmentHome,
                 environmentTemplates=self.environmentTemplates,
             )
         elif (
@@ -613,6 +646,9 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
                 endpoint.codexConfiguration
                 if isinstance(endpoint, ProviderLaunchEnvironment)
                 else None
+            ),
+            codexEnrollmentHome=(
+                endpoint.codexEnrollmentHome if isinstance(endpoint, ProviderLaunchEnvironment) else None
             ),
             claudeEnrollmentHome=(
                 endpoint.claudeEnrollmentHome if isinstance(endpoint, ProviderLaunchEnvironment) else None
@@ -668,6 +704,7 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
                 codexConfiguration=saved.codexConfiguration,
                 claudeConfiguration=saved.claudeConfiguration,
                 claudeEnrollmentHome=saved.claudeEnrollmentHome,
+                codexEnrollmentHome=saved.codexEnrollmentHome,
                 environmentTemplates=saved.environmentTemplates,
                 codexNativeDefault=saved.codexNativeDefault,
             )
@@ -694,7 +731,7 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         return None
     fields = []
     try:
-        selected_enrollment = _selected_claude_enrollment(profile)
+        selected_enrollment = _selected_claude_enrollment(profile) or _selected_codex_enrollment(profile)
     except ValueError:
         selected_enrollment = None
         fields.append("credential_home")

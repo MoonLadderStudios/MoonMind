@@ -833,3 +833,21 @@ def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(
     assert observed["ambient"] == []
     assert observed["host"] == github_host
     assert "selected-canary" in observed["config"]
+
+
+@pytest.mark.parametrize("context_required", [False, True])
+def test_credential_only_custom_codex_home_reaches_runner_without_profile_override(context_required):
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[{
+            "materializerRef": "codex-oauth-home@1", "credentialGeneration": 3,
+            "attachments": [{"targetPath": "/home/app/selected-auth", "accessMode": "read-write"}],
+        }],
+        skill_attachment={"targetPath": "/opt/skills"},
+        step_execution_id="workflow:run:work:execution:1",
+        enable_codex_runtime=True,
+        runtime_environment={"MOONMIND_CODEX_REQUIRE_CONTEXT": "1"} if context_required else None,
+    )
+    assert environment["CODEX_HOME"] == "/home/app/selected-auth"
+    assert "CODEX_HOME" in environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
+    assert "provider-CODEX_HOME" not in script
+    assert ("OMNIGENT_CODEX_PATH" in environment) is context_required

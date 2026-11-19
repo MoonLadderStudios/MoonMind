@@ -466,9 +466,10 @@ def _claude_oauth_projection(acquired, launch_environment):
 
 def _credential_home_target(materializer_ref, home, launch_environment, generation):
     expected = _OAUTH_HOME_MATERIALIZER_TARGETS[materializer_ref]
-    selected = getattr(launch_environment, "claudeEnrollmentHome", None)
+    field = "codexEnrollmentHome" if materializer_ref == "codex-oauth-home@1" else "claudeEnrollmentHome"
+    selected = getattr(launch_environment, field, None)
     if selected is not None:
-        if (materializer_ref != "claude-oauth-home@1"
+        if (materializer_ref not in {"claude-oauth-home@1", "codex-oauth-home@1"}
             or selected.credentialGeneration != generation
             or selected.volumeRef != home.volume_ref
             or selected.targetPath != home.target_path):
@@ -1801,7 +1802,8 @@ class OmnigentCredentialProvisioningService:
                     profile_credential_home = None
                     if descriptor.state.get("scope") == "profile":
                         selected_home = getattr(
-                            (configurations or {}).get(slot), "claudeEnrollmentHome", None
+                            (configurations or {}).get(slot),
+                            "codexEnrollmentHome" if binding.materializerRef == "codex-oauth-home@1" else "claudeEnrollmentHome", None
                         )
                         profile_credential_home = await self._load_profile_credential_home(
                             acquired, **({"selected_home": selected_home} if selected_home is not None else {})

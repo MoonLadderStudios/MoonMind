@@ -182,7 +182,7 @@ def test_enrolled_codex_home_templates_use_a_private_shared_projection(
 @pytest.mark.parametrize("changed", [
     {"credential_source": "secret_ref"},
     {"runtime_id": "claude_code"},
-    {"volume_mount_path": "/home/app/another-account"},
+    {"volume_mount_path": "/home/app/another-auth"},
     {"home_path_overrides": {"HOME": "/home/app/.codex"}},
 ])
 def test_enrolled_home_template_translation_requires_its_codex_oauth_owner(changed):

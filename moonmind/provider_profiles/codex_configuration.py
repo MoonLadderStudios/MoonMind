@@ -246,14 +246,18 @@ def _configuration_document(profile):
         home = dict(getattr(profile, "home_path_overrides", None) or {})
         credential_source = getattr(profile, "credential_source", None)
         materialization_mode = getattr(profile, "runtime_materialization_mode", None)
+        enrollment_target = getattr(profile, "volume_mount_path", None)
         enrolled_home = (
             getattr(profile, "runtime_id", None) == "codex_cli"
             and getattr(credential_source, "value", credential_source) == "oauth_volume"
             and getattr(materialization_mode, "value", materialization_mode) == "oauth_home"
-            and getattr(profile, "volume_mount_path", None) == _ENROLLED_CODEX_HOME
+            and enrollment_target is not None
         )
+        if enrolled_home and enrollment_target != _ENROLLED_CODEX_HOME:
+            from moonmind.provider_profiles.volume_mounts import validate_provider_enrollment_mount
+            validate_provider_enrollment_mount(enrollment_target)
         if not home and enrolled_home:
-            home_path = _ENROLLED_CODEX_HOME
+            home_path = enrollment_target
         elif set(home) == {"CODEX_HOME"}:
             home_path = str(home["CODEX_HOME"])
         else:
@@ -261,7 +265,7 @@ def _configuration_document(profile):
         if (
             not (
                 home_path.startswith("{{runtime_support_dir}}/")
-                or enrolled_home and home_path == _ENROLLED_CODEX_HOME
+                or enrolled_home and home_path == enrollment_target
             )
             or ".." in Path(home_path).parts
         ):
@@ -497,6 +501,8 @@ def oauth_configuration_for_profile(profile):
     if parsed is None:
         return None, reason
     try:
+        if getattr(profile, "volume_mount_path", None) not in {None, _ENROLLED_CODEX_HOME} and parsed["additionalFiles"]:
+            return None, "custom Codex enrollment additional files require native delivery"
         # Only template-derived references to the relocated HOME bind late.
         # Absolute literals and generic support/workspace paths retain their owner.
         environment = {}
@@ -582,10 +588,20 @@ def configure_home(configuration, home):
     _write(Path(home) / "config.toml", configuration["document"])
 
 
-def configure_private_oauth_home(configuration, home):
+def _validated_enrolled_home(value):
+    if value is None:
+        value = _ENROLLED_CODEX_HOME
+    # This coordinate comes from the frozen credential attachment, passed in
+    # the generated wrapper command, never from the launched process environment.
+    if value != _ENROLLED_CODEX_HOME and not re.fullmatch(r"/home/app/[A-Za-z0-9][A-Za-z0-9_.-]*-auth", str(value)):
+        raise ValueError("Codex enrollment requires a bounded credential directory")
+    return value
+
+
+def configure_private_oauth_home(configuration, home, *, enrolled_home=None):
     """Overlay preferences only after the native owner created its private HOME."""
     home = Path(home).resolve()
-    enrolled = Path(_ENROLLED_CODEX_HOME).resolve()
+    enrolled = Path(_validated_enrolled_home(enrolled_home)).resolve()
     if home == enrolled or enrolled in home.parents or not home.is_dir():
         raise ValueError("OAuth preferences cannot modify the enrolled credential home")
     path = home / "config.toml"
@@ -606,11 +622,11 @@ def configure_private_oauth_home(configuration, home):
     _write(path, _merge(document, preferences))
 
 
-def _privatize_native_file_path(home, rendered_path):
+def _privatize_native_file_path(home, rendered_path, *, enrolled_home=None):
     """Detach the selected native HOME links without changing their source."""
     relative = Path(rendered_path).relative_to(home)
     _validate_additional_file_path(relative)
-    source_home = Path(_ENROLLED_CODEX_HOME).resolve()
+    source_home = Path(_validated_enrolled_home(enrolled_home)).resolve()
     for length in range(1, len(relative.parts) + 1):
         path = home.joinpath(*relative.parts[:length])
         if not path.is_symlink():
@@ -644,7 +660,7 @@ def _privatize_native_file_path(home, rendered_path):
             raise ValueError("Profile files require a regular native source")
 
 
-def configure_profile_files(configuration, home, workspace):
+def configure_profile_files(configuration, home, workspace, *, enrolled_home=None):
     """Render per-run files only in the native process's private Codex home.
 
     A completed projection is reused on process restart. An interrupted write
@@ -663,7 +679,7 @@ def configure_profile_files(configuration, home, workspace):
         from template_renderer import ProfileTemplateRenderer
 
     home = Path(home).resolve()
-    enrolled = Path(_ENROLLED_CODEX_HOME).resolve()
+    enrolled = Path(_validated_enrolled_home(enrolled_home)).resolve()
     if home == enrolled or enrolled in home.parents or not home.is_dir():
         raise ValueError("Profile files cannot modify the enrolled credential home")
     workspace = Path(workspace).resolve()
@@ -684,7 +700,7 @@ def configure_profile_files(configuration, home, workspace):
     renderer = ProfileTemplateRenderer(toml_serializer=render_toml)
     context = {"runtime_support_dir": str(home), "workspace_path": str(workspace)}
     for template in templates:
-        _privatize_native_file_path(home, renderer._render_string(template["path"], context))
+        _privatize_native_file_path(home, renderer._render_string(template["path"], context), enrolled_home=enrolled_home)
         renderer._materialize_file_template(
             SimpleNamespace(**template),
             context,
@@ -786,19 +802,27 @@ if __name__ == "__main__":
     if action == "prepare":
         if configuration is not None and not configuration.get("privateHomeOnly"):
             configure_home(configuration, os.environ["CODEX_HOME"])
-        binary, wrapper, context = arguments
-        launch = [context, sys.executable, __file__, "launch", config_path, binary]
+        binary, wrapper, context, *selected = arguments
+        enrolled_home = _validated_enrolled_home(selected[0]) if selected else _ENROLLED_CODEX_HOME
+        if len(selected) > 1:
+            raise ValueError("ambiguous Codex enrollment")
+        launch = [context, sys.executable, __file__, "launch", config_path,
+                  "--enrolled-home", enrolled_home, binary]
         Path(wrapper).write_text("#!/bin/sh\nexec " + shlex.join(launch) + ' "$@"\n')
         Path(wrapper).chmod(0o700)
     elif action == "launch":
+        enrolled_home = _ENROLLED_CODEX_HOME
+        if arguments and arguments[0] == "--enrolled-home":
+            enrolled_home = _validated_enrolled_home(arguments[1])
+            arguments = arguments[2:]
         binary, *arguments = arguments
         if os.environ.get("MOONMIND_CODEX_REQUIRE_CONTEXT") == "1":
             require_reusable_context(os.environ["CODEX_HOME"], arguments)
         if configuration is not None:
             if "app-server" in arguments:
                 if configuration.get("privateHomeOnly"):
-                    configure_private_oauth_home(configuration, os.environ["CODEX_HOME"])
-                configure_profile_files(configuration, os.environ["CODEX_HOME"], Path.cwd())
+                    configure_private_oauth_home(configuration, os.environ["CODEX_HOME"], enrolled_home=enrolled_home)
+                configure_profile_files(configuration, os.environ["CODEX_HOME"], Path.cwd(), enrolled_home=enrolled_home)
                 if configuration.get("environmentTemplates"):
                     from template_renderer import ProfileTemplateRenderer
 

@@ -1412,8 +1412,17 @@ class DockerOmnigentHostAttestor:
                     if native_default_model is None and not any(
                         isinstance(row, dict) and row.get("isDefault") is True for row in rows or []
                     ):
+                        source_homes = [attachment["targetPath"] for handle, attachment in oauth_mounts
+                                        if handle.get("materializerRef") == "codex-oauth-home@1"]
+                        if len(source_homes) > 1:
+                            raise HarnessPlatformError(
+                                "Codex default discovery requires one selected credential home",
+                                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
+                            )
+                        source_home = source_homes[0] if source_homes else "/home/app/.codex"
                         native_default_model = await upstream_probes.read_codex_native_default(
                             backend=self._backend, container_name=launch_result["containerName"],
+                            **({"source_home": source_home} if source_home != "/home/app/.codex" else {}),
                         )
                         model_options_source += "+codex-native-default-read"
                 available_models, selected_model_present = (

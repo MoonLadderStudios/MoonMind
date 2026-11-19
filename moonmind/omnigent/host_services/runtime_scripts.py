@@ -322,6 +322,21 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        codex_homes = [
+            attachment["targetPath"] for handle in credential_handles
+            if handle.get("materializerRef") == "codex-oauth-home@1"
+            for attachment in handle.get("attachments", [])
+            if attachment.get("accessMode") == "read-write"
+        ]
+        codex_source_home = "/home/app/.codex"
+        if set(codex_homes) - {codex_source_home}:
+            from moonmind.provider_profiles.volume_mounts import validate_provider_enrollment_mount
+            if not enable_codex_runtime or len(codex_homes) != 1:
+                raise ValueError("custom enrollment requires one selected Codex home")
+            codex_source_home = validate_provider_enrollment_mount(codex_homes[0])
+            environment["CODEX_HOME"] = codex_source_home
+        # Do not put the source selector into profile_environment: upstream
+        # launches app-server with a private CODEX_HOME which the wrapper retains.
         claude_homes = [
             attachment["targetPath"]
             for handle in credential_handles
@@ -385,7 +400,7 @@ class OmnigentRuntimeScriptService:
         if codex_wrapper:
             provider_environment.update(
                 {
-                    "CODEX_HOME": "/home/app/.codex",
+                    "CODEX_HOME": codex_source_home,
                     "OMNIGENT_CODEX_PATH": f"{_RUNTIME_BIN_DIR}/codex",
                 }
             )
@@ -441,6 +456,7 @@ class OmnigentRuntimeScriptService:
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
             *supplied_runtime_environment,
             *provider_environment,
+            *({"CODEX_HOME"} if codex_source_home != "/home/app/.codex" else set()),
         }
         if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
@@ -517,7 +533,7 @@ class OmnigentRuntimeScriptService:
                 f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
                 f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
                 f"printf '%s\\n' {shlex.quote(renderer_source)} > {renderer}; chmod 0600 {renderer}; "
-                f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
+                f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper} {shlex.quote(codex_source_home)}; '
             )
         process_home_setup = ""
         if process_home:
