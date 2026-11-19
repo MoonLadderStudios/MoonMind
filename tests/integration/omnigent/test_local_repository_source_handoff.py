@@ -9,6 +9,7 @@ import copy
 import json
 import os
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -367,13 +368,29 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     # The native comparator runs in the fixture process rather than the
     # provider's uid. Give only that comparator exact source trust; the shared
     # export above and below must supply its own isolated upload-pack trust.
-    with monkeypatch.context() as native_identity:
-        if os.geteuid() == 0:
-            native_identity.setenv("GIT_CONFIG_COUNT", "2")
-            native_identity.setenv("GIT_CONFIG_KEY_0", "safe.directory")
-            native_identity.setenv("GIT_CONFIG_VALUE_0", str(source))
-            native_identity.setenv("GIT_CONFIG_KEY_1", "safe.directory")
-            native_identity.setenv("GIT_CONFIG_VALUE_1", str(source / ".git"))
+    with (
+        tempfile.TemporaryDirectory(prefix="native-comparator-") as comparator_home,
+        monkeypatch.context() as native_identity,
+    ):
+        # Clone clears GIT_CONFIG_COUNT before upload-pack. A private config
+        # file survives that boundary without changing the user's Git config.
+        comparator_config = Path(comparator_home) / "gitconfig"
+        for trusted in (source, source / ".git"):
+            subprocess.run(
+                [
+                    "git",
+                    "config",
+                    "--file",
+                    str(comparator_config),
+                    "--add",
+                    "safe.directory",
+                    str(trusted),
+                ],
+                check=True,
+            )
+        native_identity.setenv("GIT_CONFIG_GLOBAL", str(comparator_config))
+        # Exercise the same cross-owner check even on non-root local runners.
+        native_identity.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
         destination = Path(
             await launcher._prepare_workspace_path(
                 run_id="next-native-attempt",
