@@ -1645,6 +1645,7 @@ class RepositoryConnectionService:
         principal_scope: tuple[str, str | None],
     ) -> list[Any]:
         """Read permitted recorded routes for a launch, without probing secrets."""
+        from moonmind.auth.bound_acquisition import BoundAccessError
         from moonmind.workflows.executions.repository_contract import (
             ScopedRouteCandidate,
         )
@@ -1665,6 +1666,10 @@ class RepositoryConnectionService:
                 continue
             try:
                 assignment = await self._recorded_launch_assignment(connection, repository)
+            except BoundAccessError:
+                # A revoked endpoint is ineligible for routing, not a failure
+                # of unrelated connections. Explicit selection still raises.
+                continue
             except RepositoryRouteError as exc:
                 if exc.code == REPOSITORY_SETUP_REQUIRED:
                     continue

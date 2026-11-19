@@ -302,3 +302,72 @@ async def test_recorded_public_github_ssh_nonread_retains_repository_fence(monke
         await resolver.acquire_admitted_repository_use(
             "root", repository="Acme/Other", operation="branch_write"
         )
+
+
+@pytest.mark.asyncio
+async def test_untrusted_enterprise_route_cannot_block_public_route(
+    tmp_path, monkeypatch
+):
+    from moonmind.auth.bound_acquisition import BoundAccessError
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryAssignment,
+        RepositoryIdentity,
+    )
+    from tests.unit.workflows.executions.test_repository_scoped_routes_4005 import (
+        _pat_connection,
+        _assignment,
+        route_db,
+    )
+
+    monkeypatch.setattr(
+        settings.github, "github_trusted_api_hosts", "github.enterprise.test"
+    )
+    public = _pat_connection("repository-connection:public")
+    enterprise = _pat_connection("repository-connection:enterprise").model_copy(
+        update={"endpoint_ref": HOST}
+    )
+    authority = {"principal_ref": "owner:team-a", "principal_scope": ("system", None)}
+    async with route_db(tmp_path) as sessions:
+        async with sessions() as session:
+            owner = RepositoryConnectionService(session)
+            for selected in (public, enterprise):
+                await owner.create_connection(
+                    selected,
+                    actor_ref="owner:team-a",
+                    request_id=selected.id,
+                    **authority,
+                )
+            await owner.set_assignment(
+                _assignment(public.id, "public-id", display="Acme/Repo"),
+                actor_ref="owner:team-a",
+                request_id="public-assignment",
+                **authority,
+            )
+            await owner.set_assignment(
+                RepositoryAssignment(
+                    connectionId=enterprise.id,
+                    identity=RepositoryIdentity(
+                        endpoint=HOST,
+                        providerRepoId="enterprise-id",
+                        displayName="Other/Repo",
+                    ),
+                    revision=1,
+                    verified=True,
+                ),
+                actor_ref="owner:team-a",
+                request_id="enterprise-assignment",
+                **authority,
+            )
+        monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "")
+        async with sessions() as session:
+            owner = RepositoryConnectionService(session)
+            # Trust removal denies explicit selection; it must not poison other routes.
+            with pytest.raises(BoundAccessError):
+                await owner._recorded_launch_assignment(
+                    enterprise, HOST + "/Other/Repo.git"
+                )
+            assert (
+                await owner.routed_connection_ref("Acme/Repo", **authority) == public.id
+            )
+            candidates = await owner.launch_candidates("Other/Repo", **authority)
+            assert candidates == []
