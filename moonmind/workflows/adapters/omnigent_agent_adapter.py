@@ -275,6 +275,46 @@ async def resolve_omnigent_target(
 # Workflow launch-default entry whose tools every workflow Claude launch denies.
 CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY = "claude-native:disallowedTools"
 
+_CODEX_PERMISSION_FLAGS = frozenset(
+    {
+        "--sandbox",
+        "--ask-for-approval",
+        "--approve-for-me",
+        "--not-so-yolo",
+        "--full-auto",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--yolo",
+    }
+)
+_CODEX_PERMISSION_CONFIG_KEYS = frozenset(
+    {"approval_policy", "approvals_reviewer", "sandbox_mode", "default_permissions"}
+)
+
+
+def _authors_codex_permission(args: list[str]) -> bool:
+    """Return whether authored Codex arguments already choose a permission mode."""
+
+    for index, arg in enumerate(args):
+        if arg == "--":
+            return False
+        if arg.split("=", 1)[0] in _CODEX_PERMISSION_FLAGS:
+            return True
+        if arg[:2] in {"-s", "-a"} and not arg.startswith("--"):
+            return True
+        assignment: str | None = None
+        if arg in {"-c", "--config"}:
+            assignment = args[index + 1] if index + 1 < len(args) else ""
+        elif arg.startswith("--config="):
+            assignment = arg.split("=", 1)[1]
+        elif arg[:2] == "-c" and not arg.startswith("--"):
+            assignment = arg[2:].removeprefix("=")
+        if (
+            assignment is not None
+            and assignment.split("=", 1)[0].strip() in _CODEX_PERMISSION_CONFIG_KEYS
+        ):
+            return True
+    return False
+
 
 def build_omnigent_session_create_payload(
     *,
@@ -302,6 +342,9 @@ def build_omnigent_session_create_payload(
             terminal_launch_args,
             defaults.get(CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY, []),
         )
+    elif selection.agent.harness_override == "codex-native":
+        if not _authors_codex_permission(terminal_launch_args):
+            terminal_launch_args.extend((launch_defaults or {}).get("codex-native", []))
     title = (
         session.title
         or _clean((request.parameters or {}).get("title"))

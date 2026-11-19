@@ -104,6 +104,8 @@ def _journal_artifact_service(session: AsyncSession) -> Any:
 # Pin worker-derived workflow launch defaults before any provider side effect.
 # Missing metadata is ambiguous across older workers: reconcile any provider
 # effect before selecting defaults for an attempt without a saved decision.
+# Nobody answers prompts in a workflow step, so every harness pins a no-prompt
+# permission mode rather than inheriting a CLI default an upgrade can change.
 # The permission default yields to an authored permission choice. The tool deny
 # does not: a workflow step ends with its turn, so nothing owns a deferred
 # ``ScheduleWakeup`` continuation (the direct Claude strategy denies it too).
@@ -111,6 +113,7 @@ WORKFLOW_LAUNCH_DEFAULTS_KEY = "workflowLaunchDefaults"
 WORKFLOW_LAUNCH_DEFAULTS = {
     "claude-native": ["--permission-mode", "bypassPermissions"],
     CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY: ["ScheduleWakeup"],
+    "codex-native": ["--sandbox", "danger-full-access", "--ask-for-approval", "never"],
 }
 
 

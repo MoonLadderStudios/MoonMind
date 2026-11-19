@@ -419,18 +419,29 @@ Bootstrap and resolved-image evidence belongs to one deployment. Explicit
 destination, and test containers mask repository runtime state with private
 storage so their startup probes cannot consume or replace live host evidence.
 
-### 7.6 Claude Code launch defaults
+### 7.6 Unattended launch defaults
 
-Workflow-step `claude-native` sessions launch with `--permission-mode
-bypassPermissions`, matching the direct launcher's
-`--dangerously-skip-permissions`. Nobody answers prompts in a step's terminal,
-and launching the workflow is the operator's authorization; Claude Code's
+Nobody answers prompts in a step's terminal, and launching the workflow is the
+operator's authorization, so every workflow-step harness pins a no-prompt
+permission mode instead of inheriting a CLI or account default that an upgrade
+can change. `claude-native` launches with `--permission-mode bypassPermissions`,
+matching the direct launcher's `--dangerously-skip-permissions`; Claude Code's
 account default (`auto`) would otherwise let its classifier refuse requested
-work such as queueing pr-resolver children. Omnigent policy hooks still enforce
-deployment deny rules, and a permission flag authored in `terminalLaunchArgs` is
-validated and preserved.
+work such as queueing pr-resolver children. `codex-native` launches with
+`--sandbox danger-full-access --ask-for-approval never` (Omnigent's Full Access
+preset): the host container is the isolation boundary, and Codex's own
+bubblewrap sandbox cannot create namespaces there, so a sandboxed command always
+asks to run unsandboxed. Omnigent policy hooks still enforce deployment deny
+rules, and a permission choice authored in `terminalLaunchArgs` is validated and
+preserved.
 
-They also deny `ScheduleWakeup`, whatever permission mode the step authored,
+If a step still raises an approval prompt, the session stays `running` with the
+prompt in `pending_elicitations`. An operator can answer it in Workflow Chat
+within the step's progress-stall window; after that the attempt fails with
+`OMNIGENT_APPROVAL_UNANSWERED` (`do_not_retry`, since a retry would reach the
+same prompt), and the summary names the prompt.
+
+Claude sessions also deny `ScheduleWakeup`, whatever permission mode the step authored,
 merged into any authored `--disallowedTools`: a step ends with its turn, so no
 owner remains to resume a deferred wakeup. The direct launcher denies it for the
 same reason. Rows frozen before the deny keep their recorded arguments.

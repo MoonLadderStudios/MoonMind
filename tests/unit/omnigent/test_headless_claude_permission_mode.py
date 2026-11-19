@@ -160,9 +160,8 @@ def test_claude_workflow_session_carries_the_plan_effort():
 
 
 @_BINDERS
-@pytest.mark.parametrize("harness", ["codex-native", "opencode-native"])
-def test_other_harnesses_receive_no_claude_flag(bind, harness):
-    assert _launch_args(bind(_request(), harness)) == []
+def test_other_harnesses_receive_no_claude_flag(bind):
+    assert _launch_args(bind(_request(), "opencode-native")) == []
 
 
 @_BINDERS
