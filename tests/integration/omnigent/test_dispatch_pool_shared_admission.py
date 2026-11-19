@@ -662,7 +662,9 @@ async def execute_selected_pool_source(
 
         if scenario == "recorded_source_failure":
             from api_service.services import native_pool_execution_plan as pool_service
-            from moonmind.omnigent.repository_sources import RepositorySourceHandoffUnavailable
+            from moonmind.omnigent.repository_sources import (
+                RepositorySourceHandoffUnavailable,
+            )
 
             _, profile_bytes = await artifacts.read(
                 artifact_id=plan.payload.agentProfileSnapshotRef.removeprefix("artifact:"),
