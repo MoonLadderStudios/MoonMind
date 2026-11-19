@@ -138,7 +138,7 @@ def _catalog_unavailable(message: str) -> HarnessPlatformError:
 
 
 async def read_codex_native_default(
-    *, backend: DockerCommandBackend, container_name: str,
+    *, backend: DockerCommandBackend, container_name: str, source_home: str = "/home/app/.codex",
 ) -> str | None:
     """Read a hidden default through the native owner and public CLI protocol.
 
@@ -147,7 +147,7 @@ async def read_codex_native_default(
     """
     code, stdout, _stderr = await backend.run(
         ["docker", "exec", container_name, "/opt/venv/bin/python", "-c",
-         CODEX_CONFIGURATION_READ_PROBE, "/home/app/.codex"],
+         CODEX_CONFIGURATION_READ_PROBE, source_home],
         timeout_seconds=30.0, check=False,
     )
     try:

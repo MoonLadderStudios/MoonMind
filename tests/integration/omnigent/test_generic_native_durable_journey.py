@@ -985,6 +985,8 @@ async def _compile_plan(
     claude_preferences=False,
     process_home=False,
     claude_credential_mount=None,
+    codex_credential_mount=None,
+    codex_enrollment_preferences=False,
     private_profile_config=False,
     private_configuration_home=None,
     declare_configuration_home=True,
@@ -1085,13 +1087,21 @@ async def _compile_plan(
             "CLAUDE_HOME": claude_credential_mount,
             "CLAUDE_CONFIG_DIR": claude_credential_mount,
         }
+    if codex_credential_mount:
+        assert oauth and runtime_id == "codex_cli"
+        fields["home_path_overrides"] = {"CODEX_HOME": codex_credential_mount}
+        if codex_enrollment_preferences:
+            fields["file_templates"] = [{
+                "path": codex_credential_mount + "/config.toml", "format": "toml",
+                "content_template": {"model_verbosity": "low"},
+            }]
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
         provider_id=provider_id,
         **fields,
         volume_ref="journey_oauth" if oauth else None,
-        volume_mount_path=(claude_credential_mount or method["imported_volume"]["mount_path"]) if oauth else None,
+        volume_mount_path=(codex_credential_mount or claude_credential_mount or method["imported_volume"]["mount_path"]) if oauth else None,
         secret_refs={
             role["role"]: "env://NATIVE_JOURNEY_KEY" for role in method["secret_roles"]
         },
@@ -1359,6 +1369,8 @@ async def native_journey(
                 claude_preferences=bool(selection.get("claudePreferences")),
                 process_home=bool(selection.get("processHome")),
                 claude_credential_mount=selection.get("claudeCredentialMount"),
+                codex_credential_mount=selection.get("codexCredentialMount"),
+                codex_enrollment_preferences=bool(selection.get("codexEnrollmentPreferences")),
                 private_profile_config=bool(
                     selection.get("privateProfileConfiguration")
                 ),

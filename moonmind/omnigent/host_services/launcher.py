@@ -602,6 +602,19 @@ class DockerOmnigentHostLauncher:
             *([spec.controlAttachment] if spec.controlAttachment is not None else []),
             spec.stateAttachment,
         ]
+        for handle in credential_handles:
+            if handle.get("materializerRef") != "codex-oauth-home@1":
+                continue
+            for own in handle.get("attachments", []):
+                home = own["targetPath"]
+                if own.get("accessMode") != "read-write" or home == "/home/app/.codex":
+                    continue
+                overlaps = [item for item in attachments if (
+                    item["targetPath"] == home or item["targetPath"].startswith(home + "/")
+                    or home.startswith(item["targetPath"].rstrip("/") + "/")
+                )]
+                if len(overlaps) != 1 or overlaps[0] != own:
+                    raise ValueError("selected Codex credential home overlaps another attachment")
         custom_homes = {
             attachment["targetPath"]
             for handle in credential_handles

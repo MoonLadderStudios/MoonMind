@@ -444,7 +444,13 @@ attachment, token refresh stays in the enrollment volume, and cleanup detaches i
 Qualified preferences use read-only overlays beneath that selected mount and may
 compose with the private process HOME described below. Overlapping mounts and
 unqualified files retain their native route. Historical canonical receipts keep
-their original delivery.
+their original delivery. Codex OAuth profiles may also select a dedicated
+`/home/app/<name>-auth` enrollment with the same frozen volume/generation ownership.
+Qualified `config.toml` preferences apply only to the native private session home;
+credential source selection and hidden-default reads use the admitted mount.
+Custom-enrollment additional files remain native until their full delivery is
+qualified. Private-home detachment rejects sibling links and never edits enrollment
+state.
 Claude OAuth and API-key profiles can also declare an attempt-private process `HOME`
 under the runtime support directory with literal, nonsecret top-level Markdown
 files. The frozen projection initializes that home before runner startup; session
