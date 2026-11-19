@@ -314,8 +314,8 @@ async def test_untrusted_enterprise_route_cannot_block_public_route(
         RepositoryIdentity,
     )
     from tests.unit.workflows.executions.test_repository_scoped_routes_4005 import (
-        _pat_connection,
         _assignment,
+        _pat_connection,
         route_db,
     )
 
