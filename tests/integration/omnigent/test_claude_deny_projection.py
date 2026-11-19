@@ -223,3 +223,61 @@ async def test_fresh_sibling_configuration_does_not_replace_queued_denies(
     assert_denied(journey, sibling_denies)
     assert journey.server.create_payloads[0]["terminal_launch_args"] == old_args
     assert journey.docker.volumes == {"journey_oauth": {}}
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": harness, "claudePreferences": True, "sessionSettings": SETTINGS}
+        for harness in ("claude-native", "claude-native-api-key")
+    ],
+    indirect=True,
+)
+async def test_ready_host_retry_keeps_frozen_denies_before_session_creation(
+    native_journey, monkeypatch
+):
+    import asyncio
+
+    journey = native_journey
+    update = journey.realizer._update_binding
+
+    async def revoke_after_ready(*args, **kwargs):
+        binding = await update(*args, **kwargs)
+        if kwargs.get("state") is RuntimeBindingState.host_ready:
+            raise asyncio.CancelledError()
+        return binding
+
+    with monkeypatch.context() as revoked:
+        revoked.setattr(journey.realizer, "_update_binding", revoke_after_ready)
+        revoked.setattr(
+            "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: True
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await journey.realizer.execute(journey.request, journey.plan)
+    assert journey.server.host_alive
+    assert not journey.server.create_payloads
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=journey.plan.planRef,
+            idempotency_key=journey.request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.host_ready
+    handles = json.loads(json.dumps(binding.credentialRuntimeHandles))
+    assert next(iter(handles.values()))["claudeDeniedTools"] == DENIED
+    host = await journey.services.host_lease_repository.get(binding.hostLeaseRef)
+    # Existing ready receipts omit the projection. Recovery must derive it
+    # from the immutable credential owner, not rely on a new receipt format.
+    assert "claudeDeniedTools" not in host.cleanupHandle
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
+        profile.file_templates = []
+        await session.commit()
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    assert_denied(journey, DENIED)
+    assert len(journey.server.create_payloads) == 1
+    completed = await journey.services.runtime_binding_store.get(binding.bindingId)
+    assert completed.hostLeaseRef == binding.hostLeaseRef
+    assert completed.credentialRuntimeHandles == handles
+    assert completed.state is RuntimeBindingState.cleaned

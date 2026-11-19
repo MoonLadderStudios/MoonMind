@@ -91,6 +91,26 @@ def validate_denied_tools(rules):
     return list(dict.fromkeys(rules))
 
 
+def claude_denied_tools_from_handles(credential_handles):
+    """Return the exact host's immutable selected Claude restrictions."""
+    selections = []
+    for handle in credential_handles:
+        rules = handle.get("claudeDeniedTools")
+        if rules is None:
+            continue
+        if (
+            handle.get("materializerRef")
+            not in {"claude-oauth-home@1", "omnigent-provider-config@1"}
+            or validate_denied_tools(rules) != rules
+        ):
+            raise ValueError("Claude deny rules require their selected configuration")
+        if rules not in selections:
+            selections.append(rules)
+    if len(selections) > 1:
+        raise ValueError("conflicting Claude deny configurations")
+    return selections[0] if selections else []
+
+
 def project_denied_tools(*, harness_id, arguments, rules):
     """Apply frozen Claude policy through its thin provider argument adapter."""
     if harness_id != "claude-native":

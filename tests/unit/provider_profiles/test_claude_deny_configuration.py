@@ -118,7 +118,7 @@ async def test_actual_key_materializer_preserves_frozen_rules(tmp_path):
     )
     assert resolver.resolved == ["ANTHROPIC_API_KEY"]
     assert handles[0].claudeDeniedTools == ["Read(**/.env)"]
-    from moonmind.omnigent.host_services.runtime_scripts import (
+    from moonmind.provider_profiles.claude_configuration import (
         claude_denied_tools_from_handles,
     )
 

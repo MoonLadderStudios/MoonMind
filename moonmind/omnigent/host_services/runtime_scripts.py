@@ -114,30 +114,6 @@ _MOONMIND_RUNTIME_ENV_FILES = {
 }
 
 
-def claude_denied_tools_from_handles(credential_handles):
-    """Return the exact host's immutable selected Claude restrictions."""
-    selections = []
-    for handle in credential_handles:
-        rules = handle.get("claudeDeniedTools")
-        if rules is None:
-            continue
-        from moonmind.provider_profiles.claude_configuration import (
-            validate_denied_tools,
-        )
-
-        if (
-            handle.get("materializerRef")
-            not in {"claude-oauth-home@1", "omnigent-provider-config@1"}
-            or validate_denied_tools(rules) != rules
-        ):
-            raise ValueError("Claude deny rules require their selected configuration")
-        if rules not in selections:
-            selections.append(rules)
-    if len(selections) > 1:
-        raise ValueError("conflicting Claude deny configurations")
-    return selections[0] if selections else []
-
-
 def claude_process_home_from_handles(credential_handles):
     """Resolve the one frozen process-home projection for this exact host."""
     configurations = []
