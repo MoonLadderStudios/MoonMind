@@ -660,7 +660,7 @@ async def execute_selected_pool_source(
         provider.enabled = True
         await session.commit()
 
-        if scenario == "recorded_source_failure":
+        if scenario in {"recorded_source_failure", "recorded_process_home_failure"}:
             from api_service.services import native_pool_execution_plan as pool_service
             from moonmind.omnigent.repository_sources import (
                 RepositorySourceHandoffUnavailable,
@@ -681,13 +681,21 @@ async def execute_selected_pool_source(
             row.execution_plan_ref = None
             await session.commit()
             failure = RepositorySourceHandoffUnavailable("recorded source grant no longer supports shared execution")
-            compile_plan = AsyncMock(side_effect=failure)
             monkeypatch.setattr(pool_service, "_recorded_step_plan", AsyncMock(return_value=recorded))
-            monkeypatch.setattr(pool_service, "compile_and_persist_execution_plan", compile_plan)
-            with pytest.raises(RepositorySourceHandoffUnavailable) as raised:
-                await prepare_selected_pool_plan(session, runtime_id=runtime, payload=payload, client=transport)
-            assert raised.value is failure
-            compile_plan.assert_awaited_once()
+            if scenario == "recorded_process_home_failure":
+                from moonmind.omnigent.harness_platform.materializers import (
+                    ProviderConfigurationHandoffUnavailable,
+                )
+                journey.server.process_home_supported = False
+                with pytest.raises(ProviderConfigurationHandoffUnavailable):
+                    await prepare_selected_pool_plan(session, runtime_id=runtime, payload=payload, client=transport)
+            else:
+                compile_plan = AsyncMock(side_effect=failure)
+                monkeypatch.setattr(pool_service, "compile_and_persist_execution_plan", compile_plan)
+                with pytest.raises(RepositorySourceHandoffUnavailable) as raised:
+                    await prepare_selected_pool_plan(session, runtime_id=runtime, payload=payload, client=transport)
+                assert raised.value is failure
+                compile_plan.assert_awaited_once()
             assert row.execution_plan_ref is None
             assert await session.scalar(select(func.count(OmnigentExecutionPlanRecord.plan_ref))) == plan_count
             return None

@@ -84,6 +84,21 @@ class CredentialRuntimeHandle(BaseModel):
     runtimeEnvironmentTemplates: dict[str, str] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+    claudeProcessHomeConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def _validate_process_home(self):
+        if self.claudeProcessHomeConfiguration is not None:
+            from moonmind.provider_profiles.claude_configuration import (
+                process_home_configuration,
+            )
+            if (self.materializerRef != "claude-oauth-home@1"
+                or process_home_configuration(self.claudeProcessHomeConfiguration) != self.claudeProcessHomeConfiguration):
+                raise ValueError("process HOME requires its selected Claude OAuth configuration")
+        return self
+
     cleanupRef: str = Field(alias="cleanupRef")
     attestationRef: str | None = Field(None, alias="attestationRef")
     hostOwned: bool = Field(False, alias="hostOwned")
@@ -364,14 +379,23 @@ _OAUTH_HOME_MATERIALIZER_TARGETS = OAUTH_HOME_MATERIALIZER_TARGETS
 _CREDENTIAL_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
+def _claude_process_home(launch_environment):
+    if launch_environment is None or launch_environment.claudeConfiguration is None:
+        return None
+    from moonmind.provider_profiles.claude_configuration import (
+        process_home_configuration,
+    )
+    return process_home_configuration(launch_environment.claudeConfiguration)
+
+
 def _claude_oauth_projection(acquired, launch_environment):
     if launch_environment is None or launch_environment.claudeConfiguration is None:
         return [], {}
+    from moonmind.omnigent.host_services.runtime_scripts import _RUNTIME_CONTEXT_DIR
     from moonmind.provider_profiles.claude_configuration import (
         OAUTH_PROJECTION_PATH,
         render_oauth_files,
     )
-    from moonmind.omnigent.host_services.runtime_scripts import _RUNTIME_CONTEXT_DIR
 
     # All shared workspace projections use this host-side location. This is
     # rendering context, never a daemon path or the host's source workspace.
@@ -485,6 +509,7 @@ def anticipated_credential_handle(
             "materializerRef": materializer_ref,
             "attachments": attachments,
             "runtimeEnvironment": runtime_environment,
+            "claudeProcessHomeConfiguration": _claude_process_home(provider_launch_environment),
             "cleanupRef": f"credential-cleanup:sha256:{digest}",
             "attestationRef": None,
             "hostOwned": host_owned,
@@ -1339,6 +1364,7 @@ for path in [root, *root.rglob('*')]:
                     if launch_environment is not None
                     else {}
                 ),
+                "claudeProcessHomeConfiguration": _claude_process_home(launch_environment),
                 "runtimeEnvironmentTemplates": (
                     launch_environment.environmentTemplates
                     if launch_environment is not None
@@ -1656,13 +1682,13 @@ class OmnigentCredentialProvisioningService:
         acquired_leases: tuple[AcquiredProviderLease, ...],
         writer_image_ref: str,
     ) -> tuple[CredentialRuntimeHandle, ...]:
-        from moonmind.omnigent.harness_platform.materializers import (
-            load_provider_configuration_snapshot,
-        )
         from moonmind.omnigent.harness_platform.credential_bindings import (
             model_bindings_of,
         )
-        from moonmind.omnigent.harness_platform.materializers import get_materializer
+        from moonmind.omnigent.harness_platform.materializers import (
+            get_materializer,
+            load_provider_configuration_snapshot,
+        )
 
         # Repository delivery is owned by host workspace preparation. Those
         # bindings have no model-capacity lease or Provider Profile secret.
@@ -1775,6 +1801,7 @@ class OmnigentCredentialProvisioningService:
                         handle.credentialRuntimeRef != anticipated.credentialRuntimeRef
                         or handle.cleanupRef != anticipated.cleanupRef
                         or handle.attachments != anticipated.attachments
+                        or handle.claudeProcessHomeConfiguration != anticipated.claudeProcessHomeConfiguration
                     ):
                         raise HarnessPlatformError(
                             "credential materializer changed its anticipated cleanup authority",

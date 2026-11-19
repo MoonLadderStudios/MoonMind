@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import shlex
 import json
+import shlex
 from pathlib import Path
 from typing import Any
+
 
 def validate_provider_literal_launch_environment(values: dict[str, str]) -> dict[str, str]:
     # Keep the base entrypoint builder importable without application packages.
@@ -111,6 +112,29 @@ _MOONMIND_RUNTIME_ENV_FILES = {
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": "container-jobs-workspace-id",
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": "container-jobs-workspace-relative-path",
 }
+
+
+def claude_process_home_from_handles(credential_handles):
+    """Resolve the one frozen process-home projection for this exact host."""
+    from moonmind.provider_profiles.claude_configuration import (
+        process_home_configuration,
+    )
+    configurations = []
+    for handle in credential_handles:
+        configuration = handle.get("claudeProcessHomeConfiguration")
+        if configuration is not None:
+            validated = process_home_configuration(configuration)
+            if handle.get("materializerRef") != "claude-oauth-home@1" or validated != configuration:
+                raise ValueError("process HOME requires its selected Claude OAuth configuration")
+            if configuration not in configurations:
+                configurations.append(configuration)
+    if len(configurations) > 1:
+        raise ValueError("conflicting process HOME configurations")
+    if not configurations:
+        return None, None
+    configuration = configurations[0]
+    home = configuration["homePathOverrides"]["HOME"].replace("{{runtime_support_dir}}", _RUNTIME_CONTEXT_DIR)
+    return home, configuration
 
 
 class OmnigentRuntimeScriptService:
@@ -220,10 +244,11 @@ class OmnigentRuntimeScriptService:
                     raise ValueError("Profile environment templates require their native materializer")
                 if not workspace_path or not workspace_path.startswith("/"):
                     raise ValueError("Profile environment templates require the admitted workspace path")
-                from moonmind.provider_profiles.template_renderer import (
-                    ProfileTemplateRenderer, validate_environment_template_context,
-                )
                 from moonmind.provider_profiles.codex_configuration import render_toml
+                from moonmind.provider_profiles.template_renderer import (
+                    ProfileTemplateRenderer,
+                    validate_environment_template_context,
+                )
 
                 templates = validate_environment_template_context(validate_provider_literal_launch_environment(templates))
                 if set(templates) & set(selected_environment):
@@ -240,7 +265,9 @@ class OmnigentRuntimeScriptService:
                     raise ValueError("OAuth Codex configuration requires private-HOME delivery")
                 private_templates = configuration.get("environmentTemplates") or {}
                 if private_templates:
-                    from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+                    from moonmind.provider_profiles.template_renderer import (
+                        validate_environment_template_context,
+                    )
 
                     validate_environment_template_context(validate_provider_literal_launch_environment(private_templates))
                     if set(private_templates) & (set(selected_environment) | set(templates or {})):
@@ -318,6 +345,11 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        process_home, process_configuration = claude_process_home_from_handles(credential_handles)
+        if process_home:
+            # Process HOME never relocates the enrollment-owned credential home.
+            provider_environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
+            environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
         if oauth_configuration is not None:
             if private_environment_keys & set(provider_environment):
                 raise ValueError("conflicting private Codex runtime environment")
@@ -470,6 +502,34 @@ class OmnigentRuntimeScriptService:
                 f"printf '%s\\n' {shlex.quote(renderer_source)} > {renderer}; chmod 0600 {renderer}; "
                 f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
             )
+        process_home_setup = ""
+        if process_home:
+            if not enable_claude_runtime or not workspace_path:
+                raise ValueError("process HOME requires its admitted Claude workspace")
+            source_path = Path(__file__).resolve().parents[2] / "provider_profiles" / "claude_configuration.py"
+            helper = f"{runtime_context_dir}/claude_configuration.py"
+            renderer = f"{runtime_context_dir}/template_renderer.py"
+            initialize = (
+                "import json,sys; sys.path.insert(0," + repr(runtime_context_dir) + "); "
+                "from claude_configuration import materialize_process_home; "
+                "materialize_process_home(json.loads(sys.argv[1]),runtime_support_dir="
+                + repr(runtime_context_dir) + ",workspace_path=sys.argv[2])"
+            )
+            probe = (
+                "import dataclasses,sys; from omnigent.spec.parser import _parse_os_env; "
+                "from omnigent.inner.loader import _parse_os_env_spec; "
+                "from omnigent.inner.os_env import process_home_environment; "
+                "p=sys.argv[1]; s=_parse_os_env({'process_home':p,'sandbox':{'type':'none'}}); "
+                "assert s.process_home == p; "
+                "assert _parse_os_env_spec(dataclasses.asdict(s)).process_home == p; "
+                "assert process_home_environment({},p)['HOME'] == p"
+            )
+            process_home_setup = (
+                f"printf '%s\\n' {shlex.quote(source_path.read_text())} > {helper}; chmod 0600 {helper}; "
+                f"printf '%s\\n' {shlex.quote(source_path.with_name('template_renderer.py').read_text())} > {renderer}; chmod 0600 {renderer}; "
+                f"python3 -c {shlex.quote(initialize)} {shlex.quote(json.dumps(process_configuration))} {shlex.quote(workspace_path)}; "
+                f"/opt/venv/bin/python -c {shlex.quote(probe)} {shlex.quote(process_home)}; "
+            )
         claude_wrapper = f"{_RUNTIME_BIN_DIR}/claude"
         claude_setup = f"rm -f {claude_wrapper}; "
         if claude_configuration:
@@ -510,6 +570,7 @@ class OmnigentRuntimeScriptService:
             + context_setup
             + codex_setup
             + claude_setup
+            + process_home_setup
             + 'if [ "${MOONMIND_OPENCODE_RUNTIME:-0}" = 1 ]; then '
             "mkdir -p "
             + opencode_data

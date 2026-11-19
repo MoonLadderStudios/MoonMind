@@ -760,6 +760,9 @@ async def prepare_selected_pool_plan(
                 effort=recorded_plan.payload.modelConfig.effort,
                 modelSource="recorded_step_plan",
             )
+        from moonmind.omnigent.harness_platform.materializers import (
+            ProviderConfigurationHandoffUnavailable,
+        )
         from moonmind.omnigent.repository_sources import (
             RepositorySourceHandoffUnavailable,
         )
@@ -792,7 +795,7 @@ async def prepare_selected_pool_plan(
                     else {}
                 ),
             )
-        except RepositorySourceHandoffUnavailable:
+        except (RepositorySourceHandoffUnavailable, ProviderConfigurationHandoffUnavailable) as error:
             if recorded is not None:
                 # Already-shared work must not switch lifecycle owners when
                 # its persisted authority/configuration has changed.
@@ -802,7 +805,11 @@ async def prepare_selected_pool_plan(
             # supported native work when only source reads have migrated.
             return {
                 "disposition": "native",
-                "reason": "workspace_requires_its_recorded_native_owner",
+                "reason": (
+                    "configuration_requires_its_recorded_native_owner"
+                    if isinstance(error, ProviderConfigurationHandoffUnavailable)
+                    else "workspace_requires_its_recorded_native_owner"
+                ),
             }
         if recorded:
             changed = changed_admitted_intent(

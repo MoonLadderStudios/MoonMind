@@ -104,6 +104,7 @@ class OmnigentSessionSelection:
     terminal_launch_args: list[str] = field(default_factory=list)
     collaboration_mode: str | None = None
     allow_empty_workspace: bool = False
+    process_home: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,17 @@ def build_omnigent_selection(
 
     agent = _parse_agent(raw_payload.get("agent"))
     session = _parse_session(raw_payload.get("session"))
+    if session.process_home is not None:
+        import re
+
+        from moonmind.omnigent.host_services.runtime_scripts import _RUNTIME_CONTEXT_DIR
+        if (agent.harness_override != "claude-native" or session.host_type != "external"
+            or not re.fullmatch(re.escape(_RUNTIME_CONTEXT_DIR) + r"/[A-Za-z0-9][A-Za-z0-9_.-]*-home", session.process_home)
+            or session.process_home.rsplit("/", 1)[1] in {"claude-home", "codex-home"}):
+            raise OmnigentAdapterError(
+                "process HOME requires the admitted private Claude host directory",
+                failure_class=_INVALID_SESSION_PAYLOAD_FAILURE_CLASS,
+            )
     try:
         bound_request = bind_omnigent_model_selection(
             request,
@@ -333,6 +345,7 @@ def build_omnigent_session_create_payload(
         "model_override": session.model_override,
         "reasoning_effort": session.reasoning_effort,
         "terminal_launch_args": terminal_launch_args,
+        "process_home": session.process_home,
     }
     if session.host_type == "external":
         payload["host_id"] = session.host_id
@@ -408,6 +421,7 @@ def _parse_session(raw: object) -> OmnigentSessionSelection:
     return OmnigentSessionSelection(
         host_type=host_type,
         host_id=_clean(payload.get("hostId")),
+        process_home=_clean(payload.get("processHome")),
         workspace=_clean(payload.get("workspace")),
         title=_clean(payload.get("title")),
         labels=dict(labels),

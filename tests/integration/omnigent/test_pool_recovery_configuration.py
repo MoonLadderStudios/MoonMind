@@ -1,6 +1,7 @@
 """A replacement attempt preserves the configuration admitted for its step."""
 
 import json
+import shlex
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,6 +69,17 @@ _CLAUDE_STYLE = {
          "content_template": "---\nname: review\ndescription: Concise review\n---\nReview {{workspace_path}} carefully.\n"},
     ],
 }
+
+
+@pytest.mark.parametrize("native_journey", [{**_CLAUDE, "processHome": True}], indirect=True)
+@pytest.mark.parametrize("same_step", [False, True], ids=["fresh-step", "replacement"])
+async def test_claude_process_home_recovery_obeys_frozen_configuration(
+    native_journey, monkeypatch, same_step
+):
+    await _assert_selected_pool_replacement(
+        native_journey, monkeypatch, same_step=same_step,
+        edit_profile=True, tamper=None, process_home=True,
+    )
 
 
 @pytest.mark.parametrize("native_journey", [_CLAUDE_STYLE], indirect=True)
@@ -199,6 +211,7 @@ async def _assert_selected_pool_replacement(
     legacy=None,
     retained_metadata=True,
     output_style=False,
+    process_home=False,
 ):
     journey = native_journey
     codex = journey.harness == "codex-native"
@@ -222,6 +235,27 @@ async def _assert_selected_pool_replacement(
             journey.docker.claude_preferences["CLAUDE.md"]
             == "Admitted instructions for /workspaces/run.\n"
         )
+        if process_home:
+            configurations = []
+            for token in shlex.split(journey.docker.script):
+                if token.startswith('{"homePathOverrides"'):
+                    document = json.loads(token)
+                    if "HOME" in document["homePathOverrides"]:
+                        configurations.append(document)
+            assert len(configurations) == 1
+            private = configurations[0]
+            later = journey.docker.launch_env["API_TIMEOUT_MS"] == "100000"
+            name = "later-home" if later else "process-home"
+            assert private["homePathOverrides"] == {"HOME": "{{runtime_support_dir}}/" + name}
+            assert private["fileTemplates"][0]["content_template"] == (
+                "Later HOME.\n" if later else "Admitted HOME for {{workspace_path}}.\n"
+            )
+            assert journey.server.create_payloads[-1]["process_home"] == (
+                "/home/app/.omnigent/moonmind/runtime-context/" + name
+            )
+            assert journey.docker.launch_env["HOME"] == "/home/app"
+            assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == "/home/app/.claude"
+            assert "NOTES.md" not in journey.docker.claude_preferences
         if output_style:
             files = journey.docker.claude_preferences
             later = journey.docker.launch_env["API_TIMEOUT_MS"] == "100000"
@@ -438,6 +472,10 @@ async def _assert_selected_pool_replacement(
                     templates[0]["content_template"]["outputStyle"] = "later"
                     templates[-1]["path"] = "/home/app/.claude/output-styles/later.md"
                     templates[-1]["content_template"] = "---\nname: later\ndescription: Updated review\n---\nLater style.\n"
+                if process_home:
+                    profile.home_path_overrides = {**profile.home_path_overrides, "HOME": "{{runtime_support_dir}}/later-home"}
+                    templates[-1]["path"] = "{{runtime_support_dir}}/later-home/NOTES.md"
+                    templates[-1]["content_template"] = "Later HOME.\n"
                 profile.file_templates = templates
                 profile.env_template = {
                     **profile.env_template,
@@ -743,3 +781,18 @@ async def test_fixed_claude_output_style_reaches_shared_readonly_projection(nati
     assert "Review /workspaces/run carefully." in files["output-styles/review.md"]
     assert "readonly" in journey.docker.mounts["/home/app/.claude/output-styles/review.md"]
     assert journey.docker.volumes == {"journey_oauth": {}}
+
+
+@pytest.mark.parametrize("native_journey", [{**_CLAUDE, "processHome": True}], indirect=True)
+@pytest.mark.parametrize("fixed", [False, True], ids=["pool", "fixed"])
+async def test_new_process_home_keeps_native_route_on_unsupported_server(native_journey, monkeypatch, fixed):
+    native_journey.server.process_home_supported = False
+    await pool.execute_selected_pool_source(
+        native_journey, monkeypatch, fixed_serialized=fixed,
+        expected_native_reason="configuration_requires_its_recorded_native_owner",
+    )
+
+
+@pytest.mark.parametrize("native_journey", [{**_CLAUDE, "processHome": True}], indirect=True)
+async def test_recorded_process_home_does_not_switch_to_native_after_server_downgrade(native_journey, monkeypatch):
+    await pool.execute_selected_pool_source(native_journey, monkeypatch, scenario="recorded_process_home_failure")

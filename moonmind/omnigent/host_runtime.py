@@ -433,6 +433,7 @@ class GenericOmnigentHostRuntime:
             "hostClassRef": host_class.ref,
             "launchPolicyRef": launch_policy.ref,
             "workspacePath": "/workspaces/run",
+            **({"processHome": launch["processHome"]} if launch.get("processHome") else {}),
             "materializedInputPaths": dict(
                 prepared.workspace_attachment.get("materializedInputPaths") or {}
             ),
