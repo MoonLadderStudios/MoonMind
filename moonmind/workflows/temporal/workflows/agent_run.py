@@ -431,6 +431,7 @@ NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID = (
     "agent-run-non-destructive-slot-wait-recovery-v1"
 )
 ACCURATE_SLOT_WAIT_REASON_PATCH_ID = "agent-run-accurate-slot-wait-reason-v1"
+SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID = "agent-run-slot-wait-inspection-cancellation-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-sync-profiles-before-slot-request-v1"
@@ -5190,6 +5191,13 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            if is_cancelled_exception(exc) and self._workflow_patch_enabled(
+                SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID
+            ):
+                # Temporal wraps canceled activities in ActivityError. An
+                # inspection fallback must not turn cancellation back into a
+                # capacity wait; normalize it for the owning cleanup handler.
+                raise CancelledError("Provider slot inspection canceled") from exc
             self._get_logger().warning(
                 "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
                 manager_id,
@@ -5249,6 +5257,13 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            if is_cancelled_exception(exc) and self._workflow_patch_enabled(
+                SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID
+            ):
+                # Temporal wraps canceled activities in ActivityError. An
+                # inspection fallback must not turn cancellation back into a
+                # capacity wait; normalize it for the owning cleanup handler.
+                raise CancelledError("Provider slot inspection canceled") from exc
             self._get_logger().warning(
                 "Auth profile manager %s state inspection failed while building the slot wait observation; using generic reason: %s",
                 manager_id,

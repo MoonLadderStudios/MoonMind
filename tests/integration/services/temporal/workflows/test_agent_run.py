@@ -831,15 +831,37 @@ async def test_agent_run_workflow():
             assert result.summary == "Success"
 
 
-async def test_agent_run_workflow_cancellation():
+@pytest.mark.parametrize("cancel_boundary", ["slot_wait", "profile_list", "manager_state"])
+async def test_agent_run_workflow_cancellation(cancel_boundary):
     _managed_launch_requests.clear()
+    admission_entered = asyncio.Event()
+    activities = list(_COMMON_AGENT_RUN_ACTIVITIES)
+    if cancel_boundary != "slot_wait":
+        blocked_activity = {
+            "profile_list": ("provider_profile.list", mock_provider_profile_list),
+            "manager_state": ("provider_profile.manager_state", mock_provider_profile_manager_state),
+        }[cancel_boundary]
+
+        @_activity.defn(name=blocked_activity[0])
+        async def hold_admission(request: dict) -> dict:
+            # Keep a real admission activity in flight until cancellation. The
+            # heartbeat lets the worker observe its server-side cancellation.
+            admission_entered.set()
+            while True:
+                _activity.heartbeat()
+                await asyncio.sleep(0.01)
+
+        activities = [
+            hold_admission if item is blocked_activity[1] else item
+            for item in activities
+        ]
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with (
             Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
                 workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                activities=activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
             Worker(
@@ -847,14 +869,14 @@ async def test_agent_run_workflow_cancellation():
                 task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                     "provider_profile.list"
                 ).task_queue,
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                activities=activities,
             ),
             Worker(
                 env.client,
                 task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                     "agent_runtime.launch"
                 ).task_queue,
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                activities=activities,
             ),
             Worker(
                 env.client,
@@ -894,20 +916,23 @@ async def test_agent_run_workflow_cancellation():
                 task_queue="agent-run-task-queue",
             )
 
-            # start_workflow only acknowledges startup, not admission. Wait for
-            # the durable slot-wait timer so this tests cancellation while queued,
-            # rather than racing profile discovery/manager inspection activities.
-            async with asyncio.timeout(15):
-                while True:
-                    history = await handle.fetch_history()
-                    if any(
-                        event.HasField("timer_started_event_attributes")
-                        and event.timer_started_event_attributes.start_to_fire_timeout.ToTimedelta()
-                        == timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS)
-                        for event in history.events
-                    ):
-                        break
-                    await asyncio.sleep(0.01)
+            if cancel_boundary == "slot_wait":
+                # start_workflow only acknowledges startup, not admission. Wait for
+                # the durable slot-wait timer so this tests cancellation while queued,
+                # rather than racing profile discovery/manager inspection activities.
+                async with asyncio.timeout(15):
+                    while True:
+                        history = await handle.fetch_history()
+                        if any(
+                            event.HasField("timer_started_event_attributes")
+                            and event.timer_started_event_attributes.start_to_fire_timeout.ToTimedelta()
+                            == timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS)
+                            for event in history.events
+                        ):
+                            break
+                        await asyncio.sleep(0.01)
+            else:
+                await asyncio.wait_for(admission_entered.wait(), timeout=15)
             assert not _managed_launch_requests
             await handle.cancel()
 
@@ -928,6 +953,11 @@ async def test_agent_run_workflow_cancellation():
                 or isinstance(exc_info.value.__cause__, asyncio.CancelledError)
             )
             assert not _managed_launch_requests
+            history = await handle.fetch_history()
+            await Replayer(
+                workflows=[MoonMindAgentRun],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ).replay_workflow(history)
 
 
 async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous():
