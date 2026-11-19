@@ -894,7 +894,21 @@ async def test_agent_run_workflow_cancellation():
                 task_queue="agent-run-task-queue",
             )
 
-            # Cancel the workflow while it's waiting
+            # start_workflow only acknowledges startup, not admission. Wait for
+            # the durable slot-wait timer so this tests cancellation while queued,
+            # rather than racing profile discovery/manager inspection activities.
+            async with asyncio.timeout(15):
+                while True:
+                    history = await handle.fetch_history()
+                    if any(
+                        event.HasField("timer_started_event_attributes")
+                        and event.timer_started_event_attributes.start_to_fire_timeout.ToTimedelta()
+                        == timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS)
+                        for event in history.events
+                    ):
+                        break
+                    await asyncio.sleep(0.01)
+            assert not _managed_launch_requests
             await handle.cancel()
 
             with pytest.raises(WorkflowFailureError) as exc_info:
@@ -913,6 +927,7 @@ async def test_agent_run_workflow_cancellation():
                 or "cancel" in cause_str
                 or isinstance(exc_info.value.__cause__, asyncio.CancelledError)
             )
+            assert not _managed_launch_requests
 
 
 async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous():
