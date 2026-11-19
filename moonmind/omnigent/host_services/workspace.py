@@ -305,7 +305,9 @@ class OmnigentWorkspaceMaterializer:
                 fenced = (
                     bool(
                         plan
-                        and plan.payload.resolvedTools.get("initialRepositorySource")
+                        and getattr(plan.payload, "resolvedTools", {}).get(
+                            "initialRepositorySource"
+                        )
                     )
                     or source.kind == "checkpoint"
                     or bool(
@@ -775,7 +777,9 @@ class OmnigentWorkspaceMaterializer:
         )
 
         initial = (
-            (plan.payload.resolvedTools or {}).get("initialRepositorySource")
+            getattr(getattr(plan, "payload", None), "resolvedTools", {}).get(
+                "initialRepositorySource"
+            )
             if plan is not None
             else None
         )
@@ -1020,7 +1024,7 @@ class OmnigentWorkspaceMaterializer:
         previous = checkpoint.source.model_dump(by_alias=True, mode="json")
         previous_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
         local_initial_source = bool(
-            plan.payload.resolvedTools.get("initialRepositorySource")
+            getattr(plan.payload, "resolvedTools", {}).get("initialRepositorySource")
         )
         repository_source = (
             None if local_initial_source else authored_repository_source(request)
@@ -1084,7 +1088,7 @@ class OmnigentWorkspaceMaterializer:
         service = ManagedCheckpointRestoreService(
             authority_root=self._root,
             artifact_service=self._remediation_artifacts,
-            isolate_git=bool(plan.payload.resolvedTools.get("initialRepositorySource")),
+            isolate_git=local_initial_source,
             anonymous_repository_read_resolver=(
                 admitted_anonymous_read
                 if anonymous_remote
