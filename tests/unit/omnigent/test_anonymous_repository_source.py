@@ -47,6 +47,13 @@ def test_anonymous_remote_keeps_exact_case_sensitive_repository_path():
         "https://gitlab.example.test/group/../other.git",
         "https://gitlab.example.test/group/%2e%2e/other.git",
     ],
+    # Node IDs are retained as CI ownership evidence. Describe rejected inputs
+    # without copying credential-shaped URL components into that evidence.
+    ids=[
+        "leading-space", "embedded-control", "zero-port", "out-of-range-port",
+        "insecure-http", "local-path", "file-url", "ssh-url", "userinfo",
+        "query", "fragment", "parent-path", "encoded-parent-path",
+    ],
 )
 def test_implicit_authority_and_ambiguous_paths_are_not_anonymous_https(source):
     assert anonymous_https_repository_source(source) is None
