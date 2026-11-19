@@ -58,6 +58,28 @@ _CLAUDE = {
     "claudeOauthFiles": True,
 }
 
+_CLAUDE_STYLE = {
+    **_CLAUDE,
+    "sessionSettings": {"language": "English", "outputStyle": "review"},
+    "additionalFiles": [
+        {"path": "/home/app/.claude/CLAUDE.md", "format": "text",
+         "content_template": "Admitted instructions for {{workspace_path}}.\n"},
+        {"path": "/home/app/.claude/output-styles/review.md", "format": "text",
+         "content_template": "---\nname: review\ndescription: Concise review\n---\nReview {{workspace_path}} carefully.\n"},
+    ],
+}
+
+
+@pytest.mark.parametrize("native_journey", [_CLAUDE_STYLE], indirect=True)
+@pytest.mark.parametrize("same_step", [False, True], ids=["fresh-step", "replacement"])
+async def test_claude_output_style_recovery_obeys_frozen_configuration(
+    native_journey, monkeypatch, same_step
+):
+    await _assert_selected_pool_replacement(
+        native_journey, monkeypatch, same_step=same_step,
+        edit_profile=True, tamper=None, output_style=True,
+    )
+
 
 @pytest.mark.parametrize(
     ("native_journey", "same_step", "edit_profile", "tamper"),
@@ -176,6 +198,7 @@ async def _assert_selected_pool_replacement(
     native_tier_edit=False,
     legacy=None,
     retained_metadata=True,
+    output_style=False,
 ):
     journey = native_journey
     codex = journey.harness == "codex-native"
@@ -199,6 +222,16 @@ async def _assert_selected_pool_replacement(
             journey.docker.claude_preferences["CLAUDE.md"]
             == "Admitted instructions for /workspaces/run.\n"
         )
+        if output_style:
+            files = journey.docker.claude_preferences
+            later = journey.docker.launch_env["API_TIMEOUT_MS"] == "100000"
+            assert json.loads(files["settings.json"])["outputStyle"] == ("later" if later else "review")
+            expected = "---\nname: later\ndescription: Updated review\n---\nLater style.\n" if later else "---\nname: review\ndescription: Concise review\n---\nReview /workspaces/run carefully.\n"
+            selected_path = "output-styles/" + json.loads(files["settings.json"])["outputStyle"] + ".md"
+            assert files[selected_path] == expected
+            mount = journey.docker.mounts["/home/app/.claude/" + selected_path]
+            assert "readonly" in mount and mount["src"] != "journey_oauth"
+            assert "/home/app/.claude/.credentials.json" not in journey.docker.mounts
         assert journey.docker.volumes == {"journey_oauth": {}}
         return journey.docker.launch_env["API_TIMEOUT_MS"]
 
@@ -401,6 +434,10 @@ async def _assert_selected_pool_replacement(
             else:
                 templates = deepcopy(profile.file_templates)
                 templates[0]["content_template"]["language"] = "Later language"
+                if output_style:
+                    templates[0]["content_template"]["outputStyle"] = "later"
+                    templates[-1]["path"] = "/home/app/.claude/output-styles/later.md"
+                    templates[-1]["content_template"] = "---\nname: later\ndescription: Updated review\n---\nLater style.\n"
                 profile.file_templates = templates
                 profile.env_template = {
                     **profile.env_template,
@@ -694,4 +731,15 @@ async def test_fixed_serialized_claude_oauth_files_use_the_shared_lifecycle(
     assert journey.docker.claude_preferences["CLAUDE.md"] == (
         "Admitted instructions for /workspaces/run.\n"
     )
+    assert journey.docker.volumes == {"journey_oauth": {}}
+
+
+@pytest.mark.parametrize("native_journey", [_CLAUDE_STYLE], indirect=True)
+async def test_fixed_claude_output_style_reaches_shared_readonly_projection(native_journey, monkeypatch):
+    journey = native_journey
+    await pool.execute_selected_pool_source(journey, monkeypatch, fixed_serialized=True)
+    files = journey.docker.claude_preferences
+    assert json.loads(files["settings.json"])["outputStyle"] == "review"
+    assert "Review /workspaces/run carefully." in files["output-styles/review.md"]
+    assert "readonly" in journey.docker.mounts["/home/app/.claude/output-styles/review.md"]
     assert journey.docker.volumes == {"journey_oauth": {}}

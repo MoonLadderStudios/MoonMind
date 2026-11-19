@@ -395,6 +395,10 @@ admitted nonsecret files inside the declared Codex HOME at native launch. These
 private templates are validated both in frozen configuration and by the portable
 launcher. Undeclared files, mixed private/generic references and ambiguous paths
 with dot segments or repeated separators retain the direct route.
+Claude preferences and instruction files, including literal `output-styles/*.md`
+paired with `settings.json.outputStyle`, use the frozen configuration and private
+renderer. OAuth delivery projects those files read-only without modifying enrolled
+credentials; a replacement attempt retains its admitted style despite Profile edits.
 Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
 uncarried tool/auth configuration and other HOME choices retain their adapter

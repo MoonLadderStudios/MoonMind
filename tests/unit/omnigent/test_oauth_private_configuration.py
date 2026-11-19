@@ -444,7 +444,9 @@ def test_claude_oauth_preferences_freeze_canonical_files_without_auth_state(over
             runtime_support_dir="/support/" + sibling,
             workspace_path="/work/" + sibling,
         )
-        assert set(files) == {"settings.json", "CLAUDE.md", "rules/project.md"}
+        from tests.unit.omnigent.test_claude_profile_configuration import OUTPUT_STYLE
+        assert set(files) == {"settings.json", "CLAUDE.md", "rules/project.md", "output-styles/concise.md"}
+        assert files["output-styles/concise.md"] == OUTPUT_STYLE.encode("utf-8")
         assert json.loads(files["settings.json"]) == {
             "outputStyle": "concise",
             "alwaysThinkingEnabled": True,
@@ -468,6 +470,9 @@ def test_claude_oauth_preferences_freeze_canonical_files_without_auth_state(over
         ("rules/../../CLAUDE.md", "no"),
         ("rules/with,comma.md", "no"),
         ("CLAUDE.md", "{{selected_secret}}"),
+        ("output-styles/../.credentials.json", "escape"),
+        ("output-styles/concise.md", "{{selected_secret}}"),
+        ("output-styles/with,comma.md", "unsafe mount"),
     ],
 )
 def test_claude_oauth_unsupported_files_remain_direct(path, content):
@@ -486,7 +491,7 @@ def test_claude_oauth_unsupported_files_remain_direct(path, content):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "unsafe_target", [None, "settings.json", "rules", "projection"]
+    "unsafe_target", [None, "settings.json", "rules", "output-styles", "projection"]
 )
 async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_cleanup(
     tmp_path,
@@ -556,12 +561,13 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
     if unsafe_target:
         if unsafe_target != "projection":
             (enrolled / unsafe_target).symlink_to(
-                outside if unsafe_target == "rules" else outside / "settings.json",
-                target_is_directory=unsafe_target == "rules",
+                outside if unsafe_target in {"rules", "output-styles"} else outside / "settings.json",
+                target_is_directory=unsafe_target in {"rules", "output-styles"},
             )
         reason = {
             "settings.json": "mount target must be a regular file",
             "rules": "Not a directory",
+            "output-styles": "Not a directory",
             "projection": "source contains a symlink",
         }[unsafe_target]
         with pytest.raises(AssertionError, match=reason):
@@ -577,6 +583,7 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
     assert mountpoint.st_mode & 0o777 == 0o600
     assert (mountpoint.st_uid, mountpoint.st_gid) == (os.getuid(), os.getgid())
     assert (enrolled / "rules/project.md").read_text() == ""
+    assert (enrolled / "output-styles/concise.md").read_text() == ""
     assert (
         handle.attachments
         == anticipated_credential_handle(
@@ -614,7 +621,9 @@ async def test_claude_oauth_file_mounts_preserve_atomic_refresh_and_fenced_clean
         item.subPath: (tmp_path / item.sourceRef / item.subPath).read_bytes()
         for item in handle.attachments[2:]
     }
+    from tests.unit.omnigent.test_claude_profile_configuration import OUTPUT_STYLE
     assert first_files["files/CLAUDE.md"].count(b"Work in") == 1
+    assert first_files["files/output-styles/concise.md"] == OUTPUT_STYLE.encode("utf-8")
     newer_context = replace(
         context,
         acquired=type(context.acquired)(
