@@ -546,6 +546,7 @@ async def prepare_selected_pool_plan(
             }
         source = request.workspace_spec.get("workspaceSource") or {}
         locator = request.workspace_spec.get("workspaceLocator") or {}
+        selected_enterprise = False
         repository_handoff = (
             request.canonical_repository_workspace_handoff
             and source.get("kind") == "repository"
@@ -553,6 +554,7 @@ async def prepare_selected_pool_plan(
         if repository_handoff:
             from moonmind.omnigent.repository_sources import (
                 anonymous_https_repository_source,
+                selected_github_https_repository_source,
                 normalize_repository_source,
             )
             from moonmind.omnigent.workspace_sources import (
@@ -580,9 +582,9 @@ async def prepare_selected_pool_plan(
                 or request.workspace_spec.get("repositoryTarget")
                 or {}
             )
-            # Only GitHub account grants and explicit credential-free HTTPS
-            # reads have equivalent shared source owners. Local paths and
-            # other authenticated transports keep their native authority.
+            # Explicit trusted GitHub connections and credential-free HTTPS
+            # reads use admitted source owners. Local paths and other transports
+            # keep their native authority. Selection below is not a grant.
             from moonmind.workflows.executions.repository_contract import (
                 authored_repository_access,
             )
@@ -591,6 +593,11 @@ async def prepare_selected_pool_plan(
                 {**request.parameters, "workspaceSpec": request.workspace_spec}
             )
             remote = anonymous_https_repository_source(compiled_source.repository_ref or "")
+            selected_enterprise = bool(
+                connection_ref and not anonymous
+                and normalize_repository_source(compiled_source.repository_ref or "")[1] == "remote"
+                and selected_github_https_repository_source(compiled_source.repository_ref or "")
+            )
             repository_handoff = (
                 isinstance(target, Mapping)
                 and target.get("provider") in {None, "git"}
@@ -598,6 +605,7 @@ async def prepare_selected_pool_plan(
                 and (
                     normalize_repository_source(compiled_source.repository_ref or "")[1] == "github_https"
                     or anonymous and not connection_ref and remote is not None
+                    or selected_enterprise
                 )
             )
         if (
@@ -752,33 +760,50 @@ async def prepare_selected_pool_plan(
                 effort=recorded_plan.payload.modelConfig.effort,
                 modelSource="recorded_step_plan",
             )
-        admitted = await compile_and_persist_execution_plan(
-            session_factory=None,
-            execution_plan_store=SessionExecutionPlanStore(session),
-            artifact_service=artifacts,
-            principal=principal,
-            workflow_id=workflow_id,
-            agent_profile_snapshot=snapshot,
-            provider_profile=profile,
-            initial_parameters=parameters,
-            authored_request_ref=snapshot_ref,
-            authored_request_digest=original_digest,
-            task_input_snapshot_ref=snapshot_ref,
-            task_input_snapshot_digest=original_digest,
-            db_session=session,
-            access=access,
-            model_tier_resolution=resolution,
-            _compile_step_plans=False,
-            recorded_skillset_ref=request.resolved_skillset_ref
-            or request.step_execution.resolved_skillset_ref,
-            **(
-                {
-                    "_recorded_provider_configuration_snapshot": recorded.plan.payload.providerConfigurationSnapshot
-                }
-                if recorded
-                else {}
-            ),
+        from moonmind.omnigent.repository_sources import (
+            RepositorySourceHandoffUnavailable,
         )
+
+        try:
+            admitted = await compile_and_persist_execution_plan(
+                session_factory=None,
+                execution_plan_store=SessionExecutionPlanStore(session),
+                artifact_service=artifacts,
+                principal=principal,
+                workflow_id=workflow_id,
+                agent_profile_snapshot=snapshot,
+                provider_profile=profile,
+                initial_parameters=parameters,
+                authored_request_ref=snapshot_ref,
+                authored_request_digest=original_digest,
+                task_input_snapshot_ref=snapshot_ref,
+                task_input_snapshot_digest=original_digest,
+                db_session=session,
+                access=access,
+                model_tier_resolution=resolution,
+                _compile_step_plans=False,
+                recorded_skillset_ref=request.resolved_skillset_ref
+                or request.step_execution.resolved_skillset_ref,
+                **(
+                    {
+                        "_recorded_provider_configuration_snapshot": recorded.plan.payload.providerConfigurationSnapshot
+                    }
+                    if recorded
+                    else {}
+                ),
+            )
+        except RepositorySourceHandoffUnavailable:
+            if recorded is not None:
+                # Already-shared work must not switch lifecycle owners when
+                # its persisted authority/configuration has changed.
+                raise
+            # The authoritative compiler includes frozen Skill/Profile tools.
+            # Do not duplicate that capability decision in routing or strand
+            # supported native work when only source reads have migrated.
+            return {
+                "disposition": "native",
+                "reason": "workspace_requires_its_recorded_native_owner",
+            }
         if recorded:
             changed = changed_admitted_intent(
                 recorded.plan.payload, admitted.envelope.payload

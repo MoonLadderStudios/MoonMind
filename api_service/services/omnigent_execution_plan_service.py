@@ -1097,6 +1097,7 @@ async def _admit_repository_plan_inputs(
     )
     from moonmind.omnigent.repository_sources import (
         anonymous_https_repository_source, normalize_repository_source,
+        selected_github_https_repository_source, RepositorySourceHandoffUnavailable,
     )
     from moonmind.omnigent.workspace_intent import authored_repository_source
     from moonmind.omnigent.workspace_sources import compile_workspace_source
@@ -1167,17 +1168,22 @@ async def _admit_repository_plan_inputs(
         anonymous_https_repository_source(_remote)
         if anonymous and not connection_ref and kind == "remote" else None
     )
-    if kind != "github_https" and anonymous_remote is None:
+    selected_remote = (
+        selected_github_https_repository_source(_remote)
+        if connection_ref and not anonymous and kind == "remote" else None
+    )
+    if kind != "github_https" and anonymous_remote is None and selected_remote is None:
         if native_review:
             raise ValueError(
                 "native review graph requires a selected GitHub repository"
             )
         # Local/content sources never acquire repository transport credentials.
         return result
-    if anonymous_remote and (requires_github or native_review or not typed_authority):
-        raise ValueError("anonymous HTTPS source requires a typed read-only repository consumer")
+    if (anonymous_remote or selected_remote) and (requires_github or native_review or not typed_authority):
+        error = RepositorySourceHandoffUnavailable if selected_remote else ValueError
+        raise error("HTTPS source requires a typed read-only repository consumer")
     repository = (
-        anonymous_remote[0] if anonymous_remote
+        (anonymous_remote or selected_remote)[0] if anonymous_remote or selected_remote
         else github_repository_name_from_value(source.repository_ref)
     )
     mode = (
@@ -1235,10 +1241,12 @@ async def _admit_repository_plan_inputs(
         not isinstance(finish_mode, str) or finish_mode.strip() in {"", "merge"}
     ):
         operations = tuple(dict.fromkeys((*operations, "merge_request")))
-    if anonymous_remote and (
-        any(operation != "read" for operation in operations) or merge_automation
+    if (anonymous_remote or selected_remote) and (
+        publish_mode != "none"
+        or any(operation != "read" for operation in operations) or merge_automation
     ):
-        raise ValueError("anonymous HTTPS source cannot admit collaboration authority")
+        error = RepositorySourceHandoffUnavailable if selected_remote else ValueError
+        raise error("HTTPS source cannot admit collaboration authority")
     slots = {} if native_review else {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
     if (
@@ -1368,6 +1376,8 @@ async def _admit_repository_plan_inputs(
                 )
                 if selected_connection is None:
                     raise ValueError("selected repository connection is unavailable")
+                if selected_remote and selected_connection.hosting_service != "github":
+                    raise RepositorySourceHandoffUnavailable("enterprise source requires a GitHub hosting connection")
                 assignment = await connections.launch_assignment(
                     selected_connection, repository
                 )

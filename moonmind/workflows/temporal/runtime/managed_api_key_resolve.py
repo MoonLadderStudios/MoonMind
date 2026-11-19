@@ -513,6 +513,81 @@ async def _admitted_repository_record(
     )
 
 
+def _recorded_repository_source(parameters: Mapping[str, Any], owner: str):
+    """Compile the retained source without interpreting its credential authority."""
+    from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+    workflow = parameters.get("workflow") or parameters.get("task") or {}
+    workflow = workflow if isinstance(workflow, Mapping) else {}
+    workspace = (
+        parameters.get("workspaceSpec")
+        or parameters.get("workspace")
+        or workflow.get("workspace")
+        or {}
+    )
+    workspace = dict(workspace) if isinstance(workspace, Mapping) else {}
+    target = (
+        parameters.get("repository")
+        or workspace.get("repositoryTarget")
+        or workspace.get("repository")
+    )
+    if isinstance(target, Mapping) and target.get("provider"):
+        workspace["repositoryTarget"] = dict(target)
+        workspace.pop("repository", None)
+    elif target:
+        workspace["repository"] = target
+    source = compile_workspace_source(
+        workspace, workflow_id=owner, step_execution_id=owner, runtime="omnigent"
+    )
+    return source
+
+
+async def _selected_enterprise_source_connection(parameters, source_ref, repository, operation):
+    """Validate a retained explicit Enterprise read before any secret lookup.
+
+    A step-bound shared plan may leave its root in the native recorded shape.
+    Its full source URL anchors the origin while the selected persisted
+    connection and verified assignment retain authority; no file/default route
+    or arbitrary authenticated provider is introduced here.
+    """
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_host_from_endpoint,
+        normalize_github_repository_remote,
+    )
+    from moonmind.omnigent.repository_sources import normalize_repository_source
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+        authored_repository_access,
+    )
+
+    if not source_ref or normalize_repository_source(source_ref)[1] != "remote":
+        return None
+    connection_ref, anonymous = authored_repository_access(parameters)
+    if not connection_ref or anonymous or operation != "read":
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE", "Enterprise restore requires its explicit read connection"
+        )
+    selected = await load_repository_connection_for_launch(connection_ref, repository=source_ref)
+    if (
+        selected is None
+        or selected.provider != "git"
+        or getattr(selected, "hosting_service", None) != "github"
+        or selected.id != connection_ref
+    ):
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE", "selected Enterprise connection is unavailable"
+        )
+    source = normalize_github_repository_remote(source_ref, endpoint=selected.endpoint_ref)
+    requested = normalize_github_repository_remote(repository, endpoint=selected.endpoint_ref)
+    if source is None or requested is None or source.casefold() != requested.casefold():
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE", "repository target conflicts with the recorded Enterprise source"
+        )
+    # This also checks deployment trust before credential resolution.
+    github_host_from_endpoint(selected.endpoint_ref)
+    return selected
+
+
 async def acquire_admitted_repository_use(
     workflow_id: str, *, repository: str, operation: str,
     expected_api_base: str | None = None,
@@ -530,7 +605,6 @@ async def acquire_admitted_repository_use(
     from moonmind.omnigent.host_services.github_credentials import (
         OmnigentGithubCredentialService,
     )
-    from moonmind.omnigent.workspace_sources import compile_workspace_source
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
     from moonmind.workflows.executions.repository_contract import (
         RepositoryContractError,
@@ -597,28 +671,14 @@ async def acquire_admitted_repository_use(
                 "repository operation lacks its admitted snapshot",
             )
 
-    workflow = parameters.get("workflow") or parameters.get("task") or {}
-    workflow = workflow if isinstance(workflow, Mapping) else {}
-    workspace = (
-        parameters.get("workspaceSpec")
-        or parameters.get("workspace")
-        or workflow.get("workspace")
-        or {}
+    source = _recorded_repository_source(parameters, owner)
+    enterprise = await _selected_enterprise_source_connection(
+        parameters, source.repository_ref, repository, operation
     )
-    workspace = dict(workspace) if isinstance(workspace, Mapping) else {}
-    target = (
-        parameters.get("repository")
-        or workspace.get("repositoryTarget")
-        or workspace.get("repository")
-    )
-    if isinstance(target, Mapping) and target.get("provider"):
-        workspace["repositoryTarget"] = dict(target)
-        workspace.pop("repository", None)
-    elif target:
-        workspace["repository"] = target
-    source = compile_workspace_source(
-        workspace, workflow_id=owner, step_execution_id=owner, runtime="omnigent"
-    )
+    if enterprise is not None:
+        if expected_api_base is not None and github_api_base_for(enterprise.endpoint_ref).rstrip("/") != expected_api_base.rstrip("/"):
+            raise ValueError("The admitted repository connection does not serve the requested API endpoint")
+        return None, None
     admitted_repository = github_repository_name_from_value(source.repository_ref)
     if (
         not admitted_repository
@@ -684,6 +744,27 @@ async def resolve_admitted_git_read(
         finally:
             acquired.credential.clear()
         return admitted(api_base, token or None)
+    owner, _run_id, parameters = await _admitted_repository_record(workflow_id)
+    source = _recorded_repository_source(parameters, owner)
+    enterprise = await _selected_enterprise_source_connection(
+        parameters, source.repository_ref, repository, "read"
+    )
+    if enterprise is not None:
+        # Use the same validated connection object for credential resolution.
+        # Re-discovering from a slug could select a retargeted endpoint between
+        # validation and acquisition. The original URL is checked on each read.
+        from urllib.parse import urlsplit
+
+        remote = normalize_github_repository_remote(source.repository_ref, endpoint=enterprise.endpoint_ref)
+        name = urlsplit(remote).path.strip("/").removesuffix(".git")
+        access = await _resolve_github_access_for_connection(
+            enterprise, repository=name, required_operations=("read",)
+        )
+        if not access.credential.token:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE", access.credential.safe_summary
+            )
+        return AdmittedGitRead(remote, github_host_from_endpoint(enterprise.endpoint_ref), access.credential.token)
     connection_ref, anonymous = await load_admitted_repository_access(workflow_id)
     if anonymous:
         return admitted("", None)

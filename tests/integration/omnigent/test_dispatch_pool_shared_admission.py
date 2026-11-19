@@ -115,6 +115,7 @@ async def execute_selected_pool_source(
     bind_parent_context=False, repository_at_top=True, terminal_runner=None,
     expected_native_reason=None, parent_repository_patch=True, submission_parameters=None,
     repository_revision=None, pinned_repository_patch=False, controller_checkpoint_ref=None,
+    repository_endpoint="https://github.com", repository_hosting_service="github",
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -136,17 +137,21 @@ async def execute_selected_pool_source(
                 github_repository_assignment,
             )
 
+            connection = github_pat_connection("pool-repository", "POOL_TEST_REPOSITORY_TOKEN")
+            connection = connection.model_copy(update={"endpoint_ref": repository_endpoint, "hosting_service": repository_hosting_service})
+            assignment = github_repository_assignment("pool-repository", "MoonLadderStudios/MoonMind")
+            assignment = assignment.model_copy(update={"identity": assignment.identity.model_copy(
+                update={"endpoint": repository_endpoint}
+            )})
             await RepositoryConnectionService(session).create_connection(
-                github_pat_connection("pool-repository", "POOL_TEST_REPOSITORY_TOKEN"),
+                connection,
                 actor_ref="system:deployment",
                 request_id="pool-publishing-connection",
                 principal_ref="system:deployment",
                 principal_scope=("system", None),
             )
             await RepositoryConnectionService(session).set_assignment(
-                github_repository_assignment(
-                    "pool-repository", "MoonLadderStudios/MoonMind"
-                ),
+                assignment,
                 actor_ref="system:deployment",
                 request_id="pool-publishing-assignment",
                 principal_ref="system:deployment",
