@@ -60,20 +60,29 @@ def assert_denied(journey, rules):
 async def test_frozen_claude_deny_survives_profile_edit_and_cold_successor(
     native_journey,
 ):
-    journey = native_journey
+    await assert_frozen_configuration_survives_cold_successor(native_journey, SETTINGS)
+
+
+async def assert_frozen_configuration_survives_cold_successor(
+    journey, expected_settings, expected_environment=None,
+):
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         profile.file_templates = []
+        if expected_environment is not None:
+            profile.env_template = {"PROJECT_LABEL": "later-profile-value"}
         await session.commit()
     first = await journey.realizer.execute(journey.request, journey.plan)
     assert first.failure_class is None, first
     assert_denied(journey, DENIED)
+    for key, value in (expected_environment or {}).items():
+        assert journey.docker.launch_env[key] == value
     if not journey.api_key:
-        assert json.loads(journey.docker.claude_preferences["settings.json"]) == SETTINGS
+        assert json.loads(journey.docker.claude_preferences["settings.json"]) == expected_settings
     else:
         templates = journey.docker.claude_configuration["fileTemplates"]
         assert len(templates) == 1
-        assert templates[0]["content_template"] == SETTINGS
+        assert templates[0]["content_template"] == expected_settings
     predecessor = await journey.services.runtime_binding_store.get(
         stable_binding_id(
             execution_plan_ref=journey.plan.planRef,
@@ -130,6 +139,8 @@ async def test_frozen_claude_deny_survives_profile_edit_and_cold_successor(
     assert second.failure_class is None, second
     assert observed == {"saved": native.GENERATED}
     assert_denied(journey, DENIED)
+    for key, value in (expected_environment or {}).items():
+        assert journey.docker.launch_env[key] == value
     current = await journey.services.runtime_binding_store.get(
         stable_binding_id(
             execution_plan_ref=journey.plan.planRef,
@@ -258,9 +269,13 @@ async def test_fresh_sibling_configuration_does_not_replace_queued_denies(
 async def test_ready_host_retry_keeps_frozen_denies_before_session_creation(
     native_journey, monkeypatch
 ):
-    import asyncio
+    await assert_ready_host_retry_keeps_configuration(native_journey, monkeypatch)
 
-    journey = native_journey
+
+async def assert_ready_host_retry_keeps_configuration(
+    journey, monkeypatch, expected_environment=None,
+):
+    import asyncio
     update = journey.realizer._update_binding
 
     async def revoke_after_ready(*args, **kwargs):
@@ -287,6 +302,8 @@ async def test_ready_host_retry_keeps_frozen_denies_before_session_creation(
     assert binding.state is RuntimeBindingState.host_ready
     handles = json.loads(json.dumps(binding.credentialRuntimeHandles))
     assert next(iter(handles.values()))["claudeDeniedTools"] == DENIED
+    for key, value in (expected_environment or {}).items():
+        assert next(iter(handles.values()))["runtimeEnvironment"][key] == value
     host = await journey.services.host_lease_repository.get(binding.hostLeaseRef)
     # Existing ready receipts omit the projection. Recovery must derive it
     # from the immutable credential owner, not rely on a new receipt format.
@@ -294,6 +311,8 @@ async def test_ready_host_retry_keeps_frozen_denies_before_session_creation(
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         profile.file_templates = []
+        if expected_environment is not None:
+            profile.env_template = {"PROJECT_LABEL": "later-profile-value"}
         await session.commit()
     result = await journey.realizer.execute(journey.request, journey.plan)
     assert result.failure_class is None, result

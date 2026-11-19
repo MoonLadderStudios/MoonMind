@@ -420,7 +420,11 @@ credentials; a replacement attempt retains its admitted style despite Profile ed
 Replacement-seeded `settings.json` templates may also carry `permissions.deny` for
 bounded built-in tool rules. Ordered replacements and deep merges freeze the final
 effective document using native array-replacement semantics, not a union of older
-rules; no ambient enrolled settings are read. The frozen credential owner projects
+rules; no ambient enrolled settings are read. Literal nonsecret settings `env`
+uses the existing launch-environment guard and frozen credential owner. Its final
+values override Profile process environment, matching native Claude precedence
+even when Skill filtering disables user settings. Protected/authentication keys
+and context-dependent settings environment remain native. The frozen credential owner projects
 these restrictions into Claude's terminal `--disallowedTools` arguments, merging runtime restrictions
 rather than replacing the bridge-generated settings. This keeps denies effective
 when Skill filtering ignores user settings. OAuth and API-key attempts, including
