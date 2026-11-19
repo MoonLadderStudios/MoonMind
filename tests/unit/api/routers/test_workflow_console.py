@@ -366,7 +366,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         for item in payload["destinations"]
         if item["navigationGroup"] == "primary"
     ]
-    assert primary_keys == ["workflows", "create", "security"]
+    assert primary_keys == ["workflows", "create"]
     assert payload["endpoints"]["workflows"] == "/api/executions"
     # No route serves a workflow update/event stream, so none is advertised;
     # each dashboard query owns its own polling.

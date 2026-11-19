@@ -176,7 +176,7 @@ def test_configuration_group_membership_excludes_standalone_security(
         "settings-operations",
     ]
     security = next(item for item in DASHBOARD_DESTINATIONS if item.key == "security")
-    assert security.navigation_group == "primary"
+    assert security.navigation_group == "operations"
     assert security.menu_group_key is None
     assert security.capability_key == "settingsInstance"
     for destination in DASHBOARD_DESTINATIONS:

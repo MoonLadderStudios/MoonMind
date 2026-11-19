@@ -79,7 +79,7 @@ There is no Settings landing page, because the dropdown already is the configura
 | Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` | `Providers & Secrets \| MoonMind` |
 | Operations | `/settings/operations` | `settings-operations` | `Operations \| MoonMind` |
 
-Both use the dashboard's utility-page classification and share a bundle with separate route-owned components. Security is a top-level workspace, not a Configuration page. When the preset catalog is disabled, Assessments and Reports still load direct security assessment work and state that preset-based history is unavailable.
+Both use the dashboard's utility-page classification and share a bundle with separate route-owned components. Security is its own workspace in the System menu, not a Configuration page. When the preset catalog is disabled, Assessments and Reports still load direct security assessment work and state that preset-based history is unavailable.
 
 ### 5.2 Default entry point
 
@@ -214,7 +214,7 @@ The collapsed summary distinguishes a confirmed recommendation, known custom ove
 
 New-work Harness, publish mode and Provider Profile defaults belong to Providers & Secrets → New Work Defaults. Skill policy and remaining descriptor-driven controls belong to Operations → Advanced. Both retain the same catalog keys, validation, reset, audit and draft guards. Collapsing a disclosure retains an edited draft. Browser-local Dashboard preferences can be reset in Operations without changing server configuration.
 
-Security is a separate top-level workspace with Assessments, Targets and Reports. Targets reuses the saved assessment project/environment and authorization editors. Target context does not confer access; authorization remains a separate, explicit grant with validity and scope. Assessment launches and resumptions use existing workflow admission and detail actions, not a second runner. Reports link to retained evidence rather than copying it into another store. History and filter coverage is described in the workspace; unsupported global target filtering is not implied.
+Security is a separate workspace, reached from the System menu, with Assessments, Targets and Reports. Targets reuses the saved assessment project/environment and authorization editors. Target context does not confer access; authorization remains a separate, explicit grant with validity and scope. Assessment launches and resumptions use existing workflow admission and detail actions, not a second runner. Reports link to retained evidence rather than copying it into another store. History and filter coverage is described in the workspace; unsupported global target filtering is not implied.
 
 Legacy Instance and User / Workspace URLs stay available as client redirects so fragments survive: assessment project/authorization anchors open Security → Targets, workflow-default anchors open advanced New Work Defaults, and other settings open Operations → Advanced. Existing authorization detail selectors are retained. Access checks remain those of the corresponding existing settings resources.
 

@@ -18,7 +18,7 @@ describe('account-free instance cutover', () => {
       canonicalPath: '/security',
       capabilityKey: 'settingsInstance',
       page: 'security',
-      navigationGroup: 'primary',
+      navigationGroup: 'operations',
     });
     expect(instance?.pathPatterns).toContain('/security/targets');
   });

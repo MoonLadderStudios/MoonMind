@@ -19,7 +19,7 @@ import {
 describe('dashboard route resolution', () => {
   it('routes Security and retains assessment bookmark detail', () => {
     expect(resolveDashboardRoute('/security/targets')?.page).toBe('security');
-    expect(destinationForPath('/security')?.navigationGroup).toBe('primary');
+    expect(destinationForPath('/security')?.navigationGroup).toBe('operations');
     expect(legacySettingsRedirect('/settings/instance', '', '#assessment-authorizations')).toBe('/security/targets#assessment-authorizations');
     expect(legacySettingsRedirect('/settings/instance', '')).toBe('/settings/operations#advanced');
     expect(legacySettingsRedirect('/settings/instance', '?authorizationRef=ref-1&scope=user', '#assessment-authorizations')).toBe('/security/targets?authorizationRef=ref-1#assessment-authorizations');
@@ -65,17 +65,17 @@ describe('dashboard route resolution', () => {
     features.omnigentPolicies = false;
     const info = { features };
     expect(visiblePrimaryDestinations(info).map(({ key }) => key)).toEqual([
-      'workflows', 'create', 'security',
+      'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
-      'recurring', 'skills', 'omnigent-agents', 'artifacts',
+      'recurring', 'skills', 'omnigent-agents', 'artifacts', 'security',
       'settings-providers-secrets', 'settings-operations',
     ]);
   });
 
   it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
     expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
-      'workflows', 'create', 'security',
+      'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(null)).toEqual([]);
   });
