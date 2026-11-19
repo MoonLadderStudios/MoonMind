@@ -301,8 +301,33 @@ class OmnigentWorkspacePublicationService:
         plan = request.omnigent_execution_plan or identity.omnigent_execution_plan
         if plan is None:
             raise HarnessPlatformError("Finalization restore requires its original execution plan", code="WORKSPACE_RESTORE_UNAVAILABLE")
+        # Match initial preparation: a frozen local-source plan carries its
+        # Git history in the checkpoint, not in a cloneable remote repository.
+        # Never reopen the authored local path during finalization recovery.
+        local_initial_source = False
+        if self._plans is not None:
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                verify_execution_plan_envelope,
+            )
+
+            stored = await self._plans.load(plan.plan_ref)
+            if stored is None:
+                raise HarnessPlatformError(
+                    "Finalization restore requires its frozen execution plan",
+                    code="WORKSPACE_RESTORE_UNAVAILABLE",
+                )
+            admitted = verify_execution_plan_envelope(stored)
+            if admitted.planRef != plan.plan_ref:
+                raise HarnessPlatformError(
+                    "Finalization restore execution plan differs from its binding",
+                    code="WORKSPACE_RESTORE_UNAVAILABLE",
+                )
+            local_initial_source = bool(
+                admitted.payload.resolvedTools.get("initialRepositorySource")
+            )
         access = await step_execution_artifact_access(request)
         return await self._artifacts.restore_checkpoint(
+            isolate_git=local_initial_source,
             authority_root=self._workspace_root,
             access=access,
             restore_request={
@@ -328,7 +353,9 @@ class OmnigentWorkspacePublicationService:
                 "destination": {
                     **locator.model_dump(by_alias=True),
                     "stepExecutionId": step_id,
-                    "repository": authored_repository_source(request),
+                    "repository": (
+                        None if local_initial_source else authored_repository_source(request)
+                    ),
                 },
                 "workspacePolicy": "restore_publication_candidate",
                 "resumePhase": "resume_publication",

@@ -1272,7 +1272,8 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         return (await self.read_bytes(artifact_ref)).decode("utf-8")
 
     async def restore_checkpoint(
-        self, *, restore_request, authority_root, access: ArtifactAccessContext
+        self, *, restore_request, authority_root, access: ArtifactAccessContext,
+        isolate_git: bool = False,
     ):
         from moonmind.schemas.checkpoint_restore_models import (
             ManagedWorkspaceRestoreRequest,
@@ -1302,6 +1303,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         async with self._session_factory() as session:
             service = ManagedCheckpointRestoreService(
                 authority_root=authority_root,
+                isolate_git=isolate_git,
                 artifact_service=TemporalArtifactService(
                     TemporalArtifactRepository(session),
                     transaction_ownership=ArtifactTransactionOwnership.STANDALONE,

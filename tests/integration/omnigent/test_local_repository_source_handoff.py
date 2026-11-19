@@ -5,6 +5,7 @@ workspace ownership, Git preparation and artifact persistence are production own
 """
 
 import asyncio
+import copy
 import json
 import os
 import subprocess
@@ -16,7 +17,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from moonmind.omnigent.realizers.turn_delivery import admission_epoch
-from moonmind.omnigent.runtime_bindings import RuntimeBindingState, stable_binding_id
+from moonmind.omnigent.runtime_bindings import (
+    InMemoryStableRuntimeBindingStore,
+    RuntimeBindingState,
+    stable_binding_id,
+)
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -591,6 +596,41 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     assert not saved_manifest["gitHistory"].get("shallowCommits")
     assert saved_manifest["baseCommit"] == changed_head[0]
     predecessor_workspace = journey.server.workspace
+    shutil.rmtree(predecessor_workspace)
+    # Same-attempt finalization must recover from its saved checkpoint without
+    # the original local clone source or a surviving workspace volume. Replay
+    # the durable state at the saved boundary, before publication/terminal result,
+    # through the production finalization owner without launching another turn.
+    local_binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=next_plan.planRef,
+            idempotency_key=next_request.idempotency_key,
+            admission_epoch=admission_epoch(next_request),
+        )
+    )
+    unfinished = local_binding.model_copy(update={
+        "terminalResult": None,
+        "phaseResults": {
+            name: value for name, value in local_binding.phaseResults.items()
+            if name != "publication"
+        },
+    })
+    finalization_store = InMemoryStableRuntimeBindingStore()
+    finalization_store._bindings[unfinished.bindingId] = unfinished
+    finalizer = copy.copy(journey.realizer)
+    finalizer._runtime_bindings = finalization_store
+    previous_events = list(journey.events)
+    finalized = await finalizer._reconcile_finalization(next_request, unfinished)
+    assert finalized.failure_class is None
+    assert finalized.metadata["savedWorkspaceCheckpoint"] == saved
+    final_phases = (await finalization_store.get(unfinished.bindingId)).phaseResults
+    assert "restoration" in final_phases
+    assert "publication" in final_phases
+    assert journey.events == previous_events
+    assert git(predecessor_workspace, "rev-parse", "HEAD") == changed_head[0]
+    assert git(predecessor_workspace, "branch", "--show-current") == "continued-work"
+    assert git(predecessor_workspace, "rev-parse", "refs/remotes/origin/authored-base") == commits[-1]
+    assert (predecessor_workspace / "tracked.txt").read_text() == "continued committed work\n"
     shutil.rmtree(predecessor_workspace)
     from moonmind.omnigent.workspace_sources import replace_repository_workspace_source
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
