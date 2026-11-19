@@ -119,7 +119,7 @@ def test_explicit_claude_permission_choice_is_preserved(bind, explicit):
         (["--disallowedTools", "Bash"], ["--disallowedTools", "Bash,ScheduleWakeup"]),
         (
             ["--disallowedTools=WebFetch,ScheduleWakeup"],
-            ["--disallowedTools=WebFetch,ScheduleWakeup"],
+            ["--disallowedTools", "WebFetch,ScheduleWakeup"],
         ),
     ],
 )

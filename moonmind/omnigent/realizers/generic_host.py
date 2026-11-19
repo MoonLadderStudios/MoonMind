@@ -1201,11 +1201,28 @@ class GenericOmnigentHostRealizer:
             if binding.hostLeaseRef
             else None
         )
-        return (
-            credential_handles,
-            host_lease,
-            self._persisted_host_context(binding, host_lease),
-        )
+        host_context = self._persisted_host_context(binding, host_lease)
+        if host_context is not None:
+            from moonmind.provider_profiles.claude_configuration import (
+                claude_denied_tools_from_handles,
+            )
+
+            # Ready-host receipts predate this projection. Rebuild it from the
+            # validated immutable credential handles, never from a live Profile.
+            rules = claude_denied_tools_from_handles(
+                [
+                    handle.model_dump(by_alias=True, mode="json")
+                    for handle in credential_handles
+                ]
+            )
+            recorded = host_context.get("claudeDeniedTools")
+            if recorded is not None and recorded != rules:
+                raise ValueError(
+                    "ready host Claude denies differ from its credential authority"
+                )
+            if rules:
+                host_context["claudeDeniedTools"] = list(rules)
+        return credential_handles, host_lease, host_context
 
     async def _predecessor_host_stopped(
         self, binding: StableRuntimeBinding
@@ -2539,6 +2556,17 @@ class GenericOmnigentHostRealizer:
         session.pop("processHome", None)
         if host_context.get("processHome"):
             session["processHome"] = host_context["processHome"]
+        denied_tools = host_context.get("claudeDeniedTools") or []
+        if denied_tools:
+            from moonmind.provider_profiles.claude_configuration import (
+                project_denied_tools,
+            )
+
+            session["terminalLaunchArgs"] = project_denied_tools(
+                harness_id=plan.payload.harnessId,
+                arguments=session.get("terminalLaunchArgs") or [],
+                rules=denied_tools,
+            )
         omnigent["session"] = session
         omnigent["capture"] = dict(plan.payload.capturePolicy)
         primary_lease = binding.providerLeases.get("primary-model")
