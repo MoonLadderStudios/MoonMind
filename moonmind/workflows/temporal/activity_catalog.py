@@ -802,9 +802,7 @@ def build_default_activity_catalog(
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(
-                1800, 1860, heartbeat_timeout_seconds=30
-            ),
+            timeouts=TemporalActivityTimeouts(1800, 1860, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
             heartbeat_required=True,
         ),
@@ -1430,6 +1428,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="agent_runtime.export_initial_source",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(180, 540),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.launch",
             family="agent_runtime",
             capability_class="agent_runtime",
@@ -1846,16 +1853,66 @@ def build_default_activity_catalog(
                 ),
             )
             for name, capability, queue, fleet in (
-                ("publication_recovery.observe", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
-                ("publication_recovery.publish", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
-                ("publication_recovery.verify", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
-                ("publication_recovery.restore_candidate", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
-                ("publication_recovery.publish_candidate", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
-                ("publication_recovery.saved_work_prepare", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
-                ("publication_recovery.saved_work_push", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
-                ("publication_recovery.saved_work_pull_request", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
-                ("publication_recovery.cleanup", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
-                ("publication_recovery.persist_result", "artifacts", cfg.activity_artifacts_task_queue, ARTIFACTS_FLEET),
+                (
+                    "publication_recovery.observe",
+                    "integration:github",
+                    cfg.activity_integrations_task_queue,
+                    INTEGRATIONS_FLEET,
+                ),
+                (
+                    "publication_recovery.publish",
+                    "integration:github",
+                    cfg.activity_integrations_task_queue,
+                    INTEGRATIONS_FLEET,
+                ),
+                (
+                    "publication_recovery.verify",
+                    "integration:github",
+                    cfg.activity_integrations_task_queue,
+                    INTEGRATIONS_FLEET,
+                ),
+                (
+                    "publication_recovery.restore_candidate",
+                    "agent_runtime",
+                    cfg.activity_agent_runtime_task_queue,
+                    AGENT_RUNTIME_FLEET,
+                ),
+                (
+                    "publication_recovery.publish_candidate",
+                    "agent_runtime",
+                    cfg.activity_agent_runtime_task_queue,
+                    AGENT_RUNTIME_FLEET,
+                ),
+                (
+                    "publication_recovery.saved_work_prepare",
+                    "agent_runtime",
+                    cfg.activity_agent_runtime_task_queue,
+                    AGENT_RUNTIME_FLEET,
+                ),
+                (
+                    "publication_recovery.saved_work_push",
+                    "agent_runtime",
+                    cfg.activity_agent_runtime_task_queue,
+                    AGENT_RUNTIME_FLEET,
+                ),
+                (
+                    "publication_recovery.saved_work_pull_request",
+                    "integration:github",
+                    cfg.activity_integrations_task_queue,
+                    INTEGRATIONS_FLEET,
+                ),
+                (
+                    "publication_recovery.cleanup",
+                    "agent_runtime",
+                    cfg.activity_agent_runtime_task_queue,
+                    AGENT_RUNTIME_FLEET,
+                ),
+                (
+                    "publication_recovery.persist_result",
+                    "artifacts",
+                    cfg.activity_artifacts_task_queue,
+                    ARTIFACTS_FLEET,
+                ),
             )
         ),
     )

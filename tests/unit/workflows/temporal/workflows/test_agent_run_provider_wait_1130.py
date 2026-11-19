@@ -1235,3 +1235,43 @@ async def test_inspected_slot_wait_observation_health_absent_when_healthy(
         request=_make_request(),
     )
     assert observation["manager_health"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("patched", [False, True])
+async def test_slot_inspection_preserves_wrapped_cancellation(
+    monkeypatch, structured, patched
+):
+    from temporalio.exceptions import ActivityError, CancelledError
+
+    _mock_workflow_identity(monkeypatch)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _: patched)
+    failure = ActivityError(
+        "Activity cancelled", scheduled_event_id=1, started_event_id=2,
+        identity="worker", activity_type="provider_profile.manager_state",
+        activity_id="inspection", retry_state=None,
+    )
+    failure.__cause__ = CancelledError("cancel requested")
+
+    async def canceled_inspection(self, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        MoonMindAgentRun, "_manager_state_for_slot_wait", canceled_inspection
+    )
+    wf = MoonMindAgentRun()
+    inspect = (
+        wf._inspected_provider_slot_wait if structured
+        else wf._inspected_provider_slot_waiting_reason
+    )
+    arguments = dict(manager_id="manager-1", runtime_id="codex_cli", request=_make_request())
+    if patched:
+        with pytest.raises(CancelledError) as caught:
+            await inspect(**arguments)
+        assert caught.value.__cause__ is failure
+    else:
+        # Existing histories retain their recorded fallback command shape.
+        result = await inspect(**arguments)
+        reason = result["reason"] if structured else result
+        assert reason

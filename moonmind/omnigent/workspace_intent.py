@@ -695,3 +695,40 @@ __all__ = [
     "authored_target_branch",
     "compile_workspace_intent",
 ]
+
+
+def project_authored_workspace(
+    workflow_parameters, node_inputs, runtime_block, *, normalize=None
+):
+    """Project the canonical Run's workspace layers in their existing order."""
+    from copy import deepcopy
+    from collections.abc import Mapping
+
+    parameters = workflow_parameters if isinstance(workflow_parameters, Mapping) else {}
+    result = {}
+    for label, value in (
+        ("workflow.workspaceSpec", parameters.get("workspaceSpec")),
+        ("workflow.workspace_spec", parameters.get("workspace_spec")),
+        ("node.runtime.workspaceSpec", runtime_block.get("workspaceSpec")),
+        ("node.runtime.workspace_spec", runtime_block.get("workspace_spec")),
+        ("node.workspaceSpec", node_inputs.get("workspaceSpec")),
+        ("node.workspace_spec", node_inputs.get("workspace_spec")),
+    ):
+        if isinstance(value, Mapping):
+            result.update(
+                normalize(value, label) if normalize else deepcopy(dict(value))
+            )
+    for key in (
+        "repository",
+        "repositoryTarget",
+        "repo",
+        "startingBranch",
+        "targetBranch",
+        "baseBranch",
+        "publishBaseBranch",
+        "branch",
+    ):
+        value = node_inputs.get(key)
+        if value is not None:
+            result[key] = value
+    return result

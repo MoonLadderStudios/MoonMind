@@ -302,8 +302,17 @@ class OmnigentWorkspaceMaterializer:
                     step_execution_id=identity.step_execution_id,
                     runtime="omnigent",
                 )
-                fenced = source.kind == "checkpoint" or bool(
-                    source.kind == "repository" and source.repository_commit_sha
+                fenced = (
+                    bool(
+                        plan
+                        and getattr(plan.payload, "resolvedTools", {}).get(
+                            "initialRepositorySource"
+                        )
+                    )
+                    or source.kind == "checkpoint"
+                    or bool(
+                        source.kind == "repository" and source.repository_commit_sha
+                    )
                 )
             except WorkspaceSourceError:
                 # The normal materializer supplies the public failure envelope.
@@ -459,6 +468,13 @@ class OmnigentWorkspaceMaterializer:
             target_owner_workflow_id=owner_workflow_id,
             attempt_id=owner_step_execution_id,
         )
+        if (
+            isinstance(checkpoint, dict)
+            and checkpoint.get("kind") == "initial_repository_source"
+        ):
+            fingerprint["initialRepositorySource"] = dict(
+                plan.payload.resolvedTools["initialRepositorySource"]
+            )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         # These are existing execution-contract fields, including persisted
         # requests whose workflow patch did not also copy them into inputRefs.
@@ -550,6 +566,7 @@ class OmnigentWorkspaceMaterializer:
             source.kind == "repository"
             and source.repository_commit_sha
             and not materialization_complete
+            and checkpoint is None
         ):
             # An existing directory may be an interrupted clone, not a verified
             # pinned source. Never reset it: reject a wrong HEAD before readiness.
@@ -759,6 +776,37 @@ class OmnigentWorkspaceMaterializer:
             step_execution_artifact_access,
         )
 
+        initial = (
+            getattr(getattr(plan, "payload", None), "resolvedTools", {}).get(
+                "initialRepositorySource"
+            )
+            if plan is not None
+            else None
+        )
+        if initial is not None and source.kind == "repository":
+            from moonmind.workflows.temporal.runtime.initial_repository_source import (
+                intent_digest,
+                read_initial_source,
+                source_intent,
+            )
+
+            intent = source_intent(request)
+            if intent is None or initial.get("sourceIntentDigest") != intent_digest(
+                intent
+            ):
+                raise ValueError(
+                    "initial source differs from the admitted launch intent"
+                )
+            access = await step_execution_artifact_access(request)
+            descriptor = await read_initial_source(
+                self._remediation_artifacts, initial, access=access
+            )
+            if (
+                descriptor["source"].get("workflowId"),
+                descriptor["source"].get("runId"),
+            ) != (request.step_execution.workflow_id, request.step_execution.run_id):
+                raise ValueError("initial source belongs to another workflow run")
+            return descriptor
         metadata = getattr(self._remediation_artifacts, "get_metadata", None)
         identity = getattr(request, "step_execution", None)
         if source.kind != "checkpoint" or metadata is None or identity is None or plan is None:
@@ -925,6 +973,17 @@ class OmnigentWorkspaceMaterializer:
         allow_projected_outputs=False,
     ):
         """Use the checkpoint owner's Git/history/index restore, not tar overlay."""
+        if (
+            isinstance(checkpoint, dict)
+            and checkpoint.get("kind") == "initial_repository_source"
+        ):
+            return await self._restore_initial_repository_source(
+                checkpoint,
+                request,
+                plan,
+                input_projection=input_projection,
+                allow_projected_outputs=allow_projected_outputs,
+            )
         from moonmind.omnigent.workspace_intent import authored_repository_source
         from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
         from moonmind.workflows.executions.repository_contract import (
@@ -964,9 +1023,14 @@ class OmnigentWorkspaceMaterializer:
                 admitted_target_branch = branch_name
         previous = checkpoint.source.model_dump(by_alias=True, mode="json")
         previous_step = f"{checkpoint.source.workflow_id}:{checkpoint.source.run_id}:{checkpoint.source.logical_step_id}:execution:{checkpoint.source.execution_ordinal}"
-        repository_source = authored_repository_source(request)
+        local_initial_source = bool(
+            getattr(plan.payload, "resolvedTools", {}).get("initialRepositorySource")
+        )
+        repository_source = (
+            None if local_initial_source else authored_repository_source(request)
+        )
         repository = github_repository_name_from_value(repository_source)
-        if not repository and remediation is not None:
+        if not local_initial_source and not repository and remediation is not None:
             repository = remediation.get("repository")
         repository_identity = None
         if repository_source and getattr(plan.payload, "resolvedTools", {}).get(
@@ -1022,10 +1086,13 @@ class OmnigentWorkspaceMaterializer:
             return AdmittedGitRead(repository, urlsplit(repository).netloc, None)
 
         service = ManagedCheckpointRestoreService(
-            authority_root=self._root, artifact_service=self._remediation_artifacts,
+            authority_root=self._root,
+            artifact_service=self._remediation_artifacts,
+            isolate_git=local_initial_source,
             anonymous_repository_read_resolver=(
                 admitted_anonymous_read
-                if anonymous_remote and repository_identity.endpoint != "https://github.com"
+                if anonymous_remote
+                and repository_identity.endpoint != "https://github.com"
                 else None
             ),
         )
@@ -1096,6 +1163,85 @@ class OmnigentWorkspaceMaterializer:
                 restore_request,
                 access=access,
                 admitted_projection=input_projection,
+            )
+        return frozenset()
+
+    async def _restore_initial_repository_source(
+        self,
+        descriptor,
+        request,
+        plan,
+        *,
+        input_projection=None,
+        allow_projected_outputs=False,
+    ):
+        from moonmind.workflows.skills.run_projection import (
+            step_execution_artifact_access,
+        )
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        identity = request.step_execution
+        snapshot = plan.payload.resolvedTools["initialRepositorySource"]
+        source = descriptor["source"]
+        initial = {
+            "schemaVersion": "initial-repository-source/v1",
+            "recoveryIdentity": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "logicalStepId": identity.logical_step_id,
+                "executionOrdinal": identity.execution_ordinal,
+            },
+            "source": {
+                **{
+                    key: source[key]
+                    for key in (
+                        "workflowId",
+                        "runId",
+                        "logicalStepId",
+                        "executionOrdinal",
+                    )
+                },
+                "initialSourceRef": snapshot["artifactRef"],
+                "initialSourceDigest": snapshot["contentDigest"],
+                "sourceWorkspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": source["workspaceId"],
+                    "relativePath": "repo",
+                },
+            },
+            "checkpoint": descriptor["workspace"],
+            "destination": {
+                **request.workspace_spec["workspaceLocator"],
+                "stepExecutionId": identity.step_execution_id,
+            },
+            "workspacePolicy": "restore_initial_source",
+            "resumePhase": "rerun_failed_step",
+            "capabilitySetVersion": "omnigent-plan/v1",
+            "capabilityDigest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
+            "idempotencyKey": request.idempotency_key
+            + ":initial-source:"
+            + snapshot["contentDigest"],
+        }
+        service = ManagedCheckpointRestoreService(
+            authority_root=self._root,
+            artifact_service=self._remediation_artifacts,
+            isolate_git=True,
+        )
+        access = await step_execution_artifact_access(request)
+        await service.restore(
+            initial,
+            access=access,
+            **(
+                {"admitted_projection": input_projection}
+                if allow_projected_outputs
+                else {}
+            ),
+        )
+        if input_projection is not None:
+            return await service.validate_input_projection(
+                initial, access=access, admitted_projection=input_projection
             )
         return frozenset()
 

@@ -324,3 +324,72 @@ async def test_agent_uses_only_its_fenced_selected_pool_response(monkeypatch):
     assert result.instruction_ref == request.instruction_ref
     assert result.execution_profile_ref == request.execution_profile_ref
     assert request.agent_kind == "managed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["repeated", "cancelled", "retained"])
+async def test_local_source_phase_is_bounded_and_cancel_safe(monkeypatch, mode):
+    import asyncio
+    from temporalio.exceptions import ApplicationError
+
+    run = MoonMindAgentRun()
+    run._assigned_slot_fencing_generation = 7
+    monkeypatch.setattr(run, "_workflow_patch_enabled", lambda _: mode != "retained")
+    monkeypatch.setattr(
+        "temporalio.workflow.info",
+        lambda: SimpleNamespace(workflow_id="agent", run_id="run"),
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        executionProfileRef="profile",
+        correlationId="parent",
+        idempotencyKey="request",
+        instructionRef="task",
+    )
+    calls = []
+
+    async def signal(name, value):
+        calls.append(value)
+        run.pool_plan_prepared(
+            {
+                "requestId": "request",
+                "fencingGeneration": 7,
+                "disposition": "native"
+                if mode == "retained"
+                else "source_export_required",
+            }
+        )
+
+    async def wait(predicate, **kwargs):
+        assert predicate()
+
+    monkeypatch.setattr("temporalio.workflow.wait_condition", wait)
+    export = AsyncMock(
+        side_effect=asyncio.CancelledError if mode == "cancelled" else None
+    )
+    monkeypatch.setattr(run, "_execute_routed_activity", export)
+    if mode == "retained":
+        assert (
+            await run._prepare_selected_pool_shared_request(
+                request=request,
+                runtime_id="codex_cli",
+                manager_handle=SimpleNamespace(signal=signal),
+                original_profile_ref=None,
+            )
+            is request
+        )
+        assert "localSourceHandoff" not in calls[0]
+        export.assert_not_called()
+    else:
+        with pytest.raises(
+            asyncio.CancelledError if mode == "cancelled" else ApplicationError
+        ):
+            await run._prepare_selected_pool_shared_request(
+                request=request,
+                runtime_id="codex_cli",
+                manager_handle=SimpleNamespace(signal=signal),
+                original_profile_ref=None,
+            )
+        assert len(calls) == (1 if mode == "cancelled" else 2)
+        assert export.await_count == 1

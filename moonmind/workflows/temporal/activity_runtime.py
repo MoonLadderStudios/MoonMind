@@ -1091,17 +1091,35 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "provider_account_usage_cleanup",
     ),
-    "oauth_session.prepare_credential_maintenance": ("agent_runtime", "oauth_session_prepare_credential_maintenance"),
-    "oauth_session.revalidate_bound_host": ("agent_runtime", "oauth_session_revalidate_bound_host"),
+    "oauth_session.prepare_credential_maintenance": (
+        "agent_runtime",
+        "oauth_session_prepare_credential_maintenance",
+    ),
+    "oauth_session.revalidate_bound_host": (
+        "agent_runtime",
+        "oauth_session_revalidate_bound_host",
+    ),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
-    "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
-    "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
-    "oauth_session.stop_auth_runner": ("agent_runtime", "oauth_session_stop_auth_runner"),
+    "oauth_session.start_auth_runner": (
+        "agent_runtime",
+        "oauth_session_start_auth_runner",
+    ),
+    "oauth_session.update_terminal_session": (
+        "artifacts",
+        "oauth_session_update_terminal_session",
+    ),
+    "oauth_session.stop_auth_runner": (
+        "agent_runtime",
+        "oauth_session_stop_auth_runner",
+    ),
     "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
     "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
     "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
     "oauth_session.verify_volume": ("agent_runtime", "oauth_session_verify_volume"),
-    "oauth_session.verify_cli_fingerprint": ("agent_runtime", "oauth_session_verify_cli_fingerprint"),
+    "oauth_session.verify_cli_fingerprint": (
+        "agent_runtime",
+        "oauth_session_verify_cli_fingerprint",
+    ),
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),
     # General-purpose repo operations (provider-agnostic)
     "github_issue.collect_evidence": ("integrations", "github_issue_collect_evidence"),
@@ -1109,7 +1127,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "recurring_review_ready_successor",
     ),
-    "recurring.admit_implementation": ("integrations", "recurring_admit_implementation"),
+    "recurring.admit_implementation": (
+        "integrations",
+        "recurring_admit_implementation",
+    ),
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.sync_pr_unverified_criteria": (
         "integrations",
@@ -1209,6 +1230,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_build_launch_context",
     ),
+    "agent_runtime.export_initial_source": (
+        "agent_runtime",
+        "agent_runtime_export_initial_source",
+    ),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
     "agent_runtime.load_session_snapshot": (
@@ -1217,8 +1242,14 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
-    "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
-    "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "integration.omnigent.profile_bound_execute": (
+        "agent_runtime",
+        "integration_omnigent_profile_bound_execute",
+    ),
+    "integration.omnigent.oauth_host_janitor": (
+        "agent_runtime",
+        "integration_omnigent_oauth_host_janitor",
+    ),
     "omnigent.admit_generic_host_capacity": (
         "agent_runtime",
         "omnigent_admit_generic_host_capacity",
@@ -3160,6 +3191,15 @@ class TemporalSandboxActivities:
         )
         return result.model_dump(by_alias=True, mode="json", exclude_none=True)
 
+    def _capture_git_history(self, workspace, head, *, high_security_mode):
+        from moonmind.workflows.temporal.runtime.checkpoint_history import (
+            capture_git_history,
+        )
+
+        return capture_git_history(
+            workspace, head, high_security_mode=high_security_mode
+        )
+
     async def _capture_workspace_evidence(
         self,
         model: WorkspaceCheckpointCaptureInput,
@@ -3340,10 +3380,18 @@ class TemporalSandboxActivities:
                             },
                         }
                     )
-                history_payload, history = await asyncio.to_thread(capture_git_history, workspace, head, high_security_mode=high_security_mode)
+                history_payload, history = await asyncio.to_thread(
+                    self._capture_git_history,
+                    workspace,
+                    head,
+                    high_security_mode=high_security_mode,
+                )
                 if history_payload is not None:
                     history["ref"] = await self._put_checkpoint_bytes(
-                        history_payload, content_type="application/x-git-bundle",
+                        history_payload,
+                        content_type=history.get(
+                            "contentType", "application/x-git-bundle"
+                        ),
                         metadata={"artifact_kind": "checkpoint_history"},
                     )
                 post_head = (await _run_command(_sandbox_workspace_git_command(
@@ -6423,6 +6471,24 @@ class TemporalAgentRuntimeActivities:
             run_store=run_store,
         )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
+
+    async def agent_runtime_export_initial_source(self, payload):
+        from api_service.services.native_pool_execution_plan import (
+            export_selected_pool_source,
+        )
+
+        if self._session_factory is None or self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "initial source export requires its existing lease and artifact owners"
+            )
+        return await export_selected_pool_source(
+            session_factory=self._session_factory,
+            runtime_id=payload["runtime_id"],
+            payload=payload,
+            workspace_root=self._workspace_root,
+            artifact_service=self._artifact_service,
+            client=self._client_adapter,
+        )
 
     async def _require_assessment_model_delivery(self, *, profile_ref: str | None) -> None:
         if self._session_factory is None:

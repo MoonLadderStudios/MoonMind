@@ -490,6 +490,14 @@ async def ensure_verified_execution_plan_dependencies(
         )
     for ref, digest in (
         (binding.task_input_snapshot_ref, binding.task_input_snapshot_digest),
+        (
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "artifactRef"
+            ),
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "contentDigest"
+            ),
+        ),
         (plan.payload.policySnapshotRef, plan.payload.policySnapshotDigest),
         (
             plan.payload.effectiveLaunchSnapshotRef,
@@ -725,7 +733,8 @@ def _execution_plan_input_refs(
             plan.payload.agentProfileSnapshotRef,
             (
                 plan.payload.providerConfigurationSnapshot.artifactRef
-                if getattr(plan.payload, "providerConfigurationSnapshot", None) is not None
+                if getattr(plan.payload, "providerConfigurationSnapshot", None)
+                is not None
                 else None
             ),
             plan.payload.policySnapshotRef,
@@ -738,6 +747,9 @@ def _execution_plan_input_refs(
                 else None
             ),
             plan.payload.resolvedSkills.get("resolvedSkillSetRef"),
+            (plan.payload.resolvedTools.get("initialRepositorySource") or {}).get(
+                "artifactRef"
+            ),
             *(
                 access["artifactRef"]
                 for access in plan.payload.resolvedTools.get(
@@ -1260,7 +1272,8 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         return (await self.read_bytes(artifact_ref)).decode("utf-8")
 
     async def restore_checkpoint(
-        self, *, restore_request, authority_root, access: ArtifactAccessContext
+        self, *, restore_request, authority_root, access: ArtifactAccessContext,
+        isolate_git: bool = False,
     ):
         from moonmind.schemas.checkpoint_restore_models import (
             ManagedWorkspaceRestoreRequest,
@@ -1290,6 +1303,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         async with self._session_factory() as session:
             service = ManagedCheckpointRestoreService(
                 authority_root=authority_root,
+                isolate_git=isolate_git,
                 artifact_service=TemporalArtifactService(
                     TemporalArtifactRepository(session),
                     transaction_ownership=ArtifactTransactionOwnership.STANDALONE,

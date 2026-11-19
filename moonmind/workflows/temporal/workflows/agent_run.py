@@ -431,6 +431,7 @@ NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID = (
     "agent-run-non-destructive-slot-wait-recovery-v1"
 )
 ACCURATE_SLOT_WAIT_REASON_PATCH_ID = "agent-run-accurate-slot-wait-reason-v1"
+SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID = "agent-run-slot-wait-inspection-cancellation-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-sync-profiles-before-slot-request-v1"
@@ -5190,6 +5191,13 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            if is_cancelled_exception(exc) and self._workflow_patch_enabled(
+                SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID
+            ):
+                # Temporal wraps canceled activities in ActivityError. An
+                # inspection fallback must not turn cancellation back into a
+                # capacity wait; normalize it for the owning cleanup handler.
+                raise CancelledError("Provider slot inspection canceled") from exc
             self._get_logger().warning(
                 "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
                 manager_id,
@@ -5249,6 +5257,13 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            if is_cancelled_exception(exc) and self._workflow_patch_enabled(
+                SLOT_WAIT_INSPECTION_CANCELLATION_PATCH_ID
+            ):
+                # Temporal wraps canceled activities in ActivityError. An
+                # inspection fallback must not turn cancellation back into a
+                # capacity wait; normalize it for the owning cleanup handler.
+                raise CancelledError("Provider slot inspection canceled") from exc
             self._get_logger().warning(
                 "Auth profile manager %s state inspection failed while building the slot wait observation; using generic reason: %s",
                 manager_id,
@@ -6822,29 +6837,70 @@ class MoonMindAgentRun:
         self._pool_plan_response = None
         self._pool_plan_request_id = request.idempotency_key
         self._pool_plan_fence = self._assigned_slot_fencing_generation
+        local_source_handoff = self._workflow_patch_enabled(
+            "agent-run-local-source-grant-v1"
+        )
         try:
-            await manager_handle.signal("prepare_shared_execution_plan", {
-                "owner_id": workflow.info().workflow_id, "runId": workflow.info().run_id,
-                "profile_id": request.execution_profile_ref,
-                "fencing_generation": self._pool_plan_fence,
-                "originalProfileRef": original_profile_ref,
-                "request": request.model_dump(mode="json", by_alias=True),
-            })
-            context = getattr(self, "_execution_budget", None)
-            plan_wait_seconds = 240
-            if context is not None and context.execution_deadline is not None:
-                plan_wait_seconds = min(
-                    plan_wait_seconds, context.remaining_seconds(workflow.now())
+            exported = False
+            while True:
+                self._pool_plan_response = None
+                await manager_handle.signal(
+                    "prepare_shared_execution_plan",
+                    {
+                        "owner_id": workflow.info().workflow_id,
+                        "runId": workflow.info().run_id,
+                        "profile_id": request.execution_profile_ref,
+                        "fencing_generation": self._pool_plan_fence,
+                        "originalProfileRef": original_profile_ref,
+                        "request": request.model_dump(mode="json", by_alias=True),
+                        **(
+                            {"localSourceHandoff": True} if local_source_handoff else {}
+                        ),
+                    },
                 )
-                if plan_wait_seconds <= 0:
-                    raise asyncio.TimeoutError(
-                        "Remediation wall-clock deadline expired awaiting pool plan"
+                context = getattr(self, "_execution_budget", None)
+                plan_wait_seconds = 240
+                if context is not None and context.execution_deadline is not None:
+                    plan_wait_seconds = min(
+                        plan_wait_seconds, context.remaining_seconds(workflow.now())
                     )
-            await workflow.wait_condition(
-                lambda: self._pool_plan_response is not None,
-                timeout=timedelta(seconds=plan_wait_seconds),
-            )
-            result = self._pool_plan_response
+                    if plan_wait_seconds <= 0:
+                        raise asyncio.TimeoutError(
+                            "Remediation wall-clock deadline expired awaiting pool plan"
+                        )
+                await workflow.wait_condition(
+                    lambda: self._pool_plan_response is not None,
+                    timeout=timedelta(seconds=plan_wait_seconds),
+                )
+                result = self._pool_plan_response
+                if result.get("disposition") != "source_export_required":
+                    break
+                if not local_source_handoff:
+                    raise ApplicationError(
+                        "Retained workflow cannot export an initial source",
+                        type="InitialSourceHandoffUnavailable",
+                        non_retryable=True,
+                    )
+                if exported:
+                    raise ApplicationError(
+                        "Initial source export did not finalize its durable receipt",
+                        type="InitialSourceHandoffIncomplete",
+                        non_retryable=True,
+                    )
+                exported = True
+                await self._execute_routed_activity(
+                    "agent_runtime.export_initial_source",
+                    {
+                        "runtime_id": runtime_id,
+                        "owner_id": workflow.info().workflow_id,
+                        "runId": workflow.info().run_id,
+                        "profile_id": request.execution_profile_ref,
+                        "fencing_generation": self._pool_plan_fence,
+                        "originalProfileRef": original_profile_ref,
+                        "request": request.model_dump(mode="json", by_alias=True),
+                    },
+                    cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                )
             if result.get("disposition") == "native":
                 metadata = request.parameters.get("metadata")
                 hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None

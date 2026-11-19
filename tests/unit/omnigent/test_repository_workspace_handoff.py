@@ -416,3 +416,27 @@ def test_patched_controller_save_preserves_pin_as_checkpoint_provenance(monkeypa
     )
     assert selected.workspace_spec == original
     assert authored_repository_access({"workspaceSpec": built.workspace_spec}) == ("selected-connection", False)
+
+
+def test_local_source_successor_uses_newer_checkpoint_not_original_path(monkeypatch):
+    from tests.unit.workflows.temporal.workflows.test_run_step_ledger import (
+        _configure_workflow_runtime,
+    )
+    from moonmind.workflows.temporal.runtime.initial_repository_source import source_intent
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, 'patched', lambda _: True)
+    parent = run_module.MoonMindUserWorkflow()
+    parent._previous_step_checkpoint_refs['work'] = 'artifact:art_verified_plan_checkpoint'
+    built = parent._build_agent_execution_request(
+        node_inputs={'instructions': 'Preserve accepted work.', 'runtime': {'mode': 'codex_cli'}},
+        node_id='work', tool_name='codex_cli',
+        workflow_parameters={'workspaceSpec': {'workspaceSource': {'kind': 'repository'}, 'repository': '/vanished/owned/source', 'branch':'main'}},
+        trusted_remediation_checkpoint_restore_ref='artifact://verified-save',
+    )
+    compiled = source.compile_workspace_source(built.workspace_spec)
+    assert compiled.kind == 'checkpoint'
+    assert compiled.checkpoint_ref == 'artifact://verified-save'
+    assert compiled.repository_ref == '/vanished/owned/source'
+    assert built.parameters['metadata']['moonmind']['sharedStepCheckpointRef'] == 'artifact:art_verified_plan_checkpoint'
+    assert source_intent(built) is None

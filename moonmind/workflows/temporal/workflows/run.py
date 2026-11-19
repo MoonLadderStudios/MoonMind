@@ -23879,49 +23879,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         else:
             idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
-        workspace_spec: dict[str, Any] = {}
-        for source_label, raw_workspace_spec in (
-            (
-                "workflow.workspaceSpec",
-                (
-                    workflow_parameters.get("workspaceSpec")
-                    if isinstance(workflow_parameters, Mapping)
-                    else None
-                ),
-            ),
-            (
-                "workflow.workspace_spec",
-                (
-                    workflow_parameters.get("workspace_spec")
-                    if isinstance(workflow_parameters, Mapping)
-                    else None
-                ),
-            ),
-            ("node.runtime.workspaceSpec", runtime_block.get("workspaceSpec")),
-            ("node.runtime.workspace_spec", runtime_block.get("workspace_spec")),
-            ("node.workspaceSpec", node_inputs.get("workspaceSpec")),
-            ("node.workspace_spec", node_inputs.get("workspace_spec")),
-        ):
-            if isinstance(raw_workspace_spec, Mapping):
-                workspace_spec.update(
-                    self._json_mapping(
-                        raw_workspace_spec,
-                        path=source_label,
-                    )
-                )
-        for ws_key in (
-            "repository",
-            "repositoryTarget",
-            "repo",
-            "startingBranch",
-            "targetBranch",
-            "baseBranch",
-            "publishBaseBranch",
-            "branch",
-        ):
-            ws_val = node_inputs.get(ws_key)
-            if ws_val is not None:
-                workspace_spec[ws_key] = ws_val
+        from moonmind.omnigent.workspace_intent import project_authored_workspace
+
+        workspace_spec = project_authored_workspace(
+            workflow_parameters,
+            node_inputs,
+            runtime_block,
+            normalize=lambda value, label: self._json_mapping(value, path=label),
+        )
         shared_checkpoint_required = False
         if trusted_remediation_checkpoint_restore_ref is not None:
             restore_ref = str(

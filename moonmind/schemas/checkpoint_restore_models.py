@@ -201,3 +201,58 @@ class CheckpointRestoreError(RuntimeError):
             "message": message[:500],
         }
         super().__init__(f"{code}: {message}")
+
+
+class InitialRepositoryRestoreSource(RestoreIdentity):
+    """A real source owner, not a fabricated completed StepExecution checkpoint."""
+
+    initial_source_ref: str = Field(alias="initialSourceRef", min_length=1)
+    initial_source_digest: str = Field(
+        alias="initialSourceDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    source_workspace_locator: SandboxWorkspaceLocator = Field(
+        alias="sourceWorkspaceLocator"
+    )
+
+    @property
+    def checkpoint_ref(self):
+        # Internal byte-restore implementation uses one opaque source handle.
+        return self.initial_source_ref
+
+    @property
+    def checkpoint_boundary(self):
+        return None
+
+
+class InitialRepositoryRestoreRequest(ManagedWorkspaceRestoreRequest):
+    schema_version: Literal["initial-repository-source/v1"] = Field(
+        alias="schemaVersion"
+    )
+    source: InitialRepositoryRestoreSource
+    destination: SandboxRestoreDestination
+    workspace_policy: Literal["restore_initial_source"] = Field(alias="workspacePolicy")
+
+    @property
+    def restores_original_owner(self):
+        return False
+
+    @model_validator(mode="after")
+    def validate_distinct_identities(self):
+        if (
+            self.resume_phase != "rerun_failed_step"
+            or (self.source.workflow_id, self.source.run_id)
+            != (self.recovery_identity.workflow_id, self.recovery_identity.run_id)
+            or self.source.logical_step_id == self.recovery_identity.logical_step_id
+            or self.source.source_workspace_locator.workspace_id
+            == self.destination.workspace_id
+        ):
+            raise ValueError("initial source requires a distinct same-run owned source")
+        return self
+
+
+def parse_workspace_restore_request(raw):
+    if isinstance(raw, ManagedWorkspaceRestoreRequest):
+        return raw
+    if raw.get("schemaVersion") == "initial-repository-source/v1":
+        return InitialRepositoryRestoreRequest.model_validate(raw)
+    return ManagedWorkspaceRestoreRequest.model_validate(raw)

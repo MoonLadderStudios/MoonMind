@@ -78,6 +78,8 @@ An execution requesting immediate publication is not silently converted to save-
 
 Existing-workspace materialization checks the recorded owner workflow and step before claiming it or advancing its generation. Cross-workflow reuse needs a server-signed grant even when the source kind is omitted; unsigned historical grants resume only within their owner's workflow. For `sandbox.checkout_repo`, a `file://` URL is a local source that must resolve beneath the workspace root, so URI encoding cannot reach other worker filesystems.
 
+A saved-work retry retains its admitted local-source snapshot from the verified predecessor checkpoint for the same workflow and logical step, even when the provider pool selects a different account. Account rotation resolves the new account’s model and configuration without reopening the original source directory.
+
 The source `repository` exists only for a repository source; provenance inside an imported artifact is evidence, not a live binding, and a publication destination is another role of the same target type. The authored `repository` compiles to the runtime `repositoryTarget` and worker `publishMode` is a compilation result, so conflicting aliases are rejected before external access. An omitted branch requests the remote default, and preparation records the observed branch and revision rather than assuming `main`.
 
 Same-repository work presents one repository and one branch, and Skill/Preset arguments bind to that context. A managed PR uses the authored base and a generated head; existing-PR work derives head/base from its validated PR target. Discovery cannot replace an explicitly selected base with a repository default.
