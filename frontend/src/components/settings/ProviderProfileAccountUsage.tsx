@@ -475,7 +475,9 @@ export function ProviderProfileAccountUsage({
         </div>
       )}
 
-      {summary ? null : updatedLine}
+      {/* The row keeps the age only when the reading is no longer current, so
+          an outdated allowance never looks like a fresh one. */}
+      {summary ? (stale && !primaryPassed ? updatedLine : null) : updatedLine}
     </>
   ) : null;
 

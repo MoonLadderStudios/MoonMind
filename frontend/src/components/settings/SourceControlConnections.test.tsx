@@ -978,6 +978,30 @@ describe('SourceControlConnections', () => {
     expect(screen.queryByRole('form', { name: 'Add token connection' })).toBeNull();
   });
 
+  it('keeps an open connection and its draft when a background refresh fails', async () => {
+    let failing = false;
+    stubApi({ items: [connection()] }, {
+      'GET /api/v1/repository-connections': () =>
+        failing ? json({ detail: 'unavailable' }, 503) : json({ items: [connection()] }),
+    });
+    const { queryClient } = renderSection();
+    await openFirstConnection();
+    const form = await screen.findByRole('form', { name: 'Edit connection' });
+    const name = within(form).getByLabelText('Connection name') as HTMLInputElement;
+    fireEvent.change(name, { target: { value: 'Draft name' } });
+
+    failing = true;
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: SOURCE_CONTROL_QUERY_KEY });
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Failed to load connections');
+    // The cached rows stay, so the open editor and its unsaved draft survive.
+    expect(screen.getByRole('button', { name: 'Personal GitHub' })).toBeTruthy();
+    expect(name.isConnected).toBe(true);
+    expect(name.value).toBe('Draft name');
+  });
+
   it('disables a connection reversibly and keeps its record', async () => {
     const assigned = { repository: 'acme/widgets', providerRepoId: '7', operations: ['read'], revision: 1, verified: true };
     const state = { items: [connection({ assignments: [assigned] })] };

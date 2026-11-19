@@ -350,16 +350,21 @@ export function SourceControlConnections({
         </div>
       ) : null}
 
-      {connectionsQuery.isLoading ? (
-        <p className="text-sm text-slate-500">Loading connections…</p>
-      ) : connectionsQuery.isError ? (
+      {/* A failed refresh is reported beside the rows already loaded: replacing
+          them would unmount an open connection and drop its unsaved drafts. */}
+      {connectionsQuery.isError ? (
         <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
           Failed to load connections. Saved connections are unchanged.
         </p>
+      ) : null}
+      {connectionsQuery.isLoading ? (
+        <p className="text-sm text-slate-500">Loading connections…</p>
       ) : connections.length === 0 ? (
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          No connections yet. Add a token connection or connect a GitHub App.
-        </p>
+        connectionsQuery.isError ? null : (
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            No connections yet. Add a token connection or connect a GitHub App.
+          </p>
+        )
       ) : (
         <ul aria-label="Connections" className="source-control-list">
           {connections.map((connection) => {

@@ -3708,15 +3708,17 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
     max-width: 100%;
   }
 
-  /* Stacked rows clip overflow, so an open Provider Profile actions menu
+  /* Stacked rows clip overflow, so an open profile or secret actions menu
    * expands in place below its trigger across the record width. */
-  .stacked-records .provider-profile-actions .td-workflow-actions-menu {
+  .stacked-records .provider-profile-actions .td-workflow-actions-menu,
+  .stacked-records .managed-secrets-actions .td-workflow-actions-menu {
     width: 100%;
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .stacked-records .provider-profile-actions .td-workflow-actions-popover {
+  .stacked-records .provider-profile-actions .td-workflow-actions-popover,
+  .stacked-records .managed-secrets-actions .td-workflow-actions-popover {
     position: static;
     width: 100%;
     max-width: 100%;

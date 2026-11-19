@@ -140,6 +140,8 @@ describe('ProviderProfileAccountUsage', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
     // The row reading carries the allowance; the account sits in its details.
     expect(text(usageDetails())).toContain('personal@example.com');
+    // A current reading needs no age in the row.
+    expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).not.toContain('Updated');
     expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).not.toContain(
       'personal@example.com',
     );
@@ -255,6 +257,19 @@ describe('ProviderProfileAccountUsage', () => {
     expect(text(region)).toContain('Updated 42 minutes ago');
     expect(text(region)).toContain('Last known');
     expect(text(region)).toContain('Usage temporarily unavailable: the provider did not respond in time.');
+    // The collapsed row itself marks the reading as outdated.
+    expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).toContain(
+      'Updated 42 minutes ago · Last known',
+    );
+  });
+
+  it('marks a plainly stale weekly reading as last known in the row', () => {
+    vi.setSystemTime(Date.parse('2026-11-18T20:40:00Z'));
+    renderUsage(projection({ status: 'stale' }));
+
+    const row = screen.getByRole('group', { name: 'Account and usage for codex-oauth' });
+    expect(within(row).getByText('36% remaining')).toBeTruthy();
+    expect(text(row)).toContain('Last known');
   });
 
   it('gives update or reconnect guidance when idle sign-in renewal is unsupported', () => {
