@@ -322,11 +322,20 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
-        from moonmind.provider_profiles.claude_configuration import (
-            claude_process_home_from_handles,
-        )
+        process_home, process_configuration = None, None
+        if any(
+            handle.get("claudeProcessHomeConfiguration") is not None
+            for handle in credential_handles
+        ):
+            # Keep the plain script builder portable without the application
+            # package; only selected Claude HOME projections need its adapter.
+            from moonmind.provider_profiles.claude_configuration import (
+                claude_process_home_from_handles,
+            )
 
-        process_home, process_configuration = claude_process_home_from_handles(credential_handles)
+            process_home, process_configuration = claude_process_home_from_handles(
+                credential_handles
+            )
         if process_home and any(
             handle.get("claudeProcessHomeConfiguration") is not None
             and handle.get("materializerRef") == "claude-oauth-home@1"
