@@ -19,11 +19,16 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 _PROBE = r"""
 import json, os, pathlib, shutil, socket, subprocess, sys, time, uuid
 import httpx
-root, cli, temporary, mode, base, projected, selected = json.loads(sys.argv[1])
+root, cli, temporary, mode, base, projected, selected, layout = json.loads(sys.argv[1])
 p=pathlib.Path(temporary);p.mkdir(parents=True)
 os.environ['HOME']=str(p/'runner');pathlib.Path(os.environ['HOME']).mkdir()
 from omnigent.harnesses.claude_native.bridge import augment_claude_args, bridge_dir_for_bridge_id, prepare_bridge_dir
-home=p/'home';home.mkdir();config=home/'.claude';config.mkdir();workspace=p/'workspace';workspace.mkdir()
+home=p/'home';home.mkdir();config=home/pathlib.Path(layout['credentialHome']).name;config.mkdir();workspace=p/'workspace';workspace.mkdir()
+if layout.get('processHomeConfiguration'):
+ from moonmind.provider_profiles.claude_configuration import materialize_process_home
+ home=pathlib.Path(materialize_process_home(layout['processHomeConfiguration'],runtime_support_dir=p/'support',workspace_path=str(workspace)))
+ # A competing default directory must not supply selected preferences.
+ (home/'.claude').mkdir();(home/'.claude'/'settings.json').write_text(json.dumps({'env':{'PROJECT_LABEL':'wrong-home'}}))
 (config/'settings.json').write_text(json.dumps(selected))
 sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close();url=f'http://127.0.0.1:{port}'
 client=httpx.Client(trust_env=False)
@@ -42,6 +47,8 @@ try:
   args=augment_claude_args(base,bridge_dir=bridge,python_executable=sys.executable,skills_filter=mode)
   generated=json.loads(pathlib.Path(args[args.index('--settings')+1]).read_text());assert generated.get('hooks')
  body={'command':'printf "label=%s only=%s sibling=%s" "$PROJECT_LABEL" "$PROJECT_ONLY" "$PROJECT_SIBLING"','description':'Inspect nonsecret project values'}
+ if layout.get('processHomeConfiguration'):
+  body['command'] += '; cat "$HOME/NOTES.md"'
  client.post(url+'/mock/configure',json={'responses':[{'tool_calls':[{'name':'Bash','arguments':json.dumps(body)}]},{'text':'done'}]}).raise_for_status()
  env={'PATH':os.defpath,'HOME':str(home),'CLAUDE_CONFIG_DIR':str(config),'ANTHROPIC_BASE_URL':url,'ANTHROPIC_API_KEY':'mock-key','CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS':'1','HTTP_PROXY':'http://127.0.0.1:1','HTTPS_PROXY':'http://127.0.0.1:1','ALL_PROXY':'http://127.0.0.1:1','NO_PROXY':'127.0.0.1,localhost','PYTHONPATH':os.environ.get('PYTHONPATH','')}
  env.update({'PROJECT_LABEL':'process-value','PROJECT_SIBLING':'process-sibling'} if mode=='native' else projected)
@@ -60,6 +67,8 @@ try:
  for result in results:
   assert not result.get('is_error'),result
   assert 'label=settings-value only=settings-only sibling=process-sibling' in json.dumps(result),result
+  if layout.get('processHomeConfiguration'):
+   assert 'Admitted HOME for '+str(workspace)+'.' in json.dumps(result),result
  print(json.dumps({'version':subprocess.check_output([cli,'--version'],text=True,env=env).strip(),'mode':mode,'actualToolOutputVerified':True}))
 finally:
  server.terminate();server.wait(timeout=5)
@@ -67,7 +76,15 @@ finally:
 """
 
 
-@pytest.mark.parametrize("native_journey", journey_tests.SELECTIONS, indirect=True)
+@pytest.mark.parametrize("native_journey", [
+    *journey_tests.SELECTIONS,
+    {
+        "harness": "claude-native", "claudeCredentialMount": "/home/app/selected-claude-auth",
+        "claudeOauthFiles": True, "claudePreferences": True, "processHome": True,
+        "sessionSettings": {"env": journey_tests.ENV},
+        "oauthTuning": {"PROJECT_LABEL": "process-value", "PROJECT_SIBLING": "process-sibling"},
+    },
+], indirect=True)
 @pytest.mark.parametrize("mode", ["native", "all", "none"])
 async def test_installed_cli_preserves_native_settings_env(
     native_journey, tmp_path, mode
@@ -105,6 +122,19 @@ async def test_installed_cli_preserves_native_settings_env(
             for item in journey.docker.claude_configuration["fileTemplates"]
             if item["path"].endswith("/settings.json")
         )
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from moonmind.provider_profiles.claude_configuration import claude_process_home_from_handles
+
+    binding = await journey.services.runtime_binding_store.get(stable_binding_id(
+        execution_plan_ref=journey.plan.planRef, idempotency_key=journey.request.idempotency_key,
+    ))
+    process_home, configuration = claude_process_home_from_handles(list(binding.credentialRuntimeHandles.values()))
+    assert bool(process_home) == bool(journey.selection.get("processHome"))
+    if process_home:
+        assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == "/home/app/selected-claude-auth"
+        assert journey.server.create_payloads[-1]["process_home"] == process_home
+    layout = {"credentialHome": journey.docker.launch_env.get("CLAUDE_CONFIG_DIR", "/home/app/.claude"),
+              "processHomeConfiguration": configuration}
     probe = await asyncio.to_thread(
         _run_probe,
         [
@@ -120,6 +150,7 @@ async def test_installed_cli_preserves_native_settings_env(
                     journey.server.create_payloads[-1]["terminal_launch_args"],
                     projected,
                     selected,
+                    layout,
                 ]
             ),
         ],

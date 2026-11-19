@@ -364,8 +364,9 @@ class OmnigentRuntimeScriptService:
             for handle in credential_handles
         ):
             # Process HOME never relocates the enrollment-owned credential home.
-            provider_environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
-            environment["CLAUDE_CONFIG_DIR"] = "/home/app/.claude"
+            enrolled_home = next(iter(custom_homes), "/home/app/.claude")
+            provider_environment["CLAUDE_CONFIG_DIR"] = enrolled_home
+            environment["CLAUDE_CONFIG_DIR"] = enrolled_home
         if oauth_configuration is not None:
             if private_environment_keys & set(provider_environment):
                 raise ValueError("conflicting private Codex runtime environment")

@@ -1117,7 +1117,7 @@ async def _compile_plan(
     if claude_oauth_files or claude_preferences:
         assert runtime_id == "claude_code" and (oauth or claude_preferences)
         configuration_home = (
-            "/home/app/.claude" if oauth else "{{runtime_support_dir}}/claude-home"
+            (claude_credential_mount or "/home/app/.claude") if oauth else "{{runtime_support_dir}}/claude-home"
         )
         if not oauth:
             profile.home_path_overrides = {"CLAUDE_CONFIG_DIR": configuration_home}
@@ -1136,12 +1136,12 @@ async def _compile_plan(
                     if claude_preferences
                     else [
                         {
-                            "path": "/home/app/.claude/CLAUDE.md",
+                            "path": configuration_home + "/CLAUDE.md",
                             "format": "text",
                             "content_template": "Admitted instructions for {{workspace_path}}.\n",
                         },
                         {
-                            "path": "/home/app/.claude/rules/project.md",
+                            "path": configuration_home + "/rules/project.md",
                             "format": "text",
                             "content_template": "Use {{runtime_support_dir}} for support.\n",
                         },
@@ -1513,6 +1513,7 @@ async def native_journey(
         realizer = services.realizer_registry.require("generic-omnigent-host@1")
         assert plan.payload.executionRealizerRef == realizer.ref
         yield SimpleNamespace(
+            selection=selection,
             request=request,
             plan=plan,
             services=services,
