@@ -400,11 +400,12 @@ def _selected_claude_enrollment(profile):
     if target in {None, "/home/app/.claude"}:
         return None
     overrides = dict(getattr(profile, "home_path_overrides", None) or {})
-    if getattr(profile, "file_templates", None) or any(
-        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR"} or value != target
+    if any(
+        key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "HOME"}
+        or key != "HOME" and value != target
         for key, value in overrides.items()
     ):
-        raise ValueError("custom Claude enrollment requires credential-only selectors")
+        raise ValueError("custom Claude enrollment requires matching credential selectors")
     return ClaudeEnrollmentHome(
         volumeRef=getattr(profile, "volume_ref", None), targetPath=target,
         credentialGeneration=getattr(profile, "credential_generation", 0),
@@ -480,8 +481,7 @@ class ProviderLaunchEnvironment(BaseModel):
     @model_validator(mode="after")
     def _validate_environment_ownership(self):
         if self.claudeEnrollmentHome is not None and (
-            self.claudeConfiguration is not None or self.codexConfiguration is not None
-            or self.codexNativeDefault is not None
+            self.codexConfiguration is not None or self.codexNativeDefault is not None
         ):
             raise ValueError("custom Claude enrollment cannot replace another configuration owner")
         if self.environmentTemplates and set(self.environmentTemplates) & set(self.launchEnvironment):

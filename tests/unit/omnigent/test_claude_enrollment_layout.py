@@ -68,15 +68,17 @@ def test_unsafe_or_unbounded_layout_keeps_native_route(target):
         )
 
 
-@pytest.mark.parametrize("change", ["file", "HOME", "wrong-selector"])
+@pytest.mark.parametrize("change", ["native-only-file", "HOME", "wrong-selector"])
 def test_untranslated_custom_configuration_is_not_dropped(change):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
     value = profile()
-    if change == "file":
+    if change == "native-only-file":
         value.file_templates = [
             {
                 "path": value.volume_mount_path + "/settings.json",
                 "format": "json",
-                "content_template": {"language": "English"},
+                "content_template": {"hooks": {"PostToolUse": []}},
             }
         ]
     else:
@@ -84,6 +86,8 @@ def test_untranslated_custom_configuration_is_not_dropped(change):
             "/home/app/other-auth"
         )
     assert untranslated_oauth_launch_options(value)
+    with pytest.raises(HarnessPlatformError, match="does not apply"):
+        snapshot_provider_configuration(value)
 
 
 def test_wrong_owner_and_mixed_configuration_fail_closed():
@@ -95,14 +99,15 @@ def test_wrong_owner_and_mixed_configuration_fail_closed():
             endpoint=None,
             claudeEnrollmentHome=selected.claudeEnrollmentHome,
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="another configuration owner"):
         ProviderLaunchEnvironment(
             claudeEnrollmentHome=selected.claudeEnrollmentHome,
-            claudeConfiguration={"homePathOverrides": {}, "fileTemplates": []},
+            codexNativeDefault={"profileDefaultModel": "gpt-5"},
         )
 
 
-def test_snapshot_keeps_account_and_layout_authority():
+@pytest.mark.parametrize("preferences", [False, True])
+def test_snapshot_keeps_account_and_layout_authority(preferences):
     import hashlib
     from types import SimpleNamespace
 
@@ -112,7 +117,29 @@ def test_snapshot_keeps_account_and_layout_authority():
     )
 
     value = profile()
+    if preferences:
+        value.file_templates = [{
+            "path": value.volume_mount_path + "/settings.json",
+            "format": "json",
+            "content_template": {"language": "English"},
+        }]
+    before = deepcopy(vars(value))
+    assert untranslated_oauth_launch_options(value) is None
     selected = snapshot_provider_configuration(value)
+    assert selected.claudeEnrollmentHome.model_dump() == {
+        "volumeRef": "selected-enrollment",
+        "targetPath": "/home/app/selected-claude-auth",
+        "credentialGeneration": 3,
+    }
+    assert selected.claudeConfiguration == ({
+        "homePathOverrides": {"CLAUDE_CONFIG_DIR": "/home/app/.claude"},
+        "fileTemplates": [{
+            "path": "/home/app/.claude/settings.json", "format": "json",
+            "content_template": {"language": "English"},
+            "merge_strategy": "replace", "permissions": "0600",
+        }],
+    } if preferences else None)
+    assert vars(value) == before
     bindings = {
         "model": SimpleNamespace(
             providerProfileRef=value.profile_id, materializerRef="claude-oauth-home@1"
@@ -122,6 +149,9 @@ def test_snapshot_keeps_account_and_layout_authority():
     snapshot = SimpleNamespace(
         contentDigest="sha256:" + hashlib.sha256(content).hexdigest()
     )
+    value.file_templates = []
+    value.volume_mount_path = "/home/app/later-auth"
+    value.volume_ref = "later-enrollment"
     assert (
         load_provider_configuration_snapshot(content, snapshot, bindings)["model"]
         == selected

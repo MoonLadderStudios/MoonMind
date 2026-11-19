@@ -448,14 +448,14 @@ def _claude_oauth_projection(acquired, launch_environment):
             "accessMode": "read-only",
         }
     ]
+    selected = launch_environment.claudeEnrollmentHome
+    target = selected.targetPath if selected else OAUTH_HOME_MATERIALIZER_TARGETS["claude-oauth-home@1"]
     attachments.extend(
         {
             "kind": "volume",
             "sourceRef": volume,
             "subPath": "files/" + name,
-            "targetPath": OAUTH_HOME_MATERIALIZER_TARGETS["claude-oauth-home@1"]
-            + "/"
-            + name,
+            "targetPath": target + "/" + name,
             "accessMode": "read-only",
             "contentDigest": "sha256:" + hashlib.sha256(content).hexdigest(),
         }

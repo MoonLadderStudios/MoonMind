@@ -616,7 +616,34 @@ class DockerOmnigentHostLauncher:
                 or item["targetPath"].startswith(home + "/")
                 or home.startswith(item["targetPath"].rstrip("/") + "/")
             )]
-            if len(overlapping) != 1:
+            # Only the selected credential handle may overlay its own declared
+            # preference files. Other attachments still cannot hide this home.
+            from moonmind.provider_profiles.claude_configuration import OAUTH_PROJECTION_PATH
+
+            overlays = []
+            for handle in credential_handles:
+                owned = handle.get("attachments", [])
+                if handle.get("materializerRef") != "claude-oauth-home@1" or not any(
+                    item.get("targetPath") == home and item.get("accessMode") == "read-write"
+                    for item in owned
+                ):
+                    continue
+                sources = {item["sourceRef"] for item in owned if (
+                    item.get("targetPath") == OAUTH_PROJECTION_PATH
+                    and item.get("accessMode") == "read-only"
+                    and item.get("kind") == "volume"
+                )}
+                overlays.extend(item for item in owned if (
+                    item.get("kind") == "volume"
+                    and item.get("accessMode") == "read-only"
+                    and item.get("sourceRef") in sources
+                    and item.get("contentDigest")
+                    and item.get("subPath", "").startswith("files/")
+                    and item.get("targetPath") == home + "/" + item["subPath"][len("files/"):]
+                ))
+            if len(overlapping) != 1 + len(overlays) or any(
+                item["targetPath"] != home and item not in overlays for item in overlapping
+            ) or sum(item["targetPath"] == home for item in overlapping) != 1:
                 raise ValueError("selected Claude credential home overlaps another attachment")
         for attachment in attachments:
             kind = str(attachment["kind"])

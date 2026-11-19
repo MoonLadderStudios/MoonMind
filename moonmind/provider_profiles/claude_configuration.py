@@ -439,13 +439,42 @@ def validate_oauth_configuration(configuration):
 
 def oauth_configuration_for_profile(profile):
     try:
-        configuration = validate_oauth_configuration(
-            {
-                "homePathOverrides": dict(
-                    getattr(profile, "home_path_overrides", None) or {}
-                ),
-                "fileTemplates": list(getattr(profile, "file_templates", None) or []),
+        overrides = dict(getattr(profile, "home_path_overrides", None) or {})
+        files = list(getattr(profile, "file_templates", None) or [])
+        target = getattr(profile, "volume_mount_path", None)
+        if target not in {None, _ENROLLED_HOME}:
+            from moonmind.provider_profiles.volume_mounts import validate_claude_enrollment_mount
+
+            validate_claude_enrollment_mount(target)
+            if any(
+                key not in {"CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "HOME"}
+                or key != "HOME" and value != target
+                for key, value in overrides.items()
+            ):
+                raise ValueError("Claude selectors must match the selected enrollment")
+            # Canonical coordinates are the internal preference encoding, not a
+            # new credential location. The enclosing frozen slot owns the actual
+            # enrollment; projection mounts these relative files beneath it.
+            overrides = {
+                key: value if key == "HOME" else _ENROLLED_HOME
+                for key, value in overrides.items()
             }
+            translated = []
+            process_home = overrides.get("HOME")
+            for raw in files:
+                if hasattr(raw, "model_dump"):
+                    raw = raw.model_dump(by_alias=False, mode="json")
+                if not isinstance(raw, dict):
+                    raise ValueError("Claude file templates must be objects")
+                path = str(raw.get("path", ""))
+                if path.startswith(target + "/"):
+                    raw = {**raw, "path": _ENROLLED_HOME + path[len(target):]}
+                elif not isinstance(process_home, str) or not path.startswith(process_home + "/"):
+                    raise ValueError("Claude files must belong to the selected enrollment or private HOME")
+                translated.append(raw)
+            files = translated
+        configuration = validate_oauth_configuration(
+            {"homePathOverrides": overrides, "fileTemplates": files}
         )
         denied_tools(configuration)
         return configuration, ""

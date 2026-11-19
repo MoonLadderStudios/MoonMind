@@ -9,11 +9,37 @@ session_factory = native.session_factory
 native_journey = native.native_journey
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 MOUNT = "/home/app/selected-claude-auth"
+SELECTIONS = [
+    {"harness": "claude-native", "claudeCredentialMount": MOUNT},
+    {"harness": "claude-native", "claudeCredentialMount": MOUNT,
+     "claudeOauthFiles": True, "processHome": True},
+]
+
+
+def assert_selected_configuration(journey):
+    if not journey.selection.get("claudeOauthFiles"):
+        assert journey.docker.claude_preferences is None
+        return
+    assert journey.docker.claude_preferences is not None
+    import json
+
+    files = journey.docker.claude_preferences
+    assert json.loads(files["settings.json"]) == {"language": "English"}
+    assert files["CLAUDE.md"] == "Admitted instructions for /workspaces/run.\n"
+    assert journey.server.create_payloads[-1]["process_home"] == (
+        "/home/app/.omnigent/moonmind/runtime-context/process-home"
+    )
+    for name in files:
+        mount = journey.docker.mounts[MOUNT + "/" + name]
+        assert "readonly" in mount and mount["src"] != "journey_oauth"
+        assert "/home/app/.claude/" + name not in journey.docker.mounts
+    assert MOUNT + "/.credentials.json" not in journey.docker.mounts
+
 
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
 async def test_queued_custom_enrollment_keeps_selected_layout(native_journey):
@@ -23,17 +49,19 @@ async def test_queued_custom_enrollment_keeps_selected_layout(native_journey):
         profile.volume_mount_path = "/home/app/later-claude-auth"
         profile.volume_ref = "unselected-enrollment"
         profile.home_path_overrides = {"CLAUDE_CONFIG_DIR": profile.volume_mount_path}
+        profile.file_templates = []
         await session.commit()
     await native.assert_native_turn_saved_and_cleaned(
         journey, expected_credential_target=MOUNT
     )
     assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == MOUNT
     assert journey.docker.volumes == {"journey_oauth": {}}
+    assert_selected_configuration(journey)
 
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
 async def test_ready_custom_enrollment_resumes_without_rereading_profile(
@@ -74,6 +102,8 @@ async def test_ready_custom_enrollment_resumes_without_rereading_profile(
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         profile.volume_ref = "unselected-enrollment"
         profile.volume_mount_path = "/home/app/later-auth"
+        profile.file_templates = []
+        profile.home_path_overrides = {"HOME": "{{runtime_support_dir}}/later-home"}
         await session.commit()
     result = await journey.realizer.execute(journey.request, journey.plan)
     assert result.failure_class is None, result
@@ -83,11 +113,12 @@ async def test_ready_custom_enrollment_resumes_without_rereading_profile(
     assert len(journey.server.create_payloads) == 1
     assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == MOUNT
     assert journey.docker.volumes == {"journey_oauth": {}}
+    assert_selected_configuration(journey)
 
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
 async def test_custom_enrollment_rotation_fences_queued_layout(native_journey):
@@ -106,7 +137,7 @@ async def test_custom_enrollment_rotation_fences_queued_layout(native_journey):
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
 async def test_cold_custom_enrollment_preserves_selected_volume_and_save(
@@ -159,6 +190,8 @@ async def test_cold_custom_enrollment_preserves_selected_volume_and_save(
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         profile.volume_ref = "unselected-enrollment"
         profile.volume_mount_path = "/home/app/later-auth"
+        profile.file_templates = []
+        profile.home_path_overrides = {"HOME": "{{runtime_support_dir}}/later-home"}
         await session.commit()
     await journey.gateway.admit_execution_plan_inputs(
         request=successor, plan=journey.plan
@@ -193,11 +226,12 @@ async def test_cold_custom_enrollment_preserves_selected_volume_and_save(
         }
     assert journey.docker.launch_env["CLAUDE_CONFIG_DIR"] == MOUNT
     assert journey.docker.volumes == {"journey_oauth": {}}
+    assert_selected_configuration(journey)
 
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
 async def test_installed_claude_reads_selected_enrollment_not_default(
@@ -254,6 +288,15 @@ async def test_installed_claude_reads_selected_enrollment_not_default(
         "ALL_PROXY": "http://127.0.0.1:1",
     }
 
+    if journey.server.create_payloads[-1].get("process_home"):
+        process_home = tmp_path / "private-process-home"
+        process_home.mkdir()
+        env["HOME"] = str(process_home)
+        for name, content in journey.docker.claude_preferences.items():
+            path = selected / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
     async def status(environment):
         return await asyncio.to_thread(
             subprocess.run,
@@ -284,10 +327,10 @@ async def test_installed_claude_reads_selected_enrollment_not_default(
 
 @pytest.mark.parametrize(
     "native_journey",
-    [{"harness": "claude-native", "claudeCredentialMount": MOUNT}],
+    SELECTIONS,
     indirect=True,
 )
-@pytest.mark.parametrize("conflict", ["workspace", "second-enrollment"])
+@pytest.mark.parametrize("conflict", ["workspace", "workspace-child", "second-enrollment"])
 async def test_custom_enrollment_refuses_overlapping_host_attachment(
     native_journey, monkeypatch, conflict
 ):
@@ -296,13 +339,13 @@ async def test_custom_enrollment_refuses_overlapping_host_attachment(
     original = DockerOmnigentHostLauncher.launch
 
     async def collide(self, **kwargs):
-        if conflict == "workspace":
+        if conflict.startswith("workspace"):
             spec = kwargs["spec"]
             kwargs["spec"] = spec.model_copy(
                 update={
                     "workspaceAttachment": {
                         **spec.workspaceAttachment,
-                        "targetPath": MOUNT,
+                        "targetPath": MOUNT + ("/settings.json" if conflict == "workspace-child" else ""),
                     },
                 }
             )
