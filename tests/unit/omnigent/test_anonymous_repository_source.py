@@ -35,6 +35,8 @@ def test_anonymous_remote_keeps_exact_case_sensitive_repository_path():
     [
         " https://gitlab.example.test/group/repo.git",
         "https://gitlab.example.test/group/rep\to.git",
+        "https://gitlab.example.test:0/group/repo.git",
+        "https://gitlab.example.test:65536/group/repo.git",
         "http://gitlab.example.test/group/repo.git",
         "/controller/local",
         "file:///controller/local",

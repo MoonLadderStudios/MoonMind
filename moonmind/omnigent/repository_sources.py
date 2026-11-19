@@ -68,8 +68,9 @@ def anonymous_https_repository_source(value: str) -> tuple[str, str] | None:
             or any(part in {"", ".", ".."} for part in parsed.path[1:].split("/"))
         ):
             return None
-        # Validate the port as well as its syntax.
-        _port = parsed.port
+        # Access also rejects out-of-range ports; zero is not a remote service.
+        if parsed.port == 0:
+            return None
         endpoint = "https://" + parsed.netloc
         return value, endpoint
     except (ValueError, TypeError):
