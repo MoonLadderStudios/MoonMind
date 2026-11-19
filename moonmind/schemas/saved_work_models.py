@@ -948,6 +948,10 @@ def saved_work_artifact_dependencies(
         return dependencies
 
     if artifact_kind == "step_execution_checkpoint":
+        for slot, receipt in (document.get("codexFileSeedReceipts") or {}).items():
+            if not isinstance(receipt, dict) or not receipt.get("artifactRef") or not receipt.get("contentDigest"):
+                raise ValueError("Codex file seed checkpoint dependency is incomplete")
+            add(receipt["artifactRef"], receipt["contentDigest"], "checkpoint.codex_file_seed." + slot)
         # Canonical checkpoints may keep these compact inputs in their own
         # Temporal history. They are not blobs governed by artifact retention.
         source = document.get("source") or {}

@@ -326,6 +326,7 @@ def build_generic_omnigent_execution_services(
             artifact_gateway=artifacts,
             repository_credential_service=repository_credentials,
             execution_plan_store=DbExecutionPlanStore(session_factory),
+            runtime_binding_store=runtime_bindings,
         ),
         artifact_gateway=artifacts,
         turn_command_service=CanonicalTurnCommandService(

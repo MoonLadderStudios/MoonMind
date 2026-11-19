@@ -1175,12 +1175,14 @@ async def test_a_host_slot_lost_after_admission_requeues_instead_of_failing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("seed_lineage_patch", [False, True])
 async def test_a_re_admission_is_a_fresh_ticket_not_the_stale_one(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, seed_lineage_patch,
 ) -> None:
     """Requirement 2: re-admission returns to the workflow owner, epoch bumped."""
 
     _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda marker: seed_lineage_patch if marker == "omnigent-codex-seed-lineage-v1" else True)
     run = _ExecutingRun(
         [
             _capacity_failure("OMNIGENT_CREDENTIAL_GENERATION_FENCED"),
@@ -1195,6 +1197,22 @@ async def test_a_re_admission_is_a_fresh_ticket_not_the_stale_one(
         item.admitted_provider_capacity.admission_epoch for item in run.executions
     ]
     assert epochs == [1, 2]
+    first, second = run.executions
+    if not seed_lineage_patch:
+        assert "_codexSeedAdmissionLineage" not in second.parameters
+        return
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    capacity = first.admitted_provider_capacity
+    assert second.parameters["_codexSeedAdmissionLineage"] == [{
+        "executionPlanRef": capacity.execution_plan_ref,
+        "idempotencyKey": first.idempotency_key,
+        "admissionEpoch": capacity.admission_epoch,
+        "runtimeBindingRef": stable_binding_id(
+            execution_plan_ref=capacity.execution_plan_ref,
+            idempotency_key=first.idempotency_key,
+            admission_epoch=capacity.admission_epoch,
+        ),
+    }]
 
 
 @pytest.mark.asyncio

@@ -751,3 +751,51 @@ async def test_active_workflow_admission_lifetime_excludes_untrusted_or_historic
             await session.flush()
         await api.soft_delete(artifact_id=child.artifact_id, principal="service:owner")
         assert child.status is models.TemporalArtifactStatus.DELETED
+
+
+@pytest.mark.parametrize("namespace", ["default", "isolated-workers"])
+async def test_precheckpoint_codex_seed_uses_execution_lifetime_without_permanent_pin(tmp_path, monkeypatch, namespace):
+    """Queued recovery retains exact-run seed bytes before a checkpoint exists."""
+    from types import SimpleNamespace
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+
+    monkeypatch.setattr(settings.temporal, "namespace", namespace)
+    store = module.LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with temporal_db(tmp_path) as maker, maker() as session:
+        artifact = await seed(session, store, b'{"version":1,"files":[]}')
+        api = service(session, store)
+        execution = models.TemporalExecutionCanonicalRecord(
+            namespace=namespace, workflow_id="seed-workflow", run_id="seed-run",
+            workflow_type=models.TemporalWorkflowType.USER_WORKFLOW,
+            owner_type=models.TemporalExecutionOwnerType.USER,
+            state=models.MoonMindWorkflowState.EXECUTING, entry="run",
+            search_attributes={}, memo={}, artifact_refs=[], parameters={},
+        )
+        session.add(execution)
+        await api.link_artifact(
+            artifact_id=artifact.artifact_id, principal="service:owner",
+            execution_ref=TemporalOmnigentArtifactGateway._execution_link(
+                SimpleNamespace(step_execution=SimpleNamespace(
+                    workflow_id="seed-workflow", run_id="seed-run")),
+                name="codex-file-seeds.json", link_type="evidence.codex_file_seeds",
+            ),
+        )
+        _row, retained_bytes = await api.read(
+            artifact_id=artifact.artifact_id,
+            access=module.ArtifactAccessContext.for_execution("seed-workflow"),
+        )
+        assert retained_bytes == b'{"version":1,"files":[]}'
+        artifact.expires_at = datetime.now(UTC) - timedelta(days=31)
+        await session.flush()
+        assert not await api._repository.list_expired_artifacts(now=datetime.now(UTC))
+        with pytest.raises(module.TemporalArtifactStateError, match="retained"):
+            await api.soft_delete(artifact_id=artifact.artifact_id, principal="service:owner")
+        assert artifact.dependency_closure_version is None  # no checkpoint or pin needed
+        execution.state = models.MoonMindWorkflowState.COMPLETED
+        execution.close_status = models.TemporalExecutionCloseStatus.COMPLETED
+        await session.flush()
+        assert artifact.artifact_id in {
+            row.artifact_id for row in await api._repository.list_expired_artifacts(now=datetime.now(UTC))
+        }
+        await api.soft_delete(artifact_id=artifact.artifact_id, principal="service:owner")

@@ -474,6 +474,8 @@ class ProviderLaunchEnvironment(BaseModel):
     @classmethod
     def _validate_codex_configuration(cls, value):
         if value is not None:
+            if "fileSeeds" in value:
+                raise ValueError("Codex file seeds belong to runtime materialization, not admission")
             from moonmind.provider_profiles.codex_configuration import validate_oauth_configuration
             from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
 

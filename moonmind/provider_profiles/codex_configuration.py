@@ -7,6 +7,7 @@ can be packaged into a host without importing MoonMind or its database.
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import math
@@ -467,11 +468,49 @@ def validate_private_environment(configuration, *, require_admitted_file=False):
     return environment
 
 
+def _validated_file_seeds(configuration, templates):
+    seeds = configuration.get("fileSeeds")
+    if seeds is None:
+        return None
+    required = set()
+    seen = set()
+    for template in templates:
+        relative = Path(template["path"].removeprefix("{{runtime_support_dir}}/"))
+        _validate_additional_file_path(relative)
+        name = relative.as_posix()
+        if name not in seen and template["merge_strategy"] != "replace":
+            required.add(name)
+        seen.add(name)
+    if not isinstance(seeds, dict) or set(seeds) != {"version", "files"} or type(seeds["version"]) is not int or seeds["version"] != 1:
+        raise ValueError("invalid Codex file seed envelope")
+    files = seeds["files"]
+    if not isinstance(files, list) or len(files) > 32:
+        raise ValueError("invalid Codex file seed count")
+    captured = set()
+    size = 0
+    for item in files:
+        if not isinstance(item, dict) or type(item.get("present")) is not bool:
+            raise ValueError("invalid Codex file seed entry")
+        expected = {"path", "present", "content"} if item["present"] else {"path", "present"}
+        name = item.get("path")
+        if set(item) != expected or not isinstance(name, str) or name not in required or name in captured:
+            raise ValueError("Codex file seed differs from admitted destinations")
+        if item["present"]:
+            content = item["content"]
+            if not isinstance(content, str) or "\0" in content:
+                raise ValueError("Codex file seeds must be UTF-8 text")
+            size += len(content.encode("utf-8"))
+        captured.add(name)
+    if captured != required or size > 65536:
+        raise ValueError("Codex file seed set is incomplete or exceeds bound")
+    return copy.deepcopy(seeds)
+
+
 def validate_oauth_configuration(configuration):
     """Validate preferences/files without replacing OAuth, tools or provider state."""
     if (
         not isinstance(configuration, dict)
-        or set(configuration) - {"document", "additionalFiles", "privateHomeOnly", "environmentTemplates"}
+        or set(configuration) - {"document", "additionalFiles", "privateHomeOnly", "environmentTemplates", "fileSeeds", "fileSeedPolicy"}
         or configuration.get("privateHomeOnly") is not True
     ):
         raise ValueError("OAuth Codex configuration requires private-HOME delivery")
@@ -486,9 +525,15 @@ def validate_oauth_configuration(configuration):
         raise ValueError("OAuth Codex file configuration must be an array")
     files = [_additional_file(_template(item), "{{runtime_support_dir}}") for item in files]
     environment = validate_private_environment(configuration)
+    seeds = _validated_file_seeds(configuration, files)
+    policy = configuration.get("fileSeedPolicy")
+    if policy is not None and policy != "capture-once-v1":
+        raise ValueError("unsupported Codex file seed policy")
     result = {
         "document": copy.deepcopy(document), "privateHomeOnly": True,
         **({"additionalFiles": files} if files else {}),
+        **({"fileSeeds": seeds} if seeds is not None else {}),
+        **({"fileSeedPolicy": policy} if policy is not None else {}),
         **({"environmentTemplates": environment} if environment else {}),
     }
     if len(json.dumps(result).encode()) > 65536:
@@ -496,9 +541,10 @@ def validate_oauth_configuration(configuration):
     return result
 
 
-def _validate_replacement_seeded_files(files):
-    """Custom enrollment files must not depend on mutable enrolled seed bytes."""
+def _validate_custom_file_seeds(files):
+    """Select authored replacements or bounded durable native seed capture."""
     destinations = set()
+    capture_required = False
     for item in files:
         relative = Path(item["path"].removeprefix("{{runtime_support_dir}}/"))
         _validate_additional_file_path(relative)
@@ -508,8 +554,13 @@ def _validate_replacement_seeded_files(files):
                for path in destinations):
             raise ValueError("custom Codex file destinations overlap")
         if relative not in destinations and item["merge_strategy"] != "replace":
-            raise ValueError("custom Codex files require an explicit replacement seed")
+            capture_required = True
         destinations.add(relative)
+    if capture_required:
+        from moonmind.omnigent.codex_file_seeds import required_seed_paths
+
+        required_seed_paths({"additionalFiles": files})
+    return capture_required
 
 
 def oauth_configuration_for_profile(profile):
@@ -517,8 +568,9 @@ def oauth_configuration_for_profile(profile):
     if parsed is None:
         return None, reason
     try:
+        capture_required = False
         if getattr(profile, "volume_mount_path", None) not in {None, _ENROLLED_CODEX_HOME} and parsed["additionalFiles"]:
-            _validate_replacement_seeded_files(parsed["additionalFiles"])
+            capture_required = _validate_custom_file_seeds(parsed["additionalFiles"])
         # Only template-derived references to the relocated HOME bind late.
         # Absolute literals and generic support/workspace paths retain their owner.
         environment = {}
@@ -537,6 +589,7 @@ def oauth_configuration_for_profile(profile):
         return validate_oauth_configuration({
             "document": parsed["document"], "privateHomeOnly": True,
             "additionalFiles": parsed["additionalFiles"],
+            **({"fileSeedPolicy": "capture-once-v1"} if capture_required else {}),
             **({"environmentTemplates": environment} if environment else {}),
         }), ""
     except (TypeError, ValueError, KeyError) as error:
@@ -676,6 +729,47 @@ def _privatize_native_file_path(home, rendered_path, *, enrolled_home=None):
             raise ValueError("Profile files require a regular native source")
 
 
+def _detach_frozen_seed_path(home, relative, *, enrolled_home):
+    """Detach admitted native links without reading mutable seed file bytes."""
+    source_home = Path(_validated_enrolled_home(enrolled_home)).resolve()
+    relative = Path(relative)
+    _validate_additional_file_path(relative)
+    for length in range(1, len(relative.parts) + 1):
+        parts = relative.parts[:length]
+        path = home.joinpath(*parts)
+        expected = source_home.joinpath(*parts)
+        if path.is_symlink():
+            target = Path(os.path.abspath(path.parent / os.readlink(path)))
+            if target != expected:
+                raise ValueError("frozen seed cannot detach an unrelated symbolic link")
+            if length == len(relative.parts):
+                path.unlink()
+                continue
+            # Preserve unaffected visible siblings when the source directory
+            # still exists, but never traverse replacement source symlinks.
+            children = []
+            descriptor = None
+            try:
+                descriptor = os.open(source_home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                for component in parts:
+                    next_descriptor = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                    os.close(descriptor)
+                    descriptor = next_descriptor
+                children = os.listdir(descriptor)
+            except OSError as exc:
+                if exc.errno not in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EACCES}:
+                    raise
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+            path.unlink()
+            path.mkdir(mode=0o700)
+            for name in children:
+                (path / name).symlink_to(expected / name)
+        elif path.is_file() and path.stat().st_nlink != 1:
+            raise ValueError("frozen seed cannot replace an unowned hard link")
+
+
 def configure_profile_files(configuration, home, workspace, *, enrolled_home=None):
     """Render per-run files only in the native process's private Codex home.
 
@@ -699,8 +793,13 @@ def configure_profile_files(configuration, home, workspace, *, enrolled_home=Non
     if home == enrolled or enrolled in home.parents or not home.is_dir():
         raise ValueError("Profile files cannot modify the enrolled credential home")
     workspace = Path(workspace).resolve()
+    seeds = _validated_file_seeds(configuration, templates)
+    if configuration.get("fileSeedPolicy") is not None:
+        if configuration["fileSeedPolicy"] != "capture-once-v1" or seeds is None:
+            raise ValueError("Codex file seed policy requires its frozen materialization receipt")
     digest = hashlib.sha256(json.dumps(
-        {"templates": templates, "workspace": str(workspace)},
+        {"templates": templates, "workspace": str(workspace),
+         **({"fileSeeds": seeds} if seeds is not None else {})},
         sort_keys=True, separators=(",", ":"),
     ).encode()).hexdigest()
     marker = home / ".moonmind-profile-file-digest"
@@ -715,6 +814,15 @@ def configure_profile_files(configuration, home, workspace, *, enrolled_home=Non
         stream.write("preparing")
     renderer = ProfileTemplateRenderer(toml_serializer=render_toml)
     context = {"runtime_support_dir": str(home), "workspace_path": str(workspace)}
+    for seed in (seeds or {}).get("files", []):
+        destination = home / seed["path"]
+        _detach_frozen_seed_path(home, seed["path"], enrolled_home=enrolled_home)
+        if seed["present"]:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(seed["content"].encode("utf-8"))
+            destination.chmod(0o600)
+        elif destination.exists():
+            destination.unlink()
     for template in templates:
         _privatize_native_file_path(home, renderer._render_string(template["path"], context), enrolled_home=enrolled_home)
         renderer._materialize_file_template(

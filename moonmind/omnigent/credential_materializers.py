@@ -162,6 +162,7 @@ class CredentialMaterializationContext:
     # provider config's default route endpoints.
     provider_endpoint: ProviderConfigEndpoint | None = None
     provider_launch_environment: ProviderLaunchEnvironment | None = None
+    codex_file_seed_receipt: Any | None = None
 
 
 class DockerCommandBackend(Protocol):
@@ -171,6 +172,7 @@ class DockerCommandBackend(Protocol):
         *,
         input_bytes: bytes | None = None,
         timeout_seconds: float = 60.0,
+        binary_stdout_limit_bytes: int | None = None,
     ) -> tuple[int, bytes, bytes]:
         raise NotImplementedError
 
@@ -182,6 +184,7 @@ class LocalDockerCommandBackend:
         *,
         input_bytes: bytes | None = None,
         timeout_seconds: float = 60.0,
+        binary_stdout_limit_bytes: int | None = None,
         output_limit_bytes: int | None = None,
     ) -> tuple[int, bytes, bytes]:
         limit = 16_384 if output_limit_bytes is None else output_limit_bytes + 1
@@ -191,6 +194,7 @@ class LocalDockerCommandBackend:
                 input_bytes=input_bytes,
                 timeout_seconds=timeout_seconds,
                 output_limit_bytes=limit,
+                binary_stdout_limit_bytes=binary_stdout_limit_bytes,
             )
         except TimeoutError as exc:
             # The runner's TimeoutError has no text. Name the step (argv may
@@ -1375,6 +1379,39 @@ for path in [root, *root.rglob('*')]:
             ],
             failure="credential home generation staging failed",
         )
+        runtime_codex_configuration = (
+            launch_environment.codexConfiguration if launch_environment else None
+        )
+        if self.ref == "codex-oauth-home@1" and expected_target != "/home/app/.codex" and runtime_codex_configuration:
+            from moonmind.omnigent.codex_file_seeds import (
+                capture_codex_file_seeds, required_seed_paths, validate_seed_capture,
+            )
+
+            paths = required_seed_paths(runtime_codex_configuration)
+            if paths:
+                if context.codex_file_seed_receipt is None:
+                    raise HarnessPlatformError(
+                        "Codex enrollment file seeds require durable receipt authority",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+
+                async def capture():
+                    return await capture_codex_file_seeds(
+                        self._backend, volume_ref=volume,
+                        writer_image_ref=await self._resolve_writer_ref(
+                            context.writer_image_ref,
+                            expected_omnigent_version=context.expected_omnigent_version,
+                        ), paths=paths,
+                    )
+
+                seeds = await context.codex_file_seed_receipt(
+                    acquired=acquired, selected_home=home,
+                    configuration=runtime_codex_configuration, capture=capture,
+                )
+                runtime_codex_configuration = {
+                    **runtime_codex_configuration,
+                    "fileSeeds": validate_seed_capture(seeds, paths),
+                }
         attachment = {
             "kind": "volume",
             "sourceRef": volume,
@@ -1421,7 +1458,7 @@ for path in [root, *root.rglob('*')]:
                         **(
                             {
                                 OAUTH_CONFIGURATION_ENV: json.dumps(
-                                    launch_environment.codexConfiguration
+                                    runtime_codex_configuration
                                 )
                             }
                             if launch_environment.codexConfiguration is not None
@@ -1756,6 +1793,30 @@ class OmnigentCredentialProvisioningService:
             selected_home=selected_home,
         )
 
+    async def validate_file_seed_authority(self, *, request, binding):
+        from moonmind.omnigent.provider_leases import validate_bound_provider_leases
+        from moonmind.omnigent.runtime_bindings import RuntimeBindingState
+
+        if binding is None or binding.state not in {
+            RuntimeBindingState.credentials_acquired,
+            RuntimeBindingState.credentials_materialized,
+        }:
+            raise HarnessPlatformError(
+                "Codex file seed capture no longer owns pre-host materialization",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if not await validate_bound_provider_leases(
+            session_factory=self._session_factory,
+            provider_leases=binding.providerLeases,
+            execution_plan_ref=binding.executionPlanRef,
+            step_execution_id=request.step_execution.step_execution_id,
+            idempotency_key=request.idempotency_key,
+        ):
+            raise HarnessPlatformError(
+                "Codex file seed capture lost its selected provider authority",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+            )
+
     async def materialize_all(
         self,
         *,
@@ -1763,6 +1824,7 @@ class OmnigentCredentialProvisioningService:
         plan: Any,
         acquired_leases: tuple[AcquiredProviderLease, ...],
         writer_image_ref: str,
+        codex_file_seed_receipt: Any | None = None,
     ) -> tuple[CredentialRuntimeHandle, ...]:
         from moonmind.omnigent.harness_platform.credential_bindings import (
             model_bindings_of,
@@ -1853,6 +1915,7 @@ class OmnigentCredentialProvisioningService:
                                 CredentialMaterializationContext(
                                     request=request,
                                     acquired=acquired,
+                                    codex_file_seed_receipt=codex_file_seed_receipt,
                                     secrets=secrets,
                                     writer_image_ref=writer_image_ref,
                                     artifact_gateway=self._artifacts,

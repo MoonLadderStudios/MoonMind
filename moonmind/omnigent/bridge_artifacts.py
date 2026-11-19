@@ -899,6 +899,12 @@ class OmnigentArtifactGateway:
     async def read_bytes(self, artifact_ref: str) -> bytes:
         return (await self.read_text(artifact_ref)).encode("utf-8")
 
+    async def read_codex_seed_checkpoint(self, artifact_ref: str, *, request):
+        body = await self.read_bytes(artifact_ref)
+        from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+        checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
+        return body, await self.read_bytes(checkpoint.plan_ref)
+
     async def read_repository_access_snapshot(
         self, artifact_ref: str, *, request: AgentExecutionRequest
     ) -> bytes:
@@ -970,6 +976,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             binding=binding,
             workflow_id=identity.workflow_id,
             run_id=identity.run_id,
+            namespace=self._execution_namespace(),
             access=ArtifactAccessContext.for_execution(
                 identity.workflow_id, principal=self._principal
             ),
@@ -989,6 +996,15 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         return value
 
     @staticmethod
+    def _execution_namespace() -> str:
+        from temporalio import activity
+        from moonmind.config.settings import settings
+
+        if activity.in_activity():
+            return activity.info().namespace
+        return settings.temporal.namespace
+
+    @staticmethod
     def _execution_link(
         request: AgentExecutionRequest,
         *,
@@ -1000,7 +1016,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         from moonmind.workflows.temporal.artifacts import ExecutionRef
 
         return ExecutionRef(
-            namespace="default",
+            namespace=TemporalOmnigentArtifactGateway._execution_namespace(),
             workflow_id=request.step_execution.workflow_id,
             run_id=request.step_execution.run_id,
             link_type=link_type,
@@ -1400,6 +1416,39 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 ),
             )
         return payload
+
+    async def read_codex_seed_checkpoint(self, artifact_ref: str, *, request):
+        """Read the exact scoped checkpoint and its recorded plan, not arbitrary refs."""
+        from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+        identity, _binding, plan = await self._admitted_plan(
+            request, noun="Codex seed checkpoint"
+        )
+        metadata = request.parameters.get("metadata") or {}
+        hints = metadata.get("moonmind") or {}
+        if (hints.get("sharedCheckpointRequired") is not True
+            or hints.get("sharedStepCheckpointRef") != artifact_ref):
+            raise OmnigentArtifactError("Codex seed checkpoint was not requested")
+        body = await self._read_for_execution(
+            self._artifact_id(artifact_ref), workflow_id=identity.workflow_id,
+        )
+        if len(body) > 4 * 1024 * 1024:
+            raise OmnigentArtifactError("Codex seed checkpoint exceeds its bound")
+        checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
+        source = checkpoint.source
+        if (checkpoint.boundary != "after_execution"
+            or (source.workflow_id, source.run_id, source.logical_step_id)
+            != (identity.workflow_id, identity.run_id, identity.logical_step_id)
+            or source.execution_ordinal >= identity.execution_ordinal
+            or self._artifact_id(checkpoint.task_input_snapshot_ref)
+            != self._artifact_id(plan.payload.authority.taskInputSnapshotRef)
+            or not checkpoint.plan_ref):
+            raise OmnigentArtifactError("Codex seed checkpoint conflicts with its step")
+        recorded = await self._read_for_execution(
+            self._artifact_id(checkpoint.plan_ref), workflow_id=identity.workflow_id,
+        )
+        if len(recorded) > 4 * 1024 * 1024:
+            raise OmnigentArtifactError("Codex seed checkpoint plan exceeds its bound")
+        return body, recorded
 
     async def read_repository_access_snapshot(
         self, artifact_ref: str, *, request: AgentExecutionRequest

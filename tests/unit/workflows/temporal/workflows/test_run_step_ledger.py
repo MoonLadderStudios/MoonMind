@@ -3303,8 +3303,9 @@ def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("seeded", [False, True])
 async def test_run_routes_step_checkpoint_create_through_activity_boundary(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, seeded: bool,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
@@ -3358,6 +3359,8 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
         created_at=now,
         plan_digest="sha256:plan",
         step_outputs={"summaryRef": "artifact://summary"},
+        codex_file_seed_receipts={"primary-model": {"artifactRef": "artifact:seed"}} if seeded else None,
+        codex_file_seed_source={"planArtifactRef": "artifact:admitted-plan", "planDigest": "sha256:admitted"} if seeded else None,
     )
 
     assert result["checkpointRef"] == "artifact://checkpoint/created"
@@ -3384,6 +3387,15 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     assert "implement" not in workflow._step_checkpoint_refs
     assert "workspacePath" not in captured["payload"]
     assert "diff" not in json.dumps(captured["payload"], sort_keys=True)
+
+    if seeded:
+        assert captured["payload"]["codexFileSeedReceipts"] == {"primary-model": {"artifactRef": "artifact:seed"}}
+        assert captured["payload"]["planRef"] == "artifact:admitted-plan"
+        assert captured["payload"]["planDigest"] == "sha256:admitted"
+    else:
+        assert "codexFileSeedReceipts" not in captured["payload"]
+        assert "codexFileSeedSource" not in captured["payload"]
+        assert captured["payload"]["planDigest"] == "sha256:plan"
 
 
 @pytest.mark.asyncio
