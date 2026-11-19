@@ -108,6 +108,7 @@ def _run_probe(command, env):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
+            # The process group can exit before cleanup reaches it.
             pass
         process.wait()
 
