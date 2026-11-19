@@ -78,7 +78,7 @@ def test_unqualified_custom_options_stay_native(change):
     elif change == "selector":
         value.home_path_overrides = {"CODEX_HOME": "/home/app/sibling-auth"}
     elif change == "file":
-        value.file_templates = [{"path": value.volume_mount_path + "/AGENTS.md", "format": "text", "content_template": "Keep native."}]
+        value.file_templates = [{"path": value.volume_mount_path + "/AGENTS.md", "format": "text", "content_template": "Keep native.", "merge_strategy": "append"}]
     else:
         value.file_templates = [{"path": value.volume_mount_path + "/config.toml", "format": "toml", "content_template": {"shell_environment_policy": {"inherit": "all"}}}]
     assert untranslated_oauth_launch_options(value)

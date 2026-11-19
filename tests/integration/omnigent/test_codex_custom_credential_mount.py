@@ -9,10 +9,19 @@ session_factory = native.session_factory
 native_journey = native.native_journey
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 MOUNT = "/home/app/selected-codex-auth"
+ADDITIONAL_FILES = [
+    {"path": MOUNT + "/AGENTS.md", "format": "text", "content_template": "Frozen instructions", "merge_strategy": "replace", "permissions": "0600"},
+    {"path": MOUNT + "/AGENTS.md", "format": "text", "content_template": "Exactly once addition", "merge_strategy": "append", "permissions": "0600"},
+    {"path": MOUNT + "/rules/preferences.json", "format": "json", "content_template": {"frozen": True}, "merge_strategy": "replace", "permissions": "0600"},
+    {"path": MOUNT + "/rules/preferences.json", "format": "json", "content_template": {"extra": 2}, "merge_strategy": "deep_merge", "permissions": "0600"},
+]
 SELECTIONS = [
     {"harness": "codex-native", "codexCredentialMount": MOUNT},
     {"harness": "codex-native", "codexCredentialMount": MOUNT,
      "codexEnrollmentPreferences": True, "codexNativeDefault": True, "hiddenNativeDefault": True},
+    {"harness": "codex-native", "codexCredentialMount": MOUNT,
+     "codexEnrollmentPreferences": True, "codexNativeDefault": True, "hiddenNativeDefault": True,
+     "additionalFiles": ADDITIONAL_FILES},
 ]
 
 
@@ -20,7 +29,13 @@ def assert_selected_configuration(journey):
     import json
     if journey.selection.get("codexEnrollmentPreferences"):
         configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
-        assert configuration == {"document": {"model_verbosity": "low"}, "privateHomeOnly": True}
+        expected = {"document": {"model_verbosity": "low"}, "privateHomeOnly": True}
+        if journey.selection.get("additionalFiles"):
+            expected["additionalFiles"] = [
+                {**item, "path": item["path"].replace(MOUNT, "{{runtime_support_dir}}", 1)}
+                for item in ADDITIONAL_FILES
+            ]
+        assert configuration == expected
         assert "--enrolled-home" in journey.docker.script
         assert MOUNT in journey.docker.script
         from moonmind.omnigent.codex_login import CODEX_CONFIGURATION_READ_PROBE
