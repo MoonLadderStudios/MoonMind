@@ -154,11 +154,13 @@ async def test_installed_codex_preserves_selected_auth_and_private_configuration
     assert json.loads(probe.stdout.strip().splitlines()[-1])["sourceInputsUnchanged"]
 
 
-_SEARCH_PROBE = r'''
+_PREFERENCE_PROBE = r'''
 import asyncio,json,os,pathlib,shutil,subprocess,sys
-upstream,binary,temporary,configuration,minimal=json.loads(sys.argv[1])
+binary,temporary,configuration,minimal,setting,expected,enrolled_before,enrolled_after=json.loads(sys.argv[1])
 r=pathlib.Path(temporary);r.mkdir();home=r/'home';home.mkdir();source=r/'enrolled';source.mkdir();sibling=r/'sibling';sibling.mkdir()
-(source/'config.toml').write_text('web_search="cached"\n')
+def preference_document(value):
+ return setting+'='+json.dumps(value)+'\n'
+(source/'config.toml').write_text(preference_document(enrolled_before))
 (source/'auth.json').write_text('{"OPENAI_API_KEY":"synthetic-selected-account"}')
 (sibling/'auth.json').write_text('synthetic-sibling-unchanged')
 os.environ['HOME']=str(home);os.environ['CODEX_HOME']=str(source)
@@ -180,36 +182,50 @@ async def read(executable,directory):
    result=json.loads(line)
    if result.get('id')==i:return result
  try:
-  await rpc(1,'initialize',{'clientInfo':{'name':'disabled-search-test','version':'1'}})
+  await rpc(1,'initialize',{'clientInfo':{'name':'frozen-preference-test','version':'1'}})
   result=await rpc(2,'config/read',{'includeLayers':False})
   assert 'error' not in result,'vendor rejected admitted config'
-  return result['result']['config']['web_search']
+  return result['result']['config'][setting]
  finally:p.terminate();await asyncio.wait_for(p.wait(),5)
 async def main():
- assert await read(binary,source)=='cached'
+ assert await read(binary,source)==enrolled_before
  auth=(source/'auth.json').read_bytes()
  for attempt in range(2):
   private=r/f'private-{attempt}';private.mkdir();wrapper=r/f'wrapper-{attempt}'
   _populate_codex_home_config(private,source,minimal_config=minimal)
   subprocess.run([sys.executable,str(helper),'prepare',str(configuration_path),binary,str(wrapper),str(context),str(source)],env={**env,'CODEX_HOME':str(private)},check=True,capture_output=True,timeout=10)
-  assert await read(wrapper,private)=='disabled'
-  assert await read(wrapper,private)=='disabled'
+  assert await read(wrapper,private)==expected
+  assert await read(wrapper,private)==expected
   assert (private/'auth.json').resolve()==source/'auth.json'
   assert (source/'auth.json').read_bytes()==auth
   assert (sibling/'auth.json').read_text()=='synthetic-sibling-unchanged'
-  assert (source/'config.toml').read_text()==('web_search="cached"\n' if attempt==0 else 'web_search="live"\n')
-  (source/'config.toml').write_text('web_search="live"\n')
- print(json.dumps({'effectiveSearch':'disabled','attempts':2,'selectedAuthUnchanged':True}))
+  assert (source/'config.toml').read_text()==preference_document(enrolled_before if attempt==0 else enrolled_after)
+  (source/'config.toml').write_text(preference_document(enrolled_after))
+ print(json.dumps({'effectiveValue':expected,'attempts':2,'selectedAuthUnchanged':True}))
 asyncio.run(main())
 '''
 
 
-@pytest.mark.parametrize("native_journey", [{
-    "harness": "codex-native", "oauthPrivateConfiguration": True,
-    "sessionSettings": {"web_search": "disabled"},
-}], indirect=True)
+@pytest.mark.parametrize(
+    "native_journey,setting,expected,enrolled_before,enrolled_after",
+    [
+        pytest.param(
+            {"harness": "codex-native", "oauthPrivateConfiguration": True,
+             "sessionSettings": {"web_search": "disabled"}},
+            "web_search", "disabled", "cached", "live", id="disabled-search",
+        ),
+        pytest.param(
+            {"harness": "codex-native", "oauthPrivateConfiguration": True,
+             "sessionSettings": {"tool_output_token_limit": 1024}},
+            "tool_output_token_limit", 1024, 2048, 4096, id="output-budget",
+        ),
+    ],
+    indirect=["native_journey"],
+)
 @pytest.mark.parametrize("minimal", [False, True], ids=["ambient-settings", "minimal-settings"])
-async def test_installed_codex_wrapper_preserves_disabled_search(native_journey, tmp_path, minimal):
+async def test_installed_codex_wrapper_preserves_frozen_preferences(
+    native_journey, tmp_path, minimal, setting, expected, enrolled_before, enrolled_after,
+):
     cli = shutil.which("codex")
     if cli is None:
         pytest.skip("installed Codex CLI unavailable; image qualification is separate")
@@ -217,12 +233,13 @@ async def test_installed_codex_wrapper_preserves_disabled_search(native_journey,
     result = await journey.realizer.execute(journey.request, journey.plan)
     assert result.failure_class is None, result
     configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
-    assert configuration["document"]["web_search"] == "disabled"
+    assert configuration["document"][setting] == expected
     root = Path(__file__).resolve().parents[3] / "omnigent"
     env = {**os.environ, "PYTHONPATH": str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")}
-    probe = await asyncio.to_thread(_run_probe, [sys.executable, "-c", _SEARCH_PROBE,
-        json.dumps([str(root), cli, str(tmp_path / "cli"), configuration, minimal])], env)
+    probe = await asyncio.to_thread(_run_probe, [sys.executable, "-c", _PREFERENCE_PROBE,
+        json.dumps([cli, str(tmp_path / "cli"), configuration, minimal,
+                    setting, expected, enrolled_before, enrolled_after])], env)
     assert probe.returncode == 0, probe.stderr[-2000:]
     assert json.loads(probe.stdout.strip().splitlines()[-1]) == {
-        "effectiveSearch": "disabled", "attempts": 2, "selectedAuthUnchanged": True,
+        "effectiveValue": expected, "attempts": 2, "selectedAuthUnchanged": True,
     }

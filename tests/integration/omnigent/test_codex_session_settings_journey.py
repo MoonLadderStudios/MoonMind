@@ -1,4 +1,4 @@
-"""Explicitly disabled search survives immutable shared-runtime boundaries."""
+"""Selected Codex session settings survive shared-runtime recovery."""
 
 import asyncio
 import hashlib
@@ -15,20 +15,31 @@ from tests.integration.omnigent import test_generic_native_durable_journey as na
 session_factory = native.session_factory
 native_journey = native.native_journey
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
-SELECTIONS = [
-    {"harness": "codex-native", "oauthPrivateConfiguration": True,
-     "sessionSettings": {"web_search": "disabled"}},
-    {"harness": "codex-native-api-key", "privateProfileConfiguration": True,
-     "sessionSettings": {"web_search": "disabled"}},
+SETTINGS = [
+    ("web_search", "disabled", "live"),
+    ("tool_output_token_limit", 1024, 0),
 ]
+SELECTIONS = [
+    pytest.param(
+        {**auth, "sessionSettings": {setting: original}},
+        id=f"{auth_id}-{setting}",
+    )
+    for auth_id, auth in (
+        ("oauth", {"harness": "codex-native", "oauthPrivateConfiguration": True}),
+        ("api-key", {"harness": "codex-native-api-key", "privateProfileConfiguration": True}),
+    )
+    for setting, original, _edited in SETTINGS
+]
+LIVE_VALUES = {setting: edited for setting, _original, edited in SETTINGS}
 
 
 async def edit_live_profile(journey):
+    setting, = journey.selection["sessionSettings"]
     async with journey.session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, native.PROFILE)
         profile.file_templates = [{
             "path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
-            "content_template": {"web_search": "live"}, "merge_strategy": "deep_merge",
+            "content_template": {setting: LIVE_VALUES[setting]}, "merge_strategy": "deep_merge",
         }]
         await session.commit()
 
@@ -38,7 +49,7 @@ def assert_frozen_configuration(journey):
         journey.docker.codex_configuration if journey.api_key else
         json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
     )
-    assert configuration["document"] == {"web_search": "disabled"}
+    assert configuration["document"] == journey.selection["sessionSettings"]
     assert configuration["privateHomeOnly"] is True
     assert "codex-configuration.py prepare" in journey.docker.script
     if journey.api_key:
@@ -52,7 +63,7 @@ def assert_frozen_configuration(journey):
 
 
 @pytest.mark.parametrize("native_journey", SELECTIONS, indirect=True)
-async def test_disabled_search_queued_profile_edit_keeps_admitted_configuration(native_journey):
+async def test_codex_session_setting_queued_profile_edit_keeps_admitted_configuration(native_journey):
     journey = native_journey
     await edit_live_profile(journey)
     await native.assert_native_turn_saved_and_cleaned(journey)
@@ -60,7 +71,7 @@ async def test_disabled_search_queued_profile_edit_keeps_admitted_configuration(
 
 
 @pytest.mark.parametrize("native_journey", SELECTIONS, indirect=True)
-async def test_disabled_search_ready_host_retry_keeps_configuration(native_journey, monkeypatch):
+async def test_codex_session_setting_ready_host_retry_keeps_configuration(native_journey, monkeypatch):
     journey = native_journey
     update = journey.realizer._update_binding
 
@@ -91,7 +102,7 @@ async def test_disabled_search_ready_host_retry_keeps_configuration(native_journ
 
 
 @pytest.mark.parametrize("native_journey", SELECTIONS, indirect=True)
-async def test_disabled_search_cold_successor_preserves_save_and_selected_identity(native_journey):
+async def test_codex_session_setting_cold_successor_preserves_save_and_selected_identity(native_journey):
     journey = native_journey
     first = await native.assert_native_turn_saved_and_cleaned(journey)
     assert_frozen_configuration(journey)
@@ -106,7 +117,7 @@ async def test_disabled_search_cold_successor_preserves_save_and_selected_identi
     payload = journey.request.model_dump(mode="json", by_alias=True, exclude_none=True)
     identity = journey.request.step_execution
     step_id = f"{identity.workflow_id}:{identity.run_id}:{identity.logical_step_id}:execution:2"
-    payload["idempotencyKey"] = "disabled-search-successor"
+    payload["idempotencyKey"] = "session-setting-successor"
     payload["stepExecution"].update(executionOrdinal=2, stepExecutionId=step_id)
     payload["workspaceSpec"] = {
         "workspaceCheckpointRestoreRef": saved["archiveRef"],
@@ -114,8 +125,8 @@ async def test_disabled_search_cold_successor_preserves_save_and_selected_identi
             f"{identity.workflow_id}:{step_id}".encode()).hexdigest()[:24], "relativePath": "repo"},
     }
     payload["admittedProviderCapacity"].update(
-        stepExecutionId=step_id, idempotencyKey="disabled-search-successor",
-        agentRunRunId="disabled-search-successor-run",
+        stepExecutionId=step_id, idempotencyKey="session-setting-successor",
+        agentRunRunId="session-setting-successor-run",
     )
     successor = AgentExecutionRequest.model_validate(payload)
     journey.manager.request = successor
@@ -142,6 +153,7 @@ async def test_disabled_search_cold_successor_preserves_save_and_selected_identi
     assert current.hostLeaseRef != predecessor.hostLeaseRef
     for binding in (predecessor, current):
         handle = next(iter(binding.credentialRuntimeHandles.values()))
+        assert handle["providerProfileRef"] == native.PROFILE
         assert handle["credentialGeneration"] == 3
         if not journey.api_key:
             assert handle["attachments"] == [{"kind": "volume", "sourceRef": "journey_oauth",

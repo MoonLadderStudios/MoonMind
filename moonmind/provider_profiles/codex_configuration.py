@@ -31,6 +31,7 @@ _SESSION_SETTINGS = {
     "project_doc_max_bytes", "project_doc_fallback_filenames", "history",
     "model_reasoning_summary", "model_verbosity", "model_context_window",
     "model_auto_compact_token_limit", "personality", "web_search",
+    "tool_output_token_limit",
 }
 
 
@@ -41,6 +42,11 @@ def _validate_session_settings(document):
         type(document["web_search"]) is not str or document["web_search"] != "disabled"
     ):
         raise ValueError("shared Codex web_search supports only explicit disabled")
+    if "tool_output_token_limit" in document and (
+        type(document["tool_output_token_limit"]) is not int
+        or not 0 <= document["tool_output_token_limit"] <= (1 << 63) - 1
+    ):
+        raise ValueError("Codex tool_output_token_limit must be a nonnegative TOML integer")
     if "developer_instructions" in document and not isinstance(document["developer_instructions"], str):
         raise ValueError("developer_instructions must be a string")
     for key in ("hide_agent_reasoning", "show_raw_agent_reasoning"):
