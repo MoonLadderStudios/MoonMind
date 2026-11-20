@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -201,6 +201,10 @@ describe('skills catalog visual parity (MoonLadderStudios/MoonMind#3346)', () =>
     await waitFor(() => {
       expect(table.querySelectorAll('tbody tr').length).toBeGreaterThanOrEqual(REPRESENTATIVE_SKILLS.length);
     });
+    // The browser pointer outlives each test file, so an earlier file can
+    // leave it resting over a row and turn on the row hover fill. Park it at
+    // the page corner before reading row backgrounds.
+    await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
 
     const tableStyle = getComputedStyle(table);
     // The table element itself stays transparent: the generic `table` rule
