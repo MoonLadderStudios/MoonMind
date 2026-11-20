@@ -316,7 +316,10 @@ def _capture_source_bytes(source, intent):
             "local source requires an explicit branch"
         )
     with tempfile.TemporaryDirectory(prefix="moonmind-initial-source-") as temporary:
-        private = Path(temporary)
+        # The worker's configured temporary root can itself be a platform
+        # alias (for example, /var on macOS). Archive containment and Git's
+        # exact safe.directory check both compare against canonical paths.
+        private = Path(temporary).resolve()
         env = {
             "PATH": os.defpath,
             "HOME": str(private),
@@ -377,12 +380,26 @@ def _capture_source_bytes(source, intent):
             raise LocalRepositorySourceUnavailable(
                 "local source requires Git tag preservation"
             )
-        head = git(destination, ["rev-parse", "HEAD"]).decode().strip()
-        if intent.get("commitSha") and intent["commitSha"] != head:
-            raise LocalRepositorySourceUnavailable(
-                "local source pin must equal the selected branch tip"
-            )
-        tree = git(destination, ["ls-tree", "-r", "-l", "-z", "HEAD"])
+        tip = git(destination, ["rev-parse", "HEAD"]).decode().strip()
+        pin = intent.get("commitSha")
+        if pin is not None:
+            if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-f]{40}", pin):
+                raise LocalRepositorySourceUnavailable(
+                    "local source pin must be a full commit identity"
+                )
+            if pin != tip:
+                exact = git(
+                    destination, ["rev-parse", "--quiet", "--verify", pin + "^{commit}"],
+                    allow_unrelated=True,
+                ).decode().strip()
+                if exact != pin or git(
+                    destination, ["merge-base", pin, tip], allow_unrelated=True
+                ).decode().strip() != pin:
+                    raise LocalRepositorySourceUnavailable(
+                        "local source pin is not an ancestor of the selected branch"
+                    )
+        head = pin or tip
+        tree = git(destination, ["ls-tree", "-r", "-l", "-z", head])
         members, total = set(), 0
         for entry in tree.split(b"\0"):
             if not entry:
@@ -409,7 +426,7 @@ def _capture_source_bytes(source, intent):
             members.add(name)
             if len(members) > SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_count"]:
                 raise ValueError("local source committed tree exceeds path bounds")
-        git(destination, ["read-tree", "HEAD"])
+        git(destination, ["read-tree", head])
         attributes = git(
             destination,
             ["check-attr", "--cached", "-z", "filter", "--stdin"],
@@ -425,7 +442,13 @@ def _capture_source_bytes(source, intent):
             )
         git(
             destination,
-            ["-c", "core.hooksPath=" + os.devnull, "checkout", "--force", branch],
+            [
+                "-c",
+                "core.hooksPath=" + os.devnull,
+                "checkout",
+                "--force",
+                *(["--detach", head] if pin else [branch]),
+            ],
         )
         refs = (
             git(
@@ -451,7 +474,7 @@ def _capture_source_bytes(source, intent):
                     "refs/remotes/origin/" + branch,
                     "refs/remotes/origin/HEAD",
                 }
-                or oid != head
+                or oid != tip
             ):
                 raise ValueError("local clone produced unexpected reference authority")
             safe_refs[name] = {
@@ -466,6 +489,9 @@ def _capture_source_bytes(source, intent):
             head,
             self_contained=True,
             full_ancestry=True,
+            # The captured tree/index belongs to detached HEAD; the selected
+            # branch and tracking refs still need their own verified objects.
+            extra_heads=(tip,) if tip != head else (),
             env=env,
             executable=_WORKER_GIT_EXECUTABLE,
         )
@@ -499,8 +525,14 @@ async def capture_initial_source(
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
         CONTENT_TYPE,
         intent_digest,
+        supports_detached_local_pin,
     )
 
+    pin = intent.get("commitSha")
+    if pin and not supports_detached_local_pin(request, intent):
+        raise LocalRepositorySourceUnavailable(
+            "local source pin requires a detached read without a selected connection"
+        )
     if intent.get("sourcePath") != authority.get("sourcePath") or any(
         intent.get(key) != authority.get(key) for key in ("workflowId", "runId")
     ):
@@ -595,7 +627,7 @@ async def capture_initial_source(
         "pathCount": len(entries),
         "excludedPaths": [],
         "gitHistory": history,
-        "git": {"branch": branch},
+        "git": {"branch": "" if pin else branch},
     }
     manifest_ref, manifest_digest = await put(
         encode(manifest), "application/json", "checkpoint_manifest"
@@ -615,6 +647,7 @@ async def capture_initial_source(
         "sourceIntentDigest": intent_digest(intent),
         "workspace": workspace,
         "gitRefs": refs,
+        **({"selectedBranch": branch} if pin else {}),
     }
     ref, digest = await put(
         encode(descriptor), CONTENT_TYPE, "initial_repository_source"

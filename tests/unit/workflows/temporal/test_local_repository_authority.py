@@ -138,9 +138,74 @@ def test_source_export_refuses_external_or_unsupported_authority(
     assert not sentinel.exists()
 
 
-def test_source_export_rejects_pin_different_from_branch_tip(source):
+def test_source_export_rejects_missing_pin(source):
     with pytest.raises(ValueError, match="pin"):
         _capture_source_bytes(source, {"branch": "chosen", "commitSha": "0" * 40})
+
+
+def test_source_exports_pin_tree_and_complete_selected_ref_history(source, tmp_path):
+    import tarfile
+    from io import BytesIO
+
+    pin = git(source, "rev-parse", "HEAD")
+    (source / "tracked.txt").write_text("tip only\n")
+    git(source, "commit", "-am", "Advance selected branch")
+    tip = git(source, "rev-parse", "HEAD")
+    (source / "tracked.txt").write_text("dirty\n")
+
+    head, branch, refs, pack, history, archive, entries = _capture_source_bytes(
+        source, {"branch": "chosen", "commitSha": pin}
+    )
+    assert head == pin
+    # The capture still has a separate identity for the selected branch.
+    assert branch == "chosen"
+    assert refs["refs/heads/chosen"]["commit"] == tip
+    assert refs["refs/remotes/origin/chosen"]["commit"] == tip
+    assert history["headCommit"] == pin and history["requiresSourceObjects"] is False
+    assert {entry["path"] for entry in entries} == {"tracked.txt"}
+    with tarfile.open(fileobj=BytesIO(archive)) as tar:
+        assert tar.extractfile("tracked.txt").read() == b"committed\n"
+    restored = tmp_path / "standalone"
+    restored.mkdir()
+    git(restored, "init")
+    subprocess.run(
+        ["git", "-C", str(restored), "index-pack", "--stdin", "--strict"],
+        input=pack, check=True, capture_output=True,
+    )
+    assert git(restored, "merge-base", pin, tip) == pin
+    assert git(restored, "show", f"{tip}:tracked.txt") == "tip only"
+    assert (source / "tracked.txt").read_text() == "dirty\n"
+
+
+def test_source_pin_git_failure_does_not_trigger_native_fallback(source, monkeypatch):
+    from moonmind.workflows.temporal.runtime import checkpoint_history
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        LocalRepositorySourceUnavailable,
+    )
+
+    pin = git(source, "rev-parse", "HEAD")
+    (source / "tracked.txt").write_text("new tip\n")
+    git(source, "commit", "-am", "Advance selected branch")
+    run = checkpoint_history._git
+
+    def fail_ancestry(path, args, **kwargs):
+        if args[0] == "merge-base":
+            raise ValueError("capture budget exhausted")
+        return run(path, args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_history, "_git", fail_ancestry)
+    with pytest.raises(ValueError, match="budget exhausted") as failure:
+        _capture_source_bytes(source, {"branch": "chosen", "commitSha": pin})
+    assert not isinstance(failure.value, LocalRepositorySourceUnavailable)
+
+
+def test_source_pin_still_scans_objects_reachable_from_selected_tip(source):
+    pin = git(source, "rev-parse", "HEAD")
+    (source / ".env").write_text("must not cross the source boundary\n")
+    git(source, "add", ".env")
+    git(source, "commit", "-m", "Unsafe committed path after pin")
+    with pytest.raises(ValueError, match="credential-sensitive path"):
+        _capture_source_bytes(source, {"branch": "chosen", "commitSha": pin})
 
 
 @pytest.mark.asyncio
