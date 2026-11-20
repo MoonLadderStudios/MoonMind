@@ -211,9 +211,15 @@ describe('mobile workflow toolbar', () => {
 
     await page.getByRole('button', { name: 'Filters' }).click();
     const sheet = await screen.findByRole('dialog', { name: 'Advanced filters' });
-    // The fixed overlay spans the viewport excluding any scrollbar gutter.
+    // The fixed overlay spans the viewport excluding any scrollbar gutter. A
+    // stable root gutter can reserve space even without overflow, and
+    // clientWidth alone includes that reservation in Chromium.
     const viewport = () => ({
-      width: document.documentElement.clientWidth,
+      width: Math.min(
+        window.innerWidth,
+        document.documentElement.clientWidth,
+        document.documentElement.getBoundingClientRect().right,
+      ),
       height: document.documentElement.clientHeight,
     });
     const sheetBox = sheet.getBoundingClientRect();
