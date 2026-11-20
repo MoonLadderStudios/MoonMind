@@ -41,6 +41,9 @@ class CanonicalPullRequestSnapshot:
     checks_complete: bool = False
     checks_passing: bool = False
     checks_failed: bool = False
+    # Permits normal review/remediation priority during positively observed CI.
+    # It never clears degradation or makes checks passing.
+    review_while_ci_pending: bool = False
     checks_degraded: bool = False
     checks_external_blocked: bool = False
     checks_signal_available: bool = False

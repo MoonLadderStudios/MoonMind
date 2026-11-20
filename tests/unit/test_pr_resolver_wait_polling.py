@@ -623,3 +623,57 @@ def test_run_without_branch_cannot_clear_a_failure(resolver_cli, event, missing_
     assert result["status"] != "review_clean"
     assert not snapshot["ci"]["supersededChecks"]
     assert snapshot["ci"]["unresolvedChecks"]
+
+
+def test_cli_requests_fresh_review_while_required_aggregate_not_created(resolver_cli):
+    state, run = resolver_cli
+    state["protected"] = True
+    state["required_checks"] = ["ci-required"]
+    state["checks"] = [_actions_check(1, 10, name="unit")]
+    state["runs"] = [_workflow(10, 1, status="in_progress", conclusion=None)]
+    result, snapshot, _ = run(review=True)
+    assert snapshot["ci"]["reviewWhileCiPending"] is True
+    assert snapshot["ci"]["signalQuality"] == "degraded"
+    assert snapshot["ci"]["missingRequiredChecks"] == ["ci-required"]
+    assert result["reason"] == "fresh_review_required_after_remediation"
+    assert result["mergeAutomationDisposition"] == "request_review"
+    assert result["merge_outcome"] != "merged"
+
+    # No duplicate request while awaiting that exact-head review, even though
+    # aggregate CI is still absent; the existing gate owns posting and waiting.
+    state["issue_comments"] = [
+        {
+            "id": 40,
+            "user": {"login": "owner"},
+            "body": "@codex review",
+            "created_at": "2026-10-08T01:00:00Z",
+        }
+    ]
+    result, _, _ = run(review=True)
+    assert result["reason"] == "automated_review_wait"
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["finished", "wrong_head", "security_only", "real_failure", "run_unavailable"],
+)
+def test_cli_early_review_needs_live_current_head_ci(resolver_cli, invalid):
+    state, run = resolver_cli
+    state["protected"] = True
+    state["required_checks"] = ["ci-required"]
+    state["checks"] = [_actions_check(1, 10, name="unit")]
+    state["runs"] = [_workflow(10, 1, status="in_progress", conclusion=None)]
+    if invalid == "finished":
+        state["runs"][0].update(status="completed", conclusion="failure")
+    elif invalid == "wrong_head":
+        state["runs"][0]["head_sha"] = "b" * 40
+    elif invalid == "security_only":
+        state["checks"][0]["name"] = "CodeQL"
+    elif invalid == "real_failure":
+        state["checks"].append(_actions_check(2, 10, "failure", name="failing-tests"))
+    else:
+        state["runs"] = []
+    result, snapshot, _ = run(review=True)
+    assert snapshot["ci"]["reviewWhileCiPending"] is False
+    assert result.get("mergeAutomationDisposition") != "request_review"
+    assert result["merge_outcome"] != "merged"

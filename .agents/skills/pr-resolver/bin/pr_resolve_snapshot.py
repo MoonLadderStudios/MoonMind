@@ -28,9 +28,7 @@ for _package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
 
 from pr_resolve_contract import EXIT_CODE_FAILED  # noqa: E402
 
-from pr_resolver_core.code_hosts import (  # noqa: E402
-    ensure_github_only_selector,
-)
+from pr_resolver_core.code_hosts import ensure_github_only_selector  # noqa: E402
 from pr_resolver_core.review_providers import (  # noqa: E402
     AUTOMATED_REVIEW_PROVIDERS,
     automatic_review_reaction,
@@ -2227,6 +2225,23 @@ def main():
     if degraded:
         ci_summary["signalQuality"] = "degraded"
         ci_summary["hasFailures"] = True
+
+    from pr_resolver_core.github_checks import has_active_head_ci
+
+    # Missing aggregates remain degraded and merge-blocking. Proven live CI
+    # can still overlap the existing exact-head review/remediation flow.
+    ci_summary["reviewWhileCiPending"] = (
+        ci_summary["degradedReasons"] == ["missing_required_checks"]
+        and ci_summary.get("isRunning") is True
+        and not ci_summary.get("hasAuthoritativeFailures")
+        and not ci_summary.get("strandedChecks")
+        and has_active_head_ci(
+            head_check_runs,
+            run_observation[0],
+            head_sha=head_sha,
+            repository=pr_repo or "",
+        )
+    )
 
     previous_sha = (
         _fetch_previous_commit_sha(

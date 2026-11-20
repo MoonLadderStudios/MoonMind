@@ -188,6 +188,17 @@ def normalize_portable_snapshot(
             and signal_quality in {"", "ok"}
         ),
         checks_failed=authoritative_failures,
+        review_while_ci_pending=(
+            ci.get("reviewWhileCiPending") is True
+            and ci.get("isRunning") is True
+            and ci.get("headShaVerified")
+            == _text(pr.get("headRefOid") or raw.get("headSha"))
+            and bool(ci.get("headShaVerified"))
+            and ci.get("degradedReasons") == ["missing_required_checks"]
+            and bool(ci.get("missingRequiredChecks"))
+            and not authoritative_failures
+            and not ci.get("strandedChecks")
+        ),
         checks_degraded=signal_quality not in {"", "ok"},
         checks_external_blocked=bool(ci.get("strandedChecks")),
         checks_signal_available=bool(ci),

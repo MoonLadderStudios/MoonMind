@@ -748,3 +748,87 @@ def test_fix_only_prompt_does_not_require_an_open_merge_gate() -> None:
     assert "review_clean" in instructions
     assert "merge gate opens" not in instructions
     assert "nothing left to address" in instructions
+
+
+def test_readiness_can_admit_review_without_accepting_running_ci():
+    payload = {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "checksActiveForReview": True,
+        "blockers": [{"kind": "checks_running", "summary": "CI is active."}],
+    }
+    evidence = classify_readiness(
+        payload,
+        tracked_head_sha="abc123",
+        allow_review_during_ci=True,
+    )
+    assert evidence.ready is True
+    assert evidence.checks_complete is False
+    assert evidence.checks_passing is False
+    assert not classify_readiness(payload, tracked_head_sha="abc123").ready
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"checksActiveForReview": False},
+        {"headSha": "other"},
+        {"policyAllowed": False},
+        {"jiraStatusAllowed": False},
+        {"pullRequestOpen": False},
+        {"automatedReviewComplete": False},
+        {
+            "blockers": [
+                {"kind": "external_state_unavailable", "summary": "Unavailable"}
+            ]
+        },
+    ],
+)
+def test_early_review_keeps_other_readiness_barriers(extra):
+    payload = {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "checksComplete": False,
+        "checksPassing": False,
+        "checksActiveForReview": True,
+        "blockers": [{"kind": "checks_running", "summary": "CI is active."}],
+    }
+    payload.update(extra)
+    assert not classify_readiness(
+        payload,
+        tracked_head_sha="abc123",
+        allow_review_during_ci=True,
+    ).ready
+
+
+def test_early_review_readmission_tracks_completed_review_not_every_poll(monkeypatch):
+    from moonmind.workflows.temporal.workflows import merge_automation as module
+
+    gate = module.MoonMindMergeAutomationWorkflow()
+    monkeypatch.setattr(gate, "_review_loop_active", lambda: True)
+    monkeypatch.setattr(module.workflow, "patched", lambda _: True)
+    payload = {
+        "headSha": "abc123",
+        "checksActiveForReview": True,
+        "readinessObservationId": "poll-1",
+        "automatedReviewComplete": None,
+    }
+    assert gate._review_during_ci_enabled(payload)
+    gate._early_review_admission = gate._early_review_admission_key(payload)
+    assert not gate._review_during_ci_enabled(payload)
+    gate._active_review_request = {"headSha": "abc123", "requestCommentId": 10}
+    assert not gate._review_during_ci_enabled(payload)
+    gate._active_review_request = None
+    gate._review_cycles = [
+        {"headSha": "abc123", "requestCommentId": 10, "status": "completed"}
+    ]
+    assert gate._review_during_ci_enabled(payload)
+    gate._early_review_admission = gate._early_review_admission_key(payload)
+    assert not gate._review_during_ci_enabled(payload)
+    assert gate._review_during_ci_enabled({**payload, "headSha": "new123"})
+    monkeypatch.setattr(module.workflow, "patched", lambda _: False)
+    assert not gate._review_during_ci_enabled({**payload, "headSha": "new123"})

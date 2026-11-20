@@ -48,14 +48,24 @@ def _load_module(script_path: Path) -> dict[str, Any]:
 @pytest.fixture
 def snapshot_module() -> dict[str, Any]:
     return _load_module(
-        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_snapshot.py"
+        REPO_ROOT
+        / ".agents"
+        / "skills"
+        / "pr-resolver"
+        / "bin"
+        / "pr_resolve_snapshot.py"
     )
 
 
 @pytest.fixture
 def contract_module() -> dict[str, Any]:
     return _load_module(
-        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_contract.py"
+        REPO_ROOT
+        / ".agents"
+        / "skills"
+        / "pr-resolver"
+        / "bin"
+        / "pr_resolve_contract.py"
     )
 
 
@@ -210,14 +220,17 @@ def test_progress_signature_is_stable_and_head_sensitive(snapshot_module) -> Non
     summary = {"actionableCommentIds": [2, 1], "deferredCommentIds": [9]}
 
     assert build(head_sha=HEAD, comments_summary=summary) == build(
-        head_sha=HEAD, comments_summary={"actionableCommentIds": [1, 2], "deferredCommentIds": [9]}
+        head_sha=HEAD,
+        comments_summary={"actionableCommentIds": [1, 2], "deferredCommentIds": [9]},
     )
     assert build(head_sha=HEAD, comments_summary=summary) != build(
         head_sha=OLD_HEAD, comments_summary=summary
     )
 
 
-def test_deferred_ledger_entries_surface_in_the_summary(snapshot_module, tmp_path, monkeypatch) -> None:
+def test_deferred_ledger_entries_surface_in_the_summary(
+    snapshot_module, tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     ledger = tmp_path / "artifacts" / "pr_resolver_addressed_comments.json"
     ledger.parent.mkdir(parents=True)
@@ -584,9 +597,7 @@ def _codex_reply(
 def test_provider_usage_limit_reply_fails_the_request(snapshot_module, body) -> None:
     request = _request_comment(created_at="2026-10-06T21:02:09Z")
     request["id"] = 6025384173
-    reply = _codex_reply(
-        body, created_at="2026-10-06T21:02:18Z", comment_id=6025386732
-    )
+    reply = _codex_reply(body, created_at="2026-10-06T21:02:18Z", comment_id=6025386732)
 
     evidence = _evidence(snapshot_module, comments=[request, reply])
 
@@ -959,7 +970,12 @@ def test_request_review_next_step_maps_to_request_review_disposition(
 
 def test_finalize_writes_a_request_review_result(tmp_path, monkeypatch) -> None:
     finalize_module = _load_module(
-        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_finalize.py"
+        REPO_ROOT
+        / ".agents"
+        / "skills"
+        / "pr-resolver"
+        / "bin"
+        / "pr_resolve_finalize.py"
     )
     main = finalize_module["main"]
     globals_dict = main.__globals__
@@ -1014,7 +1030,12 @@ def test_finalize_stops_on_a_refused_review_request(
     tmp_path, monkeypatch, contract_module
 ) -> None:
     finalize_module = _load_module(
-        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_finalize.py"
+        REPO_ROOT
+        / ".agents"
+        / "skills"
+        / "pr-resolver"
+        / "bin"
+        / "pr_resolve_finalize.py"
     )
     main = finalize_module["main"]
     snapshot = _snapshot()
@@ -1597,9 +1618,11 @@ def test_refreshed_inventory_rebinds_review_evidence(
     first = {**_request_comment(), "id": 100}
     second = {**_request_comment("2026-08-24T22:22:00Z"), "id": 102}
     first_clean = _codex_reply(
-        CODEX_USAGE_LIMIT_REPLY
-        if initial_result == "failure"
-        else "Codex Review: Didn't find any major issues. 🚀",
+        (
+            CODEX_USAGE_LIMIT_REPLY
+            if initial_result == "failure"
+            else "Codex Review: Didn't find any major issues. 🚀"
+        ),
         comment_id=101,
     )
     second_reply = _codex_reply(
@@ -1733,13 +1756,14 @@ def test_refreshed_inventory_rebinds_review_evidence(
         assert result["commentsSummary"]["actionableCommentIds"] == [104]
 
 
-
 @pytest.mark.parametrize("comments", [[], [{"body": "Unrelated discussion"}]])
 def test_first_request_does_not_require_optional_head_timestamp(
     snapshot_module, monkeypatch, comments
 ):
     build = snapshot_module["build_automated_review_evidence"]
-    monkeypatch.setitem(build.__globals__, "_fetch_head_commit_timestamp", lambda **kw: None)
+    monkeypatch.setitem(
+        build.__globals__, "_fetch_head_commit_timestamp", lambda **kw: None
+    )
     evidence = _evidence(snapshot_module, head_committed_at=None, comments=comments)
     assert evidence["freshReviewForHead"] is False
     assert evidence["requestPending"] is False
@@ -1747,5 +1771,125 @@ def test_first_request_does_not_require_optional_head_timestamp(
     assert evidence["requestCommentId"] is None
     assert evidence["completionId"] is None
 
-    decision = classify_snapshot(normalize_portable_snapshot(_snapshot(automatedReview=evidence)))
+    decision = classify_snapshot(
+        normalize_portable_snapshot(_snapshot(automatedReview=evidence))
+    )
     assert decision.action is ResolverAction.REQUEST_REVIEW
+
+
+@pytest.mark.parametrize(
+    "review_state,reason",
+    [
+        ("missing", "fresh_review_required_after_remediation"),
+        ("pending", "automated_review_wait"),
+        ("fresh", "ci_running"),
+    ],
+)
+def test_verified_pending_aggregate_allows_review_but_never_merge(review_state, reason):
+    snapshot = _snapshot()
+    snapshot["ci"] = {
+        "isRunning": True,
+        "hasFailures": True,
+        "hasAuthoritativeFailures": False,
+        "signalQuality": "degraded",
+        "degradedReasons": ["missing_required_checks"],
+        "missingRequiredChecks": ["ci-required"],
+        "headShaVerified": HEAD,
+        "reviewWhileCiPending": True,
+    }
+    snapshot["automatedReview"]["requestPending"] = review_state == "pending"
+    snapshot["automatedReview"]["freshReviewForHead"] = review_state == "fresh"
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    assert decision.reason_code == reason
+    assert decision.action is not ResolverAction.ATTEMPT_MERGE
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"degradedReasons": ["head_checks_unavailable"]},
+        {"degradedReasons": ["missing_required_checks", "head_statuses_unavailable"]},
+        {"headShaVerified": OLD_HEAD},
+        {"isRunning": False},
+        {"strandedChecks": [{"name": "unit"}]},
+        {"hasAuthoritativeFailures": True},
+    ],
+)
+def test_pending_aggregate_review_flag_cannot_override_invalid_evidence(change):
+    snapshot = _snapshot()
+    snapshot["ci"] = {
+        "isRunning": True,
+        "hasFailures": True,
+        "hasAuthoritativeFailures": False,
+        "signalQuality": "degraded",
+        "degradedReasons": ["missing_required_checks"],
+        "missingRequiredChecks": ["ci-required"],
+        "headShaVerified": HEAD,
+        "reviewWhileCiPending": True,
+        **change,
+    }
+    assert (
+        classify_snapshot(normalize_portable_snapshot(snapshot)).action
+        is not ResolverAction.REQUEST_REVIEW
+    )
+
+
+@pytest.mark.parametrize(
+    "pending,reason", [(False, "actionable_comments"), (True, "automated_review_wait")]
+)
+def test_early_review_findings_use_existing_remediation_after_review_settles(
+    pending, reason
+):
+    snapshot = _snapshot()
+    snapshot["ci"] = {
+        "isRunning": True,
+        "hasFailures": True,
+        "hasAuthoritativeFailures": False,
+        "signalQuality": "degraded",
+        "degradedReasons": ["missing_required_checks"],
+        "missingRequiredChecks": ["ci-required"],
+        "headShaVerified": HEAD,
+        "reviewWhileCiPending": True,
+    }
+    snapshot["commentsSummary"]["hasActionableComments"] = True
+    snapshot["automatedReview"]["requestPending"] = pending
+    snapshot["automatedReview"]["freshReviewForHead"] = not pending
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    assert decision.reason_code == reason
+    assert decision.action is (
+        ResolverAction.WAIT if pending else ResolverAction.RUN_REMEDIATION
+    )
+
+
+@pytest.mark.parametrize(
+    "blocker,reason",
+    [
+        ("comments_unavailable", "comments_unavailable"),
+        ("deferred", "deferred_comments"),
+        ("malformed", "comments_unavailable"),
+        ("refused", "automated_review_request_failed"),
+    ],
+)
+def test_early_review_keeps_existing_non_ci_blockers(blocker, reason):
+    snapshot = _snapshot()
+    snapshot["ci"] = {
+        "isRunning": True,
+        "hasFailures": True,
+        "hasAuthoritativeFailures": False,
+        "signalQuality": "degraded",
+        "degradedReasons": ["missing_required_checks"],
+        "missingRequiredChecks": ["ci-required"],
+        "headShaVerified": HEAD,
+        "reviewWhileCiPending": True,
+    }
+    if blocker == "comments_unavailable":
+        snapshot["commentsFetch"]["succeeded"] = False
+    elif blocker == "deferred":
+        snapshot["commentsSummary"]["hasDeferredComments"] = True
+    elif blocker == "malformed":
+        snapshot["commentsFetch"] = {}
+    else:
+        snapshot["automatedReview"]["requestFailed"] = True
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    assert decision.reason_code == reason
+    assert decision.action is not ResolverAction.REQUEST_REVIEW

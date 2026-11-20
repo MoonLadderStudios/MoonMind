@@ -131,6 +131,7 @@ def classify_readiness(
     actionable_merge_conflicts: bool = True,
     actionable_ci_failures: bool = True,
     allow_conflict_repair_without_ci: bool = True,
+    allow_review_during_ci: bool = False,
 ) -> ReadinessEvidenceModel:
     """Normalize provider readiness evidence into bounded merge-gate evidence."""
 
@@ -157,6 +158,17 @@ def classify_readiness(
             for raw in payload.get("blockers") or []
         )
     )
+    review_during_ci = (
+        allow_review_during_ci
+        and not pull_request_merged
+        and payload.get("pullRequestOpen") is True
+        and payload.get("checksActiveForReview") is True
+        and payload.get("checksComplete") is False
+        and all(
+            isinstance(raw, Mapping) and raw.get("kind") == "checks_running"
+            for raw in payload.get("blockers") or []
+        )
+    )
     blockers: list[ReadinessBlockerModel] = []
     actionable_merge_conflict_seen = False
     if not pull_request_merged and head_sha != str(tracked_head_sha).strip():
@@ -175,7 +187,9 @@ def classify_readiness(
                 raw.get("kind"),
                 actionable_merge_conflicts=actionable_merge_conflicts,
             )
-            if kind == "checks_running" and (known_ci_failure or conflict_without_ci):
+            if kind == "checks_running" and (
+                known_ci_failure or conflict_without_ci or review_during_ci
+            ):
                 # Admit the existing resolver to repair a completed failure;
                 # missing CI also cannot start on a conflicted pull request.
                 continue
@@ -219,7 +233,7 @@ def classify_readiness(
                 )
             )
         )
-    if not (known_ci_failure or conflict_without_ci) and (
+    if not (known_ci_failure or conflict_without_ci or review_during_ci) and (
         payload.get("checksComplete") is False
         or payload.get("checks_complete") is False
     ):
@@ -282,7 +296,10 @@ def classify_readiness(
         and (known_ci_failure or (checks_are_failing and checks_are_complete))
     )
     ready = (
-        explicit_ready or checks_failed_but_actionable or actionable_merge_conflict_seen
+        explicit_ready
+        or checks_failed_but_actionable
+        or actionable_merge_conflict_seen
+        or review_during_ci
     ) and not deduped
     return ReadinessEvidenceModel.model_validate(
         {

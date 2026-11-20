@@ -1313,3 +1313,243 @@ async def test_conflict_without_ci_repairs_on_fresh_poll_and_replays(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _PreEarlyReviewGate(MoonMindMergeAutomationWorkflow):
+    def _review_during_ci_enabled(self, evaluation: Any) -> bool:
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class _EarlyReviewResolver:
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        result = await workflow.execute_activity(
+            "qualification.merge_fixture",
+            {},
+            task_queue=workflow.info().task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        if not result.pop("pending", False):
+            return result
+        info = workflow.info()
+        request = result.pop("request", False)
+        response = {
+            "status": "success",
+            "completionDisposition": "gated_continuation",
+            "mergeAutomationDisposition": "reenter_gate",
+            "headSha": "abcdef1",
+            "executionRef": "step:resolver:1",
+            "childRunId": info.run_id,
+            "gatedContinuation": {
+                "schemaVersion": "gated-continuation/v1",
+                "gateType": "merge_automation",
+                "action": "reenter_gate",
+                "reason": "ci_running",
+                "notBefore": (workflow.now() + timedelta(seconds=2)).isoformat(),
+                "executionRef": "step:resolver:1",
+                "headSha": "abcdef1",
+                "ownerWorkflowId": info.parent.workflow_id,
+                "ownerRunId": info.parent.run_id,
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "childWorkflowId": info.workflow_id,
+                "childRunId": info.run_id,
+            },
+        }
+        if request:
+            response["mergeAutomationDisposition"] = "request_review"
+            continuation = response["gatedContinuation"]
+            continuation.pop("notBefore")
+            continuation.update(
+                schemaVersion="gated-continuation/v2",
+                action="request_review",
+                reason="fresh_review_required_after_remediation",
+                provider="codex",
+            )
+        return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upgrade", [False, True])
+@pytest.mark.parametrize("request_review", [False, True])
+async def test_early_review_wait_is_bounded_and_replays(
+    monkeypatch, upgrade, request_review
+):
+    merged = False
+    early_seen = False
+    polls_after_early = 0
+    observations = []
+    child_checks_complete = []
+    requests = []
+
+    @activity.defn(name="merge_automation.evaluate_readiness")
+    async def evaluate(_payload):
+        nonlocal polls_after_early
+        if early_seen:
+            polls_after_early += 1
+        complete = polls_after_early >= 3
+        result = {
+            "headSha": "abcdef1",
+            "ready": complete and not merged,
+            "pullRequestOpen": not merged,
+            "pullRequestMerged": merged,
+            "policyAllowed": True,
+            "jiraStatusAllowed": True,
+            "checksReported": True,
+            "checksComplete": complete,
+            "checksPassing": complete,
+            "checksActiveForReview": not complete,
+            "automatedReviewComplete": None,
+            "readinessObservationId": activity.info().activity_id,
+            "blockers": (
+                []
+                if complete
+                else [{"kind": "checks_running", "summary": "CI active."}]
+            ),
+        }
+        active = _payload.get("activeReviewRequest")
+        if active:
+            result.update(
+                automatedReviewComplete=True,
+                automatedReviewRequestCommentId=active["requestCommentId"],
+                automatedReviewRequestedAt=active["requestedAt"],
+                automatedReviewCompletionKind="review",
+                automatedReviewCompletionId=42,
+                automatedReviewCompletedAt=datetime.now(timezone.utc).isoformat(),
+            )
+        observations.append(result)
+        return result
+
+    @activity.defn(name="qualification.merge_fixture")
+    async def resolve(_payload):
+        nonlocal merged, early_seen
+        complete = observations[-1]["checksComplete"]
+        child_checks_complete.append(complete)
+        if not complete:
+            if request_review and len(child_checks_complete) == 1:
+                return {"pending": True, "request": True}
+            assert (
+                not early_seen
+            ), "must not relaunch after automatic fresh review yields CI wait"
+            early_seen = True
+            return {"pending": True}
+        merged = True
+        return {
+            "status": "success",
+            "mergeAutomationDisposition": "merged",
+            "headSha": "abcdef1",
+        }
+
+    @activity.defn(name="merge_automation.request_automated_review")
+    async def post_review(payload):
+        assert observations[-1]["checksComplete"] is False
+        requests.append(payload)
+        return await _posted_review(payload)
+
+    async def skip_artifact(self, *, name, payload):
+        return None
+
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_write_json_artifact", skip_artifact
+    )
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
+    )
+    payload = _payload("early-review")
+    payload["mergeAutomationConfig"]["reviewLoop"]["enabled"] = True
+    parent_queue = "early-review-parent"
+    child_queue = module.settings.temporal.user_workflow_v2_task_queue
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await env.client.operator_service.add_search_attributes(
+            AddSearchAttributesRequest(
+                namespace=env.client.namespace,
+                search_attributes={
+                    name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
+                    for name in (
+                        "mm_owner_id",
+                        "mm_owner_type",
+                        "mm_entry",
+                        "mm_repo",
+                        "mm_state",
+                    )
+                },
+            )
+        )
+        async with (
+            Worker(
+                env.client,
+                task_queue=INTEGRATIONS_TASK_QUEUE,
+                activities=[evaluate, post_review],
+            ),
+            Worker(
+                env.client,
+                task_queue=child_queue,
+                workflows=[_EarlyReviewResolver],
+                activities=[resolve],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+        ):
+            if upgrade:
+                async with Worker(
+                    env.client,
+                    task_queue=parent_queue,
+                    workflows=[_PreEarlyReviewGate],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    max_cached_workflows=0,
+                ):
+                    handle = await env.client.start_workflow(
+                        _PreEarlyReviewGate.run,
+                        payload,
+                        id=f"early-review-{upgrade}",
+                        task_queue=parent_queue,
+                        execution_timeout=timedelta(minutes=2),
+                    )
+                    async with asyncio.timeout(10):
+                        while True:
+                            old_history = await handle.fetch_history()
+                            if any(
+                                e.HasField("timer_started_event_attributes")
+                                for e in old_history.events
+                            ):
+                                break
+                            await asyncio.sleep(0.01)
+                assert not child_checks_complete
+                await Replayer(
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(old_history)
+            async with Worker(
+                env.client,
+                task_queue=parent_queue,
+                workflows=[MoonMindMergeAutomationWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                max_cached_workflows=0,
+            ):
+                if upgrade:
+                    await env.sleep(timedelta(seconds=2))
+                else:
+                    handle = await env.client.start_workflow(
+                        MoonMindMergeAutomationWorkflow.run,
+                        payload,
+                        id=f"early-review-{upgrade}",
+                        task_queue=parent_queue,
+                        execution_timeout=timedelta(minutes=2),
+                    )
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                history = await handle.fetch_history()
+    assert result["status"] == "merged", result
+    assert child_checks_complete == (
+        [False, False, True] if request_review else [False, True]
+    )
+    assert len(result["resolverChildWorkflowIds"]) == (3 if request_review else 2)
+    assert len(requests) == int(request_review)
+    assert polls_after_early >= 3
+    await Replayer(
+        workflows=[MoonMindMergeAutomationWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)

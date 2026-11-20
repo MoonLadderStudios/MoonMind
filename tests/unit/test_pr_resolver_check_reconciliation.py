@@ -715,3 +715,61 @@ def test_zero_job_identity_cannot_bind_a_check_to_a_workflow():
     assert checks == [old, new]
     assert not evidence["supersededChecks"]
     assert evidence["unresolvedChecks"][0]["reason"] == "check_identity_unavailable"
+
+
+def test_active_head_ci_proof_requires_current_nonsecurity_pending_check():
+    check = _check(name="unit", status="in_progress", conclusion=None)
+    run = _run(status="in_progress", conclusion=None)
+    assert github_checks.has_active_head_ci(
+        [check], [run], head_sha=HEAD, repository="acme/repo"
+    )
+    assert github_checks.has_active_head_ci(
+        [{**check, "run_attempt": 2}],
+        [{**run, "run_attempt": 2}],
+        head_sha=HEAD,
+        repository="acme/repo",
+    )
+
+
+@pytest.mark.parametrize(
+    "check_changes,run_changes",
+    [
+        ({"name": "CodeQL"}, {}),
+        ({"name": "Analyze (python)"}, {}),
+        ({"app": {"id": 7, "slug": "github-advanced-security"}}, {}),
+        ({"head_sha": "b" * 40}, {}),
+        ({}, {"head_sha": "b" * 40}),
+        ({"status": "completed", "conclusion": "failure"}, {}),
+        ({}, {"status": "completed", "conclusion": "failure"}),
+        ({}, {"run_attempt": 2}),
+        ({"run_attempt": 1}, {"run_attempt": 2}),
+        ({"run_attempt": True}, {}),
+        (
+            {"details_url": "https://github.com/other/repo/actions/runs/101/job/1001"},
+            {},
+        ),
+        ({"details_url": "https://github.com/acme/repo/actions/runs/101/job/0"}, {}),
+        ({"app": {"slug": "github-actions"}}, {}),
+        ({}, {"workflow_id": None, "path": None}),
+    ],
+)
+def test_unbound_or_inactive_ci_never_authorizes_early_review(
+    check_changes, run_changes
+):
+    check = {
+        **_check(name="unit", status="in_progress", conclusion=None),
+        **check_changes,
+    }
+    run = {**_run(status="in_progress", conclusion=None), **run_changes}
+    assert not github_checks.has_active_head_ci(
+        [check], [run], head_sha=HEAD, repository="acme/repo"
+    )
+
+
+def test_missing_or_conflicting_run_records_never_authorize_early_review():
+    check = _check(name="unit", status="in_progress", conclusion=None)
+    run = _run(status="in_progress", conclusion=None)
+    for runs in (None, [], [run, {**run, "run_attempt": 2}]):
+        assert not github_checks.has_active_head_ci(
+            [check], runs, head_sha=HEAD, repository="acme/repo"
+        )

@@ -142,6 +142,7 @@ MERGE_AUTOMATION_MULTIPLE_REVIEW_REQUESTS_PATCH_PREFIX = (
 MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
     "merge-automation-actionable-ci-failure-v1:"
 )
+MERGE_AUTOMATION_REVIEW_DURING_CI_PATCH_PREFIX = "merge-automation-review-during-ci-v1:"
 MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX = (
     "merge-automation-missing-ci-wait-v1:"
 )
@@ -249,6 +250,7 @@ class MoonMindMergeAutomationWorkflow:
         self._review_loop_enabled = False
         self._review_cycles: list[dict[str, Any]] = []
         self._active_review_request: dict[str, Any] | None = None
+        self._early_review_admission: tuple[str, int | None] | None = None
         self._last_progress_signature: str | None = None
         self._no_progress_cycles = 0
         self._summary: str | None = None
@@ -1197,6 +1199,7 @@ class MoonMindMergeAutomationWorkflow:
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+            allow_review_during_ci=self._review_during_ci_enabled(evaluation),
             allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                 evaluation
             ),
@@ -1242,6 +1245,38 @@ class MoonMindMergeAutomationWorkflow:
         return workflow.patched(
             MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX + observation_key
         )
+
+    def _early_review_admission_key(
+        self, evaluation: Mapping[str, Any]
+    ) -> tuple[str, int | None]:
+        head = str(evaluation.get("headSha") or "")
+        completed = next(
+            (
+                cycle.get("requestCommentId")
+                for cycle in reversed(self._review_cycles)
+                if cycle.get("headSha") == head and cycle.get("status") == "completed"
+            ),
+            None,
+        )
+        return head, completed
+
+    def _review_during_ci_enabled(self, evaluation: Any) -> bool:
+        if (
+            not self._review_loop_active()
+            or self._active_review_request
+            or not isinstance(evaluation, Mapping)
+            or self._early_review_admission_key(evaluation)
+            == self._early_review_admission
+            or evaluation.get("checksActiveForReview") is not True
+            or evaluation.get("automatedReviewComplete") is not None
+        ):
+            return False
+        observation = evaluation.get("readinessObservationId")
+        if not isinstance(observation, str) or not observation.strip():
+            return False
+        # Preserve a recorded wait, adopting early review on the next poll.
+        key = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+        return workflow.patched(MERGE_AUTOMATION_REVIEW_DURING_CI_PATCH_PREFIX + key)
 
     def _conflict_repair_without_ci_enabled(self, evaluation: Any) -> bool:
         if (
@@ -2245,6 +2280,7 @@ class MoonMindMergeAutomationWorkflow:
                     actionable_ci_failures=self._actionable_ci_failures_enabled(
                         evaluation
                     ),
+                    allow_review_during_ci=self._review_during_ci_enabled(evaluation),
                     allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                         evaluation
                     ),
@@ -2349,6 +2385,7 @@ class MoonMindMergeAutomationWorkflow:
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+            allow_review_during_ci=self._review_during_ci_enabled(evaluation),
             allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                 evaluation
             ),
@@ -2530,6 +2567,7 @@ class MoonMindMergeAutomationWorkflow:
                 tracked_head_sha=self._input.pull_request.head_sha,
                 actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
                 actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                allow_review_during_ci=self._review_during_ci_enabled(evaluation),
                 allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                     evaluation
                 ),
@@ -2624,6 +2662,9 @@ class MoonMindMergeAutomationWorkflow:
                         actionable_ci_failures=self._actionable_ci_failures_enabled(
                             evaluation
                         ),
+                        allow_review_during_ci=self._review_during_ci_enabled(
+                            evaluation
+                        ),
                         allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                             evaluation
                         ),
@@ -2647,6 +2688,7 @@ class MoonMindMergeAutomationWorkflow:
                     actionable_ci_failures=self._actionable_ci_failures_enabled(
                         evaluation
                     ),
+                    allow_review_during_ci=self._review_during_ci_enabled(evaluation),
                     allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
                         evaluation
                     ),
@@ -2729,6 +2771,10 @@ class MoonMindMergeAutomationWorkflow:
                     resolver_request = await self._prepare_omnigent_resolver_request(
                         resolver_request,
                         resolver_workflow_id=resolver_workflow_id,
+                    )
+                if self._review_during_ci_enabled(evaluation):
+                    self._early_review_admission = self._early_review_admission_key(
+                        evaluation
                     )
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
                 child_kwargs: dict[str, Any] = {

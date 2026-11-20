@@ -104,8 +104,18 @@ def classify_snapshot(
         return _decision(
             "manual_review", "ci_workflow_terminal", ResolverAction.STOP_MANUAL_REVIEW
         )
-    if snapshot.checks_degraded and (
-        not snapshot.checks_failed or not known_ci_failures_precede_degraded
+    # A positively observed live CI run may overlap review while its required
+    # aggregate is not created yet. Keep degradation intact: this exception
+    # permits normal review and remediation priority, never merge.
+    if (
+        snapshot.checks_degraded
+        and (not snapshot.checks_failed or not known_ci_failures_precede_degraded)
+        and not (
+            snapshot.review_loop_enabled
+            and snapshot.review_while_ci_pending
+            and not snapshot.checks_failed
+            and not snapshot.checks_complete
+        )
     ):
         return _decision(
             "manual_review", "ci_signal_degraded", ResolverAction.STOP_MANUAL_REVIEW
