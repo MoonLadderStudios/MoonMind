@@ -336,6 +336,13 @@ def test_quoted_credentials_in_markdown_cannot_enter_or_restore_receipt(content)
     ('rules/options.toml', 'refresh_token="opaque-value"'),
     ('rules/options.toml', '[settings]\nclientSecret="opaque-value"'),
     ('rules/options.toml', 'note="xoxb-synthetic-token-body"'),
+], ids=[
+    'markdown-api-key', 'markdown-exported-api-key', 'markdown-session-key',
+    'markdown-escaped-session-key', 'markdown-nested-client-secret',
+    'markdown-chat-token-prefix', 'markdown-oauth-prefix',
+    'json-api-key', 'json-session-key', 'json-nested-client-secret',
+    'json-chat-token-prefix', 'toml-api-key', 'toml-session-key',
+    'toml-nested-client-secret', 'toml-chat-token-prefix',
 ])
 def test_known_credential_names_and_prefixes_refuse_before_receipt(content, path):
     from moonmind.omnigent.codex_file_seeds import validate_seed_capture

@@ -797,3 +797,47 @@ def test_hermetic_physical_receipts_are_complete_distinct_and_current(
         result = runner.owner_receipt_commands(tmp_path, manifest_path, **kwargs)
         assert result[0]["nodeIds"] == nodes
         assert len(result[0]["ownerReceiptRefs"]) == 2
+
+
+def test_seed_security_cases_keep_actual_owner_evidence_secret_free(tmp_path, monkeypatch):
+    """Negative security payloads must not become public pytest case identifiers."""
+    import os
+    import subprocess
+
+    from moonmind.omnigent.conformance import assert_secret_free
+
+    path = "tests/unit/omnigent/test_codex_file_seeds.py"
+    receipt_path = tmp_path / "seed.receipt.json"
+    identity = dict(revision="a" * 40, runId="123", attempt="1")
+    env = {
+        **os.environ,
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "MOONMIND_CI_RECEIPT": str(receipt_path),
+        "MOONMIND_CI_SUITE": "unit-fast",
+        "MOONMIND_CI_REVISION": identity["revision"],
+        "MOONMIND_CI_ENVIRONMENT": "seed-evidence-regression",
+        "GITHUB_RUN_ID": identity["runId"], "GITHUB_RUN_ATTEMPT": identity["attempt"],
+    }
+    result = subprocess.run(
+        [sys.executable, "tools/ci/write_backend_matrix_summary.py", "run",
+         "--expected-python", f"{sys.version_info.major}.{sys.version_info.minor}",
+         "-p", "pytest_asyncio.plugin", "-p", "tools.ci.write_backend_matrix_summary",
+         "--noconftest", path, "-q"],
+        cwd=REPO_ROOT, env=env, text=True, capture_output=True, timeout=60,
+    )
+    assert result.returncode == 0, "Seed security suite failed in the evidence subprocess"
+    receipt = json.loads(receipt_path.read_text())
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps({
+        "schema": "moonmind.test-ownership/v1", **identity,
+        "nodes": [{"nodeid": node, "path": path, "eligible": True, "owners": ["unit-fast"]}
+                  for node in receipt["expectedNodeIds"]],
+    }))
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "COMMANDS", ((sys.executable, "-m", "pytest", path),))
+    evidence = runner.owner_receipt_commands(
+        tmp_path, manifest_path, revision=identity["revision"], run_id="123", attempt="1",
+    )
+    assert evidence[0]["nodeIds"] == sorted(receipt["expectedNodeIds"])
+    assert_secret_free(json.dumps(evidence))
+    assert_secret_free(result.stdout + result.stderr)
