@@ -140,6 +140,69 @@ describe('Workflow list progressive disclosure and cards', () => {
     expect(within(drawer).queryByRole('button', { name: /complete first/ })).toBeNull();
   });
 
+  it('leads the mobile toolbar with Filters and the current sort, then a View options overflow', async () => {
+    window.history.pushState({}, 'Test', '/workflows?stateNotIn=failed');
+    renderWithClient(<WorkflowListPage payload={payload} />);
+    await screen.findAllByText('Example task');
+
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    const sortSelect = screen.getByRole('combobox', { name: 'Sort workflows' }) as HTMLSelectElement;
+    const viewOptions = screen.getByRole('button', { name: 'View options' });
+    const chip = screen.getByRole('button', { name: 'Status filter: not failed' });
+    const toolbar = filters.parentElement as HTMLElement;
+    expect([...toolbar.children]).toEqual([
+      filters,
+      sortSelect.closest('.workflow-list-sort-control'),
+      viewOptions.closest('.workflow-list-view-options'),
+    ]);
+    // Active-filter chips sit below the control row, after it in tab order.
+    expect(toolbar.contains(chip)).toBe(false);
+    expect(viewOptions.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // The count appears only while filters narrow the list.
+    expect(filters.textContent).toBe('Filters1');
+
+    // The closed control shows a short current sort; the list keeps full labels.
+    const sortFace = () => sortSelect.closest('.workflow-list-sort-control')!.querySelector('[aria-hidden="true"]');
+    expect(sortSelect.value).toBe('updatedAt:desc');
+    expect(sortSelect.selectedOptions[0]!.textContent).toBe('Newest update');
+    expect(sortFace()?.textContent).toBe('Updated ↓');
+    fireEvent.change(sortSelect, { target: { value: 'title:asc' } });
+    expect(sortFace()?.textContent).toBe('Workflow ↑');
+
+    // "View options" is an unlabelled overflow glyph with a screen-reader name.
+    expect(viewOptions.textContent).toBe('');
+    expect(viewOptions.classList.contains('workflow-list-view-options-trigger--overflow')).toBe(true);
+    fireEvent.click(viewOptions);
+    expect(screen.getByRole('dialog', { name: 'Workflow list view options' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Filters' }).textContent).toBe('Filters'));
+  });
+
+  it('ends the mobile filter sheet with Clear all and Show results', async () => {
+    renderWithClient(<WorkflowListPage payload={payload} />);
+    await screen.findAllByText('Example task');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    let drawer = await screen.findByRole('dialog', { name: 'Advanced filters' });
+    expect(within(drawer).queryByRole('button', { name: /Cancel|Apply|Reset/ })).toBeNull();
+    const clearAll = within(drawer).getByRole('button', { name: 'Clear all' }) as HTMLButtonElement;
+    expect(clearAll.disabled).toBe(true);
+    fireEvent.change(within(drawer).getByLabelText('Status filter value'), { target: { value: 'failed' } });
+    expect(clearAll.disabled).toBe(false);
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Show results' }));
+
+    await waitFor(() => expect(listCalls().at(-1)).toContain('stateIn=failed'));
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    drawer = await screen.findByRole('dialog', { name: 'Advanced filters' });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Clear all' }));
+    await waitFor(() => expect(listCalls().at(-1)).not.toContain('stateIn='));
+    expect(screen.queryByRole('button', { name: 'Status filter: failed' })).toBeNull();
+  });
+
   it('collapses inactive filter sections and summarizes active ones', async () => {
     window.history.pushState({}, 'Test', '/workflows?stateNotIn=failed&finishedBlank=include');
     renderWithClient(<WorkflowListPage payload={payload} />);
@@ -170,7 +233,7 @@ describe('Workflow list progressive disclosure and cards', () => {
     fireEvent.change(within(drawer).getByLabelText('Status filter mode'), { target: { value: 'exclude' } });
     fireEvent.change(within(drawer).getByLabelText('Status filter value'), { target: { value: 'failed' } });
     fireEvent.change(within(drawer).getByLabelText('Finished blank values'), { target: { value: 'exclude' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show results' }));
 
     await waitFor(() => {
       const url = listCalls().at(-1) || '';
@@ -201,7 +264,7 @@ describe('Workflow list progressive disclosure and cards', () => {
     const selected = within(skillSection).getByRole('list', { name: 'Selected skill filters' });
     expect(within(selected).getByText('deploy-preview')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show results' }));
     await waitFor(() => expect(listCalls().at(-1)).toContain('targetSkillIn=deploy-preview'));
   });
 
@@ -231,7 +294,7 @@ describe('Workflow list progressive disclosure and cards', () => {
     fireEvent.click(await within(repoSection).findByText('More values…'));
     fireEvent.change(within(repoSection).getByLabelText('Search Repo values'), { target: { value: 'other' } });
     fireEvent.click(await within(repoSection).findByLabelText('Add Acme/other-repo'));
-    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show results' }));
 
     await waitFor(() => expect(listCalls().at(-1)).toContain('repoIn=Acme%2Fother-repo'));
   });

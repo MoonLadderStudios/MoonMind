@@ -1141,11 +1141,17 @@ const SORT_DIRECTION_LABELS: Record<string, { asc: string; desc: string }> = {
   progress: { asc: 'Least complete first', desc: 'Most complete first' },
   repository: { asc: 'Repo A–Z', desc: 'Repo Z–A' },
   providerProfile: { asc: 'Provider Profile A–Z', desc: 'Provider Profile Z–A' },
-  updatedAt: { asc: 'Oldest update first', desc: 'Newest update first' },
+  updatedAt: { asc: 'Oldest update', desc: 'Newest update' },
 };
 
 function sortOptionLabel(field: string, direction: 'asc' | 'desc'): string {
   return SORT_DIRECTION_LABELS[field]?.[direction] ?? `${field} (${direction === 'asc' ? 'ascending' : 'descending'})`;
+}
+
+/** Compact closed-state sort label for the mobile toolbar, e.g. "Updated ↓". */
+function sortButtonLabel(field: string, direction: 'asc' | 'desc'): string {
+  const column = TABLE_COLUMNS.find((candidate) => candidate.field === field);
+  return `${column?.label ?? field} ${direction === 'asc' ? '↑' : '↓'}`;
 }
 
 type FacetMoreValuesProps = {
@@ -1513,7 +1519,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // options" control moves into the Actions header, so the results header row
   // above the table is dropped entirely. matchMedia is unavailable under jsdom;
   // fall back to the mobile layout there so the test surface keeps the Filters
-  // trigger and text "View options" button.
+  // trigger, sort control, and "View options" button.
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia(DESKTOP_MEDIA_QUERY).matches
@@ -2671,27 +2677,41 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   // The "View options" control is a single instance whose placement follows the
-  // active surface: an icon button in the Actions header on desktop, the labelled
-  // button in the results header otherwise.
-  const renderViewOptions = (variant: 'text' | 'icon') => (
+  // active surface: an icon button in the Actions header on desktop, a compact
+  // overflow button in the mobile toolbar, and the labelled button in the
+  // desktop results header otherwise.
+  const renderViewOptions = (variant: 'text' | 'icon' | 'overflow') => (
     <div
-      className={`workflow-list-view-options${variant === 'icon' ? ' workflow-list-view-options--icon' : ''}`}
+      className={`workflow-list-view-options${variant === 'text' ? '' : ` workflow-list-view-options--${variant}`}`}
       ref={prefsMenuRef}
     >
-      <Button variant="secondary"
+      <Button variant={variant === 'overflow' ? 'ghost' : 'secondary'}
         type="button"
         className={
-          variant === 'icon'
-            ? 'workflow-list-view-options-trigger workflow-list-view-options-trigger--icon'
-            : ' workflow-list-view-options-trigger'
+          variant === 'text'
+            ? ' workflow-list-view-options-trigger'
+            : `workflow-list-view-options-trigger workflow-list-view-options-trigger--${variant}`
         }
         aria-haspopup="dialog"
         aria-expanded={prefsMenuOpen}
         aria-label="View options"
-        title={variant === 'icon' ? 'View options' : undefined}
+        title={variant === 'text' ? undefined : 'View options'}
         onClick={() => setPrefsMenuOpen((open) => !open)}
       >
-        {variant === 'icon' ? (
+        {variant === 'overflow' ? (
+          <svg
+            aria-hidden="true"
+            className="workflow-list-view-options-icon"
+            viewBox="0 0 16 16"
+            focusable="false"
+          >
+            <g fill="currentColor">
+              <circle cx="3" cy="8" r="1.5" />
+              <circle cx="8" cy="8" r="1.5" />
+              <circle cx="13" cy="8" r="1.5" />
+            </g>
+          </svg>
+        ) : variant === 'icon' ? (
           <svg
             aria-hidden="true"
             className="workflow-list-view-options-icon"
@@ -2790,7 +2810,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
 
   // Cards have no column headers, so narrow layouts sort from this toolbar
-  // control instead of the filter drawer.
+  // control instead of the filter drawer. The visible face shows the current
+  // sort compactly ("Updated ↓"); a transparent native select covers it so a
+  // tap opens the platform list with full labels ("Newest update").
   const renderSortControl = () => {
     const current = `${sortField}:${sortDir}`;
     const options = TABLE_COLUMNS.filter((column) => column.sortable).flatMap((column) =>
@@ -2803,9 +2825,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       options.unshift({ value: current, label: sortOptionLabel(sortField, sortDir) });
     }
     return (
-      <label className="workflow-list-sort-control">
-        <span className="sr-only">Sort workflows</span>
+      <div className="workflow-list-sort-control">
+        <span className="workflow-list-sort-face" aria-hidden="true">
+          {sortButtonLabel(sortField, sortDir)}
+        </span>
         <select
+          aria-label="Sort workflows"
           value={current}
           title={CURRENT_PAGE_SORT_NOTICE}
           onChange={(event) => {
@@ -2821,7 +2846,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             </option>
           ))}
         </select>
-      </label>
+      </div>
     );
   };
 
@@ -2875,6 +2900,58 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const activeDrawerSectionCount = visibleDrawerFields.filter(([field]) =>
     Boolean(filterSummary(field, draftFilters, formatProviderProfileId)),
   ).length;
+
+  const filterTrigger = (
+    <button
+      type="button"
+      className={`workflow-list-filter-trigger${hasActiveFilters ? ' is-active' : ''}`}
+      ref={drawerToggleRef}
+      aria-haspopup="dialog"
+      aria-expanded={drawerOpen}
+      onClick={(event) => openDrawer(null, event.currentTarget)}
+    >
+      <svg
+        aria-hidden="true"
+        className="workflow-list-filter-trigger-icon"
+        viewBox="0 0 16 16"
+        focusable="false"
+      >
+        <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
+      </svg>
+      <span>Filters</span>
+      {hasActiveFilters ? (
+        <span className="workflow-list-filter-trigger-count" aria-hidden="true">
+          {activeFilters.length}
+        </span>
+      ) : null}
+    </button>
+  );
+  const activeFilterChips = hasActiveFilters ? (
+    <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
+      {activeFilters.map(({ field, label, value }) => (
+        <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
+          <button
+            type="button"
+            className="workflow-list-filter-chip-open"
+            data-filter-field={field}
+            onClick={(event) => openDrawer(field, event.currentTarget)}
+            aria-label={`${label} filter: ${value}`}
+          >
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </button>
+          <button
+            type="button"
+            className="workflow-list-filter-chip-remove"
+            onClick={() => removeActiveFilter(field)}
+            aria-label={`Remove ${label} filter`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+    </div>
+  ) : null;
 
   const tableHasRows = !isLoading && !isError && sortedItems.length > 0;
   const showViewOptionsIcon = isDesktop && actionsEnabled && tableHasRows;
@@ -3029,28 +3106,48 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               })}
             </div>
             <footer className="workflow-list-filter-drawer-actions workflow-list-filter-actions">
-              <Button variant="ghost"
-                type="button"
-                onClick={resetDraftFilters}
-                disabled={!hasActiveFilters}
-                aria-label="Reset filters"
-              >
-                Reset
-              </Button>
-              <Button variant="ghost"
-                type="button"
-                onClick={() => closeDrawer()}
-                aria-label="Cancel filters"
-              >
-                Cancel
-              </Button>
-              <Button variant="secondary"
-                type="button"
-                onClick={applyDraftFilters}
-                aria-label="Apply filters"
-              >
-                Apply
-              </Button>
+              {isDesktop ? (
+                <>
+                  <Button variant="ghost"
+                    type="button"
+                    onClick={resetDraftFilters}
+                    disabled={!hasActiveFilters}
+                    aria-label="Reset filters"
+                  >
+                    Reset
+                  </Button>
+                  <Button variant="ghost"
+                    type="button"
+                    onClick={() => closeDrawer()}
+                    aria-label="Cancel filters"
+                  >
+                    Cancel
+                  </Button>
+                  <Button variant="secondary"
+                    type="button"
+                    onClick={applyDraftFilters}
+                    aria-label="Apply filters"
+                  >
+                    Apply
+                  </Button>
+                </>
+              ) : (
+                // The mobile bottom sheet dismisses through its close button,
+                // Escape, or the backdrop, so its footer carries only the two
+                // decisions: clear everything or see the filtered list.
+                <>
+                  <Button variant="ghost"
+                    type="button"
+                    onClick={resetDraftFilters}
+                    disabled={!hasActiveFilters && activeDrawerSectionCount === 0}
+                  >
+                    Clear all
+                  </Button>
+                  <Button variant="primary" type="button" onClick={applyDraftFilters}>
+                    Show results
+                  </Button>
+                </>
+              )}
             </footer>
           </div>
         </div>
@@ -3063,61 +3160,26 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         tabIndex={focusListOnWorkspaceReturn ? -1 : undefined}
       >
         {showResultsHeader ? (
-        <header className="workflow-list-results-header">
-          <div className="workflow-list-filter-bar">
-            <button
-              type="button"
-              className={`workflow-list-filter-trigger${hasActiveFilters ? ' is-active' : ''}`}
-              ref={drawerToggleRef}
-              aria-haspopup="dialog"
-              aria-expanded={drawerOpen}
-              onClick={(event) => openDrawer(null, event.currentTarget)}
-            >
-              <svg
-                aria-hidden="true"
-                className="workflow-list-filter-trigger-icon"
-                viewBox="0 0 16 16"
-                focusable="false"
-              >
-                <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
-              </svg>
-              <span>Filters</span>
-              {hasActiveFilters ? (
-                <span className="workflow-list-filter-trigger-count" aria-hidden="true">
-                  {activeFilters.length}
-                </span>
-              ) : null}
-            </button>
-            {hasActiveFilters ? (
-              <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
-                {activeFilters.map(({ field, label, value }) => (
-                  <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
-                    <button
-                      type="button"
-                      className="workflow-list-filter-chip-open"
-                      data-filter-field={field}
-                      onClick={(event) => openDrawer(field, event.currentTarget)}
-                      aria-label={`${label} filter: ${value}`}
-                    >
-                      <span>{label}</span>
-                      <strong>{value}</strong>
-                    </button>
-                    <button
-                      type="button"
-                      className="workflow-list-filter-chip-remove"
-                      onClick={() => removeActiveFilter(field)}
-                      aria-label={`Remove ${label} filter`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
+          // Mobile gets one row of Filters, the current sort, and a compact View
+          // options overflow, with active chips on their own row below.
+          isDesktop ? (
+            <header className="workflow-list-results-header">
+              <div className="workflow-list-filter-bar">
+                {filterTrigger}
+                {activeFilterChips}
               </div>
-            ) : null}
-          </div>
-          {!isDesktop ? renderSortControl() : null}
-          {renderViewOptions('text')}
-        </header>
+              {renderViewOptions('text')}
+            </header>
+          ) : (
+            <header className="workflow-list-results-header">
+              <div className="workflow-list-mobile-toolbar">
+                {filterTrigger}
+                {renderSortControl()}
+                {renderViewOptions('overflow')}
+              </div>
+              {activeFilterChips}
+            </header>
+          )
         ) : null}
         {isLoading ? (
           <LoadingPlaceholder
