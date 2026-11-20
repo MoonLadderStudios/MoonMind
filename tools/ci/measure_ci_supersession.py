@@ -681,7 +681,13 @@ def main(argv: list[str] | None = None) -> int:
             expected = set(
                 range(1, run.get("latest_run_attempt", run.get("run_attempt", 1)) + 1)
             )
-            if set(run["job_attempts_fetched"]) != expected:
+            legacy_first_attempt = "attempt_metadata" not in run and all(
+                "attempt" not in page for page in pages
+            )
+            if (
+                not legacy_first_attempt
+                and set(run["job_attempts_fetched"]) != expected
+            ):
                 continue
             jobs_by_run[run["id"]] = [job for page in pages for job in page["jobs"]]
     pulls_path = args.dir / "pulls.json"

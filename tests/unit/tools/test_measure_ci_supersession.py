@@ -590,3 +590,19 @@ def test_push_before_retry_does_not_explain_its_later_cancellation():
         {1: jobs, 2: []},
     )["runs"][0]
     assert row["attemptObservations"][1]["outcome"] == "cancelled"
+
+
+def test_cli_keeps_legacy_first_attempt_snapshot_explicitly_incomplete(tmp_path):
+    (tmp_path / "jobs").mkdir()
+    run = _run(1, "10:00:00", "10:05:00", latest_run_attempt=2, conclusion="failure")
+    (tmp_path / "runs.json").write_text(json.dumps([run]))
+    (tmp_path / "pulls.json").write_text("{}")
+    (tmp_path / "jobs" / "1.json").write_text(json.dumps([{"jobs": _ungated_jobs()}]))
+    output = tmp_path / "report.json"
+    assert main(["summarize", "--dir", str(tmp_path), "--output", str(output)]) == 0
+    row = json.loads(output.read_text())["runs"][0]
+    assert row["attempts"] == 2
+    assert row["attemptsObserved"] == 1
+    assert not row["attemptsComplete"]
+    assert not row["timingComplete"]
+    assert row["runnerSeconds"] > 0
