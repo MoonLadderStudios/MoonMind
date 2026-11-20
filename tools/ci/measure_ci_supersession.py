@@ -344,7 +344,8 @@ def _cohort(rows: list[dict]) -> dict:
     completed = [
         row
         for row in rows
-        if row["attemptObservations"][-1]["outcome"] in COMPLETED_CANDIDATE
+        if row["timingComplete"]
+        and row["attemptObservations"][-1]["outcome"] in COMPLETED_CANDIDATE
     ]
     completed_attempts = [
         attempt for attempt in attempts if attempt["outcome"] in COMPLETED_CANDIDATE
@@ -395,7 +396,7 @@ def _cohort(rows: list[dict]) -> dict:
             [
                 row["candidateWallSeconds"]
                 for row in rows
-                if row["candidateWallSeconds"] is not None
+                if row["timingComplete"] and row["candidateWallSeconds"] is not None
             ]
         ),
         "slowPreflightLagSeconds": _distribution(
@@ -487,6 +488,7 @@ def measure(
         "schema": SCHEMA,
         "limitations": [
             "Runner occupancy, not billed minutes, prices, or causal savings.",
+            "Incomplete timing totals are observed lower bounds; unfinished or missing-attempt candidates are excluded from candidate latency statistics.",
             "Supersession is inferred from cancellation overlapping a later same-group run, not a cancellation reason receipt.",
             "Workflow source blobs are from run head_sha; executed workflow revisions are not independently attested. Observed selector steps provide admission evidence.",
             "A bounded recent-run sample is not random or representative by itself. Compare events, selections, overlap and incomplete attempts.",

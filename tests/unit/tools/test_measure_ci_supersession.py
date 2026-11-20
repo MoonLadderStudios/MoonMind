@@ -606,3 +606,21 @@ def test_cli_keeps_legacy_first_attempt_snapshot_explicitly_incomplete(tmp_path)
     assert not row["attemptsComplete"]
     assert not row["timingComplete"]
     assert row["runnerSeconds"] > 0
+
+
+@pytest.mark.parametrize("incomplete", ["running", "missing-retry"])
+def test_incomplete_candidate_does_not_enter_completed_latency_distribution(incomplete):
+    run = _run(
+        1,
+        "10:00:00",
+        "10:20:00",
+        conclusion=None if incomplete == "running" else "failure",
+        latest_run_attempt=1 if incomplete == "running" else 2,
+    )
+    jobs = [_job("select-test-suites", "10:00:00", "10:00:00", "10:00:04")]
+    if incomplete == "running":
+        jobs.append(_job("integration-hermetic", "10:00:04", "10:00:05"))
+    cohort = measure([run], {1: jobs})["cohorts"]["unobserved"]
+    assert cohort["candidateWallSeconds"]["samples"] == 0
+    assert cohort["completedCandidates"] == 0
+    assert cohort["timingIncompleteRuns"] == 1
