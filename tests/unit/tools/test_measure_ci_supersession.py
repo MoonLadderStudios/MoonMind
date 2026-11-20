@@ -107,7 +107,7 @@ def test_superseded_run_records_cancellation_age_and_started_heavy_work():
     # Heavy runner time spent before policy completed is what the gate defers;
     # its cost is the policy time after selection that delays heavy starts.
     assert row["heavyRunnerSecondsBeforePreflight"] == 170 + 160
-    assert row["admissionDelaySeconds"] == 186
+    assert row["slowPreflightLagSeconds"] == 186
     # Only allocated jobs have a completed queue wait.
     assert row["queueSeconds"] == 1 + 5 + 15 + 25 + 10
     ungated = report["cohorts"]["ungated"]
@@ -171,7 +171,7 @@ def test_admission_cohorts_follow_observed_job_creation_after_preflight():
     assert by_id[3]["preflightGated"] is None
     assert report["cohorts"]["gated"]["runs"] == 1
     assert report["cohorts"]["gated"]["completedCandidates"] == 1
-    assert report["cohorts"]["gated"]["admissionDelaySeconds"]["median"] == 160
+    assert report["cohorts"]["gated"]["slowPreflightLagSeconds"]["median"] == 160
     assert report["cohorts"]["unobserved"]["runs"] == 1
 
 
@@ -274,7 +274,7 @@ def test_sequential_pull_requests_on_one_branch_are_separate_groups():
     assert report["window"]["ambiguousPullRequestRuns"] == 0
 
 
-def test_fetch_saves_first_attempt_runs_jobs_and_head_pull_requests(tmp_path):
+def test_fetch_saves_every_attempt_runs_jobs_and_head_pull_requests(tmp_path):
     calls = []
     # The runs list describes a rerun's latest attempt; attempt 1 was cancelled.
     runs = [_run(9, "10:00:00", "10:50:00", run_attempt=2)]
@@ -285,6 +285,8 @@ def test_fetch_saves_first_attempt_runs_jobs_and_head_pull_requests(tmp_path):
         calls.append(path)
         if path.endswith("/runs/9/attempts/1"):
             return first_attempt
+        if path.endswith("/runs/9/attempts/2"):
+            return runs[0]
         page = int(path.rsplit("&page=", 1)[1])
         if "/pulls?" in path:
             return [pull] if page == 1 else []
@@ -305,9 +307,18 @@ def test_fetch_saves_first_attempt_runs_jobs_and_head_pull_requests(tmp_path):
         "repos/owner/repo/pulls?state=all&head=owner:pr-a&per_page=100&page=1" in calls
     )
     pages = json.loads((tmp_path / "jobs" / "9.json").read_text())
-    assert sum(len(page["jobs"]) for page in pages) == 103
+    assert sum(len(page["jobs"]) for page in pages) == 206
     assert json.loads((tmp_path / "runs.json").read_text()) == [
-        {**first_attempt, "latest_run_attempt": 2}
+        {
+            **first_attempt,
+            "latest_run_attempt": 2,
+            "attempt_metadata": [first_attempt, runs[0]],
+            "workflow_source": {
+                "path": None,
+                "ref": None,
+                "provenance": "run-head-source-not-executed-workflow-attestation",
+            },
+        }
     ]
     assert json.loads((tmp_path / "pulls.json").read_text()) == {
         "owner/repo:pr-a": [_pull(7, "09:00:00")]
@@ -324,7 +335,7 @@ def test_cli_writes_report_from_saved_metadata(tmp_path, capsys):
     assert main(["summarize", "--dir", str(tmp_path), "--output", str(output)]) == 0
 
     report = json.loads(output.read_text())
-    assert report["schema"] == "moonmind.ci-supersession/v1"
+    assert report["schema"] == "moonmind.ci-supersession/v2"
     assert report["cohorts"]["ungated"]["completedCandidates"] == 1
     assert "Superseded" in capsys.readouterr().out
 
@@ -342,3 +353,274 @@ def test_cli_refuses_an_interrupted_fetch(tmp_path, capsys):
 
     assert not output.exists()
     assert "1 of 2 runs" in capsys.readouterr().err
+
+
+def test_all_attempts_charge_retries_once_and_keep_failure():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(1, "10:00:00", "10:15:00", run_attempt=2)
+    original = _job(
+        "integration-hermetic", "10:00:00", "10:00:00", "10:05:00", conclusion="failure"
+    )
+    carried = {**original, "id": 987}
+    fresh = _job("integration-hermetic", "10:10:00", "10:10:00", "10:15:00")
+    run = {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}
+    report = measure(
+        [run],
+        {
+            1: [
+                {**original, "_attempt": 1},
+                {**carried, "_attempt": 2},
+                {**fresh, "_attempt": 2},
+            ]
+        },
+    )
+    row = report["runs"][0]
+    assert row["runnerSeconds"] == 600
+    assert row["retryRunnerSeconds"] == 300
+    assert [a["outcome"] for a in row["attemptObservations"]] == ["failure", "success"]
+    assert row["carriedForwardJobsExcluded"] == 1
+
+
+def test_fast_checks_classify_actual_admission_separately_from_slow_gate():
+    from tools.ci.measure_ci_supersession import FAST_CHECK_STEPS
+
+    jobs = _ungated_jobs()
+    jobs[0]["steps"] += [
+        dict(
+            name=name,
+            conclusion="success",
+            started_at="2026-11-18T10:00:02Z",
+            completed_at="2026-11-18T10:00:03Z",
+        )
+        for name in FAST_CHECK_STEPS
+    ]
+    run = _run(
+        1,
+        "10:00:00",
+        "10:05:00",
+        workflow_source={"blobSha": "abc", "ref": "candidate-sha"},
+    )
+    report = measure([run], {1: jobs})
+    row = report["runs"][0]
+    assert row["admissionDesign"] == "fast-policy"
+    assert row["fastChecksSeconds"] == 4
+    assert row["workflowSource"] == run["workflow_source"]
+    assert report["revisionCohorts"]["abc/fast-policy"]["runs"] == 1
+
+
+def test_missing_retry_is_explicitly_incomplete_not_zero_cost():
+    run = _run(1, "10:00:00", "10:05:00", latest_run_attempt=2)
+    row = measure([run], {1: _ungated_jobs()})["runs"][0]
+    assert not row["attemptsComplete"]
+    assert not row["timingComplete"]
+    assert row["attemptsObserved"] == 1
+
+
+def test_same_attempt_identical_intervals_are_not_collapsed():
+    job = _job("integration-hermetic", "10:00:00", "10:00:00", "10:05:00")
+    row = measure([_run(1, "10:00:00", "10:05:00")], {1: [job, {**job, "id": 987}]})[
+        "runs"
+    ][0]
+    assert row["runnerSeconds"] == 600
+    assert row["carriedForwardJobsExcluded"] == 0
+
+
+def test_failed_fast_check_is_not_successful_admission_evidence():
+    from tools.ci.measure_ci_supersession import FAST_CHECK_STEPS
+
+    jobs = _ungated_jobs()
+    jobs[0]["steps"].append(
+        dict(
+            name=FAST_CHECK_STEPS[0],
+            conclusion="failure",
+            started_at="2026-11-18T10:00:02Z",
+            completed_at="2026-11-18T10:00:03Z",
+        )
+    )
+    assert (
+        measure([_run(1, "10:00:00", "10:05:00")], {1: jobs})["runs"][0][
+            "admissionDesign"
+        ]
+        == "fast-policy-unobserved"
+    )
+
+
+def test_successful_retry_does_not_inflate_superseded_occupancy():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="cancelled")
+    retry = _run(1, "10:00:00", "10:15:00", run_attempt=2)
+    run = {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}
+    jobs = [
+        _job("integration-hermetic", "10:00:00", "10:00:00", "10:05:00"),
+        {
+            **_job("integration-hermetic", "10:10:00", "10:10:00", "10:15:00"),
+            "_attempt": 2,
+        },
+    ]
+    cohort = measure([run, _run(2, "10:04:00", "10:20:00")], {1: jobs, 2: []})[
+        "cohorts"
+    ]["unobserved"]
+    assert cohort["runnerHours"]["superseded"] == 300 / 3600
+    assert cohort["retryRunnerHours"] == 300 / 3600
+
+
+def test_cli_refuses_new_metadata_with_old_attempt_jobs(tmp_path, capsys):
+    (tmp_path / "jobs").mkdir()
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(1, "10:00:00", "10:15:00", run_attempt=2)
+    (tmp_path / "runs.json").write_text(
+        json.dumps(
+            [{**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}]
+        )
+    )
+    (tmp_path / "pulls.json").write_text("{}")
+    (tmp_path / "jobs" / "1.json").write_text(
+        json.dumps([{"attempt": 1, "jobs": _ungated_jobs()}])
+    )
+    assert (
+        main(
+            [
+                "summarize",
+                "--dir",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "report.json"),
+            ]
+        )
+        == 1
+    )
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_carried_gate_remains_timing_evidence_but_not_retry_occupancy():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(1, "10:00:00", "10:15:00", run_attempt=2)
+    gate = _job("preflight-policy", "10:00:00", "10:00:00", "10:01:00")
+    jobs = [
+        gate,
+        {**gate, "id": 999, "_attempt": 2},
+        {
+            **_job("integration-hermetic", "10:10:00", "10:10:00", "10:15:00"),
+            "_attempt": 2,
+        },
+    ]
+    row = measure(
+        [{**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}],
+        {1: jobs},
+    )["runs"][0]
+    assert row["runnerSeconds"] == 360
+    assert row["retryRunnerSeconds"] == 300
+    assert row["heavyRunnerSecondsBeforePreflight"] == 0
+    assert row["heavyJobsStartedBeforePreflight"] == 0
+
+
+def test_retry_cancellation_overlapping_new_push_is_superseded():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1,
+        "10:00:00",
+        "10:15:00",
+        run_attempt=2,
+        conclusion="cancelled",
+        run_started_at="2026-11-18T10:10:00Z",
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {
+            **_job("integration-hermetic", "10:10:00", "10:10:00", "10:15:00"),
+            "_attempt": 2,
+        },
+    ]
+    report = measure(
+        [
+            {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]},
+            _run(2, "10:14:00", "10:20:00"),
+        ],
+        {1: jobs, 2: []},
+    )
+    row = report["runs"][0]
+    assert row["attemptObservations"][1]["outcome"] == "superseded"
+    assert row["attemptObservations"][1]["cancellationAgeSeconds"] == 240
+    assert report["cohorts"]["unobserved"]["runnerHours"]["superseded"] == 300 / 3600
+
+
+def test_candidate_wall_time_includes_retry_and_intervening_delay():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1, "10:00:00", "10:15:00", run_attempt=2, run_started_at="2026-11-18T10:10:00Z"
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {**_job("unit", "10:10:00", "10:10:00", "10:15:00"), "_attempt": 2},
+    ]
+    row = measure(
+        [{**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}],
+        {1: jobs},
+    )["runs"][0]
+    assert row["candidateWallSeconds"] == 900
+    assert row["attemptObservations"][1]["candidateWallSeconds"] == 300
+
+
+def test_unfinished_job_counts_in_unknown_conclusion_bucket():
+    row = measure(
+        [_run(1, "10:00:00", "10:05:00", conclusion=None)],
+        {1: [_job("unit", "10:00:00", "10:00:00")]},
+    )["runs"][0]
+    assert row["jobConclusions"] == {"unknown": 1}
+
+
+def test_push_before_retry_does_not_explain_its_later_cancellation():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1,
+        "10:00:00",
+        "10:15:00",
+        run_attempt=2,
+        conclusion="cancelled",
+        run_started_at="2026-11-18T10:10:00Z",
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {**_job("unit", "10:10:00", "10:10:00", "10:15:00"), "_attempt": 2},
+    ]
+    row = measure(
+        [
+            {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]},
+            _run(2, "10:04:00", "10:20:00"),
+        ],
+        {1: jobs, 2: []},
+    )["runs"][0]
+    assert row["attemptObservations"][1]["outcome"] == "cancelled"
+
+
+def test_cli_keeps_legacy_first_attempt_snapshot_explicitly_incomplete(tmp_path):
+    (tmp_path / "jobs").mkdir()
+    run = _run(1, "10:00:00", "10:05:00", latest_run_attempt=2, conclusion="failure")
+    (tmp_path / "runs.json").write_text(json.dumps([run]))
+    (tmp_path / "pulls.json").write_text("{}")
+    (tmp_path / "jobs" / "1.json").write_text(json.dumps([{"jobs": _ungated_jobs()}]))
+    output = tmp_path / "report.json"
+    assert main(["summarize", "--dir", str(tmp_path), "--output", str(output)]) == 0
+    row = json.loads(output.read_text())["runs"][0]
+    assert row["attempts"] == 2
+    assert row["attemptsObserved"] == 1
+    assert not row["attemptsComplete"]
+    assert not row["timingComplete"]
+    assert row["runnerSeconds"] > 0
+
+
+@pytest.mark.parametrize("incomplete", ["running", "missing-retry"])
+def test_incomplete_candidate_does_not_enter_completed_latency_distribution(incomplete):
+    run = _run(
+        1,
+        "10:00:00",
+        "10:20:00",
+        conclusion=None if incomplete == "running" else "failure",
+        latest_run_attempt=1 if incomplete == "running" else 2,
+    )
+    jobs = [_job("select-test-suites", "10:00:00", "10:00:00", "10:00:04")]
+    if incomplete == "running":
+        jobs.append(_job("integration-hermetic", "10:00:04", "10:00:05"))
+    cohort = measure([run], {1: jobs})["cohorts"]["unobserved"]
+    assert cohort["candidateWallSeconds"]["samples"] == 0
+    assert cohort["completedCandidates"] == 0
+    assert cohort["timingIncompleteRuns"] == 1

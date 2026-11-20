@@ -6,15 +6,12 @@ starts in superseded runs against completed candidates, so admission changes
 are judged by observed runs rather than estimates. Job intervals reuse the
 ``ci-timings`` semantics: only an executed step proves a runner was allocated.
 
-Runs are measured from their first attempt, the candidate a newer push can
-supersede. Pull-request runs are grouped by the PR open on their head branch
-when they were created, matching the workflow's per-PR concurrency; a run
-created while several PRs shared that branch cannot be attributed and is kept
-out of supersession and push intervals. Cohorts come from observed job
-creation, not dates. When selection
-finished before ``preflight-policy``, ungated heavy owners are created before
-preflight completes and gated ones after it. Otherwise the run cannot show
-which behavior applied and stays unobserved.
+Every saved attempt is measured; carried-forward jobs are counted only in
+their first observed attempt. Legacy first-attempt snapshots remain readable
+but are marked incomplete when retries are missing. Workflow source blobs
+identify candidate source, not an independently attested executed workflow;
+observed selector steps distinguish fast-policy admission from the old slow
+preflight gate. Runner occupancy is not billed cost or causal savings.
 
 Usage (from the repository root, with an authenticated ``gh``):
   python -m tools.ci.measure_ci_supersession fetch --dir DIR [--runs 300]
@@ -39,9 +36,15 @@ from tools.ci.write_backend_matrix_summary import (
     observed_job_seconds,
 )
 
-SCHEMA = "moonmind.ci-supersession/v1"
+SCHEMA = "moonmind.ci-supersession/v2"
 PREFLIGHT_JOB = "preflight-policy"
 SELECTION_JOB = "select-test-suites"
+FAST_CHECK_STEPS = (
+    "Verify workflow terminology guardrails",
+    "Check removed capability semantics",
+    "Audit status token domains",
+    "Reject task-specific GitHub workflow names",
+)
 # The selected hermetic, journey, reliability, exact-artifact and host-recovery
 # tier, plus the image builds that exist only to feed it.
 HEAVY_JOB_PREFIXES = (
@@ -102,10 +105,19 @@ def _completed(jobs: list[dict], name: str) -> str | None:
     return job and job.get("completed_at")
 
 
-def _observe_run(run: dict, jobs: list[dict], successor: dict | None) -> dict:
-    preflight = next((job for job in jobs if job["name"] == PREFLIGHT_JOB), None)
-    preflight_done = _completed(jobs, PREFLIGHT_JOB)
-    selection_done = _completed(jobs, SELECTION_JOB)
+def _observe_run(
+    run: dict,
+    jobs: list[dict],
+    successor: dict | None,
+    *,
+    evidence_jobs: list[dict] | None = None,
+) -> dict:
+    evidence_jobs = jobs if evidence_jobs is None else evidence_jobs
+    preflight = next(
+        (job for job in evidence_jobs if job["name"] == PREFLIGHT_JOB), None
+    )
+    preflight_done = _completed(evidence_jobs, PREFLIGHT_JOB)
+    selection_done = _completed(evidence_jobs, SELECTION_JOB)
     heavy = [job for job in jobs if _is_heavy(job)]
     started_heavy = [job for job in heavy if job_allocated(job)]
     queue = runner = heavy_runner = 0.0
@@ -133,18 +145,76 @@ def _observe_run(run: dict, jobs: list[dict], successor: dict | None) -> dict:
         end = job.get("completed_at")
         if preflight_done and (not end or preflight_done < end):
             end = preflight_done
-        heavy_before += interval_seconds(job["started_at"], end) or 0
+        if preflight_done:
+            heavy_before += interval_seconds(job["started_at"], end) or 0
     gated = None
     if heavy and preflight_done and selection_done and selection_done < preflight_done:
         gated = all(_time(job["created_at"]) >= _time(preflight_done) for job in heavy)
+    selector = next((job for job in evidence_jobs if job["name"] == SELECTION_JOB), {})
+    fast_steps = [
+        step for step in selector.get("steps", []) if step["name"] in FAST_CHECK_STEPS
+    ]
+    fast_complete = len(
+        {
+            step["name"]
+            for step in fast_steps
+            if step.get("conclusion") == "success" and step.get("completed_at")
+        }
+    ) == len(FAST_CHECK_STEPS)
+    fast_end = max(
+        (step["completed_at"] for step in fast_steps if step.get("completed_at")),
+        default=None,
+    )
+    fast_admission = (
+        fast_complete
+        and bool(heavy)
+        and all(
+            job.get("created_at") and job["created_at"] >= fast_end for job in heavy
+        )
+    )
+    design = (
+        "fast-policy"
+        if fast_admission
+        else (
+            "fast-policy-unobserved"
+            if fast_steps
+            else {True: "slow-preflight", False: "ungated", None: "unobserved"}[gated]
+        )
+    )
     return {
         "id": run["id"],
+        "attempt": run.get("run_attempt", 1),
+        "headSha": run.get("head_sha"),
+        "url": run.get("html_url"),
+        "workflowSource": run.get("workflow_source", {}),
+        "admissionDesign": design,
+        "fastChecksSeconds": sum(
+            interval_seconds(step.get("started_at"), step.get("completed_at")) or 0
+            for step in fast_steps
+        ),
+        "fastChecks": [
+            {
+                key: step.get(key)
+                for key in ("name", "conclusion", "started_at", "completed_at")
+            }
+            for step in fast_steps
+        ],
+        "selectedJobs": [job["name"] for job in jobs],
+        "jobConclusions": {
+            outcome: sum(
+                (job.get("conclusion") or "unknown") == outcome for job in jobs
+            )
+            for outcome in sorted({job.get("conclusion") or "unknown" for job in jobs})
+        },
         "attempts": run.get("latest_run_attempt", run.get("run_attempt", 1)),
         "event": run["event"],
         "createdAt": run["created_at"],
         "outcome": outcome,
         "cancellationAgeSeconds": (
-            interval_seconds(run["created_at"], successor["created_at"])
+            interval_seconds(
+                run.get("attempt_started_at", run["created_at"]),
+                successor["created_at"],
+            )
             if outcome == "superseded"
             else None
         ),
@@ -156,12 +226,19 @@ def _observe_run(run: dict, jobs: list[dict], successor: dict | None) -> dict:
         "heavyJobsStartedBeforePreflight": sum(
             1
             for job in started_heavy
-            if not preflight_done or _time(job["started_at"]) < _time(preflight_done)
+            if preflight_done and _time(job["started_at"]) < _time(preflight_done)
+        ),
+        "candidateWallSeconds": interval_seconds(
+            run.get("run_started_at") or run.get("created_at"),
+            max(
+                (job["completed_at"] for job in jobs if job.get("completed_at")),
+                default=None,
+            ),
         ),
         "preflightSeconds": preflight
         and interval_seconds(preflight.get("started_at"), preflight_done),
-        # Time the gate holds heavy owners after selection: its latency cost.
-        "admissionDelaySeconds": interval_seconds(selection_done, preflight_done),
+        # Slow preflight minus selection; NOT admission delay for fast-policy runs.
+        "slowPreflightLagSeconds": interval_seconds(selection_done, preflight_done),
         "preflightGated": gated,
         "timingComplete": complete,
         "_jobQueueSeconds": [
@@ -170,15 +247,127 @@ def _observe_run(run: dict, jobs: list[dict], successor: dict | None) -> dict:
     }
 
 
+def _observe_attempts(run: dict, jobs: list[dict], candidates: list[dict]) -> dict:
+    metadata = run.get("attempt_metadata") or [run]
+    seen: dict[tuple, int] = {}
+    observations = []
+    excluded = 0
+    for attempt in sorted(metadata, key=lambda item: item.get("run_attempt", 1)):
+        number = attempt.get("run_attempt", 1)
+        unique = []
+        for job in jobs:
+            if job.get("_attempt", 1) != number:
+                continue
+            # GitHub may return carried-forward jobs with new ids on rerun.
+            # Deduplicate only across attempts, never within the same attempt.
+            key = (job["name"], job.get("started_at"), job.get("completed_at"))
+            if key in seen and seen[key] < number and key[1] and key[2]:
+                excluded += 1
+                continue
+            seen[key] = number
+            unique.append(job)
+        start = (
+            attempt["created_at"]
+            if number == 1
+            else (
+                attempt.get("run_started_at")
+                or min(
+                    (job["created_at"] for job in unique if job.get("created_at")),
+                    default=None,
+                )
+            )
+        )
+        successor = next(
+            (
+                candidate
+                for candidate in candidates
+                if start and start <= candidate["created_at"] <= attempt["updated_at"]
+            ),
+            None,
+        )
+        observed = _observe_run(
+            {
+                **attempt,
+                "attempt_started_at": start,
+                "workflow_source": run.get("workflow_source", {}),
+            },
+            unique,
+            successor,
+            evidence_jobs=[job for job in jobs if job.get("_attempt", 1) == number],
+        )
+        observations.append(observed)
+    row = dict(observations[0])
+    row["attempts"] = run.get("latest_run_attempt", run.get("run_attempt", 1))
+    row["attemptsObserved"] = len(observations)
+    expected = set(range(1, row["attempts"] + 1))
+    job_attempts = set(
+        run.get("job_attempts_fetched", [job.get("_attempt", 1) for job in jobs])
+    )
+    row["attemptsComplete"] = {
+        a["attempt"] for a in observations
+    } == expected and job_attempts == expected
+    row["timingComplete"] = row["attemptsComplete"] and all(
+        a["timingComplete"] for a in observations
+    )
+    # End-to-end candidate feedback includes queue and pauses between retries.
+    row["candidateWallSeconds"] = interval_seconds(
+        run["created_at"],
+        max(
+            (job["completed_at"] for job in jobs if job.get("completed_at")),
+            default=None,
+        ),
+    )
+    row["retryRunnerSeconds"] = sum(a["runnerSeconds"] for a in observations[1:])
+    row["carriedForwardJobsExcluded"] = excluded
+    for field in (
+        "queueSeconds",
+        "runnerSeconds",
+        "heavyRunnerSeconds",
+        "heavyRunnerSecondsBeforePreflight",
+        "heavyJobsStarted",
+        "heavyJobsStartedBeforePreflight",
+    ):
+        row[field] = sum(a[field] for a in observations)
+    row["_jobQueueSeconds"] = [
+        value for a in observations for value in a["_jobQueueSeconds"]
+    ]
+    row["attemptObservations"] = [
+        {key: value for key, value in a.items() if not key.startswith("_")}
+        for a in observations
+    ]
+    return row
+
+
 def _cohort(rows: list[dict]) -> dict:
-    superseded = [row for row in rows if row["outcome"] == "superseded"]
-    completed = [row for row in rows if row["outcome"] in COMPLETED_CANDIDATE]
+    attempts = [attempt for row in rows for attempt in row["attemptObservations"]]
+    superseded = [attempt for attempt in attempts if attempt["outcome"] == "superseded"]
+    completed = [
+        row
+        for row in rows
+        if row["timingComplete"]
+        and row["attemptObservations"][-1]["outcome"] in COMPLETED_CANDIDATE
+    ]
+    completed_attempts = [
+        attempt for attempt in attempts if attempt["outcome"] in COMPLETED_CANDIDATE
+    ]
     return {
         "runs": len(rows),
+        "attemptsObserved": sum(row["attemptsObserved"] for row in rows),
+        "retryRunnerHours": sum(row["retryRunnerSeconds"] for row in rows) / 3600,
+        "attemptOutcomes": {
+            outcome: sum(
+                a["outcome"] == outcome
+                for row in rows
+                for a in row["attemptObservations"]
+            )
+            for outcome in sorted(
+                {a["outcome"] for row in rows for a in row["attemptObservations"]}
+            )
+        },
         "completedCandidates": len(completed),
         "superseded": len(superseded),
-        "otherCancelled": sum(row["outcome"] == "cancelled" for row in rows),
-        "inProgress": sum(row["outcome"] == "in_progress" for row in rows),
+        "otherCancelled": sum(row["outcome"] == "cancelled" for row in attempts),
+        "inProgress": sum(row["outcome"] == "in_progress" for row in attempts),
         "rerunRuns": sum(row["attempts"] > 1 for row in rows),
         "timingIncompleteRuns": sum(not row["timingComplete"] for row in rows),
         "supersededWithHeavyStart": sum(
@@ -188,7 +377,7 @@ def _cohort(rows: list[dict]) -> dict:
             row["heavyJobsStarted"] for row in superseded
         ),
         "heavyJobsStartedInCompleted": sum(
-            row["heavyJobsStarted"] for row in completed
+            row["heavyJobsStarted"] for row in completed_attempts
         ),
         "heavyJobsStartedBeforePreflight": sum(
             row["heavyJobsStartedBeforePreflight"] for row in rows
@@ -203,11 +392,18 @@ def _cohort(rows: list[dict]) -> dict:
             )
             / 3600,
         },
-        "admissionDelaySeconds": _distribution(
+        "candidateWallSeconds": _distribution(
             [
-                row["admissionDelaySeconds"]
+                row["candidateWallSeconds"]
+                for row in rows
+                if row["timingComplete"] and row["candidateWallSeconds"] is not None
+            ]
+        ),
+        "slowPreflightLagSeconds": _distribution(
+            [
+                row["slowPreflightLagSeconds"]
                 for row in completed
-                if row["admissionDelaySeconds"] is not None
+                if row["slowPreflightLagSeconds"] is not None
             ]
         ),
         "cancellationAgeSeconds": _distribution(
@@ -238,7 +434,6 @@ def measure(
 ) -> dict:
     runs = sorted(runs, key=lambda run: run["created_at"])
     groups = {run["id"]: _group(run, pulls or {}) for run in runs}
-    successors: dict[int, dict] = {}
     intervals = []
     last_in_group: dict[tuple[str, str], dict] = {}
     for run in runs:
@@ -248,17 +443,19 @@ def measure(
                 intervals.append(
                     interval_seconds(previous["created_at"], run["created_at"])
                 )
-            # cancel-in-progress fires when the newer run in the group queues.
-            if previous.get("conclusion") == "cancelled" and (
-                run["created_at"] <= previous["updated_at"]
-            ):
-                successors[previous["id"]] = run
         last_in_group[groups[run["id"]]] = run
 
     rows = []
     for run in runs:
-        row = _observe_run(
-            run, jobs_by_run.get(run["id"], []), successors.get(run["id"])
+        row = _observe_attempts(
+            run,
+            jobs_by_run.get(run["id"], []),
+            [
+                candidate
+                for candidate in runs
+                if candidate["id"] != run["id"]
+                and groups[candidate["id"]] == groups[run["id"]]
+            ],
         )
         row["group"] = "/".join(groups[run["id"]])
         row["concurrentRunsAtCreation"] = sum(
@@ -277,6 +474,11 @@ def measure(
         name: _cohort([row for row in rows if row["preflightGated"] is value])
         for name, value in (("ungated", False), ("gated", True), ("unobserved", None))
     }
+    revision_cohorts = {}
+    for row in rows:
+        key = f"{row['workflowSource'].get('blobSha', 'unknown')}/{row['admissionDesign']}"
+        revision_cohorts.setdefault(key, []).append(row)
+    revision_cohorts = {key: _cohort(value) for key, value in revision_cohorts.items()}
     for row in rows:
         del row["_jobQueueSeconds"]
     events: dict[str, int] = {}
@@ -284,6 +486,14 @@ def measure(
         events[run["event"]] = events.get(run["event"], 0) + 1
     return {
         "schema": SCHEMA,
+        "limitations": [
+            "Runner occupancy, not billed minutes, prices, or causal savings.",
+            "Incomplete timing totals are observed lower bounds; unfinished or missing-attempt candidates are excluded from candidate latency statistics.",
+            "Supersession is inferred from cancellation overlapping a later same-group run, not a cancellation reason receipt.",
+            "Workflow source blobs are from run head_sha; executed workflow revisions are not independently attested. Observed selector steps provide admission evidence.",
+            "A bounded recent-run sample is not random or representative by itself. Compare events, selections, overlap and incomplete attempts.",
+        ],
+        "revisionCohorts": revision_cohorts,
         "window": {
             "from": runs[0]["created_at"] if runs else None,
             "to": runs[-1]["created_at"] if runs else None,
@@ -303,7 +513,9 @@ def measure(
 
 
 def fetch(api, repository: str, workflow: str, *, runs: int, directory: Path) -> None:
-    """Save first-attempt runs and jobs, and head-branch PRs, for ``summarize``."""
+    """Save all attempt metadata and jobs plus candidate workflow blob identity."""
+    if runs < 1 or runs > 10000:
+        raise ValueError("runs must be between 1 and 10000")
     collected: list[dict] = []
     for page in range(1, 101):
         batch = api(
@@ -313,13 +525,35 @@ def fetch(api, repository: str, workflow: str, *, runs: int, directory: Path) ->
         if len(collected) >= runs or len(batch) < 100:
             break
     collected = collected[:runs]
+    sources = {}
     for index, run in enumerate(collected):
-        # The runs list describes a rerun's latest attempt, not the first.
-        if run.get("run_attempt", 1) > 1:
-            collected[index] = {
-                **api(f"repos/{repository}/actions/runs/{run['id']}/attempts/1"),
-                "latest_run_attempt": run["run_attempt"],
+        attempts = [
+            api(f"repos/{repository}/actions/runs/{run['id']}/attempts/{number}")
+            for number in range(1, run.get("run_attempt", 1) + 1)
+        ]
+        source_key = (run.get("path"), run.get("head_sha"))
+        if source_key not in sources:
+            path, ref = source_key
+            source = {
+                "path": path,
+                "ref": ref,
+                "provenance": "run-head-source-not-executed-workflow-attestation",
             }
+            if path and ref:
+                try:
+                    blob = api(
+                        f"repos/{repository}/contents/{path}?ref={quote(ref, safe='')}"
+                    )
+                    source["blobSha"] = blob["sha"]
+                except (subprocess.CalledProcessError, KeyError):
+                    source["unavailable"] = True
+            sources[source_key] = source
+        collected[index] = {
+            **attempts[0],
+            "latest_run_attempt": run.get("run_attempt", 1),
+            "attempt_metadata": attempts,
+            "workflow_source": sources[source_key],
+        }
     # Runs list only PRs still open on their head, so look PRs up by branch.
     pulls: dict[str, list[dict]] = {}
     for run in collected:
@@ -345,19 +579,28 @@ def fetch(api, repository: str, workflow: str, *, runs: int, directory: Path) ->
             if len(batch) < 100:
                 break
     (directory / "jobs").mkdir(parents=True, exist_ok=True)
-    (directory / "runs.json").write_text(json.dumps(collected, indent=1) + "\n")
     (directory / "pulls.json").write_text(json.dumps(pulls, indent=1) + "\n")
     for run in collected:
         pages = []
-        for page in range(1, 101):
-            pages.append(
-                api(
-                    f"repos/{repository}/actions/runs/{run['id']}/attempts/1/jobs?per_page=100&page={page}"
+        for attempt in run["attempt_metadata"]:
+            number = attempt.get("run_attempt", 1)
+            for page in range(1, 101):
+                batch = api(
+                    f"repos/{repository}/actions/runs/{run['id']}/attempts/{number}/jobs?per_page=100&page={page}"
                 )
-            )
-            if len(pages[-1]["jobs"]) < 100:
-                break
-        (directory / "jobs" / f"{run['id']}.json").write_text(json.dumps(pages) + "\n")
+                pages.append(
+                    {
+                        "attempt": number,
+                        "jobs": [{**job, "_attempt": number} for job in batch["jobs"]],
+                    }
+                )
+                if len(batch["jobs"]) < 100:
+                    break
+            else:
+                raise ValueError("Job pagination limit reached; snapshot incomplete")
+        target = directory / "jobs" / f"{run['id']}.json"
+        target.write_text(json.dumps(pages) + "\n")
+    (directory / "runs.json").write_text(json.dumps(collected, indent=1) + "\n")
 
 
 def _gh_api(path: str) -> dict:
@@ -380,7 +623,7 @@ def _render(report: dict) -> str:
         "Superseded heavy runner h (before preflight)",
         "Cancellation age median/p90 s",
         "Job queue median/p90 s",
-        "Admission delay median/p90 s",
+        "Slow preflight minus selection median/p90 s",
     )
     lines = [
         f"Window {report['window']['from']} .. {report['window']['to']}: "
@@ -389,9 +632,10 @@ def _render(report: dict) -> str:
         "| " + " | ".join(columns) + " |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
-    for name, cohort in report["cohorts"].items():
+    lines[0:0] = ["Runner occupancy only; not billing or causal savings.", ""]
+    for name, cohort in report["revisionCohorts"].items():
         age, queue = cohort["cancellationAgeSeconds"], cohort["jobQueueSeconds"]
-        delay, hours = cohort["admissionDelaySeconds"], cohort["runnerHours"]
+        delay, hours = cohort["slowPreflightLagSeconds"], cohort["runnerHours"]
         lines.append(
             f"| {name} | {cohort['runs']} | {cohort['completedCandidates']} | "
             f"{cohort['superseded']} | {cohort['supersededWithHeavyStart']} | "
@@ -432,9 +676,22 @@ def main(argv: list[str] | None = None) -> int:
     for run in runs:
         path = args.dir / "jobs" / f"{run['id']}.json"
         if path.exists():
-            jobs_by_run[run["id"]] = [
-                job for page in json.loads(path.read_text()) for job in page["jobs"]
-            ]
+            pages = json.loads(path.read_text())
+            run["job_attempts_fetched"] = sorted(
+                {page.get("attempt", 1) for page in pages}
+            )
+            expected = set(
+                range(1, run.get("latest_run_attempt", run.get("run_attempt", 1)) + 1)
+            )
+            legacy_first_attempt = "attempt_metadata" not in run and all(
+                "attempt" not in page for page in pages
+            )
+            if (
+                not legacy_first_attempt
+                and set(run["job_attempts_fetched"]) != expected
+            ):
+                continue
+            jobs_by_run[run["id"]] = [job for page in pages for job in page["jobs"]]
     pulls_path = args.dir / "pulls.json"
     if len(jobs_by_run) < len(runs) or not pulls_path.exists():
         # An interrupted fetch must not read as zero-cost or misgrouped runs.
