@@ -82,16 +82,22 @@ async def main():
  assert native['model_verbosity']=='high'
  assert shared['model_verbosity']==('low' if configuration else 'high')
  if configuration and configuration.get('additionalFiles'):
-  expected='Frozen instructions\nExactly once addition'
+  seeded=configuration.get('fileSeeds')
+  expected=('Captured {{workspace_path}} instructions\nExactly once addition' if seeded else 'Frozen instructions\nExactly once addition')
+  expected_json=({'seed':'captured {{workspace_path}}','extra':2} if seeded else {'frozen':True,'extra':2})
   def assert_private(directory):
    assert (directory/'AGENTS.md').read_text()==expected
-   assert json.loads((directory/'rules/preferences.json').read_text())=={'frozen':True,'extra':2}
+   assert json.loads((directory/'rules/preferences.json').read_text())==expected_json
    assert (directory/'auth.json').is_symlink() and (directory/'auth.json').resolve()==source/'auth.json'
   # Native runtime uses this same ordered materializer, independently of the wrapper.
   from types import SimpleNamespace
   from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
   native_home=r/'native-files';native_home.mkdir()
   (native_home/'AGENTS.md').write_text('Native enrollment seed')
+  if seeded:
+   for seed in seeded['files']:
+    target=native_home/seed['path'];target.parent.mkdir(parents=True,exist_ok=True)
+    if seed['present']:target.write_text(seed['content'])
   renderer=ProviderProfileMaterializer(base_env={},secret_resolver=None)
   for template in configuration['additionalFiles']:
    renderer._materialize_file_template(SimpleNamespace(**template),{'runtime_support_dir':str(native_home),'workspace_path':str(pathlib.Path.cwd())})
@@ -117,8 +123,13 @@ print(json.dumps({'selectedAuth':True,'privateConfigRead':True,'sourceInputsUnch
 '''
 
 
-@pytest.mark.parametrize("native_journey", journey_tests.SELECTIONS, indirect=True)
-async def test_installed_codex_preserves_selected_auth_and_private_configuration(native_journey, tmp_path):
+@pytest.mark.parametrize(
+    "native_journey,frozen_seed",
+    [(selection, False) for selection in journey_tests.SELECTIONS]
+    + [(journey_tests.SELECTIONS[-1], True)],
+    indirect=["native_journey"],
+)
+async def test_installed_codex_preserves_selected_auth_and_private_configuration(native_journey, tmp_path, frozen_seed):
     cli = shutil.which("codex")
     if cli is None:
         pytest.skip("installed Codex CLI unavailable; image qualification is separate")
@@ -128,6 +139,13 @@ async def test_installed_codex_preserves_selected_auth_and_private_configuration
     journey_tests.assert_selected_configuration(journey)
     assert journey.docker.launch_env["CODEX_HOME"] == journey_tests.MOUNT
     configuration = json.loads(journey.docker.launch_env.get("MOONMIND_CODEX_PROFILE_CONFIGURATION", "null"))
+    if frozen_seed:
+        assert configuration and configuration.get("additionalFiles")
+        configuration["additionalFiles"] = [item for item in configuration["additionalFiles"] if item["merge_strategy"] != "replace"]
+        configuration["fileSeeds"] = {"version": 1, "files": [
+            {"path": "AGENTS.md", "present": True, "content": "Captured {{workspace_path}} instructions"},
+            {"path": "rules/preferences.json", "present": True, "content": '{"seed":"captured {{workspace_path}}"}'},
+        ]}
     root = Path(__file__).resolve().parents[3] / "omnigent"
     environment = {**os.environ, "PYTHONPATH": str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")}
     probe = await asyncio.to_thread(_run_probe, [sys.executable, "-c", _PROBE,

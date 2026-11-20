@@ -813,6 +813,18 @@ def test_main_checks_exact_server_then_probes_before_recovery(
     monkeypatch.setattr(driver, "_command", command)
     monkeypatch.setattr(driver, "run_test", run_test)
     monkeypatch.setattr(driver, "run_journey", run_journey)
+    def run_seed_reader(args, root):
+        assert observed[-1] == "journey"
+        assert "CANDIDATE_IMAGE=" + HOST_REF in args
+        assert (root / "driver" / driver.SEED_READER_TEST_FILE).is_file()
+        assert (root / "driver/tools/ci/write_backend_matrix_summary.py").is_file()
+        assert (root / "driver/poetry.lock").is_file()
+        for name in (driver.SEED_READER_RECEIPT, driver.SEED_READER_ENVIRONMENT):
+            (root / name).write_text('{"validated": true}')
+        observed.append("seed-reader")
+        return {"status": "passed"}
+    monkeypatch.setattr(driver, "run_seed_reader", run_seed_reader)
+    monkeypatch.setattr(driver, "validate_seed_receipt", lambda *_args: {"validated": True})
     monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
     assert driver.main(
         [
@@ -833,12 +845,14 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         ]
     ) == (0 if proxy_image_matches else 1)
     assert observed == ["server-image", "proxy-image"] + (
-        ["readiness", "temporal", "recovery", "journey"] if proxy_image_matches else []
+        ["readiness", "temporal", "recovery", "journey", "seed-reader"] if proxy_image_matches else []
     )
     if proxy_image_matches:
         evidence = tmp_path / "evidence"
         report = json.loads((evidence / "credential-recovery-result.json").read_text())
         assert report["status"] == "passed"
+        for name in (driver.SEED_READER_RECEIPT, driver.SEED_READER_ENVIRONMENT):
+            assert json.loads((evidence / name).read_text()) == {"validated": True}
         assert report["interruptedStep"] == journey_receipt()
         assert json.loads((evidence / driver.JOURNEY_RECEIPT).read_text()) == (
             journey_receipt()
@@ -1348,3 +1362,121 @@ def test_credential_free_session_accepts_idle_snapshot_without_task_error():
     _assert_credential_free_session_healthy(
         {"status": "idle", "last_task_error": None, "pending_inputs": [], "items": []}
     )
+
+
+def test_seed_reader_uses_qualified_host_and_candidate_production_imports(tmp_path):
+    command = driver.seed_reader_command(
+        image=IMAGE_ID, network='moonmind-test-fixture_test',
+        name='moonmind-test-fixture-driver', work=tmp_path,
+        dependencies=tmp_path/'deps', source_commit=SHA,
+        host_image_ref=HOST_REF, server_image_digest=SERVER_DIGEST,
+        token='moonmind-test-' + 'e'*32, project='moonmind-test-fixture')
+    assert "MOONMIND_CI_SUITE=omnigent-exact-artifact" in command
+    assert "tools.ci.write_backend_matrix_summary" in command
+    assert "record_environment" in command[command.index("-c") + 1]
+    assert 'CANDIDATE_IMAGE=' + HOST_REF in command
+    assert 'PYTHONPATH=/app:/test-driver' in command
+    assert not any('dst=/app' in arg for arg in command)
+    assert f'/test-driver/{driver.SEED_READER_TEST_FILE}::{driver.SEED_READER_TEST_NAME}' in command
+    assert f'--junitxml={tmp_path / driver.SEED_READER_JUNIT}' in command
+
+
+@pytest.mark.parametrize('outcome', ['passed', 'skipped', 'empty', 'failed'])
+def test_seed_reader_requires_current_exact_passing_test(tmp_path, monkeypatch, outcome):
+    def run(*args, **kwargs):
+        cases = '' if outcome == 'empty' else (
+            f'<testcase name="{driver.SEED_READER_TEST_NAME}">' +
+            ('<skipped/>' if outcome == 'skipped' else '<failure/>' if outcome == 'failed' else '') + '</testcase>')
+        (tmp_path / driver.SEED_READER_JUNIT).write_text('<testsuites><testsuite>' + cases + '</testsuite></testsuites>')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    if outcome == 'passed':
+        assert driver.run_seed_reader(['driver'], tmp_path) == {'status': 'passed'}
+    else:
+        with pytest.raises(driver.RecoveryError):
+            driver.run_seed_reader(['driver'], tmp_path)
+
+
+@pytest.mark.parametrize("damage", [None, "owner", "collection", "missing"])
+def test_seed_receipt_requires_exact_owner_and_collection(tmp_path, monkeypatch, damage):
+    expected = f"{driver.SEED_READER_TEST_FILE}::{driver.SEED_READER_TEST_NAME}"
+    def validate(path, **identity):
+        assert path == tmp_path / driver.SEED_READER_RECEIPT
+        assert identity == dict(revision=SHA, run_id="123", attempt="2")
+        if damage == "missing":
+            raise ValueError("missing receipt")
+        return {"suite": "unit-fast" if damage == "owner" else "omnigent-exact-artifact",
+                "expectedNodeIds": [] if damage == "collection" else [expected],
+                "cases": [{"outcome": "passed"}]}
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setattr(driver, "validate_receipt", validate)
+    if damage:
+        with pytest.raises((driver.RecoveryError, ValueError)):
+            driver.validate_seed_receipt(tmp_path, SHA)
+    else:
+        assert driver.validate_seed_receipt(tmp_path, SHA)["expectedNodeIds"] == [expected]
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_seed_bootstrap_records_actual_pytest_environment_and_outcome(tmp_path, monkeypatch, skip):
+    """Exercise the runner's real bootstrap/plugin, not synthesized JUnit evidence."""
+    import shutil
+    import subprocess
+    import sys
+
+    repository = Path(driver.__file__).resolve().parents[2]
+    copied = tmp_path / "driver"
+    for relative in ("tools/__init__.py", "tools/ci/write_backend_matrix_summary.py",
+                     "pyproject.toml", "poetry.lock"):
+        destination = copied / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repository / relative, destination)
+    test_file = copied / "tests/test_receipt_witness.py"
+    test_file.parent.mkdir()
+    test_file.write_text("import pytest\ndef test_witness():\n    " +
+                         ("pytest.skip('must not qualify')" if skip else "assert True") + "\n")
+    receipt = tmp_path / driver.SEED_READER_RECEIPT
+    environment = {
+        **os.environ, "PYTHONPATH": str(copied), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "MOONMIND_CI_RECEIPT": str(receipt), "MOONMIND_CI_SUITE": "omnigent-exact-artifact",
+        "MOONMIND_CI_REVISION": SHA, "MOONMIND_CI_ENVIRONMENT": "receipt-protocol-test",
+        "MOONMIND_CI_EXPECTED_PYTHON": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", driver.VERIFIED_BOOTSTRAP,
+         "-p", "tools.ci.write_backend_matrix_summary", "-c", "/dev/null",
+         "--rootdir=" + str(copied), "--noconftest", str(test_file), "-q"],
+        cwd=copied, env=environment, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setattr(driver, "SEED_READER_TEST_FILE", "tests/test_receipt_witness.py")
+    monkeypatch.setattr(driver, "SEED_READER_TEST_NAME", "test_witness")
+    if skip:
+        with pytest.raises(driver.RecoveryError, match="without skips"):
+            driver.validate_seed_receipt(tmp_path, SHA)
+    else:
+        actual = driver.validate_seed_receipt(tmp_path, SHA)
+        assert actual["cases"][0]["phases"]["teardown"]["outcome"] == "passed"
+        assert (tmp_path / driver.SEED_READER_ENVIRONMENT).is_file()
+
+
+def test_conformance_consumes_exact_receipts_without_crossing_release_phases():
+    workflow = yaml.safe_load((Path(driver.__file__).resolve().parents[2] /
+                               ".github/workflows/pytest-unit-tests.yml").read_text())
+    job = workflow["jobs"]["omnigent-deterministic-conformance"]
+    assert "omnigent-host-recovery" in job["needs"]
+    assert "needs.omnigent-host-recovery.result == 'success'" in job["if"]
+    assert "inputs.verification_phase == 'source'" in job["if"]
+    steps = {step["name"]: step for step in job["steps"]}
+    download = steps["Download exact host owner receipts"]
+    assert download["if"] == "needs.select-test-suites.outputs.host_recovery == 'true'"
+    assert download["with"] == {
+        "pattern": "omnigent-host-recovery-${{ github.run_id }}-*",
+        "path": "artifacts/owner-receipts/host-recovery", "merge-multiple": False,
+    }
+    verify = steps["Run deterministic Omnigent conformance"]
+    assert verify["env"]["SOURCE_PHASE"] == "${{ inputs.verification_phase == 'source' }}"
+    assert 'if [[ "$SOURCE_PHASE" == "true" ]]; then extra+=(--source-owners-only); fi' in verify["run"]

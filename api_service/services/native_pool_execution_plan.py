@@ -225,7 +225,7 @@ async def _recorded_step_plan(
     checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
     source = checkpoint.source
     if (
-        checkpoint.boundary != "after_execution"
+        checkpoint.boundary not in {"after_execution", "after_gate", "before_publication"}
         or source.workflow_id != step.workflow_id
         or source.run_id != step.run_id
         or source.logical_step_id != step.logical_step_id

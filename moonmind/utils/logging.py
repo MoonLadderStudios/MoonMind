@@ -393,8 +393,8 @@ def command_secret_continuation(text: str) -> str | None:
     return None
 
 
-def redact_sensitive_text(text: str | None) -> str:
-    """Scrub common credential-shaped values from browser/artifact text."""
+def redact_credential_text(text: str | None) -> str:
+    """Scrub credential-shaped values, not nonsecret authentication paths."""
 
     if not text:
         return ""
@@ -405,8 +405,13 @@ def redact_sensitive_text(text: str | None) -> str:
     redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
     redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED_USERINFO]@", redacted)
     redacted = _redact_secret_assignments(redacted)
-    redacted = _redact_auth_paths(redacted)
     return redacted
+
+
+def redact_sensitive_text(text: str | None) -> str:
+    """Scrub credential values and private authentication paths from diagnostics."""
+
+    return _redact_auth_paths(redact_credential_text(text))
 
 def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     """Recursively redact sensitive values while preserving compact refs."""

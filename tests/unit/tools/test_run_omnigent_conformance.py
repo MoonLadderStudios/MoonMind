@@ -27,7 +27,7 @@ def _load_runner():
     return module
 
 
-@pytest.mark.parametrize("owner", ["unit-fast", "integration-hermetic"])
+@pytest.mark.parametrize("owner", ["unit-fast", "integration-hermetic", "omnigent-exact-artifact"])
 @pytest.mark.parametrize(
     "damage",
     [None, "coverage", "source", "attempt", "owner", "interrupted", "outside-layer"],
@@ -136,7 +136,9 @@ def test_owner_receipts_require_current_complete_collected_coverage(
         )
         assert results[0]["nodeIds"] == [nodeid]
         assert results[0]["ownerReceiptRefs"]
-        if owner == "integration-hermetic":
+        if owner == "omnigent-exact-artifact":
+            retained = tmp_path / "omnigent-host-recovery-123-2"
+        elif owner == "integration-hermetic":
             retained = tmp_path / "integration-ci-hermetic-attempt-2"
         else:
             retained = tmp_path / "pytest-unit-fast-attempt-2"
@@ -154,14 +156,17 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             run_id="123",
             attempt="3",
             manifest_attempt="2",
-            require_full_source=True,
+            require_full_source=owner != "omnigent-exact-artifact",
         )
         artifact_prefix = (
             "integration-ci-hermetic"
             if owner == "integration-hermetic"
             else "pytest-unit-fast"
         )
-        current = tmp_path / f"{artifact_prefix}-attempt-3"
+        current = tmp_path / (
+            "omnigent-host-recovery-123-3" if owner == "omnigent-exact-artifact"
+            else f"{artifact_prefix}-attempt-3"
+        )
         current.mkdir()
         receipt.update(attempt="3", status="incomplete")
         (current / "owner.receipt.json").write_text(json.dumps(receipt))
@@ -176,8 +181,9 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             )
 
 
+@pytest.mark.parametrize("reader", [False, True])
 def test_source_evidence_does_not_claim_the_installed_recovery_owner(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, reader
 ):
     runner = _load_runner()
     source_path = "tests/integration/omnigent/test_replay.py"
@@ -187,6 +193,9 @@ def test_source_evidence_does_not_claim_the_installed_recovery_owner(
         installed_path
         + "::test_exact_host_replacement_resumes_same_session_without_provider_input"
     )
+    if reader:
+        installed_path = "tests/integration/omnigent/test_codex_seed_reader_transport.py"
+        installed_node = installed_path + "::test_actual_docker_reader_captures_only_selected_nonsecret_files"
     identity = dict(revision="a" * 40, runId="123", attempt="1")
     manifest = {
         "schema": "moonmind.test-ownership/v1",
@@ -232,6 +241,12 @@ def test_source_evidence_does_not_claim_the_installed_recovery_owner(
             ),
         ),
     )
+    if reader:
+        with pytest.raises(ValueError, match="Missing owner verification"):
+            runner.owner_receipt_commands(
+                tmp_path, manifest_path, revision=identity["revision"], run_id="123",
+                attempt="1", require_full_source=True,
+            )
     results = runner.owner_receipt_commands(
         tmp_path,
         manifest_path,
@@ -239,6 +254,7 @@ def test_source_evidence_does_not_claim_the_installed_recovery_owner(
         run_id="123",
         attempt="1",
         require_full_source=True,
+        source_owners_only=True,
     )
     assert results[0]["nodeIds"] == [source_node]
 
@@ -781,3 +797,47 @@ def test_hermetic_physical_receipts_are_complete_distinct_and_current(
         result = runner.owner_receipt_commands(tmp_path, manifest_path, **kwargs)
         assert result[0]["nodeIds"] == nodes
         assert len(result[0]["ownerReceiptRefs"]) == 2
+
+
+def test_seed_security_cases_keep_actual_owner_evidence_secret_free(tmp_path, monkeypatch):
+    """Negative security payloads must not become public pytest case identifiers."""
+    import os
+    import subprocess
+
+    from moonmind.omnigent.conformance import assert_secret_free
+
+    path = "tests/unit/omnigent/test_codex_file_seeds.py"
+    receipt_path = tmp_path / "seed.receipt.json"
+    identity = dict(revision="a" * 40, runId="123", attempt="1")
+    env = {
+        **os.environ,
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "MOONMIND_CI_RECEIPT": str(receipt_path),
+        "MOONMIND_CI_SUITE": "unit-fast",
+        "MOONMIND_CI_REVISION": identity["revision"],
+        "MOONMIND_CI_ENVIRONMENT": "seed-evidence-regression",
+        "GITHUB_RUN_ID": identity["runId"], "GITHUB_RUN_ATTEMPT": identity["attempt"],
+    }
+    result = subprocess.run(
+        [sys.executable, "tools/ci/write_backend_matrix_summary.py", "run",
+         "--expected-python", f"{sys.version_info.major}.{sys.version_info.minor}",
+         "-p", "pytest_asyncio.plugin", "-p", "tools.ci.write_backend_matrix_summary",
+         "--noconftest", path, "-q"],
+        cwd=REPO_ROOT, env=env, text=True, capture_output=True, timeout=60,
+    )
+    assert result.returncode == 0, "Seed security suite failed in the evidence subprocess"
+    receipt = json.loads(receipt_path.read_text())
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps({
+        "schema": "moonmind.test-ownership/v1", **identity,
+        "nodes": [{"nodeid": node, "path": path, "eligible": True, "owners": ["unit-fast"]}
+                  for node in receipt["expectedNodeIds"]],
+    }))
+    runner = _load_runner()
+    monkeypatch.setattr(runner, "COMMANDS", ((sys.executable, "-m", "pytest", path),))
+    evidence = runner.owner_receipt_commands(
+        tmp_path, manifest_path, revision=identity["revision"], run_id="123", attempt="1",
+    )
+    assert evidence[0]["nodeIds"] == sorted(receipt["expectedNodeIds"])
+    assert_secret_free(json.dumps(evidence))
+    assert_secret_free(result.stdout + result.stderr)

@@ -6202,8 +6202,24 @@ class MoonMindAgentRun:
             ):
                 return result_payload, admitted_at
             capacity_requeue_attempts += 1
+            parameters = dict(request.parameters)
+            capacity = request.admitted_provider_capacity
+            if (capacity is not None and capacity.execution_plan_ref
+                    and self._workflow_patch_enabled("omnigent-codex-seed-lineage-v1")):
+                lineage = list(parameters.get("_codexSeedAdmissionLineage") or [])
+                lineage.append({
+                    "executionPlanRef": capacity.execution_plan_ref,
+                    "idempotencyKey": request.idempotency_key,
+                    "admissionEpoch": capacity.admission_epoch,
+                    "runtimeBindingRef": stable_binding_id(
+                        execution_plan_ref=capacity.execution_plan_ref,
+                        idempotency_key=request.idempotency_key,
+                        admission_epoch=capacity.admission_epoch,
+                    ),
+                })
+                parameters["_codexSeedAdmissionLineage"] = lineage
             request = request.model_copy(
-                update={"admitted_provider_capacity": None}
+                update={"admitted_provider_capacity": None, "parameters": parameters}
             )
             # The next ticket must fence against the authority that exists now,
             # not the one this attempt was already refused for.

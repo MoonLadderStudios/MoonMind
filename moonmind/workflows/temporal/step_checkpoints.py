@@ -78,6 +78,8 @@ def build_step_checkpoint_payload(
     prepared_input_refs: list[str] | tuple[str, ...] = (),
     step_outputs: Mapping[str, Any] | None = None,
     omnigent_checkpoint: OmnigentCheckpointIdentity | Mapping[str, Any] | None = None,
+    codex_file_seed_receipts: Mapping[str, Any] | None = None,
+    codex_file_seed_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable checkpoint artifact payload."""
 
@@ -94,6 +96,8 @@ def build_step_checkpoint_payload(
         preparedInputRefs=list(prepared_input_refs),
         workspace=dict(workspace),
         omnigentCheckpoint=omnigent_checkpoint,
+        codexFileSeedReceipts=dict(codex_file_seed_receipts or {}),
+        codexFileSeedSource=dict(codex_file_seed_source) if codex_file_seed_source else None,
         stepOutputs=dict(step_outputs or {}),
         createdAt=created_at,
     )

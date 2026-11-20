@@ -298,6 +298,7 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 )
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_create_result,
+    build_step_checkpoint_id,
     build_step_checkpoint_payload,
     checkpoint_kinds_for_workspace_policy,
     validate_step_checkpoint_payload,
@@ -17576,6 +17577,101 @@ class TemporalCheckpointActivities:
             raise TemporalActivityRuntimeError(
                 "checkpoint source identity does not match the Activity execution"
             )
+        if model.codex_file_seed_receipts or model.codex_file_seed_source:
+            if self._artifact_service is None or model.boundary not in {"after_execution", "after_gate", "before_publication"}:
+                raise TemporalActivityRuntimeError(
+                    "Codex seed checkpoints require their durable execution owner"
+                )
+            from api_service.db.models import OmnigentRuntimeBindingRecord
+            from moonmind.omnigent.runtime_bindings import (
+                DbRuntimeBindingStore,
+                codex_seed_checkpoint_evidence,
+            )
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                OmnigentExecutionPlanEnvelope,
+                verify_execution_plan_envelope,
+            )
+            from moonmind.omnigent.harness_platform.stores import (
+                SessionExecutionPlanStore,
+            )
+
+            from sqlalchemy import select
+
+            source = model.codex_file_seed_source or {}
+            session = self._artifact_service._repository._session
+            row = (
+                await session.execute(
+                    select(OmnigentRuntimeBindingRecord).where(
+                        OmnigentRuntimeBindingRecord.binding_id
+                        == source.get("runtimeBindingRef")
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise TemporalActivityRuntimeError(
+                    "Codex seed checkpoint source binding is unavailable"
+                )
+            binding = DbRuntimeBindingStore._from_row(row)
+            expected, _evidence = codex_seed_checkpoint_evidence(
+                binding,
+                plan_ref=source.get("executionPlanRef"),
+                step=model.identity,
+            )
+            if (
+                not expected
+                or expected != model.codex_file_seed_receipts
+                or type(source.get("runtimeBindingRevision")) is not int
+                or not 1 <= source["runtimeBindingRevision"] <= binding.revision
+                or type(source.get("runtimeBindingFencingGeneration")) is not int
+                or not 1
+                <= source["runtimeBindingFencingGeneration"]
+                <= binding.fencingGeneration
+                or source.get("planArtifactRef") != model.plan_ref
+                or source.get("planDigest") != model.plan_digest
+            ):
+                raise TemporalActivityRuntimeError(
+                    "Codex seed checkpoint differs from durable source evidence"
+                )
+            envelope = verify_execution_plan_envelope(
+                OmnigentExecutionPlanEnvelope.model_validate_json(
+                    await self._read_bytes(model.plan_ref)
+                )
+            )
+            admitted = await SessionExecutionPlanStore(session).load(envelope.planRef)
+            if (
+                admitted is None
+                or envelope.planRef != binding.executionPlanRef
+                or model.plan_digest != "sha256:" + envelope.planRef.rsplit(":", 1)[-1]
+                or temporal_artifact_id(envelope.payload.authority.taskInputSnapshotRef)
+                != temporal_artifact_id(model.task_input_snapshot_ref)
+            ):
+                raise TemporalActivityRuntimeError(
+                    "Codex seed checkpoint plan is not the admitted source plan"
+                )
+            # Reuse the binding aggregate's immutable phase receipts for fallback
+            # writer retries; never treat caller-supplied checkpoint JSON as proof.
+            seed_checkpoint_phase = (
+                "codexSeedCheckpoint:"
+                + hashlib.sha256(model.idempotency_key.encode()).hexdigest()
+            )
+            seed_request_digest = hashlib.sha256(
+                _json_bytes(model.model_dump(by_alias=True, mode="json"))
+            ).hexdigest()
+            accepted = binding.phaseResults.get(seed_checkpoint_phase)
+            if accepted:
+                if accepted.get("requestDigest") != seed_request_digest:
+                    raise TemporalActivityRuntimeError(
+                        "Codex seed checkpoint retry changed its input"
+                    )
+                return build_step_checkpoint_create_result(
+                    checkpoint_ref=accepted["checkpointRef"],
+                    checkpoint_id=build_step_checkpoint_id(
+                        model.identity, model.boundary
+                    ),
+                    workspace_kind=model.workspace.kind,
+                    diagnostic_refs=model.diagnostic_refs,
+                    idempotency_key=model.idempotency_key,
+                )
         omnigent_checkpoint = model.omnigent
         if omnigent_checkpoint is None and model.omnigent_capture is not None:
             try:
@@ -17606,6 +17702,8 @@ class TemporalCheckpointActivities:
             prepared_input_refs=model.prepared_input_refs,
             step_outputs=step_outputs,
             omnigent_checkpoint=omnigent_checkpoint,
+            codex_file_seed_receipts=model.codex_file_seed_receipts,
+            codex_file_seed_source=model.codex_file_seed_source,
         )
         checkpoint_ref = await self._put_bytes(
             _json_bytes(payload),
@@ -17615,6 +17713,53 @@ class TemporalCheckpointActivities:
                 "checkpoint_id": payload["checkpointId"],
             },
         )
+        if model.codex_file_seed_receipts:
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+            store = DbRuntimeBindingStore(
+                async_sessionmaker(session.bind, expire_on_commit=False)
+            )
+            for attempt in range(3):
+                current = await store.get(binding.bindingId)
+                if current is None:
+                    raise TemporalActivityRuntimeError(
+                        "Codex seed checkpoint source disappeared"
+                    )
+                expected, _ = codex_seed_checkpoint_evidence(
+                    current, plan_ref=binding.executionPlanRef, step=model.identity
+                )
+                if expected != model.codex_file_seed_receipts:
+                    raise TemporalActivityRuntimeError(
+                        "Codex seed checkpoint source changed"
+                    )
+                accepted = current.phaseResults.get(seed_checkpoint_phase)
+                if accepted:
+                    if accepted.get("requestDigest") != seed_request_digest:
+                        raise TemporalActivityRuntimeError(
+                            "Codex seed checkpoint retry changed its input"
+                        )
+                    checkpoint_ref = accepted["checkpointRef"]
+                    break
+                try:
+                    await store.update(
+                        current.bindingId,
+                        expected_revision=current.revision,
+                        expected_fencing_generation=current.fencingGeneration,
+                        updates={
+                            "phaseResults": {
+                                **current.phaseResults,
+                                seed_checkpoint_phase: {
+                                    "checkpointRef": checkpoint_ref,
+                                    "requestDigest": seed_request_digest,
+                                },
+                            }
+                        },
+                    )
+                    break
+                except HarnessPlatformError:
+                    if attempt == 2:
+                        raise
         return build_step_checkpoint_create_result(
             checkpoint_ref=checkpoint_ref,
             checkpoint_id=payload["checkpointId"],

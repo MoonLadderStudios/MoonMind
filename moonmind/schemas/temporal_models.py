@@ -1317,6 +1317,12 @@ class StepExecutionCheckpointModel(BaseModel):
         default_factory=list, alias="preparedInputRefs"
     )
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    codex_file_seed_receipts: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, alias="codexFileSeedReceipts", exclude_if=lambda value: not value,
+    )
+    codex_file_seed_source: dict[str, Any] | None = Field(
+        None, alias="codexFileSeedSource", exclude_if=lambda value: value is None,
+    )
     omnigent: OmnigentCheckpointIdentity | None = Field(
         None, alias="omnigentCheckpoint"
     )
@@ -1558,6 +1564,12 @@ class StepCheckpointCreateInput(BaseModel):
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    codex_file_seed_receipts: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, alias="codexFileSeedReceipts", exclude_if=lambda value: not value,
+    )
+    codex_file_seed_source: dict[str, Any] | None = Field(
+        None, alias="codexFileSeedSource", exclude_if=lambda value: value is None,
+    )
     omnigent: OmnigentCheckpointIdentity | None = Field(
         None, alias="omnigentCheckpoint"
     )

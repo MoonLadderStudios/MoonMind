@@ -6976,6 +6976,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         diagnostic_refs: Sequence[str] = (),
         omnigent_checkpoint: Mapping[str, Any] | None = None,
         omnigent_checkpoint_capture: Mapping[str, Any] | None = None,
+        codex_file_seed_receipts: Mapping[str, Any] | None = None,
+        codex_file_seed_source: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -7008,6 +7010,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         if omnigent_checkpoint_capture is not None:
             payload["omnigentCheckpointCapture"] = dict(omnigent_checkpoint_capture)
+        if codex_file_seed_receipts:
+            payload["codexFileSeedReceipts"] = dict(codex_file_seed_receipts)
+            payload["codexFileSeedSource"] = dict(codex_file_seed_source or {})
+            payload["planRef"] = payload["codexFileSeedSource"].get("planArtifactRef")
+            payload["planDigest"] = payload["codexFileSeedSource"].get("planDigest")
         result = await workflow.execute_activity(
             route.activity_type,
             payload,
@@ -7211,6 +7218,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ):
             capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            if candidate.get("codexFileSeedReceipts"):
+                capture_input["codexFileSeedReceipts"] = dict(candidate["codexFileSeedReceipts"])
+                capture_input["codexFileSeedSource"] = dict(candidate.get("codexFileSeedSource") or {})
             omnigent_capture = candidate.get(
                 "omnigentCheckpointCapture"
             ) or candidate.get("omnigent_checkpoint_capture")
@@ -7744,6 +7754,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else None
             ),
             omnigent_checkpoint_capture=omnigent_capture_input,
+            codex_file_seed_receipts=(
+                step_capture_input.get("codexFileSeedReceipts")
+                if boundary in {"after_execution", "after_gate", "before_publication"}
+                else None
+            ),
+            codex_file_seed_source=(
+                step_capture_input.get("codexFileSeedSource")
+                if boundary in {"after_execution", "after_gate", "before_publication"}
+                else None
+            ),
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:

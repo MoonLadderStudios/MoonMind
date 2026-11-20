@@ -8,6 +8,7 @@ the existing Omnigent session driver owns provider interaction after creation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -409,6 +410,88 @@ class GenericOmnigentHostRealizer:
             ),
         )
 
+    async def _codex_file_seed_receipt(
+        self, *, request, plan, binding, acquired, selected_home, configuration, capture,
+    ):
+        """Freeze nonsecret seed data before any host can consume it."""
+        from moonmind.omnigent.codex_file_seeds import required_seed_paths, validate_seed_capture
+        from moonmind.provider_profiles.codex_configuration import validate_oauth_configuration
+        from moonmind.omnigent.runtime_bindings import codex_seed_predecessor
+
+        if self._artifacts is None or request.step_execution is None:
+            raise HarnessPlatformError("Codex file seeds require durable execution authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT)
+        phase = "codexFileSeeds:" + acquired.slot
+        identity = {
+            "configurationDigest": "sha256:" + hashlib.sha256(json.dumps(
+                configuration, sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest(),
+            "providerProfileRef": acquired.provider_profile_ref,
+            "credentialGeneration": acquired.credential_generation,
+            "volumeRef": selected_home.volume_ref,
+            "targetPath": selected_home.target_path,
+        }
+        step = request.step_execution
+        source_identity = {"workflowId": step.workflow_id, "runId": step.run_id,
+            "logicalStepId": step.logical_step_id, "executionOrdinal": step.execution_ordinal}
+        paths = required_seed_paths(configuration)
+
+        async def read(receipt):
+            if not isinstance(receipt, dict) or any(receipt.get(key) != value for key, value in identity.items()):
+                raise ValueError("Codex seed receipt conflicts with frozen provider configuration")
+            source = receipt.get("sourceIdentity") or {}
+            if any(source.get(key) != source_identity[key] for key in ("workflowId", "runId", "logicalStepId")) or type(source.get("executionOrdinal")) is not int or source["executionOrdinal"] > step.execution_ordinal:
+                raise ValueError("Codex seed receipt belongs to a different execution")
+            body = await self._artifacts.read_bytes(receipt["artifactRef"])
+            if len(body) > 512 * 1024 or "sha256:" + hashlib.sha256(body).hexdigest() != receipt.get("contentDigest"):
+                raise ValueError("Codex seed artifact digest or size is invalid")
+            seeds = validate_seed_capture(json.loads(body), paths)
+            validate_oauth_configuration({**configuration, "fileSeeds": seeds})
+            return seeds
+
+        binding = await self._runtime_bindings.get(binding.bindingId)
+        await self._credentials.validate_file_seed_authority(request=request, binding=binding)
+        recorded = (binding.phaseResults or {}).get(phase)
+        if recorded is not None:
+            return binding, await read(recorded)
+        predecessor = await codex_seed_predecessor(
+            request=request, plan=plan, binding=binding,
+            store=self._runtime_bindings, artifacts=self._artifacts,
+        )
+        retained = (predecessor.phaseResults or {}).get(phase) if predecessor is not None else None
+        if retained is not None:
+            seeds = await read(retained)
+            receipt = retained
+        else:
+            seeds = validate_seed_capture(await capture(), paths)
+            # Refuse an unusable combined envelope before making a durable receipt.
+            validate_oauth_configuration({**configuration, "fileSeeds": seeds})
+            reference = await self._artifacts.write_json(
+                request=request, name="codex-file-seeds.json", payload=seeds,
+                link_type="evidence.codex_file_seeds",
+            )
+            body = await self._artifacts.read_bytes(reference)
+            if validate_seed_capture(json.loads(body), paths) != seeds:
+                raise ValueError("Codex file seed artifact differs from captured bytes")
+            receipt = {**identity, "sourceIdentity": source_identity,
+                "artifactRef": reference,
+                "contentDigest": "sha256:" + hashlib.sha256(body).hexdigest()}
+        await self._credentials.validate_file_seed_authority(request=request, binding=binding)
+        sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+        try:
+            await sink.record_phase(phase, receipt)
+        except Exception:
+            # A lost response or racing retry can already have committed the first
+            # receipt. Its verified value wins; never accept a second observation.
+            current = await self._runtime_bindings.get(binding.bindingId)
+            accepted = (current.phaseResults or {}).get(phase)
+            if accepted is None:
+                raise
+            await self._credentials.validate_file_seed_authority(request=request, binding=current)
+            return current, await read(accepted)
+        await self._credentials.validate_file_seed_authority(request=request, binding=sink.binding)
+        return sink.binding, seeds
+
     async def _execute_lifecycle(
         self,
         request: AgentExecutionRequest,
@@ -648,11 +731,19 @@ class GenericOmnigentHostRealizer:
             request = await self._bind_request_inputs(request)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan, request=request)
+            async def codex_file_seed_receipt(**arguments):
+                nonlocal binding
+                binding, seeds = await self._codex_file_seed_receipt(
+                    request=request, plan=plan, binding=binding, **arguments,
+                )
+                return seeds
+
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,
                 acquired_leases=acquired,
                 writer_image_ref=host_class.imageRef,
+                codex_file_seed_receipt=codex_file_seed_receipt,
             )
             by_runtime_ref = {
                 (handle.providerLeaseRef, handle.materializerRef): handle
@@ -1629,6 +1720,26 @@ class GenericOmnigentHostRealizer:
             runtime_context_reference,
         )
 
+        file_seed_receipts = {
+            key.removeprefix("codexFileSeeds:"): value
+            for key, value in phases.items() if key.startswith("codexFileSeeds:")
+        }
+        if file_seed_receipts:
+            seed_plan = request.omnigent_execution_plan or (
+                request.step_execution.omnigent_execution_plan if request.step_execution else None
+            )
+            result = result.model_copy(update={"metadata": {
+                **(result.metadata or {}),
+                "codexFileSeedReceipts": file_seed_receipts,
+                "codexFileSeedSource": {
+                    "runtimeBindingRef": sink.binding.bindingId,
+                    "runtimeBindingRevision": sink.binding.revision,
+                    "runtimeBindingFencingGeneration": sink.binding.fencingGeneration,
+                    "executionPlanRef": sink.binding.executionPlanRef,
+                    **({"planArtifactRef": seed_plan.plan_artifact_ref,
+                        "planDigest": seed_plan.plan_digest} if seed_plan else {}),
+                },
+            }})
         context_reference = runtime_context_reference(sink.binding)
         if AUTHORITY_PHASE in phases:
             # An explicit empty receipt means this context-aware attempt never

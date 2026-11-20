@@ -307,7 +307,8 @@ jobs:
       - integration-hermetic
       - frontend-static
       - unit-slow
-    if: "!cancelled() && needs.select-test-suites.outputs.omnigent_conformance == 'true' && needs.preflight-policy.result == 'success' && needs.backend-matrix.result == 'success' && needs.integration-hermetic.result == 'success' && needs.frontend-static.result == 'success' && (needs.unit-slow.result == 'success' || (needs.select-test-suites.outputs.unit_slow == 'false' && needs.unit-slow.result == 'skipped'))"
+      - omnigent-host-recovery
+    if: "!cancelled() && needs.select-test-suites.outputs.omnigent_conformance == 'true' && needs.preflight-policy.result == 'success' && needs.backend-matrix.result == 'success' && needs.integration-hermetic.result == 'success' && needs.frontend-static.result == 'success' && (needs.omnigent-host-recovery.result == 'success' || (inputs.verification_phase == 'source' && needs.omnigent-host-recovery.result == 'skipped')) && (needs.unit-slow.result == 'success' || (needs.select-test-suites.outputs.unit_slow == 'false' && needs.unit-slow.result == 'skipped'))"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -333,6 +334,13 @@ jobs:
           pattern: integration-ci-hermetic-shard-*-attempt-*
           path: artifacts/owner-receipts/hermetic
           merge-multiple: false
+      - name: Download exact host owner receipts
+        if: needs.select-test-suites.outputs.host_recovery == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: omnigent-host-recovery-${{ github.run_id }}-*
+          path: artifacts/owner-receipts/host-recovery
+          merge-multiple: false
       - name: Download frontend owner receipt
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -347,6 +355,7 @@ jobs:
         run: |
           extra=()
           if [[ "$FULL_SOURCE" == "true" ]]; then extra=(--require-full-source); fi
+          if [[ "$SOURCE_PHASE" == "true" ]]; then extra+=(--source-owners-only); fi
           python tools/run_omnigent_conformance.py "${extra[@]}" \
             --owner-receipts artifacts/owner-receipts \
             --ownership-manifest artifacts/owner-receipts/ownership/test-ownership.json \
@@ -356,6 +365,7 @@ jobs:
             --host-image fake-host@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
             --host-architecture linux/amd64
         env:
+          SOURCE_PHASE: ${{ inputs.verification_phase == 'source' }}
           FULL_SOURCE: ${{ inputs.verification_phase == 'source' || needs.select-test-suites.outputs.full_backend == 'true' }}
       - name: Upload conformance evidence
         if: always()

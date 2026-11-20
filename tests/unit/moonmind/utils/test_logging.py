@@ -325,3 +325,14 @@ def test_redact_sensitive_payload_preserves_auth_readiness_metadata_string():
     }
 
     assert redact_sensitive_payload(payload) == payload
+
+
+def test_credential_redaction_keeps_path_prose_but_diagnostics_still_hide_it():
+    from moonmind.utils.logging import redact_credential_text, redact_sensitive_text
+
+    instruction = 'Read ~/.codex/AGENTS.md before editing.'
+    assert redact_credential_text(instruction) == instruction
+    assert '~/.codex/AGENTS.md' not in redact_sensitive_text(instruction)
+    secret = 'OPENAI_API_KEY=synthetic-secret-value'
+    assert 'synthetic-secret-value' not in redact_credential_text(secret)
+    assert 'synthetic-secret-value' not in redact_sensitive_text(secret)

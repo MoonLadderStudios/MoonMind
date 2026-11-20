@@ -443,6 +443,8 @@ _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
     {
         *_VERIFY_GATE_METADATA_KEYS,
         "admissionRecovery",
+        "codexFileSeedReceipts",
+        "codexFileSeedSource",
         "agentId",
         "agentKind",
         "agentRunId",

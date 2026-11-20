@@ -6,10 +6,11 @@ are mounted into the already built application image; its production imports
 remain image-owned. The upstream server, host and their observed identities
 are supplied by the job's pinned-source builds, never inferred from latest.
 
-Two rows run on one isolated stack: the same-session host recovery row, then
+Three checks run on one isolated stack: the same-session host recovery row, then
 the interrupted-step journey (MoonLadderStudios/MoonMind#4627), which replaces
 a real host mid-step under a real Temporal server and requires the step's
-successor to restore the saved workspace on a new host.
+successor to restore the saved workspace on a new host, followed by bounded
+read-only enrollment seed capture using the same qualified host image.
 """
 
 from __future__ import annotations
@@ -21,12 +22,17 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
+
+# This standalone driver uses the same strict receipt owner as backend pytest.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.ci.write_backend_matrix_summary import validate_receipt
 
 TEST_NAME = "test_exact_host_replacement_resumes_same_session_without_provider_input"
 TEST_FILE = "test_exact_docker_n_way_concurrency.py"
@@ -37,6 +43,21 @@ JOURNEY_TEST_FILE = "tests/integration/reliability/test_interrupted_step_replace
 JOURNEY_RECEIPT = "interrupted-step-exact-docker.json"
 JOURNEY_JUNIT = "interrupted-step-junit.xml"
 JOURNEY_STEPS = ("prepare", "analyze", "implement")
+SEED_READER_TEST_FILE = "tests/integration/omnigent/test_codex_seed_reader_transport.py"
+SEED_READER_TEST_NAME = "test_actual_docker_reader_captures_only_selected_nonsecret_files"
+SEED_READER_JUNIT = "codex-seed-reader-junit.xml"
+SEED_READER_RECEIPT = "codex-seed-reader.receipt.json"
+SEED_READER_ENVIRONMENT = "codex-seed-reader.environment.json"
+VERIFIED_BOOTSTRAP = (
+    "import os, sys; from pathlib import Path; "
+    "sys.path.append('/opt/test-dependencies'); "
+    "from tools.ci.write_backend_matrix_summary import record_environment; "
+    "record_environment(Path(os.environ['MOONMIND_CI_RECEIPT']), "
+    "expected_python=os.environ['MOONMIND_CI_EXPECTED_PYTHON'], arguments=sys.argv[1:]); "
+    "os.environ['MOONMIND_CI_OWNER_PID'] = str(os.getpid()); "
+    "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
+)
+
 #: The canonical Compose PostgreSQL service's test-only superuser.
 DATABASE_URL = "postgresql://postgres:moonmind-test-db@postgres:5432/moonmind"
 TEMPORAL_ADDRESS = "temporal:7233"
@@ -457,6 +478,39 @@ def run_journey(command, root, **identity):
     return validate_journey_evidence(root, **identity)
 
 
+def run_seed_reader(command, root):
+    """Require this invocation's exact Docker test, not a skip or stale report."""
+    for name in (SEED_READER_JUNIT, SEED_READER_RECEIPT, SEED_READER_ENVIRONMENT):
+        (root / name).unlink(missing_ok=True)
+    result = subprocess.run(command, check=False, timeout=300)
+    _require(result.returncode == 0, "Codex seed reader pytest failed")
+    try:
+        cases = ET.parse(root / SEED_READER_JUNIT).getroot().findall(".//testcase")
+    except (OSError, ET.ParseError) as exc:
+        raise RecoveryError("Codex seed reader evidence is missing or malformed") from exc
+    _require(len(cases) == 1 and cases[0].get("name") == SEED_READER_TEST_NAME,
+             "Codex seed reader did not execute its exact test")
+    _require(all(cases[0].find(kind) is None for kind in ("skipped", "failure", "error")),
+             "Codex seed reader did not pass")
+    return {"status": "passed"}
+
+
+def validate_seed_receipt(root, source_commit):
+    receipt = validate_receipt(
+        root / SEED_READER_RECEIPT, revision=source_commit,
+        run_id=os.environ.get("GITHUB_RUN_ID", "local"),
+        attempt=os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+    )
+    _require(receipt["suite"] == "omnigent-exact-artifact",
+             "Codex seed reader receipt has the wrong owner")
+    _require(receipt["expectedNodeIds"] == [
+        f"{SEED_READER_TEST_FILE}::{SEED_READER_TEST_NAME}"
+    ], "Codex seed reader receipt has the wrong collected test")
+    _require(all(case["outcome"] == "passed" for case in receipt["cases"]),
+             "Codex seed reader receipt did not pass without skips")
+    return receipt
+
+
 def _annotation(text):
     """Escape a GitHub Actions workflow-command message."""
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -626,6 +680,7 @@ def test_command(
     junit=JUNIT,
     extra_environment=None,
     pytest_options=("--confcutdir=/test-driver",),
+    bootstrap=None,
 ):
     command = [
         "docker",
@@ -677,7 +732,7 @@ def test_command(
         [
             image,
             "-c",
-            (
+            bootstrap or (
                 "import sys; sys.path.append('/opt/test-dependencies'); "
                 "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
             ),
@@ -712,6 +767,29 @@ def journey_command(**kwargs):
         # The journey needs only builtin fixtures; repository conftest files
         # may import tooling that is not part of the deployable image.
         pytest_options=("--rootdir=/test-driver", "--noconftest", "-s"),
+    )
+
+
+def seed_reader_command(**kwargs):
+    """Run production reader imports from the candidate with the qualified host."""
+    return test_command(
+        **kwargs,
+        target=f"/test-driver/{SEED_READER_TEST_FILE}::{SEED_READER_TEST_NAME}",
+        junit=SEED_READER_JUNIT,
+        extra_environment={
+            "PYTHONPATH": "/app:/test-driver",
+            "CANDIDATE_IMAGE": kwargs["host_image_ref"],
+            "MOONMIND_CI_RECEIPT": str(kwargs["work"] / SEED_READER_RECEIPT),
+            "MOONMIND_CI_SUITE": "omnigent-exact-artifact",
+            "MOONMIND_CI_REVISION": kwargs["source_commit"],
+            "MOONMIND_CI_ENVIRONMENT": "exact-candidate-application-image",
+            "MOONMIND_CI_EXPECTED_PYTHON": "3.15",
+            "GITHUB_RUN_ID": os.environ.get("GITHUB_RUN_ID", "local"),
+            "GITHUB_RUN_ATTEMPT": os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+        },
+        bootstrap=VERIFIED_BOOTSTRAP,
+        pytest_options=("--rootdir=/test-driver", "--noconftest", "-s",
+                        "-p", "tools.ci.write_backend_matrix_summary"),
     )
 
 
@@ -754,6 +832,7 @@ def main(argv=None):
         JUNIT,
         JOURNEY_RECEIPT,
         JOURNEY_JUNIT,
+        SEED_READER_JUNIT, SEED_READER_RECEIPT, SEED_READER_ENVIRONMENT,
         "credential-recovery-result.json",
     ):
         (output / name).unlink(missing_ok=True)
@@ -777,6 +856,7 @@ def main(argv=None):
     app = None
     row = None
     journey = None
+    seed_receipt = None
     phase = "setup"
     try:
         _require(shutil.which("docker") is not None, "Docker is unavailable")
@@ -864,6 +944,13 @@ def main(argv=None):
             work / "driver" / "tests",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        for relative in (
+            "tools/__init__.py", "tools/ci/write_backend_matrix_summary.py",
+            "pyproject.toml", "poetry.lock",
+        ):
+            target = work / "driver" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / relative, target)
         _command([*compose, "up", "-d", "omnigent", "sandbox-egress-proxy", "temporal"])
         for service, role, expected_image in (
             ("omnigent", "server", images["server"]["id"]),
@@ -917,6 +1004,14 @@ def main(argv=None):
             host_image_ref=args.host_image,
             host_image_id=images["host"]["id"],
         )
+        seed_reader = run_seed_reader(seed_reader_command(
+            image=app["Id"], network=network, name=driver_name, work=work,
+            dependencies=args.dependencies.resolve(), source_commit=source,
+            host_image_ref=args.host_image,
+            server_image_digest=images["server"]["ref"].split("@", 1)[1],
+            token=token, project=project,
+        ), work)
+        seed_receipt = validate_seed_receipt(work, source)
         (output / "credential-recovery-result.json").write_text(
             json.dumps(
                 {
@@ -924,6 +1019,7 @@ def main(argv=None):
                     "status": "passed",
                     "recovery": row,
                     "interruptedStep": journey,
+                    "codexSeedReader": seed_reader,
                 },
                 indent=2,
             )
@@ -993,7 +1089,10 @@ def main(argv=None):
         for name, receipt in ((RECEIPT, row), (JOURNEY_RECEIPT, journey)):
             if receipt is not None:
                 (output / name).write_text(json.dumps(receipt, indent=2) + "\n")
-        for name in (JUNIT, JOURNEY_JUNIT):
+        if seed_receipt is not None:
+            for name in (SEED_READER_RECEIPT, SEED_READER_ENVIRONMENT):
+                shutil.copyfile(work / name, output / name)
+        for name in (JUNIT, JOURNEY_JUNIT, SEED_READER_JUNIT):
             _project_junit(work / name, output / name)
         shutil.rmtree(work, ignore_errors=True)
 

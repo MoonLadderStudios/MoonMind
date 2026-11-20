@@ -55,7 +55,7 @@ def test_replacement_seed_preserves_order_and_normalized_destination():
 @pytest.mark.parametrize(
     "files",
     [
-        [("AGENTS.md", "more", "append", "text")],
+        [("NOTES.md", "more", "append", "text")],
         [("settings.json", {"more": 1}, "deep_merge", "json")],
         [("{{workspace_path}}.md", "text", "replace", "text")],
         [
@@ -134,3 +134,14 @@ def test_selected_seed_detaches_privately_and_restart_does_not_append_twice(
         (enrolled / "AGENTS.md").write_text("changed since admission")
     assert (enrolled / "rules/options.json").read_text() == '{"ambient":true}'
     assert (sibling / "auth.json").read_text() == "sibling-auth"
+
+
+@pytest.mark.parametrize('files', [
+    [('AGENTS.md', 'addition', 'append', 'text')],
+    [('rules/preferences.json', {'added': True}, 'deep_merge', 'json')],
+])
+def test_bounded_native_seeds_require_durable_capture_in_admitted_configuration(files):
+    configuration, reason = oauth_configuration_for_profile(selected(files))
+    assert configuration is not None, reason
+    assert configuration['fileSeedPolicy'] == 'capture-once-v1'
+    assert 'fileSeeds' not in configuration

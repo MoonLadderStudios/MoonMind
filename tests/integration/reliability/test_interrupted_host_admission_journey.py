@@ -362,9 +362,15 @@ async def test_replacement_cleans_owned_docker_resources_before_readmission(
                     for r in execution_requests
                 ] == [1, 1, 2]
                 assert execution_requests[0] == execution_requests[1]
-                assert (
-                    execution_requests[0].parameters == execution_requests[2].parameters
-                )
+                replacement_parameters = dict(execution_requests[2].parameters)
+                lineage = replacement_parameters.pop("_codexSeedAdmissionLineage")
+                assert execution_requests[0].parameters == replacement_parameters
+                assert lineage == [{
+                    "executionPlanRef": plan.planRef,
+                    "idempotencyKey": request.idempotency_key,
+                    "admissionEpoch": 1,
+                    "runtimeBindingRef": key,
+                }]
                 assert (
                     execution_requests[0].workspace_spec
                     == execution_requests[2].workspace_spec

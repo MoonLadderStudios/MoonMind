@@ -218,10 +218,12 @@ class OmnigentWorkspacePublicationService:
         artifact_gateway=None,
         repository_credential_service=None,
         execution_plan_store=None,
+        runtime_binding_store=None,
     ) -> None:
         self._artifacts = artifact_gateway
         self._repository_credentials = repository_credential_service
         self._plans = execution_plan_store
+        self._runtime_bindings = runtime_binding_store
         self._workspace_root = Path(
             workspace_root or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         ).resolve()
@@ -534,6 +536,24 @@ class OmnigentWorkspacePublicationService:
                 build_step_checkpoint_payload,
             )
 
+            seed_receipts, seed_source = {}, None
+            if self._runtime_bindings is not None:
+                from moonmind.omnigent.runtime_bindings import (
+                    codex_seed_checkpoint_evidence, stable_binding_id,
+                )
+                capacity = request.admitted_provider_capacity
+                binding_ref = stable_binding_id(
+                    execution_plan_ref=plan.plan_ref,
+                    idempotency_key=request.idempotency_key,
+                    admission_epoch=capacity.admission_epoch if capacity else 0,
+                )
+                source_binding = await self._runtime_bindings.get(binding_ref)
+                if source_binding is not None:
+                    seed_receipts, seed_source = codex_seed_checkpoint_evidence(
+                        source_binding, plan_ref=plan.plan_ref,
+                        step=request.step_execution,
+                    )
+
             payload = build_step_checkpoint_payload(
                 identity=StepExecutionIdentityModel(
                     workflowId=identity.workflow_id,
@@ -548,6 +568,8 @@ class OmnigentWorkspacePublicationService:
                 plan_ref=plan.plan_artifact_ref,
                 plan_digest=plan.plan_digest,
                 prepared_input_refs=identity.prepared_input_refs,
+                codex_file_seed_receipts=seed_receipts,
+                codex_file_seed_source=seed_source,
             )
             ref = await Capture(
                 workspace_root=self._workspace_root

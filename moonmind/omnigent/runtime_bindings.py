@@ -8,7 +8,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 from sqlalchemy import select, update, text
@@ -864,3 +864,189 @@ __all__ = [
     "evolve_binding",
     "stable_binding_id",
 ]
+
+
+class CodexSeedPredecessor(NamedTuple):
+    phaseResults: dict[str, Any]
+
+
+async def codex_seed_predecessor(*, request, plan, binding, store, artifacts):
+    """Resolve only exact re-admission receipts or a scoped saved-step checkpoint."""
+    step = request.step_execution
+    if step is None:
+        raise ValueError("Codex seed lineage requires its Step Execution")
+    lineage = request.parameters.get("_codexSeedAdmissionLineage") or []
+    if not isinstance(lineage, list) or len(lineage) > 3:
+        raise ValueError("Codex seed admission lineage is invalid")
+    capacity = request.admitted_provider_capacity
+    epoch = capacity.admission_epoch if capacity is not None else 0
+    last_epoch = epoch
+    for receipt in reversed(lineage):
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt)
+            != {
+                "executionPlanRef",
+                "idempotencyKey",
+                "admissionEpoch",
+                "runtimeBindingRef",
+            }
+            or receipt["executionPlanRef"] != plan.planRef
+            or receipt["idempotencyKey"] != request.idempotency_key
+            or type(receipt["admissionEpoch"]) is not int
+            or not 0 <= receipt["admissionEpoch"] < last_epoch
+        ):
+            raise ValueError("Codex seed admission lineage conflicts with admission")
+        last_epoch = receipt["admissionEpoch"]
+        expected = stable_binding_id(
+            execution_plan_ref=plan.planRef,
+            idempotency_key=request.idempotency_key,
+            admission_epoch=last_epoch,
+        )
+        if receipt["runtimeBindingRef"] != expected or expected == binding.bindingId:
+            raise ValueError("Codex seed predecessor identity is invalid")
+        source = await store.get(expected)
+        if source is None:
+            continue  # This exact earlier admission never materialized a binding.
+        if (source.state is not RuntimeBindingState.cleaned
+            or source.executionPlanRef != plan.planRef):
+            raise ValueError("Codex seed predecessor is not settled")
+        if not any(key.startswith("codexFileSeeds:") for key in source.phaseResults or {}):
+            continue  # Acquisition failed before any seed was accepted.
+        authority = (source.phaseResults or {}).get("runtimeContextAuthority") or {}
+        if (
+            authority.get("workflowId") != step.workflow_id
+            or authority.get("runId") != step.run_id
+            or authority.get("stepExecutionId") != step.step_execution_id
+        ):
+            raise ValueError(
+                "Codex seed predecessor has no settled same-step authority"
+            )
+        if any(key.startswith("codexFileSeeds:") for key in source.phaseResults or {}):
+            return source
+    hints = request.parameters.get("metadata") or {}
+    hints = hints.get("moonmind") or {} if isinstance(hints, dict) else {}
+    reference = hints.get("sharedStepCheckpointRef")
+    if not reference:
+        if epoch > 1 and not lineage:
+            raise ValueError("Codex seed re-admission lost its predecessor lineage")
+        return None
+    from moonmind.core.artifacts import temporal_artifact_id
+    from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope,
+        verify_execution_plan_envelope,
+    )
+
+    if (
+        hints.get("sharedCheckpointRequired") is not True
+        or not isinstance(reference, str)
+        or temporal_artifact_id(reference) is None
+        or step.execution_ordinal <= 1
+    ):
+        raise ValueError("Codex seed checkpoint reference is invalid")
+    body, recorded_body = await artifacts.read_codex_seed_checkpoint(reference, request=request)
+    if len(body) > 4 * 1024 * 1024:
+        raise ValueError("Codex seed checkpoint exceeds its bound")
+    checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
+    identity = checkpoint.source
+    if (
+        checkpoint.boundary not in {"after_execution", "after_gate", "before_publication"}
+        or (identity.workflow_id, identity.run_id, identity.logical_step_id)
+        != (step.workflow_id, step.run_id, step.logical_step_id)
+        or identity.execution_ordinal >= step.execution_ordinal
+        or temporal_artifact_id(checkpoint.task_input_snapshot_ref)
+        != temporal_artifact_id(plan.payload.authority.taskInputSnapshotRef)
+        or not checkpoint.plan_ref
+        or not checkpoint.plan_digest
+    ):
+        raise ValueError("Codex seed checkpoint belongs to another step or input")
+    recorded = verify_execution_plan_envelope(
+        OmnigentExecutionPlanEnvelope.model_validate_json(
+            recorded_body
+        )
+    )
+    if (
+        checkpoint.plan_digest != "sha256:" + recorded.planRef.rsplit(":", 1)[-1]
+        or recorded.payload.authority.taskInputSnapshotDigest
+        != plan.payload.authority.taskInputSnapshotDigest
+        or temporal_artifact_id(recorded.payload.authority.taskInputSnapshotRef)
+        != temporal_artifact_id(plan.payload.authority.taskInputSnapshotRef)
+        or recorded.payload.providerConfigurationSnapshot
+        != plan.payload.providerConfigurationSnapshot
+    ):
+        raise ValueError(
+            "Codex seed checkpoint conflicts with frozen provider admission"
+        )
+    receipts = checkpoint.codex_file_seed_receipts
+    source = checkpoint.codex_file_seed_source
+    if not receipts:
+        raise ValueError("Codex seed checkpoint lost its frozen receipts")
+    if not source or source.get("executionPlanRef") != recorded.planRef:
+        raise ValueError("Codex seed checkpoint lost its source binding evidence")
+    owner = await store.get(source.get("runtimeBindingRef"))
+    owned_checkpoint_refs = [] if owner is None else [
+        value.get("checkpointRef")
+        for key, value in (owner.phaseResults or {}).items()
+        if (key == "saved" or key.startswith("codexSeedCheckpoint:"))
+        and isinstance(value, dict)
+    ]
+    if (owner is None or owner.state not in {
+        RuntimeBindingState.draining, RuntimeBindingState.cleanup_pending,
+        RuntimeBindingState.cleaned,
+    } or temporal_artifact_id(reference) not in {
+        temporal_artifact_id(value) for value in owned_checkpoint_refs
+    }):
+        raise ValueError("Codex seed checkpoint source authority is unavailable")
+    expected, attestation = codex_seed_checkpoint_evidence(
+        owner,
+        plan_ref=recorded.planRef,
+        step=identity,
+    )
+    if (
+        expected != receipts
+        # Reconciliation advances the writer fence without invalidating an
+        # already-owned checkpoint or its immutable seed receipts. This reads
+        # retained data only; successor process authority is checked separately.
+        or type(source.get("runtimeBindingFencingGeneration")) is not int
+        or not 1 <= source["runtimeBindingFencingGeneration"]
+        <= attestation["runtimeBindingFencingGeneration"]
+        or type(source.get("runtimeBindingRevision")) is not int
+        or not 1 <= source["runtimeBindingRevision"] <= owner.revision
+    ):
+        raise ValueError("Codex seed checkpoint conflicts with its durable source")
+    # Exact retained source phases establish producer authority; JSON shape or
+    # content addressing alone must never authorize captured credential bytes.
+    return CodexSeedPredecessor(
+        phaseResults={
+            "codexFileSeeds:" + slot: value for slot, value in receipts.items()
+        }
+    )
+
+
+def codex_seed_checkpoint_evidence(binding, *, plan_ref, step):
+    """Project immutable phases only from the exact durable execution owner."""
+    authority = (binding.phaseResults or {}).get("runtimeContextAuthority") or {}
+    receipts = {
+        key.removeprefix("codexFileSeeds:"): value
+        for key, value in (binding.phaseResults or {}).items()
+        if key.startswith("codexFileSeeds:")
+    }
+    if not receipts:
+        return {}, None
+    from moonmind.schemas.temporal_models import build_step_execution_id
+
+    step_id = getattr(step, "step_execution_id", None) or build_step_execution_id(step)
+    if (
+        binding.executionPlanRef != plan_ref
+        or authority.get("workflowId") != step.workflow_id
+        or authority.get("runId") != step.run_id
+        or authority.get("stepExecutionId") != step_id
+    ):
+        raise ValueError("Codex seed checkpoint has no exact execution authority")
+    return receipts, {
+        "runtimeBindingRef": binding.bindingId,
+        "runtimeBindingRevision": binding.revision,
+        "runtimeBindingFencingGeneration": binding.fencingGeneration,
+        "executionPlanRef": binding.executionPlanRef,
+    }

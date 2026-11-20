@@ -886,7 +886,7 @@ class OmnigentWorkspaceMaterializer:
                 checkpoint.source.workflow_id != identity.workflow_id
                 and not branch_restore
             )
-            or checkpoint.boundary not in {"after_execution", "before_publication"}
+            or checkpoint.boundary not in {"after_execution", "after_gate", "before_publication"}
             or context is not None
             and context.step_execution_id != source_step
         ):

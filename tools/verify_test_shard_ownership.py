@@ -45,7 +45,9 @@ from tools.ci.refresh_reliability_durations import (
     RELIABILITY_SUITES,
     durations_pytest_args,
 )
-from tools.ci.run_credential_free_host_recovery import TEST_FILE, TEST_NAME
+from tools.ci.run_credential_free_host_recovery import (
+    TEST_FILE, TEST_NAME, SEED_READER_TEST_FILE, SEED_READER_TEST_NAME,
+)
 from tools.select_test_suites import AUDITED_HERMETIC_TEST_PATHS
 
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
@@ -181,7 +183,7 @@ def owners(node: CollectedNode) -> set[str]:
 
     if node.path in CONTROLLER_JOURNEY_PATHS:
         result.add("integration-controller-journey")
-    if node.nodeid == EXACT_RECOVERY_NODE:
+    if node.nodeid in {EXACT_RECOVERY_NODE, f"{SEED_READER_TEST_FILE}::{SEED_READER_TEST_NAME}"}:
         result.add("omnigent-exact-artifact")
 
     if (
