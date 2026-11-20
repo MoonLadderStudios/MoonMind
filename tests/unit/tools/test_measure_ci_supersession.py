@@ -511,3 +511,82 @@ def test_carried_gate_remains_timing_evidence_but_not_retry_occupancy():
     assert row["retryRunnerSeconds"] == 300
     assert row["heavyRunnerSecondsBeforePreflight"] == 0
     assert row["heavyJobsStartedBeforePreflight"] == 0
+
+
+def test_retry_cancellation_overlapping_new_push_is_superseded():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1,
+        "10:00:00",
+        "10:15:00",
+        run_attempt=2,
+        conclusion="cancelled",
+        run_started_at="2026-11-18T10:10:00Z",
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {
+            **_job("integration-hermetic", "10:10:00", "10:10:00", "10:15:00"),
+            "_attempt": 2,
+        },
+    ]
+    report = measure(
+        [
+            {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]},
+            _run(2, "10:14:00", "10:20:00"),
+        ],
+        {1: jobs, 2: []},
+    )
+    row = report["runs"][0]
+    assert row["attemptObservations"][1]["outcome"] == "superseded"
+    assert row["attemptObservations"][1]["cancellationAgeSeconds"] == 240
+    assert report["cohorts"]["unobserved"]["runnerHours"]["superseded"] == 300 / 3600
+
+
+def test_candidate_wall_time_includes_retry_and_intervening_delay():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1, "10:00:00", "10:15:00", run_attempt=2, run_started_at="2026-11-18T10:10:00Z"
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {**_job("unit", "10:10:00", "10:10:00", "10:15:00"), "_attempt": 2},
+    ]
+    row = measure(
+        [{**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]}],
+        {1: jobs},
+    )["runs"][0]
+    assert row["candidateWallSeconds"] == 900
+    assert row["attemptObservations"][1]["candidateWallSeconds"] == 300
+
+
+def test_unfinished_job_counts_in_unknown_conclusion_bucket():
+    row = measure(
+        [_run(1, "10:00:00", "10:05:00", conclusion=None)],
+        {1: [_job("unit", "10:00:00", "10:00:00")]},
+    )["runs"][0]
+    assert row["jobConclusions"] == {"unknown": 1}
+
+
+def test_push_before_retry_does_not_explain_its_later_cancellation():
+    first = _run(1, "10:00:00", "10:05:00", conclusion="failure")
+    retry = _run(
+        1,
+        "10:00:00",
+        "10:15:00",
+        run_attempt=2,
+        conclusion="cancelled",
+        run_started_at="2026-11-18T10:10:00Z",
+    )
+    jobs = [
+        _job("unit", "10:00:00", "10:00:00", "10:05:00"),
+        {**_job("unit", "10:10:00", "10:10:00", "10:15:00"), "_attempt": 2},
+    ]
+    row = measure(
+        [
+            {**first, "latest_run_attempt": 2, "attempt_metadata": [first, retry]},
+            _run(2, "10:04:00", "10:20:00"),
+        ],
+        {1: jobs, 2: []},
+    )["runs"][0]
+    assert row["attemptObservations"][1]["outcome"] == "cancelled"

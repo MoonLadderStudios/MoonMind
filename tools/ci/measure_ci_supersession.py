@@ -201,7 +201,9 @@ def _observe_run(
         ],
         "selectedJobs": [job["name"] for job in jobs],
         "jobConclusions": {
-            outcome: sum(job.get("conclusion") == outcome for job in jobs)
+            outcome: sum(
+                (job.get("conclusion") or "unknown") == outcome for job in jobs
+            )
             for outcome in sorted({job.get("conclusion") or "unknown" for job in jobs})
         },
         "attempts": run.get("latest_run_attempt", run.get("run_attempt", 1)),
@@ -209,7 +211,10 @@ def _observe_run(
         "createdAt": run["created_at"],
         "outcome": outcome,
         "cancellationAgeSeconds": (
-            interval_seconds(run["created_at"], successor["created_at"])
+            interval_seconds(
+                run.get("attempt_started_at", run["created_at"]),
+                successor["created_at"],
+            )
             if outcome == "superseded"
             else None
         ),
@@ -242,7 +247,7 @@ def _observe_run(
     }
 
 
-def _observe_attempts(run: dict, jobs: list[dict], successor: dict | None) -> dict:
+def _observe_attempts(run: dict, jobs: list[dict], candidates: list[dict]) -> dict:
     metadata = run.get("attempt_metadata") or [run]
     seen: dict[tuple, int] = {}
     observations = []
@@ -261,10 +266,33 @@ def _observe_attempts(run: dict, jobs: list[dict], successor: dict | None) -> di
                 continue
             seen[key] = number
             unique.append(job)
+        start = (
+            attempt["created_at"]
+            if number == 1
+            else (
+                attempt.get("run_started_at")
+                or min(
+                    (job["created_at"] for job in unique if job.get("created_at")),
+                    default=None,
+                )
+            )
+        )
+        successor = next(
+            (
+                candidate
+                for candidate in candidates
+                if start and start <= candidate["created_at"] <= attempt["updated_at"]
+            ),
+            None,
+        )
         observed = _observe_run(
-            {**attempt, "workflow_source": run.get("workflow_source", {})},
+            {
+                **attempt,
+                "attempt_started_at": start,
+                "workflow_source": run.get("workflow_source", {}),
+            },
             unique,
-            successor if number == 1 else None,
+            successor,
             evidence_jobs=[job for job in jobs if job.get("_attempt", 1) == number],
         )
         observations.append(observed)
@@ -280,6 +308,14 @@ def _observe_attempts(run: dict, jobs: list[dict], successor: dict | None) -> di
     } == expected and job_attempts == expected
     row["timingComplete"] = row["attemptsComplete"] and all(
         a["timingComplete"] for a in observations
+    )
+    # End-to-end candidate feedback includes queue and pauses between retries.
+    row["candidateWallSeconds"] = interval_seconds(
+        run["created_at"],
+        max(
+            (job["completed_at"] for job in jobs if job.get("completed_at")),
+            default=None,
+        ),
     )
     row["retryRunnerSeconds"] = sum(a["runnerSeconds"] for a in observations[1:])
     row["carriedForwardJobsExcluded"] = excluded
@@ -397,7 +433,6 @@ def measure(
 ) -> dict:
     runs = sorted(runs, key=lambda run: run["created_at"])
     groups = {run["id"]: _group(run, pulls or {}) for run in runs}
-    successors: dict[int, dict] = {}
     intervals = []
     last_in_group: dict[tuple[str, str], dict] = {}
     for run in runs:
@@ -407,17 +442,19 @@ def measure(
                 intervals.append(
                     interval_seconds(previous["created_at"], run["created_at"])
                 )
-            # cancel-in-progress fires when the newer run in the group queues.
-            if previous.get("conclusion") == "cancelled" and (
-                run["created_at"] <= previous["updated_at"]
-            ):
-                successors[previous["id"]] = run
         last_in_group[groups[run["id"]]] = run
 
     rows = []
     for run in runs:
         row = _observe_attempts(
-            run, jobs_by_run.get(run["id"], []), successors.get(run["id"])
+            run,
+            jobs_by_run.get(run["id"], []),
+            [
+                candidate
+                for candidate in runs
+                if candidate["id"] != run["id"]
+                and groups[candidate["id"]] == groups[run["id"]]
+            ],
         )
         row["group"] = "/".join(groups[run["id"]])
         row["concurrentRunsAtCreation"] = sum(
