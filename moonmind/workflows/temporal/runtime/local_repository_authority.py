@@ -432,8 +432,7 @@ def _capture_source_bytes(source, intent):
                 raise LocalRepositorySourceUnavailable("local source target branch is invalid")
             target_ref = "refs/heads/" + target_branch
             if (
-                pin is not None
-                or not target_branch
+                not target_branch
                 or len(target_branch) > 400
                 or target_branch == "HEAD"
                 or target_branch.startswith(("-", "origin/", "refs/"))
@@ -488,8 +487,8 @@ def _capture_source_bytes(source, intent):
                 "checkout",
                 "--force",
                 *(
-                    ["--detach", head] if pin
-                    else ["--no-track", "-b", target_branch] if target_branch
+                    ["--no-track", "-b", target_branch, head] if target_branch
+                    else ["--detach", head] if pin
                     else [branch]
                 ),
             ],
@@ -571,13 +570,13 @@ async def capture_initial_source(
         intent_digest,
         local_source_uses_default_access,
         source_intent,
-        supports_detached_local_pin,
+        supports_local_pin,
     )
 
     pin = intent.get("commitSha")
-    if pin and not supports_detached_local_pin(request, intent):
+    if pin and not supports_local_pin(request, intent):
         raise LocalRepositorySourceUnavailable(
-            "local source pin requires a detached read without a selected connection"
+            "local source pin requires a matching typed default-connection read"
         )
     target_branch = intent.get("targetBranch")
     if target_branch and (
@@ -681,7 +680,7 @@ async def capture_initial_source(
         "pathCount": len(entries),
         "excludedPaths": [],
         "gitHistory": history,
-        "git": {"branch": "" if pin else target_branch or branch},
+        "git": {"branch": target_branch or ("" if pin else branch)},
     }
     manifest_ref, manifest_digest = await put(
         encode(manifest), "application/json", "checkpoint_manifest"
@@ -703,6 +702,7 @@ async def capture_initial_source(
         "gitRefs": refs,
         **({"selectedBranch": branch} if pin or target_branch else {}),
         **({"targetBranch": target_branch} if target_branch else {}),
+        **({"checkoutPin": pin} if pin and target_branch else {}),
     }
     ref, digest = await put(
         encode(descriptor), CONTENT_TYPE, "initial_repository_source"

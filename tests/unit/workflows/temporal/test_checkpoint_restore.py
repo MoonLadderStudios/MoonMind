@@ -1477,3 +1477,81 @@ def test_initial_source_target_branch_refuses_mismatched_authority_without_write
     assert error.value.code == "CHECKPOINT_MANIFEST_CORRUPTED"
     assert "unsafe branch" not in str(error.value)
     assert (git("for-each-ref", "--format=%(refname):%(objectname)"), git("config", "--local", "--list")) == before
+
+
+def _pinned_target_initial_source_ref_fixture(tmp_path, *, ancestor=True):
+    service, workspace, descriptor, manifest, git = _initial_source_ref_fixture(
+        tmp_path, ancestor=ancestor,
+    )
+    git("checkout", "-b", "authored-target")
+    descriptor.update(targetBranch="authored-target", checkoutPin=manifest["baseCommit"])
+    manifest["git"]["branch"] = "authored-target"
+    return service, workspace, descriptor, manifest, git
+
+
+@pytest.mark.parametrize("ancestor", [False, True], ids=["tip", "ancestor"])
+def test_initial_source_pinned_target_restores_selected_tip_without_moving_checkout(tmp_path, ancestor):
+    service, workspace, descriptor, manifest, git = _pinned_target_initial_source_ref_fixture(
+        tmp_path, ancestor=ancestor,
+    )
+    service._restore_initial_refs(workspace, descriptor, manifest)
+    assert git("symbolic-ref", "HEAD") == "refs/heads/authored-target"
+    assert git("rev-parse", "HEAD") == descriptor["checkoutPin"] == manifest["baseCommit"]
+    for name, value in descriptor["gitRefs"].items():
+        assert git("rev-parse", name) == value["commit"]
+        if "symbolicTarget" in value:
+            assert git("symbolic-ref", name) == value["symbolicTarget"]
+    assert git("config", "branch.authored-base.remote") == "origin"
+    assert git("config", "branch.authored-base.merge") == "refs/heads/authored-base"
+    for absent in ("remote.origin.url", "branch.authored-target.remote"):
+        assert subprocess.run(
+            ["git", "-C", str(workspace), "config", "--get", absent], capture_output=True
+        ).returncode == 1
+
+
+@pytest.mark.parametrize("damage", [
+    "missing-pin", "null-pin", "wrong-pin", "abbreviated-pin", "unrelated-tip",
+    "wrong-stage-branch", "detached-checkout", "marker-without-target", "marker-on-legacy",
+])
+def test_initial_source_pinned_target_rejects_invalid_checkout_authority_before_writes(tmp_path, damage):
+    if damage == "marker-on-legacy":
+        service, workspace, descriptor, manifest, git = _initial_source_ref_fixture(
+            tmp_path, detached=False,
+        )
+        descriptor["checkoutPin"] = manifest["baseCommit"]
+    else:
+        service, workspace, descriptor, manifest, git = _pinned_target_initial_source_ref_fixture(
+            tmp_path, ancestor=damage != "null-pin",
+        )
+    if damage == "missing-pin":
+        descriptor.pop("checkoutPin")
+    elif damage == "null-pin":
+        descriptor["checkoutPin"] = None
+    elif damage == "wrong-pin":
+        descriptor["checkoutPin"] = descriptor["gitRefs"]["refs/heads/authored-base"]["commit"]
+    elif damage == "abbreviated-pin":
+        descriptor["checkoutPin"] = descriptor["checkoutPin"][:8]
+    elif damage == "unrelated-tip":
+        other = git("commit-tree", git("rev-parse", "HEAD^{tree}"), "-m", "distinct root")
+        for value in descriptor["gitRefs"].values():
+            value["commit"] = other
+    elif damage == "wrong-stage-branch":
+        git("branch", "-m", "different-target")
+    elif damage in {"detached-checkout", "marker-without-target"}:
+        git("checkout", "--detach")
+        if damage == "marker-without-target":
+            descriptor.pop("targetBranch")
+            manifest["git"]["branch"] = ""
+    before = (
+        git("rev-parse", "HEAD"),
+        git("for-each-ref", "--format=%(refname):%(objectname)"),
+        git("config", "--local", "--list"),
+    )
+    with pytest.raises(CheckpointRestoreError) as error:
+        service._restore_initial_refs(workspace, descriptor, manifest)
+    assert error.value.code == "CHECKPOINT_MANIFEST_CORRUPTED"
+    assert (
+        git("rev-parse", "HEAD"),
+        git("for-each-ref", "--format=%(refname):%(objectname)"),
+        git("config", "--local", "--list"),
+    ) == before

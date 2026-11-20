@@ -193,11 +193,11 @@ Workflow Execution, with a terminal step manifest, cleaned runtime/host and no
 active workspace claim. The authored source and selected pool fence are checked
 before reading files. An explicit branch is exported with full ancestry and
 selected local/tracking refs, not dirty or untracked files, remote URLs, helpers
-or publication authority. An unpinned default-connection read can attach a new
-literal target branch at the selected tip, without changing the source refs.
-An existing target branch stays native, as do pinned target-branch requests
-and target-branch or pin requests using a nondefault connection. A full commit
-pin without a target branch checks out detached. Unsafe layouts, tags,
+or publication authority. A default-connection read can attach a new literal
+target branch at the selected tip or at an explicitly pinned ancestor, without
+moving the source refs. An existing target branch or nondefault connection
+stays native for these handoffs. A full commit pin without a target branch
+checks out detached. Unsafe layouts, tags,
 submodules, external filters, unsupported configuration and arbitrary
 worker-local paths retain the native owner before a source receipt is accepted.
 The lease holds a non-executable compiler candidate while the source owner

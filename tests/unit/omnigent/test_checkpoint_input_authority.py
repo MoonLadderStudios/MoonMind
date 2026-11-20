@@ -97,6 +97,86 @@ async def test_initial_local_checkout_requires_same_recorded_target(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("fault", "error"),
+    [
+        (None, None),
+        ("different-pin", "checkout differs"),
+        ("wrong-base", "checkout differs"),
+        ("wrong-selected-branch", "checkout differs"),
+        ("missing-pin", "checkout differs"),
+        ("legacy-digest", "launch intent"),
+        ("late-target-on-detached", "launch intent"),
+        ("retained-markerless", None),
+        ("retained-wrong-base", "launch intent"),
+    ],
+)
+async def test_initial_local_pinned_target_binds_base_and_checkout(
+    tmp_path, monkeypatch, fault, error
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal.runtime import initial_repository_source as local
+
+    pin = "a" * 40
+    target = "operator/work"
+    request = AgentExecutionRequest.model_construct(
+        canonical_repository_workspace_handoff=True,
+        workspace_spec={
+            "workspaceSource": {"kind": "repository"},
+            "repositoryTarget": {
+                "provider": "git",
+                "repository": {"name": "/worker/source"},
+                "branch": {"name": "main"},
+                "revision": {"kind": "git_commit", "commitSha": pin},
+            },
+            "targetBranch": target,
+        },
+        parameters={"publishMode": "none"},
+        step_execution=SimpleNamespace(
+            workflow_id="mm:local-input", run_id="run", logical_step_id="step"
+        ),
+    )
+    historical = fault in {
+        "legacy-digest", "late-target-on-detached", "retained-markerless", "retained-wrong-base"
+    }
+    intent = local.source_intent(request, bind_target_branch=not historical)
+    expected = {"sourceIntentDigest": local.intent_digest(intent)}
+    descriptor = {
+        "source": {"workflowId": "mm:local-input", "runId": "run"},
+        "targetBranch": target,
+        "selectedBranch": "wrong" if fault == "wrong-selected-branch" else "main",
+        "checkoutPin": "b" * 40 if fault == "different-pin" else pin,
+        "workspace": {"baseCommit": "b" * 40 if fault == "wrong-base" else pin},
+    }
+    if fault in {
+        "missing-pin", "late-target-on-detached", "retained-markerless", "retained-wrong-base"
+    }:
+        del descriptor["checkoutPin"]
+    if fault in {"late-target-on-detached", "retained-markerless", "retained-wrong-base"}:
+        del descriptor["targetBranch"]
+    if fault in {"retained-markerless", "retained-wrong-base"}:
+        del descriptor["selectedBranch"]
+    if fault == "retained-wrong-base":
+        descriptor["workspace"]["baseCommit"] = "b" * 40
+    read = AsyncMock(return_value=descriptor)
+    monkeypatch.setattr(local, "read_initial_source", read)
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=AsyncMock(), workspace_root=tmp_path
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(resolvedTools={"initialRepositorySource": expected})
+    )
+    source = SimpleNamespace(kind="repository")
+    if error:
+        with pytest.raises(ValueError, match=error):
+            await materializer._read_step_input_checkpoint(source, request, plan)
+        read.assert_awaited_once()
+    else:
+        assert await materializer._read_step_input_checkpoint(source, request, plan) == descriptor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "input_kind,fault",
     [
         ("direct", None),
