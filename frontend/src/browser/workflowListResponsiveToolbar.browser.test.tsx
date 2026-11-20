@@ -118,6 +118,136 @@ describe('workflow list responsive toolbar', () => {
   });
 });
 
+describe('mobile workflow toolbar', () => {
+  afterEach(() => {
+    document.documentElement.style.fontSize = '';
+  });
+
+  const overlaps = (a: DOMRect, b: DOMRect) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+  it.each([
+    ['375px', 375, ''],
+    ['320px', 320, ''],
+    ['375px with 200% text', 375, '200%'],
+  ] as const)('keeps Filters, sort and View options separate at %s', async (_label, width, fontSize) => {
+    window.history.replaceState({}, '', '/workflows?stateNotIn=failed');
+    document.documentElement.style.fontSize = fontSize;
+    await page.viewport(width, MOBILE.height);
+    const { container, unmount } = renderWithClient(
+      <main className="dashboard-root">
+        <WorkflowListPage payload={payload} />
+      </main>,
+    );
+    cleanupRender = unmount;
+    await waitFor(() => expect(container.querySelector('.queue-card')).not.toBeNull());
+
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    const sortSelect = screen.getByRole('combobox', { name: 'Sort workflows' });
+    const sort = sortSelect.closest('.workflow-list-sort-control') as HTMLElement;
+    const viewOptions = screen.getByRole('button', { name: 'View options' });
+    const controls = [filters, sort, viewOptions];
+    const boxes = controls.map((control) => control.getBoundingClientRect());
+
+    for (const [index, box] of boxes.entries()) {
+      // Comfortable tap targets that stay on screen.
+      expect(box.height, `control ${index} height`).toBeGreaterThanOrEqual(44);
+      expect(box.width, `control ${index} width`).toBeGreaterThanOrEqual(44);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(controls[index]!.scrollWidth).toBeLessThanOrEqual(controls[index]!.clientWidth + 1);
+      for (const other of boxes.slice(index + 1)) {
+        expect(overlaps(box, other), `control ${index} overlaps a later control`).toBe(false);
+        // Controls on the same line keep a real gap between them.
+        if (box.top < other.bottom && other.top < box.bottom) {
+          expect(other.left - box.right).toBeGreaterThanOrEqual(6);
+        }
+      }
+    }
+    // The transparent native select covers the visible sort face, so a tap on
+    // "Updated ↓" opens the platform list of sort choices.
+    const selectBox = sortSelect.getBoundingClientRect();
+    expect(selectBox.left).toBeCloseTo(boxes[1]!.left, 0);
+    expect(selectBox.right).toBeCloseTo(boxes[1]!.right, 0);
+    expect(selectBox.height).toBeCloseTo(boxes[1]!.height, 0);
+    expect(sort.textContent).toContain('Updated ↓');
+
+    // The row lines up with the card edges.
+    const card = container.querySelector('.queue-card')!.getBoundingClientRect();
+    expect(boxes[0]!.left).toBeCloseTo(card.left, 0);
+    expect(boxes[2]!.right).toBeCloseTo(card.right, 0);
+
+    // The overflow control is lighter than the two bordered main controls.
+    const filtersStyle = getComputedStyle(filters);
+    const overflowStyle = getComputedStyle(viewOptions);
+    expect(filtersStyle.borderTopColor).not.toBe('rgba(0, 0, 0, 0)');
+    expect(overflowStyle.borderTopColor).toBe('rgba(0, 0, 0, 0)');
+    expect(overflowStyle.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+
+    const toolbar = filters.parentElement as HTMLElement;
+    expect(toolbar.scrollWidth).toBeLessThanOrEqual(toolbar.clientWidth + 1);
+    if (!fontSize) {
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    }
+    if (width === 375 && !fontSize) {
+      // Two main controls and the overflow share one row at phone widths;
+      // narrower or larger-text layouts may wrap instead.
+      expect(new Set(boxes.map((box) => Math.round(box.top))).size).toBe(1);
+    }
+
+    // View options opens from the overflow without leaving the viewport.
+    await page.getByRole('button', { name: 'View options' }).click();
+    const popover = await screen.findByRole('dialog', { name: 'Workflow list view options' });
+    const popoverBox = popover.getBoundingClientRect();
+    expect(popoverBox.left).toBeGreaterThanOrEqual(0);
+    expect(popoverBox.right).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it('opens Filters as a bottom sheet on mobile and keeps the desktop drawer', async () => {
+    await page.viewport(MOBILE.width, MOBILE.height);
+    const { unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
+    cleanupRender = unmount;
+    await screen.findAllByText('Example task');
+
+    await page.getByRole('button', { name: 'Filters' }).click();
+    const sheet = await screen.findByRole('dialog', { name: 'Advanced filters' });
+    // The fixed overlay spans the viewport excluding any scrollbar gutter. A
+    // stable root gutter can reserve space even without overflow, and
+    // clientWidth alone includes that reservation in Chromium.
+    const viewport = () => ({
+      width: Math.min(
+        window.innerWidth,
+        document.documentElement.clientWidth,
+        document.documentElement.getBoundingClientRect().right,
+      ),
+      height: document.documentElement.clientHeight,
+    });
+    const sheetBox = sheet.getBoundingClientRect();
+    expect(sheetBox.left).toBeCloseTo(0, 0);
+    expect(sheetBox.right).toBeCloseTo(viewport().width, 0);
+    expect(sheetBox.bottom).toBeCloseTo(viewport().height, 0);
+    expect(sheetBox.top).toBeGreaterThanOrEqual(viewport().height * 0.14);
+    for (const name of ['Clear all', 'Show results']) {
+      const action = within(sheet).getByRole('button', { name }).getBoundingClientRect();
+      expect(action.height).toBeGreaterThanOrEqual(44);
+      expect(action.bottom).toBeLessThanOrEqual(viewport().height);
+    }
+    expect(sheet.scrollWidth).toBeLessThanOrEqual(sheet.clientWidth + 1);
+    await page.getByRole('button', { name: 'Show results' }).click();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull());
+
+    await page.viewport(DESKTOP.width, DESKTOP.height);
+    await page.getByRole('button', { name: 'Advanced filters' }).click();
+    const drawer = await screen.findByRole('dialog', { name: 'Advanced filters' });
+    const drawerBox = drawer.getBoundingClientRect();
+    expect(drawerBox.top).toBeCloseTo(0, 0);
+    expect(drawerBox.height).toBeCloseTo(viewport().height, 0);
+    expect(drawerBox.right).toBeCloseTo(viewport().width, 0);
+    expect(within(drawer).getByRole('button', { name: 'Apply filters' })).toBeTruthy();
+    expect(within(drawer).getByRole('button', { name: 'Cancel filters' })).toBeTruthy();
+  });
+});
+
 describe('workflow list row actions', () => {
   it.each([
     ['desktop table', DESKTOP, '.queue-table-cell-actions'],
@@ -441,7 +571,7 @@ describe('workflow list recorded Provider Profile', () => {
     await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter value'), 'account,primary');
     expect(within(editor).getByText('Later primary account (1)')).toBeTruthy();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
-    await page.getByRole('button', { name: surface === 'desktop' ? 'Apply Provider Profile filter' : 'Apply filters' }).click();
+    await page.getByRole('button', { name: surface === 'desktop' ? 'Apply Provider Profile filter' : 'Show results' }).click();
     await waitFor(() => expect(listParams().getAll('providerProfileIdIn')).toEqual(['account,primary', 'acct-a']));
     expect(listParams().getAll('providerProfileIdNotIn')).toEqual(['acct-b']);
     expect(listParams().get('providerProfileStateIn')).toBe('pending');

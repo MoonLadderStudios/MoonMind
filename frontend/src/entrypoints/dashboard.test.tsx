@@ -3473,8 +3473,10 @@ describe('Dashboard shared entry', () => {
 
     expect(mobileWorkspaceSidebarBlock).toContain('width: 100%');
 
-    expect(mobileViewOptionsPopoverBlock).toContain('right: auto');
-    expect(mobileViewOptionsPopoverBlock).toContain('left: 0');
+    // The ⋯ overflow sits at the card's right edge, so its popover keeps the
+    // base right anchoring and only narrows to fit the viewport.
+    expect(mobileViewOptionsPopoverBlock).not.toContain('left: 0');
+    expect(mobileViewOptionsPopoverBlock).toContain('min-width: min(14rem, calc(100vw - 2rem))');
     expect(mobileViewOptionsPopoverBlock).toContain('max-width: calc(100vw - 2rem)');
 
     // Individual cards must keep their standalone card styling.

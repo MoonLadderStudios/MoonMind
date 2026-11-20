@@ -75,7 +75,7 @@ The table starts directly below the navigation bar; the page heading is availabl
 | Results toolbar / footer | Row range and count, page size (shared `PageSizeSelector`), pagination, and the current-page sort notice when it applies. |
 | Desktop table | Sortable and filterable column headers. |
 | Advanced filters drawer | The full filter set, including fields not visible in the table (ID, Skill, Scheduled, Created, Finished). Each section is collapsed unless it holds an active filter and summarizes its current value. Facets with more values than the first page offer **More values…**, which searches and pages the facet endpoint. Sorting stays on the column headers (and a sort select in card layouts), not in the drawer. |
-| Mobile cards | Compact cards whose title is the only detail link, with the `More actions` menu as a separate target, so no control nests inside another. Filters are available through the mobile filter sheet. |
+| Mobile cards | Compact cards whose title is the only detail link, with the `More actions` menu as a separate target, so no control nests inside another. |
 | View options | Density, column visibility, and live-update preference. |
 
 The page polls at `dashboardConfig.pollIntervalsMs.list` (default five seconds).
@@ -117,9 +117,8 @@ Notes:
 
 1. The default query is the Workflow-run list, equivalent to `WorkflowType = MoonMind.UserWorkflow` and `mm_entry = user_workflow`.
 2. System workflow rows do not appear through column filters, optional columns, or old URL parameters.
-3. The mobile filter sheet exposes the same filterable columns as desktop, including Progress and Provider Profile.
-4. Raw Temporal Visibility query syntax is not exposed.
-5. Legacy runtime and target-skill filters use the `mm_target_runtime` and singular `mm_target_skill` Search Attributes where registered. Provider Profile is not a new label for `mm_target_runtime`; it has its own recorded-identity projection, and missing query capability is reported truthfully rather than guessed from current profiles.
+3. Raw Temporal Visibility query syntax is not exposed.
+4. Legacy runtime and target-skill filters use the `mm_target_runtime` and singular `mm_target_skill` Search Attributes where registered. Provider Profile is not a new label for `mm_target_runtime`; it has its own recorded-identity projection, and missing query capability is reported truthfully rather than guessed from current profiles.
 
 ### 6.1 Admin diagnostics
 
@@ -271,7 +270,7 @@ Deselecting `canceled` from an otherwise-all Status list produces `not canceled`
 
 Active filters are summarized above the table or in the mobile filter summary, for example `Status: not canceled`, `Provider Profile: OpenAI · Primary +1`, `Finished: blank`, `Progress: 25–75%, failed steps`.
 
-Every active column filter has a chip with product labels rather than API parameter names. Clicking a chip reopens that column's filter; its remove action clears only that column. Clear/reset clears every column filter and restores the default Workflow-run view. On mobile, chips stay visible in a horizontally scrollable row or compact summary.
+Every active column filter has a chip with product labels rather than API parameter names. Clicking a chip reopens that column's filter; its remove action clears only that column. Clear/reset clears every column filter and restores the default Workflow-run view. On mobile, chips wrap below the toolbar.
 
 ---
 
@@ -391,9 +390,9 @@ Sort and filter controls are separately keyboard-reachable; headers keep `aria-s
 
 ## 16. Mobile behavior
 
-Cards are the narrow-screen presentation: title link, status pill with the same supplements as desktop, a field grid with Progress, ID, Provider Profile (with optional Harness), Repository, and Updated, a full-width `View details` action, and the row actions menu.
+Cards are the narrow-screen presentation: title link, status pill with the same supplements as desktop, a field grid with Progress, ID, Provider Profile (with optional Harness), Repository, and Updated, and the row actions menu.
 
-A `Filters` button opens a filter sheet listing the same filterable columns as desktop, each opening the same editor in a full-screen or bottom-sheet layout, so mobile filtering never depends on a visible table header. Active chips remain visible. Long or equal-name profiles and unavailable metadata keep readable labels, stable identity, and usable controls without page overflow.
+The toolbar above the cards aligns with their edges: `Filters`, the current sort (`Updated ↓`), and a lighter `⋯` named `View options`. Its 44px controls wrap rather than overlap. `Filters` shows a count only while filters apply and opens a bottom sheet with every filter column, `Clear all`, and `Show results`. Sort stays one tap away because it answers a different question, what changed recently; its list uses full labels such as `Newest update`. Long or equal-name profiles and unavailable metadata stay readable and usable without page overflow.
 
 ---
 

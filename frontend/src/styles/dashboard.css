@@ -1395,10 +1395,6 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.workflow-list-sort-control select {
-  max-width: 12rem;
-}
-
 .workflow-list-filter-control {
   width: 100%;
 }
@@ -1451,10 +1447,40 @@ h1 {
   padding-bottom: 0.85rem;
 }
 
+/* On phones the drawer is a bottom sheet: full width with a capped height, a
+ * scrolling body, and footer actions kept above the home indicator. */
 @media (max-width: 767px) {
+  .workflow-list-filter-drawer-overlay {
+    align-items: flex-end;
+  }
+
   .workflow-list-filter-drawer {
-    width: 100vw;
+    width: 100%;
+    height: auto;
+    max-height: 85vh;
+    max-height: 85dvh;
     border-left: 0;
+    border-top: 1px solid rgb(var(--mm-border) / 0.84);
+    border-radius: 1rem 1rem 0 0;
+    box-shadow: 0 -24px 56px -32px rgb(var(--mm-ink) / 0.7);
+  }
+
+  .workflow-list-filter-drawer-body {
+    min-height: 0;
+  }
+
+  .workflow-list-filter-drawer-close {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .workflow-list-filter-drawer-actions {
+    justify-content: space-between;
+    padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+  }
+
+  .workflow-list-filter-drawer-actions .mm-button {
+    min-height: 2.75rem;
   }
 }
 
@@ -2616,7 +2642,8 @@ h1 {
   flex: 1 1 auto;
 }
 
-.workflow-list-filter-trigger {
+.workflow-list-filter-trigger,
+.workflow-list-sort-face {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -2642,6 +2669,43 @@ h1 {
 }
 
 @media (hover: hover) {.workflow-list-filter-trigger:hover:where(:not([aria-expanded="true"], .is-active)) { background: rgb(var(--mm-ink) / 0.05); }}
+
+/* Mobile sort: the compact face ("Updated ↓") is what shows; a transparent
+ * native select covers it, takes taps and keys, and opens the platform list. */
+.workflow-list-sort-control {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workflow-list-sort-face {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.workflow-list-sort-control select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  opacity: 0;
+  cursor: pointer;
+  /* 16px or more keeps iOS Safari from zooming the page on focus. */
+  font-size: max(1rem, 16px);
+}
+
+@media (hover: hover) {.workflow-list-sort-control:hover .workflow-list-sort-face { background: rgb(var(--mm-ink) / 0.05); }}
+
+.workflow-list-sort-control:has(select:focus-visible) .workflow-list-sort-face {
+  outline: 2px solid rgb(var(--mm-focus));
+  outline-offset: 3px;
+}
 
 .workflow-list-filter-trigger.is-active { border-color: rgb(var(--mm-selected-text)); background: rgb(var(--mm-selected-fill)); color: rgb(var(--mm-selected-text)); }
 
@@ -3210,6 +3274,31 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
 
 .workflow-list-view-options--icon .workflow-list-view-options-popover {
   z-index: 30;
+}
+
+/* Mobile overflow variant: a borderless ⋯ that stays lighter than the Filters
+ * and sort controls while keeping a full-size tap target. */
+.workflow-list-view-options--overflow {
+  flex: 0 0 auto;
+}
+
+.workflow-list-view-options-trigger.workflow-list-view-options-trigger--overflow {
+  --mm-button-color: rgb(var(--mm-muted));
+  width: 2.75rem;
+  height: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border-radius: 0.85rem;
+}
+
+.workflow-list-view-options-trigger--overflow[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent) / 0.55);
+  background: rgb(var(--mm-accent) / 0.10);
+}
+
+.workflow-list-view-options-trigger--overflow .workflow-list-view-options-icon {
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 /* Desktop advanced-filters entry point: a compact funnel icon in the Actions
@@ -3886,36 +3975,40 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
 
 @media (max-width: 767px) {
   .workflow-list-results-header {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    flex-wrap: nowrap;
+    display: grid;
     gap: 0.5rem;
     padding: 0 0 0.75rem;
     border-bottom: 0;
     background: transparent;
   }
 
-  .workflow-list-filter-bar {
-    flex: 0 1 auto;
+  /* Filters and sort lead; the View options overflow sits at the card's right
+   * edge. Controls wrap instead of overlapping at narrow widths or large text. */
+  .workflow-list-mobile-toolbar {
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    width: auto;
+    gap: 0.5rem;
+    min-width: 0;
   }
 
-  .workflow-list-filter-trigger {
+  .workflow-list-filter-trigger,
+  .workflow-list-sort-face {
     justify-content: center;
-    width: auto;
+    min-height: 2.75rem;
+    padding-inline: 0.75rem;
+  }
+
+  /* At very large text the count drops below the label rather than spilling
+   * past the card edge. */
+  .workflow-list-filter-trigger {
+    flex-wrap: wrap;
+    max-width: 100%;
     white-space: nowrap;
   }
 
-  .workflow-list-view-options {
-    flex: 0 0 auto;
-    margin-left: 0;
-  }
-
   .workflow-list-view-options-popover {
-    right: auto;
-    left: 0;
+    min-width: min(14rem, calc(100vw - 2rem));
     max-width: calc(100vw - 2rem);
   }
 

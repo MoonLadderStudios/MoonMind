@@ -78,10 +78,12 @@ describe('Workflows Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
-  // The mobile filter drawer exposes the full filter UI. These helpers open it
-  // and apply the staged draft.
+  // The filter drawer exposes the full filter UI. These helpers open it and
+  // apply the staged draft; the mobile sheet labels its apply action
+  // "Show results".
   const openFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
-  const applyFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+  const applyFilterDrawer = () =>
+    fireEvent.click(screen.getByRole('button', { name: /^(Apply filters|Show results)$/ }));
 
   it('shows the loading state while the workflow list request is pending', () => {
     fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
