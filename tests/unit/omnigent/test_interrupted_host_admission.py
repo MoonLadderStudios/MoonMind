@@ -197,8 +197,13 @@ async def test_interrupted_allocation_requires_durable_cleanup(
         "exhausted",
     ],
 )
-async def test_cleanup_receipt_controls_workflow_readmission(monkeypatch, mismatch):
+@pytest.mark.parametrize("seed_lineage_patch", [False, True])
+async def test_cleanup_receipt_controls_workflow_readmission(monkeypatch, mismatch, seed_lineage_patch):
     _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda marker: seed_lineage_patch if marker == "omnigent-codex-seed-lineage-v1" else True,
+    )
     clock = [datetime(2026, 9, 13, tzinfo=timezone.utc)]
     monkeypatch.setattr(
         "moonmind.workflows.temporal.workflows.agent_run.workflow.now", lambda: clock[0]
@@ -253,7 +258,21 @@ async def test_cleanup_receipt_controls_workflow_readmission(monkeypatch, mismat
         assert first.admitted_provider_capacity.admission_epoch == 1
         assert second.admitted_provider_capacity.admission_epoch == 2
         assert first.idempotency_key == second.idempotency_key
-        assert first.parameters == second.parameters
+        replacement_parameters = dict(second.parameters)
+        if seed_lineage_patch:
+            lineage = replacement_parameters.pop("_codexSeedAdmissionLineage")
+            capacity = first.admitted_provider_capacity
+            assert lineage == [{
+                "executionPlanRef": capacity.execution_plan_ref,
+                "idempotencyKey": first.idempotency_key,
+                "admissionEpoch": capacity.admission_epoch,
+                "runtimeBindingRef": stable_binding_id(
+                    execution_plan_ref=capacity.execution_plan_ref,
+                    idempotency_key=first.idempotency_key,
+                    admission_epoch=capacity.admission_epoch,
+                ),
+            }]
+        assert first.parameters == replacement_parameters
         assert first.workspace_spec == second.workspace_spec
         expected = 25 if mismatch == "slow_cleanup" else 600
         assert (
