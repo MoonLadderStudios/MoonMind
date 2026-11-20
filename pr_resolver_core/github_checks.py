@@ -373,3 +373,76 @@ def reconcile_check_runs(
         if index in unresolved and (state not in _PASSING_CHECK_STATES or duplicated):
             evidence["unresolvedChecks"].append({**detail, "reason": unresolved[index]})
     return applicable, evidence
+
+
+def has_active_head_ci(
+    checks: Sequence[Mapping[str, Any]],
+    workflow_runs: Sequence[Mapping[str, Any]] | None,
+    *,
+    head_sha: str,
+    repository: str,
+) -> bool:
+    """Prove active CI for review timing, never required-gate ownership or success.
+
+    Security-only checks are insufficient. A job must bind to a live Actions
+    run and its current attempt on this exact head; stale/missing observations
+    are conservative false negatives rather than permission to request review.
+    """
+    if not head_sha or not repository or workflow_runs is None:
+        return False
+    pending = {"queued", "in_progress"}
+    job_url = re.compile(
+        rf"https://github\.com/{re.escape(repository)}/actions/runs/([1-9][0-9]*)"
+        r"(?:/attempts/([1-9][0-9]*))?/job/([1-9][0-9]*)\Z"
+    )
+    for check in checks:
+        app = check.get("app") or {}
+        name = str(check.get("name") or "").strip().upper()
+        if (
+            not isinstance(app, Mapping)
+            or app.get("slug") != "github-actions"
+            or _positive_integer(app.get("id")) is None
+            or not name
+            or name == "CODEQL"
+            or name.startswith("ANALYZE (")
+            or str(
+                check.get("workflowName") or check.get("workflow_name") or ""
+            ).upper()
+            == "CODEQL"
+            or check.get("head_sha") != head_sha
+            or check.get("status") not in pending
+            or check.get("conclusion") not in (None, "")
+        ):
+            continue
+        match = job_url.fullmatch(str(check.get("details_url") or ""))
+        if not match:
+            continue
+        matches = [
+            run
+            for run in workflow_runs
+            if _positive_integer(run.get("id")) == int(match[1])
+        ]
+        if not matches or any(run != matches[0] for run in matches[1:]):
+            continue
+        run = matches[0]
+        if (
+            run.get("head_sha") != head_sha
+            or run.get("status") not in pending
+            or run.get("conclusion") not in (None, "")
+            or _workflow_identity(run) is None
+            or str(run.get("name") or "").strip().upper() == "CODEQL"
+        ):
+            continue
+        run_attempt = _positive_integer(run.get("run_attempt"))
+        explicit = check.get("run_attempt")
+        url_attempt = int(match[2]) if match[2] else None
+        attempt = _positive_integer(explicit) if explicit is not None else url_attempt
+        if explicit is not None and attempt is None:
+            continue
+        if url_attempt is not None and attempt != url_attempt:
+            continue
+        if attempt is None and run_attempt == 1:
+            attempt = 1
+        if attempt is not None and attempt == run_attempt:
+            return True
+    return False

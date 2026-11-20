@@ -76,6 +76,7 @@ class PullRequestReadinessResult(BaseModel):
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
     checks_reported: bool | None = Field(None, alias="checksReported")
+    checks_active_for_review: bool = Field(False, alias="checksActiveForReview")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
@@ -3272,6 +3273,7 @@ class GitHubService:
         pr_open: bool | None = None
         pr_merged: bool | None = None
         checks_reported: bool | None = None
+        checks_active_for_review = False
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
@@ -3373,10 +3375,18 @@ class GitHubService:
                     repo=repo,
                     head_sha=observed_head_sha,
                     headers=headers,
+                    observe_active_ci=(
+                        review_loop_enabled
+                        and not review_request
+                        and isinstance(head, dict)
+                        and bool(observed_head_sha)
+                        and head.get("sha") == observed_head_sha
+                    ),
                     base_branch=(
                         str(base.get("ref") or "") if isinstance(base, dict) else None
                     ),
                 )
+                checks_active_for_review = check_evidence.get("activeForReview") is True
                 checks_reported = check_evidence.get("reported")
                 checks_complete = check_evidence["complete"]
                 checks_passing = check_evidence["passing"]
@@ -3468,6 +3478,7 @@ class GitHubService:
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
             checksReported=checks_reported,
+            checksActiveForReview=checks_active_for_review,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
@@ -3491,10 +3502,13 @@ class GitHubService:
         head_sha: str,
         headers: dict[str, str],
         base_branch: str | None = None,
+        observe_active_ci: bool = False,
     ) -> dict[str, Any]:
         from pr_resolver_core.github_checks import (
+            has_active_head_ci,
             head_ci_reported,
             partition_commit_statuses,
+            reconcile_check_runs,
         )
 
         blockers: list[dict[str, Any]] = []
@@ -3506,6 +3520,11 @@ class GitHubService:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
+                if not isinstance(data, Mapping) or (
+                    data.get(field) is not None
+                    and not isinstance(data.get(field), list)
+                ):
+                    raise TypeError("Malformed GitHub collection evidence")
                 if first is None:
                     first = data
                 items.extend(data.get(field) or [])
@@ -3637,6 +3656,56 @@ class GitHubService:
         )
         has_failed_checks = status_failed or bool(failed_runs)
 
+        active_for_review = False
+        if (
+            observe_active_ci
+            and required_contexts is not None
+            and pending_runs
+            and not has_failed_checks
+            and all(
+                run.get("status") in {"queued", "in_progress", "completed"}
+                and (
+                    run.get("conclusion") in {"success", "neutral", "skipped"}
+                    if run.get("status") == "completed"
+                    else run.get("conclusion") in {None, ""}
+                )
+                for run in check_runs
+            )
+            and all(
+                status.get("state") in {"pending", "success"}
+                for status in commit_statuses
+            )
+        ):
+            try:
+                runs = await fetch_collection(
+                    f"https://api.github.com/repos/{repo}/actions/runs?head_sha={quote(head_sha, safe='')}&per_page=100",
+                    "workflow_runs",
+                )
+                observed_runs = runs.get("workflow_runs")
+                if not isinstance(observed_runs, list) or not all(
+                    isinstance(run, Mapping) for run in observed_runs
+                ):
+                    raise TypeError("Malformed workflow run evidence")
+                applicable, identity = reconcile_check_runs(
+                    check_runs,
+                    observed_runs,
+                    head_sha=head_sha,
+                )
+                active_for_review = (
+                    not identity["strandedChecks"]
+                    and not identity["unresolvedChecks"]
+                    and has_active_head_ci(
+                        applicable,
+                        observed_runs,
+                        head_sha=head_sha,
+                        repository=repo,
+                    )
+                )
+            except (httpx.HTTPError, TypeError, ValueError):
+                # This optional timing proof never replaces the CI gate. An
+                # unavailable Actions read leaves the ordinary wait in place.
+                active_for_review = False
+
         if has_running_checks:
             blockers.append(
                 {
@@ -3662,6 +3731,7 @@ class GitHubService:
 
         return {
             "reported": ci_reported,
+            "activeForReview": active_for_review,
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
@@ -3824,7 +3894,6 @@ class GitHubService:
         # comment is no longer present. Missing times require the exact comment.
         return retained
 
-
     async def _revalidate_requested_review(
         self,
         *,
@@ -3949,7 +4018,6 @@ class GitHubService:
                 }
             ],
         }
-
 
     async def _evaluate_requested_review(
         self,
@@ -4335,7 +4403,6 @@ class GitHubService:
         # Another route may recover and prove completion even if one endpoint
         # is permanently denied. Exhaust every qualified alternative first.
         return None, self._select_review_evidence_blocker(read_blockers)
-
 
     async def _evaluate_automated_review(
         self,

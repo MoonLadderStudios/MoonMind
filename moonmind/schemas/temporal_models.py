@@ -2249,6 +2249,7 @@ class ReadinessEvidenceModel(BaseModel):
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
     checks_reported: bool | None = Field(None, alias="checksReported")
+    checks_active_for_review: bool = Field(False, alias="checksActiveForReview")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(

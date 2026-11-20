@@ -3626,3 +3626,100 @@ async def test_probe_token_reports_permission_metadata_without_claiming_write(
         "write": "untested",
     }
     assert result["testedBranch"] == "trunk"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "active",
+        "missing",
+        "security",
+        "failed",
+        "unknown",
+        "unavailable",
+        "malformed",
+        "malformed_item",
+        "stranded",
+        "unresolved",
+    ],
+)
+async def test_review_admission_requires_active_head_ci(case):
+    check = {
+        "name": "unit-tests",
+        "status": "in_progress",
+        "conclusion": None,
+        "head_sha": "abc123",
+        "app": {"slug": "github-actions", "id": 1},
+        "details_url": "https://github.com/owner/repo/actions/runs/10/job/20",
+    }
+    if case == "security":
+        check["name"] = "CodeQL"
+    if case == "failed":
+        check.update(status="completed", conclusion="failure")
+    if case == "unknown":
+        check["status"] = "mystery"
+    checks = [] if case == "missing" else [check]
+    runs = [
+        {
+            "id": 10,
+            "head_sha": "abc123",
+            "status": "in_progress",
+            "conclusion": None,
+            "run_attempt": 1,
+            "run_number": 10,
+            "event": "pull_request",
+            "workflow_id": 30,
+            "path": ".github/workflows/ci.yml",
+            "name": "CI",
+        }
+    ]
+    if case in {"stranded", "unresolved"}:
+        checks.append(
+            {
+                **check,
+                "name": "another-check",
+                "details_url": "https://github.com/owner/repo/actions/runs/11/job/21",
+            }
+        )
+        if case == "stranded":
+            runs.append(
+                {**runs[0], "id": 11, "status": "completed", "conclusion": "success"}
+            )
+    calls = []
+
+    async def get(url, **kwargs):
+        calls.append(url)
+        if "/status?" in url:
+            return _mock_get_response(200, {"statuses": []})
+        if "/check-runs?" in url:
+            return _mock_get_response(200, {"check_runs": checks})
+        if "/actions/runs?" in url:
+            if case == "malformed":
+                return _mock_get_response(200, [])
+            if case == "malformed_item":
+                return _mock_get_response(200, {"workflow_runs": [None]})
+            return _mock_get_response(
+                503 if case == "unavailable" else 200,
+                {"workflow_runs": runs},
+            )
+        raise AssertionError(url)
+
+    client = AsyncMock()
+    client.get = get
+    service = GitHubService()
+    with patch.object(
+        service,
+        "_required_github_check_contexts",
+        AsyncMock(return_value=["ci-required"]),
+    ):
+        result = await service._evaluate_github_checks(
+            client=client,
+            repo="owner/repo",
+            head_sha="abc123",
+            headers={},
+            observe_active_ci=True,
+        )
+    assert result.get("activeForReview", False) is (case == "active")
+    assert result["complete"] is False
+    assert result["passing"] is False
