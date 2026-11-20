@@ -30,12 +30,17 @@ _SESSION_SETTINGS = {
     "developer_instructions", "hide_agent_reasoning", "show_raw_agent_reasoning",
     "project_doc_max_bytes", "project_doc_fallback_filenames", "history",
     "model_reasoning_summary", "model_verbosity", "model_context_window",
-    "model_auto_compact_token_limit", "personality",
+    "model_auto_compact_token_limit", "personality", "web_search",
 }
 
 
 def _validate_session_settings(document):
     """Carry session preferences without admitting another tool/auth owner."""
+    # Restrict the built-in tool without admitting a new source of tool access.
+    if "web_search" in document and (
+        type(document["web_search"]) is not str or document["web_search"] != "disabled"
+    ):
+        raise ValueError("shared Codex web_search supports only explicit disabled")
     if "developer_instructions" in document and not isinstance(document["developer_instructions"], str):
         raise ValueError("developer_instructions must be a string")
     for key in ("hide_agent_reasoning", "show_raw_agent_reasoning"):

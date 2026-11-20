@@ -152,3 +152,77 @@ async def test_installed_codex_preserves_selected_auth_and_private_configuration
         json.dumps([str(root), cli, str(tmp_path / "cli"), configuration, str(Path(shutil.which("node")).parent) if shutil.which("node") else None])], environment)
     assert probe.returncode == 0, probe.stderr[-2000:]
     assert json.loads(probe.stdout.strip().splitlines()[-1])["sourceInputsUnchanged"]
+
+
+_SEARCH_PROBE = r'''
+import asyncio,json,os,pathlib,shutil,subprocess,sys
+upstream,binary,temporary,configuration,minimal=json.loads(sys.argv[1])
+r=pathlib.Path(temporary);r.mkdir();home=r/'home';home.mkdir();source=r/'enrolled';source.mkdir();sibling=r/'sibling';sibling.mkdir()
+(source/'config.toml').write_text('web_search="cached"\n')
+(source/'auth.json').write_text('{"OPENAI_API_KEY":"synthetic-selected-account"}')
+(sibling/'auth.json').write_text('synthetic-sibling-unchanged')
+os.environ['HOME']=str(home);os.environ['CODEX_HOME']=str(source)
+from omnigent.inner.codex_executor import _populate_codex_home_config
+from moonmind.provider_profiles import codex_configuration as config
+helper=r/'codex_configuration.py'
+helper.write_text(pathlib.Path(config.__file__).read_text().replace('_ENROLLED_CODEX_HOME = "/home/app/.codex"','_ENROLLED_CODEX_HOME = '+repr(str(source)),1))
+shutil.copyfile(pathlib.Path(config.__file__).with_name('template_renderer.py'),r/'template_renderer.py')
+context=r/'context';context.write_text('#!/bin/sh\nexec "$@"\n');context.chmod(0o700)
+configuration_path=r/'configuration.json';configuration_path.write_text(json.dumps(configuration))
+env={'PATH':os.environ['PATH'],'HOME':str(home)}
+async def read(executable,directory):
+ p=await asyncio.create_subprocess_exec(str(executable),'app-server',env={**env,'CODEX_HOME':str(directory)},stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
+ async def rpc(i,method,params):
+  p.stdin.write((json.dumps({'id':i,'method':method,'params':params})+'\n').encode());await p.stdin.drain()
+  while True:
+   line=await asyncio.wait_for(p.stdout.readline(),15)
+   assert line,'CLI stopped before effective config read'
+   result=json.loads(line)
+   if result.get('id')==i:return result
+ try:
+  await rpc(1,'initialize',{'clientInfo':{'name':'disabled-search-test','version':'1'}})
+  result=await rpc(2,'config/read',{'includeLayers':False})
+  assert 'error' not in result,'vendor rejected admitted config'
+  return result['result']['config']['web_search']
+ finally:p.terminate();await asyncio.wait_for(p.wait(),5)
+async def main():
+ assert await read(binary,source)=='cached'
+ auth=(source/'auth.json').read_bytes()
+ for attempt in range(2):
+  private=r/f'private-{attempt}';private.mkdir();wrapper=r/f'wrapper-{attempt}'
+  _populate_codex_home_config(private,source,minimal_config=minimal)
+  subprocess.run([sys.executable,str(helper),'prepare',str(configuration_path),binary,str(wrapper),str(context),str(source)],env={**env,'CODEX_HOME':str(private)},check=True,capture_output=True,timeout=10)
+  assert await read(wrapper,private)=='disabled'
+  assert await read(wrapper,private)=='disabled'
+  assert (private/'auth.json').resolve()==source/'auth.json'
+  assert (source/'auth.json').read_bytes()==auth
+  assert (sibling/'auth.json').read_text()=='synthetic-sibling-unchanged'
+  assert (source/'config.toml').read_text()==('web_search="cached"\n' if attempt==0 else 'web_search="live"\n')
+  (source/'config.toml').write_text('web_search="live"\n')
+ print(json.dumps({'effectiveSearch':'disabled','attempts':2,'selectedAuthUnchanged':True}))
+asyncio.run(main())
+'''
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native", "oauthPrivateConfiguration": True,
+    "sessionSettings": {"web_search": "disabled"},
+}], indirect=True)
+@pytest.mark.parametrize("minimal", [False, True], ids=["ambient-settings", "minimal-settings"])
+async def test_installed_codex_wrapper_preserves_disabled_search(native_journey, tmp_path, minimal):
+    cli = shutil.which("codex")
+    if cli is None:
+        pytest.skip("installed Codex CLI unavailable; image qualification is separate")
+    journey = native_journey
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
+    assert configuration["document"]["web_search"] == "disabled"
+    root = Path(__file__).resolve().parents[3] / "omnigent"
+    env = {**os.environ, "PYTHONPATH": str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    probe = await asyncio.to_thread(_run_probe, [sys.executable, "-c", _SEARCH_PROBE,
+        json.dumps([str(root), cli, str(tmp_path / "cli"), configuration, minimal])], env)
+    assert probe.returncode == 0, probe.stderr[-2000:]
+    assert json.loads(probe.stdout.strip().splitlines()[-1]) == {
+        "effectiveSearch": "disabled", "attempts": 2, "selectedAuthUnchanged": True,
+    }
