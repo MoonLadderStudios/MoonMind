@@ -38,6 +38,13 @@ function renderSecretManager() {
   return { onNotice };
 }
 
+// Row actions live in each secret's ellipsis menu.
+function secretAction(label: string): HTMLElement {
+  const trigger = screen.getByRole('button', { name: /^Actions for / });
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger);
+  return within(screen.getByRole('menu')).getByRole('menuitem', { name: label });
+}
+
 describe('SecretManager', () => {
   it('shows and copies managed SecretRefs without exposing plaintext', async () => {
     const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
@@ -47,7 +54,10 @@ describe('SecretManager', () => {
     });
     const { onNotice } = renderSecretManager();
 
-    expect(screen.getByText('db://github-pat-main')).toBeTruthy();
+    // The row names the slug; its copy control carries the full SecretRef.
+    expect(screen.getByRole('button', { name: 'Copy SecretRef for github-pat-main' }).getAttribute('title')).toBe(
+      'Copy db://github-pat-main',
+    );
     expect(screen.queryByText(/sk-test-secret/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy SecretRef for github-pat-main' }));
@@ -236,7 +246,6 @@ describe('SecretManager', () => {
       json: async () => ({ secretRef: `db://${slug}`, usages: [], diagnostics: [] }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -265,14 +274,14 @@ describe('SecretManager', () => {
         );
       });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(secretAction('Edit'));
     fireEvent.change(screen.getByLabelText('Secure value'), {
       target: { value: 'edited-value' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save new value' }));
     await expectRequest(encoded, 'PUT');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rotate' }));
+    fireEvent.click(secretAction('Rotate'));
     const rotateForm = screen.getByRole('button', { name: 'Rotate now' }).closest('form');
     fireEvent.change(rotateForm!.querySelector('input')!, {
       target: { value: 'rotated-value' },
@@ -283,7 +292,9 @@ describe('SecretManager', () => {
     fireEvent.click(screen.getByRole('button', { name: `Re-enable ${slug}` }));
     await expectRequest(`${encoded}/status`, 'PUT');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(secretAction('Delete'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete secret' }));
     await expectRequest(encoded, 'DELETE');
 
     await expectRequest(`${encoded}/usage`);
@@ -306,9 +317,8 @@ describe('SecretManager', () => {
     }
     const actionsCell = row!.querySelector('td[data-label="Actions"]');
     expect(actionsCell).not.toBeNull();
-    const actionsArea = actionsCell!.querySelector('div');
-    expect(actionsArea).not.toBeNull();
-    expect(actionsArea!.className).toContain('flex-wrap');
+    // One menu trigger replaces the per-row button stack.
+    expect(within(actionsCell as HTMLElement).getAllByRole('button')).toHaveLength(1);
   });
 
   describe('focused add, edit, and rotate flow', () => {
@@ -346,18 +356,20 @@ describe('SecretManager', () => {
         ok: !failed, json: async () => failed ? { detail: 'Secret change failed.' } : {},
       }));
       const { queryClient, onNotice } = renderGuardedSecretManager(fetchMock);
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       queryClient.setQueryData(['provider-profiles'], [{ profile_id: 'bound-profile' }]);
       queryClient.setQueryData(['provider-profiles', 'creation-choices'], {});
       if (operation !== 'delete') {
-        fireEvent.click(screen.getByRole('button', { name: operation === 'edit' ? 'Edit' : 'Rotate' }));
+        fireEvent.click(secretAction(operation === 'edit' ? 'Edit' : 'Rotate'));
         fireEvent.change(screen.getByLabelText(operation === 'edit' ? 'Secure value' : 'New secure value'), {
           target: { value: 'replacement-value' },
         });
       }
-      const submit = () => fireEvent.click(screen.getByRole('button', {
-        name: operation === 'edit' ? 'Save new value' : operation === 'rotate' ? 'Rotate now' : 'Delete',
-      }));
+      const submit = () => {
+        if (operation === 'delete') fireEvent.click(secretAction('Delete'));
+        fireEvent.click(screen.getByRole('button', {
+          name: operation === 'edit' ? 'Save new value' : operation === 'rotate' ? 'Rotate now' : 'Delete secret',
+        }));
+      };
       submit();
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
       if (operation === 'delete') await waitFor(() => expect(onNotice).toHaveBeenCalledWith({ level: 'error', text: 'Secret change failed.' }));
@@ -372,7 +384,7 @@ describe('SecretManager', () => {
 
     it('shows stored secrets as the primary view with no creation form until Add secret', () => {
       renderGuardedSecretManager();
-      expect(screen.getByRole('heading', { name: 'Stored secrets' })).toBeTruthy();
+      expect(screen.getByRole('region', { name: 'Managed Secrets' })).toBeTruthy();
       expect(screen.getByText('github-pat-main')).toBeTruthy();
       expect(screen.queryByLabelText('Secret slug')).toBeNull();
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -447,13 +459,13 @@ describe('SecretManager', () => {
 
     it('opens edit and rotate in context for the chosen secret', async () => {
       const { fetchMock } = renderGuardedSecretManager();
-      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.click(secretAction('Edit'));
       const edit = screen.getByRole('dialog', { name: 'Update secret value: github-pat-main' });
       expect((within(edit).getByLabelText('Secret slug') as HTMLInputElement).disabled).toBe(true);
       expect(document.activeElement).toBe(within(edit).getByLabelText('Secure value'));
       fireEvent.click(within(edit).getByRole('button', { name: 'Cancel' }));
 
-      fireEvent.click(screen.getByRole('button', { name: 'Rotate' }));
+      fireEvent.click(secretAction('Rotate'));
       const rotate = screen.getByRole('dialog', { name: 'Rotate Secret: github-pat-main' });
       fireEvent.click(within(rotate).getByRole('button', { name: 'Rotate now' }));
       expect(within(rotate).getByRole('alert').textContent).toBe('Provide a new secure value to rotate the secret.');

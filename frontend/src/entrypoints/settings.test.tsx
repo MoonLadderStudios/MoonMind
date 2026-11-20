@@ -111,6 +111,8 @@ describe('MoonLadderStudios/MoonMind#4019 Source Control on Providers & Secrets'
     expect(within(section).getByRole('button', { name: 'Add token connection' })).toBeTruthy();
     expect(within(section).getByRole('button', { name: 'Connect GitHub App' })).toBeTruthy();
     await within(section).findByText('acme/widgets');
+    // Connections start collapsed; managing one opens its panel.
+    fireEvent.click(within(section).getByRole('button', { name: 'Personal GitHub' }));
     expect(within(section).queryByText(/SecretRef|GITHUB_TOKEN/)).toBeNull();
 
     fireEvent.click(within(section).getByRole('button', { name: 'Test connection' }));
@@ -374,7 +376,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     renderProvidersPage(payloadWithRuntimes);
     const profiles = (await screen.findByRole('heading', { name: 'Profiles' })).closest('section')!;
     const defaults = screen.getByRole('region', { name: 'Defaults for new work' });
-    const secrets = screen.getByRole('heading', { name: 'Stored secrets' }).closest('section')!;
+    const secrets = screen.getByRole('region', { name: 'Managed Secrets' });
     const source = screen.getByRole('region', { name: 'Source Control' });
     expect(screen.queryByLabelText('Configuration health summary')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -511,7 +513,7 @@ describe('Providers & Secrets readiness after secret changes', () => {
     const assertBlocked = (blocked: boolean) => {
       expect(Boolean(defaultProblem())).toBe(blocked);
       expect(Boolean(profileProblem())).toBe(blocked);
-      expect(within(document.getElementById('provider-profile-bound-profile')!).getByText(`Readiness: ${blocked ? 'Blocked' : 'Ready'}`)).toBeTruthy();
+      expect(within(document.getElementById('provider-profile-bound-profile')!).getByText(blocked ? 'Blocked' : 'Ready')).toBeTruthy();
       expect(screen.getByText("unrelated-profile can't launch: Authentication expired.")).toBeTruthy();
     };
     if (!pendingInventory) assertBlocked(true);
@@ -541,7 +543,8 @@ describe('Providers & Secrets readiness after secret changes', () => {
       // An external disable survives editing the value: refresh must reveal the
       // new blocker rather than optimistically treating every success as ready.
       status = 'disabled';
-      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Actions for api-key' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
       fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'updated-value' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save new value' }));
       await screen.findByText('Secret updated successfully.');

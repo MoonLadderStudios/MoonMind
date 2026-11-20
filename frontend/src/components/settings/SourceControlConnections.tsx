@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 
 import type { components } from '../../generated/openapi';
+import { Button } from '../Button';
 import { responseError } from '../../lib/api/client';
 import { GithubTokenProbePanel } from './GithubTokenProbePanel';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
@@ -151,12 +152,16 @@ function canPublish(operations: readonly string[]): boolean {
   return REQUIRED_PUBLISH_OPERATIONS.every((operation) => operations.includes(operation));
 }
 
+function permissionSummary(connection: Connection): string {
+  const base = canPublish(connection.allowedOperations) ? 'read and publish' : 'read only';
+  return connection.allowedOperations.includes('projects') ? `${base}, project boards` : base;
+}
+
+// Repository names shown on a collapsed row before the rest are counted.
+const ROW_REPOSITORY_LIMIT = 4;
+
 const inputClass =
   'w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-hidden focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white';
-const primaryButton =
-  'inline-flex items-center justify-center rounded-xl bg-mm-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-mm-accent/90 disabled:cursor-not-allowed disabled:opacity-50';
-const secondaryButton =
-  'inline-flex items-center justify-center rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800';
 
 function ErrorText({ children }: { children: string | null }) {
   if (!children) return null;
@@ -192,9 +197,7 @@ export function SourceControlConnections({
     },
   });
   const connections = connectionsQuery.data?.items ?? [];
-  const selected =
-    connections.find((item) => item.id === selectedId) ??
-    (selectedId === null && adding === null ? connections[0] : undefined);
+  const selected = connections.find((item) => item.id === selectedId);
 
   /**
    * Replace the detail pane only after its own drafts are clean or discarded;
@@ -299,79 +302,36 @@ export function SourceControlConnections({
       aria-label="Source Control"
       className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
     >
-      <header className="flex flex-wrap items-start justify-between gap-3">
+      <header className="flex flex-wrap items-start justify-between gap-3 pb-3">
         <div className="min-w-0 space-y-1">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Source Control</h3>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Named GitHub connections that workflows use for the repositories you assign. They are
-            separate from Provider Profiles, and a connection with no assigned repositories grants
-            no repository access.
+          <h3 className="m-0 text-lg font-semibold text-slate-900 dark:text-white">Source Control</h3>
+          <p className="m-0 max-w-2xl text-sm text-slate-600 dark:text-slate-400">
+            GitHub connections that workflows use, separate from Provider Profiles. A connection
+            grants access only to the repositories assigned to it.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={secondaryButton}
+          <Button
+            variant="secondary"
+            className="text-sm"
             onClick={() => showPane({ adding: 'pat', selectedId: null })}
           >
             Add token connection
-          </button>
-          <button
-            type="button"
-            className={secondaryButton}
+          </Button>
+          <Button
+            variant="secondary"
+            className="text-sm"
             onClick={() => showPane({ adding: 'app', selectedId: null })}
           >
             Connect GitHub App
-          </button>
+          </Button>
         </div>
       </header>
 
       <ErrorText>{appCallbackError}</ErrorText>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-        <nav aria-label="Connections" className="min-w-0 space-y-2">
-          {connectionsQuery.isLoading ? (
-            <p className="text-sm text-slate-500">Loading connections…</p>
-          ) : connectionsQuery.isError ? (
-            <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
-              Failed to load connections. Saved connections are unchanged.
-            </p>
-          ) : connections.length === 0 ? (
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              No connections yet. Add a token connection or connect a GitHub App.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {connections.map((connection) => {
-                const isSelected = selected?.id === connection.id;
-                return (
-                  <li key={connection.id}>
-                    <button
-                      type="button"
-                      aria-current={isSelected ? 'true' : undefined}
-                      onClick={() => showPane({ adding: null, selectedId: connection.id })}
-                      className={`w-full rounded-2xl border px-3 py-2 text-left text-sm ${
-                        isSelected
-                          ? 'border-mm-accent bg-mm-accent/10'
-                          : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50'
-                      }`}
-                    >
-                      <span className="block truncate font-medium text-slate-900 dark:text-white">
-                        {connection.displayName}
-                      </span>
-                      <span className="block text-xs text-slate-600 dark:text-slate-400">
-                        {kindLabel(connection)} · {assignmentSummary(connection)}
-                        {connection.lifecycle !== 'active' ? ' · Disabled' : ''}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </nav>
-
-        <div className="min-w-0">
+      {adding ? (
+        <div className="source-control-panel">
           {adding === 'pat' ? (
             <PatCreateForm
               requestIdFor={requestIdFor}
@@ -384,23 +344,99 @@ export function SourceControlConnections({
               }}
               onCancel={() => setAdding(null)}
             />
-          ) : adding === 'app' ? (
+          ) : (
             <AppConnectForm requestIdFor={requestIdFor} navigate={navigate} onCancel={() => setAdding(null)} />
-          ) : selected ? (
-            <ConnectionDetail
-              key={selected.id}
-              connection={selected}
-              canRunProbe={canRunProbe}
-              onNotice={onNotice}
-              requestIdFor={requestIdFor}
-              settle={settle}
-              isStillSelected={(id) => (selectedRef.current ?? connections[0]?.id) === id}
-              onCommitted={showCommitted}
-              onReload={() => queryClient.invalidateQueries({ queryKey: SOURCE_CONTROL_QUERY_KEY })}
-            />
-          ) : null}
+          )}
         </div>
-      </div>
+      ) : null}
+
+      {/* A failed refresh is reported beside the rows already loaded: replacing
+          them would unmount an open connection and drop its unsaved drafts. */}
+      {connectionsQuery.isError ? (
+        <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+          Failed to load connections. Saved connections are unchanged.
+        </p>
+      ) : null}
+      {connectionsQuery.isLoading ? (
+        <p className="text-sm text-slate-500">Loading connections…</p>
+      ) : connections.length === 0 ? (
+        connectionsQuery.isError ? null : (
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            No connections yet. Add a token connection or connect a GitHub App.
+          </p>
+        )
+      ) : (
+        <ul aria-label="Connections" className="source-control-list">
+          {connections.map((connection) => {
+            const isSelected = selected?.id === connection.id;
+            const assignments = connection.assignments ?? [];
+            const detailId = `source-control-connection-${connection.id}`;
+            return (
+              <li key={connection.id}>
+                <div className="source-control-row">
+                  <div className="source-control-row-identity">
+                    <h4 className="m-0 text-sm font-medium text-slate-900 dark:text-white [overflow-wrap:anywhere]">
+                      <button
+                        type="button"
+                        aria-current={isSelected ? 'true' : undefined}
+                        aria-expanded={isSelected}
+                        aria-controls={isSelected ? detailId : undefined}
+                        onClick={() => showPane({ adding: null, selectedId: isSelected ? null : connection.id })}
+                        className="source-control-row-toggle"
+                      >
+                        <svg aria-hidden="true" className="shrink-0" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+                          <path d={isSelected ? 'M4 6l4 4 4-4' : 'M6 4l4 4-4 4'} />
+                        </svg>
+                        {connection.displayName}
+                      </button>
+                    </h4>
+                    <p className="m-0 pl-5 text-xs text-slate-600 dark:text-slate-400">
+                      {kindLabel(connection)} · {permissionSummary(connection)}
+                      {connection.lifecycle !== 'active' ? ' · Disabled' : ''}
+                    </p>
+                  </div>
+                  <div className="source-control-row-repositories">
+                    {assignments.length === 0 ? (
+                      <span className="text-xs text-amber-700 dark:text-amber-300">No repositories assigned</span>
+                    ) : isSelected ? (
+                      // The open panel lists and manages them; the row keeps the count.
+                      <span className="text-xs text-slate-600 dark:text-slate-400">{assignmentSummary(connection)}</span>
+                    ) : (
+                      <>
+                        {assignments.slice(0, ROW_REPOSITORY_LIMIT).map((assignment) => (
+                          <span key={assignment.providerRepoId ?? assignment.repository} className="source-control-chip">
+                            {assignment.repository}
+                          </span>
+                        ))}
+                        {assignments.length > ROW_REPOSITORY_LIMIT ? (
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            +{assignments.length - ROW_REPOSITORY_LIMIT} more
+                          </span>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                </div>
+                {isSelected ? (
+                  <div id={detailId} className="source-control-panel">
+                    <ConnectionDetail
+                      key={connection.id}
+                      connection={connection}
+                      canRunProbe={canRunProbe}
+                      onNotice={onNotice}
+                      requestIdFor={requestIdFor}
+                      settle={settle}
+                      isStillSelected={(id) => selectedRef.current === id}
+                      onCommitted={showCommitted}
+                      onReload={() => queryClient.invalidateQueries({ queryKey: SOURCE_CONTROL_QUERY_KEY })}
+                    />
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }
@@ -513,19 +549,17 @@ function PatCreateForm({
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={saving || !name.trim() || !token}>
+        <Button variant="primary" type="submit" disabled={saving || !name.trim() || !token}>
           {saving ? 'Saving…' : 'Save connection'}
-        </button>
-        <button
-          type="button"
-          className={secondaryButton}
+        </Button>
+        <Button variant="ghost"
           onClick={() => {
             discard();
             onCancel();
           }}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -645,12 +679,12 @@ function AppConnectForm({
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
+        <Button variant="primary" type="submit" disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
           {starting ? 'Opening GitHub…' : 'Install on GitHub'}
-        </button>
-        <button type="button" className={secondaryButton} onClick={() => { discard(); onCancel(); }}>
+        </Button>
+        <Button variant="ghost" onClick={() => { discard(); onCancel(); }}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -890,133 +924,135 @@ function ConnectionDetail({
     }
   }
 
+  const metadata = [
+    connection.account ? `Account ${connection.account}` : null,
+    connection.installationId ? `Installation ${connection.installationId}` : null,
+    isActive ? null : 'Disabled: workflows cannot use it',
+  ].filter(Boolean);
+
   return (
-    <div className="space-y-4" aria-label={`${connection.displayName} details`}>
-      <div className="space-y-1">
-        <h4 className="break-words text-base font-semibold text-slate-900 dark:text-white">
-          {connection.displayName}
-        </h4>
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          {kindLabel(connection)}
-          {connection.account ? ` · Account ${connection.account}` : ''}
-          {connection.installationId ? ` · Installation ${connection.installationId}` : ''}
-          {isActive ? '' : ' · Disabled: workflows cannot use it'}
-        </p>
+    <div className="source-control-detail-grid" aria-label={`${connection.displayName} details`}>
+      <div className="min-w-0 space-y-4">
+        {metadata.length > 0 ? (
+          <p className="text-sm text-slate-600 dark:text-slate-400">{metadata.join(' · ')}</p>
+        ) : null}
         {connection.credentialKind === 'github_app' && (connection.permittedRepositories ?? []).length > 0 ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Installation limited to {(connection.permittedRepositories ?? []).join(', ')}
           </p>
         ) : null}
+
+        <section aria-label="Assigned repositories" className="space-y-2">
+          <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Assigned repositories</h5>
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            All assigned repositories inherit this connection’s permissions. GitHub or GitLab must also allow the requested action.
+          </p>
+          {assignments.length === 0 ? (
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              No repositories assigned. Workflows cannot use this connection until you assign one.
+            </p>
+          ) : (
+            <ul className="flex flex-wrap gap-2">
+              {assignments.map((assignment) => (
+                <li
+                  key={assignment.providerRepoId ?? assignment.repository}
+                  className="source-control-chip source-control-chip--action"
+                >
+                  <span className="min-w-0 break-words">
+                    {assignment.repository}
+                    <span className="ml-2 text-xs text-slate-500">
+                      {canPublish(connection.allowedOperations) ? 'read and publish' : 'read only'}
+                    </span>
+                  </span>
+                  {assignment.providerRepoId ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Remove ${assignment.repository}`}
+                      onClick={() => void unassign(assignment.repository, assignment.providerRepoId as string)}
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {isActive ? (
+            <form aria-label="Assign repository" className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={assign}>
+              <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+                <span className="font-medium text-slate-700 dark:text-slate-200">Assign repository (owner/repo)</span>
+                <input className={inputClass} value={repository} onChange={(e) => setRepository(e.target.value)} required autoComplete="off" />
+              </label>
+              <Button variant="secondary" type="submit" disabled={assigning || !repository.trim()}>
+                {assigning ? 'Checking…' : 'Assign'}
+              </Button>
+              {assignmentChanged ? (
+                <Button variant="ghost" onClick={discardAssignment} disabled={assigning}>
+                  Cancel assignment
+                </Button>
+              ) : null}
+            </form>
+          ) : null}
+          <ErrorText>{assignError}</ErrorText>
+        </section>
+
+        <GithubTokenProbePanel
+          connection={connection}
+          canRunProbe={canRunProbe}
+          onNotice={onNotice}
+          initialRepo={assignments[0]?.repository ?? connection.permittedRepositories?.[0] ?? ''}
+        />
       </div>
 
-      <section aria-label="Assigned repositories" className="space-y-2">
-        <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Assigned repositories</h5>
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          All assigned repositories inherit this connection’s permissions. GitHub or GitLab must also allow the requested action.
-        </p>
-        {assignments.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            No repositories assigned. Workflows cannot use this connection until you assign one.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {assignments.map((assignment) => (
-              <li
-                key={assignment.providerRepoId ?? assignment.repository}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-800"
-              >
-                <span className="min-w-0 break-words">
-                  {assignment.repository}
-                  <span className="ml-2 text-xs text-slate-500">
-                    {canPublish(connection.allowedOperations) ? 'read and publish' : 'read only'}
-                  </span>
-                </span>
-                {assignment.providerRepoId ? (
-                  <button
-                    type="button"
-                    className={secondaryButton}
-                    onClick={() => void unassign(assignment.repository, assignment.providerRepoId as string)}
-                  >
-                    Remove
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-        {isActive ? (
-          <form aria-label="Assign repository" className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={assign}>
-            <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-              <span className="font-medium text-slate-700 dark:text-slate-200">Assign repository (owner/repo)</span>
-              <input className={inputClass} value={repository} onChange={(e) => setRepository(e.target.value)} required autoComplete="off" />
-            </label>
-            <button type="submit" className={primaryButton} disabled={assigning || !repository.trim()}>
-              {assigning ? 'Checking…' : 'Assign'}
-            </button>
-            {assignmentChanged ? (
-              <button type="button" className={secondaryButton} onClick={discardAssignment} disabled={assigning}>
-                Cancel assignment
-              </button>
-            ) : null}
-          </form>
-        ) : null}
-        <ErrorText>{assignError}</ErrorText>
-      </section>
-
-      <GithubTokenProbePanel
-        connection={connection}
-        canRunProbe={canRunProbe}
-        onNotice={onNotice}
-        initialRepo={assignments[0]?.repository ?? connection.permittedRepositories?.[0] ?? ''}
-      />
-
-      <form aria-label="Edit connection" className="space-y-3" onSubmit={save}>
-        <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Edit connection</h5>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-slate-700 dark:text-slate-200">Connection name</span>
-          <input className={inputClass} value={name} disabled={saving} onChange={(e) => setName(e.target.value)} required autoComplete="off" />
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-          <input type="checkbox" checked={publish} disabled={saving} onChange={(e) => setPublish(e.target.checked)} />
-          Allow publishing (push branches, open pull requests and update issues)
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-          <input type="checkbox" checked={projects} disabled={saving} onChange={(e) => setProjects(e.target.checked)} />
-          Allow project board updates
-        </label>
-        {isPat ? (
+      <div className="min-w-0">
+        <form aria-label="Edit connection" className="space-y-3" onSubmit={save}>
+          <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Edit connection</h5>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-700 dark:text-slate-200">Replace token (optional)</span>
-            <input
-              className={inputClass}
-              type="password"
-              value={token}
-              disabled={saving}
-              onChange={(e) => setToken(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
+            <span className="font-medium text-slate-700 dark:text-slate-200">Connection name</span>
+            <input className={inputClass} value={name} disabled={saving} onChange={(e) => setName(e.target.value)} required autoComplete="off" />
           </label>
-        ) : null}
-        <ErrorText>{saveError}</ErrorText>
-        <div className="flex flex-wrap gap-2">
-          <button type="submit" className={primaryButton} disabled={saving || !changed || !name.trim() || (rotationPending && !token)}>
-            {saving ? 'Saving…' : 'Save changes'}
-          </button>
-          {changed ? (
-            <button type="button" className={secondaryButton} onClick={discardEdit} disabled={saving}>
-              Cancel changes
-            </button>
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+            <input type="checkbox" checked={publish} disabled={saving} onChange={(e) => setPublish(e.target.checked)} />
+            Allow publishing (push branches, open pull requests and update issues)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+            <input type="checkbox" checked={projects} disabled={saving} onChange={(e) => setProjects(e.target.checked)} />
+            Allow project board updates
+          </label>
+          {isPat ? (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700 dark:text-slate-200">Replace token (optional)</span>
+              <input
+                className={inputClass}
+                type="password"
+                value={token}
+                disabled={saving}
+                onChange={(e) => setToken(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
           ) : null}
-          <button
-            type="button"
-            className={secondaryButton}
-            onClick={() => void setLifecycle(isActive ? 'disable' : 'enable')}
-          >
-            {isActive ? 'Disable connection' : 'Enable connection'}
-          </button>
-        </div>
-      </form>
+          <ErrorText>{saveError}</ErrorText>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" type="submit" disabled={saving || !changed || !name.trim() || (rotationPending && !token)}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </Button>
+            {changed ? (
+              <Button variant="ghost" onClick={discardEdit} disabled={saving}>
+                Cancel changes
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              onClick={() => void setLifecycle(isActive ? 'disable' : 'enable')}
+            >
+              {isActive ? 'Disable connection' : 'Enable connection'}
+            </Button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

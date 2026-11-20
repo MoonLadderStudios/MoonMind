@@ -1,7 +1,7 @@
 import { Button } from '../Button';
 import { isBrokenReferenceStatus } from '../secrets/SecretManager';
 import { secretSlugFromRef } from './ConfigurationHealthSummary';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
 import type { components } from '../../generated/openapi';
@@ -2030,6 +2030,13 @@ export function ProviderProfilesManager({
   const [creationPresetError, setCreationPresetError] = useState<string | null>(null);
   const [creationPresetRefreshKey, setCreationPresetRefreshKey] = useState(0);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [expandedProfileIds, setExpandedProfileIds] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleProfileDetails = (profileId: string) =>
+    setExpandedProfileIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(profileId)) next.add(profileId);
+      return next;
+    });
   const createFormRuntimeSeedRef = useRef(createFormRuntimeSeed);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
   const [tmateOAuthSession, setTmateOAuthSession] = useState<OAuthSessionState | null>(null);
@@ -4435,7 +4442,7 @@ export function ProviderProfilesManager({
       ? { label: 'Reconnect OAuth', onSelect: connect.onSelect, disabledReason: connect.disabledReason }
       : null;
   };
-  const renderAccountUsage = (profile: ProviderProfile, variant: 'compact' | 'full') => (
+  const renderAccountUsage = (profile: ProviderProfile, variant: 'summary' | 'details' | 'full') => (
     <ProviderProfileAccountUsage
       subject={profile.profile_id}
       usage={profile.account_usage}
@@ -4504,95 +4511,77 @@ export function ProviderProfilesManager({
 
   return (
     <section className="provider-profiles rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
-        {canWriteProviderProfiles && !profileFormVisible ? (
-          <Button variant="secondary"
-            type="button"
-            className="self-start text-sm"
-            onClick={() => {
-              setCreateFormOpen(true);
-              setEditorFocusRequest((current) => current + 1);
-            }}
-          >
-            Add profile
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {onSelectRuntimeId ? (
+            <>
+              <label className="sr-only" htmlFor={RUNTIME_FILTER_CONTROL_ID}>
+                Harness filter
+              </label>
+              <select
+                id={RUNTIME_FILTER_CONTROL_ID}
+                className="w-full rounded-xl border sm:w-auto border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={activeRuntimeFilterValue}
+                onChange={(event) =>
+                  onSelectRuntimeId(
+                    event.target.value === ALL_RUNTIMES_FILTER_VALUE
+                      ? undefined
+                      : event.target.value,
+                  )
+                }
+              >
+                {runtimeFilterChoices.map((choice) => (
+                  <option key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+          {canWriteProviderProfiles && !profileFormVisible ? (
+            <Button variant="secondary"
+              type="button"
+              className="text-sm"
+              onClick={() => {
+                setCreateFormOpen(true);
+                setEditorFocusRequest((current) => current + 1);
+              }}
+            >
+              Add profile
+            </Button>
+          ) : null}
+        </div>
       </div>
 
-      {onSelectRuntimeId ? (
-        <div className="mt-4 flex flex-col gap-1.5 text-sm md:max-w-xs">
-          <label
-            className="font-medium text-slate-700 dark:text-slate-300"
-            htmlFor={RUNTIME_FILTER_CONTROL_ID}
-          >
-            Harness filter
-          </label>
-          <select
-            id={RUNTIME_FILTER_CONTROL_ID}
-            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-            value={activeRuntimeFilterValue}
-            onChange={(event) =>
-              onSelectRuntimeId(
-                event.target.value === ALL_RUNTIMES_FILTER_VALUE
-                  ? undefined
-                  : event.target.value,
-              )
-            }
-          >
-            {runtimeFilterChoices.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      ) : null}
-
-      <div className="provider-profiles-table-wrap stacked-records-wrap mt-6 overflow-x-auto">
+      <div className="provider-profiles-table-wrap stacked-records-wrap overflow-x-auto">
         <table
-          className="provider-profiles-table stacked-records min-w-full md:divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm"
+          className="provider-profiles-table settings-flat-table stacked-records min-w-full text-left text-sm"
           role="table"
         >
-          <thead className="bg-slate-50 dark:bg-slate-800/50" role="rowgroup">
+          <thead role="rowgroup">
             <tr role="row">
               <th
                 id="provider-profile-header-profile"
                 scope="col"
                 role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+                className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400"
               >
                 Profile
               </th>
               <th
-                id="provider-profile-header-harness"
+                id="provider-profile-header-usage"
                 scope="col"
                 role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+                className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400"
               >
-                Harness
-              </th>
-              <th
-                id="provider-profile-header-provider"
-                scope="col"
-                role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
-              >
-                Provider
-              </th>
-              <th
-                id="provider-profile-header-credential"
-                scope="col"
-                role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
-              >
-                Credential
+                Weekly usage
               </th>
               <th
                 id="provider-profile-header-status"
                 scope="col"
                 role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+                className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400"
               >
                 Status
               </th>
@@ -4600,16 +4589,16 @@ export function ProviderProfilesManager({
                 id="provider-profile-header-actions"
                 scope="col"
                 role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+                className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400"
               >
-                Actions
+                <span className="sr-only">Actions</span>
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-mm-border/80 bg-transparent" role="rowgroup">
+          <tbody role="rowgroup">
             {profiles.length === 0 ? (
               <tr role="row">
-                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={6} role="cell">
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={4} role="cell">
                   {selectedRuntimeId
                     ? `No Provider Profiles are configured for ${formatHarnessLabel(selectedRuntimeId)}.`
                     : 'No provider profiles configured yet.'}
@@ -4622,219 +4611,127 @@ export function ProviderProfilesManager({
                 const activationLabel = activationStatusLabel(profile);
                 const modelTiers = providerProfileModelTiers(profile);
                 void defaultTaskModelByRuntime;
-                const claudeReadiness =
-                  authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
-                const opencodeReadiness =
-                  authModel.kind === 'opencode_credentials' ? authModel.readiness : undefined;
-                const hasStatusDetails = Boolean(
-                  (activationLabel && activationLabel !== 'Connected') ||
-                    profile.disabled_reason ||
-                    profile.last_validated_at ||
-                    profile.readiness ||
-                    claudeReadiness?.connected !== undefined ||
-                    claudeReadiness?.lastValidatedAt ||
-                    claudeReadiness?.backingSecretExists !== undefined ||
-                    claudeReadiness?.launchReady !== undefined ||
-                    claudeReadiness?.failureReason ||
-                    opencodeReadiness?.connected !== undefined ||
-                    opencodeReadiness?.lastValidatedAt ||
-                    opencodeReadiness?.backingSecretExists !== undefined ||
-                    opencodeReadiness?.launchReady !== undefined ||
-                    opencodeReadiness?.failureReason,
-                );
+                const tierCount = providerProfileTierCount(profile);
+                const tierRepair = tierCount === 0 || tierCount === null;
+                const validDefaultTier =
+                  profile.default_model_tier && profile.default_model_tier >= 1 && profile.default_model_tier <= modelTiers.length
+                    ? profile.default_model_tier
+                    : 1;
+                const hasInvalidDefaultTier =
+                  profile.default_model_tier != null &&
+                  (profile.default_model_tier < 1 || profile.default_model_tier > modelTiers.length);
+                // One pill answers "can this launch?"; the reasons behind it
+                // surface in the row only when the answer is not a plain yes.
+                const healthy = profile.enabled && (!profile.readiness || profile.readiness.status === 'ready');
+                const authStatusLabel =
+                  authModel.kind === 'claude_credentials' || authModel.kind === 'opencode_credentials'
+                    ? authModel.statusLabel
+                    : null;
+                const readinessReason =
+                  profile.readiness?.reason_code && profile.readiness.reason_code !== 'ready'
+                    ? readinessReasonLabel(profile.readiness.reason_code)
+                    : null;
+                const statusPill = !profile.enabled
+                  ? { text: 'Disabled', className: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300' }
+                  : profile.readiness
+                    ? { text: readinessLabel(profile.readiness.status), className: readinessClass(profile.readiness.status) }
+                    : { text: 'Enabled', className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' };
+                const expanded = expandedProfileIds.has(profile.profile_id);
+                const detailsId = `provider-profile-details-${profile.profile_id}`;
+                const detailHeading = 'm-0 text-xs font-semibold text-slate-700 dark:text-slate-300';
                 return (
-                <tr key={profile.profile_id} id={`provider-profile-${profile.profile_id}`} tabIndex={-1} role="row">
+                <Fragment key={profile.profile_id}>
+                <tr id={`provider-profile-${profile.profile_id}`} tabIndex={-1} role="row">
                   <td
-                    className="px-3 py-4"
+                    className="px-3 py-3"
                     data-label="Profile"
                     headers="provider-profile-header-profile"
                     role="cell"
                   >
-                    <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
-                    {profile.is_default ? (
-                      <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                        Preferred for {formatHarnessLabel(profile.runtime_id)}
-                      </div>
-                    ) : null}
-                    {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Overrides: {Object.keys(profile.model_overrides).join(', ')}
-                      </div>
-                    ) : null}
-                    {(() => {
-                      const count = providerProfileTierCount(profile);
-                      const tiers = modelTiers;
-                      const isRepair = count === 0 || count === null;
-                      if (isRepair) {
-                        return (
-                          <div className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300" aria-label={`${profile.profile_id} tier policy unavailable`}>
-                            Tier policy unavailable · needs repair
-                          </div>
-                        );
-                      }
-                      const validDefault = profile.default_model_tier && profile.default_model_tier >= 1 && profile.default_model_tier <= tiers.length ? profile.default_model_tier : 1;
-                      const hasInvalidDefault = profile.default_model_tier != null && (profile.default_model_tier < 1 || profile.default_model_tier > tiers.length);
-                      return (
-                        <div className="mt-2 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
-                          <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                            {tiers.length} tiers · Default: Tier {validDefault}
-                            {hasInvalidDefault ? <span className="ml-1 text-amber-600 dark:text-amber-400">· Invalid saved default: Tier {profile.default_model_tier}</span> : null}
-                          </div>
-                          <div className="space-y-1">
-                            {tiers.slice(0, 2).map((tier, tierIndex) => {
-                              const tierNumber = tierIndex + 1;
-                              return (
-                                <div key={`${profile.profile_id}-tier-${tierNumber}`} className="text-xs text-slate-600 dark:text-slate-300">
-                                  <span className="font-medium">Tier {tierNumber}{tierNumber === validDefault ? ' default' : ''}</span>
-                                  {' · '}
-                                  <span className="font-mono">{tier.label || `Tier ${tierNumber}`}</span>
-                                  {' · '}
-                                  <span className="font-mono">{tierSummaryModel(tier)}</span>
-                                  {' · '}
-                                  <span className="font-mono">{tierDisplayEffort(tier.effort)}</span>
-                                  {tierNumber === validDefault ? <span className="ml-1 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-1 text-[10px] font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}
-                                </div>
-                              );
-                            })}
-                            {tiers.length > 2 ? <div className="text-xs text-slate-500 dark:text-slate-400">+{tiers.length - 2} more</div> : null}
-                          </div>
-                          {tiers.length > 2 || hasInvalidDefault ? (
-                            <details className="group">
-                              <summary className="cursor-pointer text-xs font-medium text-slate-500 dark:text-slate-400">Show tier mapping</summary>
-                              <div className="mt-1 space-y-1">
-                                {tiers.map((tier, tierIndex) => {
-                                  const tierNumber = tierIndex + 1;
-                                  return (
-                                    <div key={`${profile.profile_id}-tier-full-${tierNumber}`} className="text-xs text-slate-600 dark:text-slate-300">
-                                      <span className="font-medium">Tier {tierNumber}{tierNumber === validDefault ? ' default' : ''}</span>
-                                      {' · '}
-                                      <span className="font-mono">{tier.label || `Tier ${tierNumber}`}</span>
-                                      {' · '}
-                                      <span className="font-mono">{tierSummaryModel(tier)}</span>
-                                      {' · '}
-                                      <span className="font-mono">{tierDisplayEffort(tier.effort)}</span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </details>
+                    <div className="flex min-w-0 items-start gap-1.5">
+                      <button
+                        type="button"
+                        className="provider-profile-toggle"
+                        aria-expanded={expanded}
+                        aria-controls={detailsId}
+                        aria-label={`${expanded ? 'Hide' : 'Show'} details for ${profile.profile_id}`}
+                        onClick={() => toggleProfileDetails(profile.profile_id)}
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+                          <path d={expanded ? 'M4 6l4 4 4-4' : 'M6 4l4 4-4 4'} />
+                        </svg>
+                      </button>
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-medium text-slate-900 dark:text-white [overflow-wrap:anywhere]">{profile.profile_id}</span>
+                          {profile.is_default ? (
+                            <span className="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                              Preferred<span className="sr-only"> for {formatHarnessLabel(profile.runtime_id)}</span>
+                            </span>
                           ) : null}
                         </div>
-                      );
-                    })()}
-                  </td>
-                  <td
-                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
-                    data-label="Harness"
-                    headers="provider-profile-header-harness"
-                    role="cell"
-                    title={profile.runtime_id}
-                  >
-                    {profile.runtime_id ? formatHarnessLabel(profile.runtime_id) : '—'}
-                  </td>
-                  <td
-                    className="px-3 py-4"
-                    data-label="Provider"
-                    headers="provider-profile-header-provider"
-                    role="cell"
-                  >
-                    <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
-                    {profile.provider_label ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
-                    ) : null}
-                    {profile.tags && profile.tags.length > 0 ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Tags: {profile.tags.join(', ')}
-                      </div>
-                    ) : null}
-                    {profile.priority != null ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Priority: {profile.priority}
-                      </div>
-                    ) : null}
-                    {renderAccountUsage(profile, 'compact')}
-                  </td>
-                  <td
-                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
-                    data-label="Credential"
-                    headers="provider-profile-header-credential"
-                    role="cell"
-                  >
-                    <div>{credentialMethodLabel(profile)}</div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      Concurrency: {profile.max_parallel_runs}
-                    </div>
-                    <details className="provider-profile-details mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      <summary className="cursor-pointer font-medium">Details</summary>
-                      <div className="mt-2 space-y-1">
-                        <div className="font-mono">{profile.credential_source}</div>
-                        <div className="font-mono">{profile.runtime_materialization_mode}</div>
-                        {profile.volume_ref ? <div>OAuth volume: {profile.volume_ref}</div> : null}
-                        {profile.volume_mount_path ? <div>Mount: {profile.volume_mount_path}</div> : null}
-                        <div>Cooldown: {profile.cooldown_after_429_seconds}s</div>
-                        <div className="font-medium text-slate-700 dark:text-slate-300">
-                          Role-aware SecretRefs
+                        <div className="text-xs text-slate-600 dark:text-slate-400">
+                          <span title={profile.runtime_id} data-profile-harness="">
+                            {profile.runtime_id ? formatHarnessLabel(profile.runtime_id) : '—'}
+                          </span>
+                          {' · '}
+                          {profile.provider_label || profile.provider_id}
+                          {' · '}
+                          {credentialMethodLabel(profile)}
                         </div>
-                        {Object.entries(profile.secret_refs ?? {}).length === 0 ? (
-                          <div>No secret refs</div>
+                        {tierRepair ? (
+                          <div className="text-xs font-medium text-amber-700 dark:text-amber-300" aria-label={`${profile.profile_id} tier policy unavailable`}>
+                            Tier policy unavailable · needs repair
+                          </div>
                         ) : (
-                          <dl className="space-y-1">
-                            {Object.entries(profile.secret_refs ?? {}).map(([role, ref]) => (
-                              <div key={role}>
-                                <dt className="font-mono font-semibold">{role}</dt>
-                                <dd className="font-mono break-all">{ref}</dd>
-                              </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            {modelTiers.slice(0, 2).map((tier, tierIndex) => (
+                              <span key={`${profile.profile_id}-tier-summary-${tierIndex}`}>
+                                {tierIndex > 0 ? ' · ' : null}
+                                <span className={`font-mono ${tierIndex + 1 === validDefaultTier ? 'text-slate-900 dark:text-slate-100' : ''}`}>
+                                  {tierSummaryModel(tier)} {tierDisplayEffort(tier.effort)}
+                                </span>
+                                {tierIndex + 1 === validDefaultTier ? ' (default)' : null}
+                              </span>
                             ))}
-                          </dl>
+                            {modelTiers.length > 2 ? <span>{' · '}<span>+{modelTiers.length - 2} more</span></span> : null}
+                            {hasInvalidDefaultTier ? (
+                              <span className="ml-1 text-amber-600 dark:text-amber-400">· Invalid saved default: Tier {profile.default_model_tier}</span>
+                            ) : null}
+                          </div>
                         )}
                       </div>
-                    </details>
+                    </div>
                   </td>
                   <td
-                    className="px-3 py-4"
+                    className="px-3 py-3"
+                    data-label="Weekly usage"
+                    headers="provider-profile-header-usage"
+                    role="cell"
+                  >
+                    {renderAccountUsage(profile, 'summary')}
+                  </td>
+                  <td
+                    className="px-3 py-3"
                     data-label="Status"
                     headers="provider-profile-header-status"
                     role="cell"
                   >
-                    <div className="provider-profile-status flex flex-col gap-2">
+                    <div className="provider-profile-status flex flex-col items-start gap-1">
+                      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusPill.className}`}>
+                        {statusPill.text}
+                      </span>
                       {[...new Set(Object.values(profile.secret_refs ?? {}).map(secretSlugFromRef))].map((slug) =>
                         slug && isBrokenReferenceStatus(secretStatusBySlug[slug]) ? (
                           <p key={slug} className="text-xs text-rose-700 dark:text-rose-400">
                             Secret {slug} is {secretStatusBySlug[slug]}. Launches will fail.
                           </p>
                         ) : null)}
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            profile.enabled
-                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                              : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                          }`}
-                        >
-                          {profile.enabled ? 'Enabled' : 'Disabled'}
-                        </span>
-                        {profile.readiness ? (
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${readinessClass(profile.readiness.status)}`}
-                          >
-                            Readiness: {readinessLabel(profile.readiness.status)}
-                          </span>
-                        ) : null}
-                        {profile.readiness?.reason_code ? (
-                          <span className="text-xs text-slate-500">
-                            Provider status: {readinessReasonLabel(profile.readiness.reason_code)}
-                          </span>
-                        ) : null}
-                      </div>
-                      {authModel.kind === 'claude_credentials' && authModel.statusLabel ? (
-                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                          {authModel.statusLabel}
-                        </div>
+                      {!healthy && readinessReason ? (
+                        <div className="text-xs text-slate-600 dark:text-slate-400">{readinessReason}</div>
                       ) : null}
-                      {authModel.kind === 'opencode_credentials' && authModel.statusLabel ? (
-                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                          {authModel.statusLabel}
-                        </div>
+                      {!healthy && authStatusLabel ? (
+                        <div className="text-xs text-slate-600 dark:text-slate-400">{authStatusLabel}</div>
                       ) : null}
                       {oauthSession ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
@@ -4846,103 +4743,10 @@ export function ProviderProfilesManager({
                           {oauthSession.failureReason}
                         </div>
                       ) : null}
-                      {hasStatusDetails ? (
-                        <details className="provider-profile-status-details">
-                          <summary className="cursor-pointer text-xs font-medium text-slate-500 dark:text-slate-400">
-                            Diagnostics
-                          </summary>
-                          <div className="mt-2 space-y-1">
-                            {activationLabel ? (
-                              <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                                {activationLabel}
-                              </div>
-                            ) : null}
-                            {profile.disabled_reason ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Reason: {formatStatusLabel(profile.disabled_reason, profile.disabled_reason)}
-                              </div>
-                            ) : null}
-                            {profile.last_validated_at ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Last validated: {profile.last_validated_at}
-                              </div>
-                            ) : null}
-                            {profile.readiness ? (
-                              <div className="space-y-1">
-                                <div className="text-xs text-slate-500 dark:text-slate-400">
-                                  {profile.readiness.summary}
-                                </div>
-                                {visibleReadinessChecks(profile.readiness).map((check) => (
-                                  <div
-                                    key={check.id}
-                                    className={
-                                      check.status === 'error'
-                                        ? 'text-xs text-rose-600 dark:text-rose-400'
-                                        : 'text-xs text-amber-700 dark:text-amber-300'
-                                    }
-                                  >
-                                    {check.label}: {redactClaudeSecretText(check.message)}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'claude_credentials' && authModel.readiness?.connected !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'claude_credentials' && authModel.readiness?.lastValidatedAt ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Last validated: {authModel.readiness.lastValidatedAt}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'claude_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'claude_credentials' && authModel.readiness?.launchReady !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'claude_credentials' && authModel.readiness?.failureReason ? (
-                              <div className="text-xs text-rose-600 dark:text-rose-400">
-                                Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.connected !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                OpenCode connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.lastValidatedAt ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Last validated: {authModel.readiness.lastValidatedAt}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.launchReady !== undefined ? (
-                              <div className="text-xs text-slate-500 dark:text-slate-400">
-                                Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
-                              </div>
-                            ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.failureReason ? (
-                              <div className="text-xs text-rose-600 dark:text-rose-400">
-                                Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
-                              </div>
-                            ) : null}
-                          </div>
-                        </details>
-                      ) : null}
                     </div>
                   </td>
                   <td
-                    className="px-3 py-4"
+                    className="px-3 py-3"
                     data-label="Actions"
                     headers="provider-profile-header-actions"
                     role="cell"
@@ -4962,6 +4766,169 @@ export function ProviderProfilesManager({
                     ) : null}
                   </td>
                 </tr>
+                {/* Kept in the DOM while collapsed so the details stay one
+                    toggle away without a refetch or a lost scroll position. */}
+                <tr id={detailsId} className="provider-profile-detail-row" hidden={!expanded} role="row">
+                  <td colSpan={4} role="cell" className="px-3 pb-4 pt-1">
+                    <div className="provider-profile-detail-grid text-xs text-slate-600 dark:text-slate-400">
+                      <section className="min-w-0 space-y-1" aria-label={`${profile.profile_id} account and usage`}>
+                        <h4 className={detailHeading}>Account and usage</h4>
+                        {profile.account_usage === undefined ? <p>Not reported for this profile.</p> : renderAccountUsage(profile, 'details')}
+                      </section>
+                      <section className="min-w-0 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
+                        <h4 className={detailHeading}>Models</h4>
+                        {tierRepair ? (
+                          <div>Tier policy unavailable.</div>
+                        ) : (
+                          <>
+                            <div>
+                              {modelTiers.length} tiers · Default: Tier {validDefaultTier}
+                            </div>
+                            {modelTiers.map((tier, tierIndex) => {
+                              const tierNumber = tierIndex + 1;
+                              return (
+                                <div key={`${profile.profile_id}-tier-full-${tierNumber}`}>
+                                  <span className="font-medium">Tier {tierNumber}{tierNumber === validDefaultTier ? ' default' : ''}</span>
+                                  {' · '}
+                                  <span className="font-mono">{tier.label || `Tier ${tierNumber}`}</span>
+                                  {' · '}
+                                  <span className="font-mono">{tierSummaryModel(tier)}</span>
+                                  {' · '}
+                                  <span className="font-mono">{tierDisplayEffort(tier.effort)}</span>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                        {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
+                          <div>Overrides: {Object.keys(profile.model_overrides).join(', ')}</div>
+                        ) : null}
+                      </section>
+                      <section className="min-w-0 space-y-1" aria-label={`${profile.profile_id} credential and routing`}>
+                        <h4 className={detailHeading}>Credential and routing</h4>
+                        <div>Concurrency: {profile.max_parallel_runs}</div>
+                        <div>Cooldown: {profile.cooldown_after_429_seconds}s</div>
+                        {profile.priority != null ? <div>Priority: {profile.priority}</div> : null}
+                        {profile.tags && profile.tags.length > 0 ? <div>Tags: {profile.tags.join(', ')}</div> : null}
+                        <div className="font-mono">{profile.credential_source}</div>
+                        <div className="font-mono">{profile.runtime_materialization_mode}</div>
+                        {profile.volume_ref ? <div>OAuth volume: {profile.volume_ref}</div> : null}
+                        {profile.volume_mount_path ? <div>Mount: {profile.volume_mount_path}</div> : null}
+                        <div className="font-medium text-slate-700 dark:text-slate-300">
+                          Role-aware SecretRefs
+                        </div>
+                        {Object.entries(profile.secret_refs ?? {}).length === 0 ? (
+                          <div>No secret refs</div>
+                        ) : (
+                          <dl className="space-y-1">
+                            {Object.entries(profile.secret_refs ?? {}).map(([role, ref]) => (
+                              <div key={role}>
+                                <dt className="font-mono font-semibold">{role}</dt>
+                                <dd className="font-mono break-all">{ref}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        )}
+                      </section>
+                      <section className="provider-profile-diagnostics min-w-0 space-y-1" aria-label={`${profile.profile_id} diagnostics`}>
+                        <h4 className={detailHeading}>Diagnostics</h4>
+                        <div>Profile {profile.enabled ? 'enabled' : 'disabled'}</div>
+                        {profile.readiness ? (
+                          <div>Readiness: {readinessLabel(profile.readiness.status)}</div>
+                        ) : null}
+                        {profile.readiness?.reason_code ? (
+                          <div>Provider status: {readinessReasonLabel(profile.readiness.reason_code)}</div>
+                        ) : null}
+                        {healthy && authStatusLabel ? <div>{authStatusLabel}</div> : null}
+                        {activationLabel ? (
+                          <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                            {activationLabel}
+                          </div>
+                        ) : null}
+                        {profile.disabled_reason ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Reason: {formatStatusLabel(profile.disabled_reason, profile.disabled_reason)}
+                          </div>
+                        ) : null}
+                        {profile.last_validated_at ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Last validated: {profile.last_validated_at}
+                          </div>
+                        ) : null}
+                        {profile.readiness ? (
+                          <div className="space-y-1">
+                            <div className="text-xs text-slate-500 dark:text-slate-400">
+                              {profile.readiness.summary}
+                            </div>
+                            {visibleReadinessChecks(profile.readiness).map((check) => (
+                              <div
+                                key={check.id}
+                                className={
+                                  check.status === 'error'
+                                    ? 'text-xs text-rose-600 dark:text-rose-400'
+                                    : 'text-xs text-amber-700 dark:text-amber-300'
+                                }
+                              >
+                                {check.label}: {redactClaudeSecretText(check.message)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'claude_credentials' && authModel.readiness?.connected !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'claude_credentials' && authModel.readiness?.lastValidatedAt ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Last validated: {authModel.readiness.lastValidatedAt}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'claude_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'claude_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'claude_credentials' && authModel.readiness?.failureReason ? (
+                          <div className="text-xs text-rose-600 dark:text-rose-400">
+                            Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'opencode_credentials' && authModel.readiness?.connected !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            OpenCode connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'opencode_credentials' && authModel.readiness?.lastValidatedAt ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Last validated: {authModel.readiness.lastValidatedAt}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'opencode_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'opencode_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
+                          </div>
+                        ) : null}
+                        {authModel.kind === 'opencode_credentials' && authModel.readiness?.failureReason ? (
+                          <div className="text-xs text-rose-600 dark:text-rose-400">
+                            Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
+                          </div>
+                        ) : null}
+                      </section>
+                    </div>
+                  </td>
+                </tr>
+                </Fragment>
                 );
               })
             )}

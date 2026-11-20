@@ -3395,7 +3395,7 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
 
 /*
  * Provider Profiles table (flat / desktop layout).
- * Let dense cells wrap instead of forcing the 7-column table wider than the
+ * Let dense cells wrap instead of forcing the table wider than the
  * (data-wide) settings panel, so every row control — including the Actions
  * column — stays reachable without horizontal scrolling at >=1280px and the
  * table degrades gracefully toward the stacked card layout below.
@@ -3410,25 +3410,197 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   white-space: nowrap;
 }
 
-.provider-profile-status-details > summary {
-  list-style: none;
+/* Providers & Secrets lists: rows sit directly on the section card and are
+ * separated by hairlines, so a list never reads as a card nested in a card.
+ * Below 721px the shared stacked-record cards take over instead. */
+@media (min-width: 721px) {
+  .settings-flat-table,
+  .dark .settings-flat-table {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .settings-flat-table th,
+  .dark .settings-flat-table th {
+    background: transparent;
+  }
+
+  .settings-flat-table tbody tr:nth-child(2n),
+  .dark .settings-flat-table tbody tr:nth-child(2n) {
+    background: transparent;
+  }
+
+  .settings-flat-table tbody tr:last-child > td {
+    border-bottom: 0;
+  }
+
+  .provider-profiles-table th:nth-child(2) {
+    width: 19rem;
+  }
+
+  .provider-profiles-table th:nth-child(3) {
+    width: 11rem;
+  }
+
+  .settings-flat-table th:last-child {
+    width: 3.25rem;
+  }
+
+  /* An open profile and its details read as one record. */
+  .provider-profiles-table tbody tr:has(+ .provider-profile-detail-row:not([hidden])) > td {
+    border-bottom: 0;
+  }
+
+  .settings-flat-table tbody tr.provider-profile-detail-row:hover,
+  .dark .settings-flat-table tbody tr.provider-profile-detail-row:hover {
+    background: transparent;
+  }
+}
+
+/* Author display rules (table rows, stacked cards) must not reveal a
+ * collapsed details row. */
+.provider-profile-detail-row[hidden] {
+  display: none !important;
+}
+
+.provider-profile-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.05rem;
+  border-radius: 0.375rem;
+  color: rgb(var(--mm-ink) / 0.65);
+}
+
+.provider-profile-toggle:hover {
+  background: rgb(var(--mm-ink) / 0.07);
+}
+
+.provider-profile-toggle:focus-visible {
+  outline: 2px solid rgb(var(--mm-accent));
+  outline-offset: 1px;
+}
+
+.provider-profile-detail-grid {
+  display: grid;
+  gap: 1rem 1.5rem;
+  /* Never wider than the record: a 13rem minimum overflows a phone at 200% text. */
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.5);
+}
+
+.provider-usage-refresh {
+  color: rgb(var(--mm-ink) / 0.65);
+}
+
+.source-control-list > li + li {
+  border-top: 1px solid rgb(var(--mm-border) / 0.65);
+}
+
+.source-control-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.65rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+
+@media (hover: hover) {
+  .source-control-row:hover {
+    background: rgb(var(--mm-accent) / 0.08);
+  }
+}
+
+.source-control-row-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+/* The whole row opens the connection, not only its name. */
+.source-control-row-toggle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.source-control-row-toggle:focus-visible {
+  outline: none;
+}
+
+.source-control-row-toggle:focus-visible::after {
+  outline: 2px solid rgb(var(--mm-accent));
+  outline-offset: -2px;
+}
+
+.source-control-row-repositories {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.source-control-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid rgb(var(--mm-border) / 0.8);
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  color: rgb(var(--mm-ink) / 0.85);
+  overflow-wrap: anywhere;
 }
 
-.provider-profile-status-details > summary::-webkit-details-marker {
-  display: none;
+.source-control-chip--action {
+  padding: 0.15rem 0.25rem 0.15rem 0.6rem;
+  font-size: 0.8125rem;
 }
 
-.provider-profile-status-details > summary::before {
-  content: '\25b8';
-  font-size: 0.65rem;
-  line-height: 1;
+.source-control-panel {
+  margin: 0.25rem 0 0.75rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.5);
 }
 
-.provider-profile-status-details[open] > summary::before {
-  content: '\25be';
+.source-control-detail-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1100px) {
+  .source-control-detail-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .source-control-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.375rem;
+  }
+
+  .source-control-row-repositories {
+    padding-left: 1.25rem;
+  }
 }
 
 @media (max-width: 720px) {
@@ -3540,15 +3712,17 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
     max-width: 100%;
   }
 
-  /* Stacked rows clip overflow, so an open Provider Profile actions menu
+  /* Stacked rows clip overflow, so an open profile or secret actions menu
    * expands in place below its trigger across the record width. */
-  .stacked-records .provider-profile-actions .td-workflow-actions-menu {
+  .stacked-records .provider-profile-actions .td-workflow-actions-menu,
+  .stacked-records .managed-secrets-actions .td-workflow-actions-menu {
     width: 100%;
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .stacked-records .provider-profile-actions .td-workflow-actions-popover {
+  .stacked-records .provider-profile-actions .td-workflow-actions-popover,
+  .stacked-records .managed-secrets-actions .td-workflow-actions-popover {
     position: static;
     width: 100%;
     max-width: 100%;
@@ -10506,7 +10680,9 @@ button.workflow-workspace-sidebar-row:active {
 /* Neither the horizontally scrollable wrapper nor the table's inherited
  * `overflow: hidden` may clip an open profile actions menu. */
 .provider-profiles-table-wrap:has(.td-workflow-actions-popover),
-.provider-profiles-table:has(.td-workflow-actions-popover) {
+.provider-profiles-table:has(.td-workflow-actions-popover),
+.managed-secrets-table-wrap:has(.td-workflow-actions-popover),
+.managed-secrets-table:has(.td-workflow-actions-popover) {
   overflow: visible;
 }
 

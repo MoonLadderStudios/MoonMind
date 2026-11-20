@@ -142,8 +142,8 @@ describe('Providers & Secrets phone gutters', () => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     await renderProvidersPage();
     await screen.findByRole('button', { name: 'Copy SecretRef for github-token' });
-    const profileButtons = [...panel.querySelectorAll<HTMLButtonElement>('.provider-profiles table button:not(:disabled)')];
-    const secretButtons = [...panel.querySelectorAll<HTMLButtonElement>('.managed-secrets-actions button:not(:disabled)')];
+    const profileButtons = [...panel.querySelectorAll<HTMLButtonElement>('.provider-profiles table .provider-profile-actions button:not(:disabled)')];
+    const secretButtons = [...panel.querySelectorAll<HTMLButtonElement>('.managed-secrets-table button:not(:disabled)')];
     expect(profileButtons.map((button) => button.getAttribute('aria-label'))).toEqual(['Actions for codex_team_oauth']);
     expect(secretButtons.length).toBeGreaterThanOrEqual(3);
     const surface = theme === 'dark' ? 'rgb(20, 18, 34)' : 'rgb(255, 255, 255)';

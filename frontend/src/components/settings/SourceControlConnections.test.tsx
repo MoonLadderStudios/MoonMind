@@ -121,6 +121,16 @@ function renderSection({
   return { ...utils, queryClient, navigate };
 }
 
+/**
+ * Connections start collapsed. Most scenarios manage the first one, so open
+ * it once the list has loaded; an empty list has nothing to open.
+ */
+async function openFirstConnection() {
+  await waitFor(() => expect(screen.queryByText('Loading connections…')).toBeNull());
+  const row = document.querySelector<HTMLButtonElement>('.source-control-row-toggle');
+  if (row && row.getAttribute('aria-expanded') !== 'true') fireEvent.click(row);
+}
+
 async function fillPatForm(name: string, token = TOKEN) {
   fireEvent.click(await screen.findByRole('button', { name: 'Add token connection' }));
   const form = screen.getByRole('form', { name: 'Add token connection' });
@@ -171,6 +181,7 @@ describe('SourceControlConnections', () => {
       },
     });
     const { queryClient, container } = renderSection();
+    await openFirstConnection();
     expect(await screen.findByText(/No connections yet/)).toBeTruthy();
 
     const form = await fillPatForm('Personal GitHub');
@@ -207,6 +218,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.click(within(form).getByLabelText(/Allow project board updates/));
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
@@ -233,9 +245,10 @@ describe('SourceControlConnections', () => {
         json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }),
     });
     renderSection();
+    await openFirstConnection();
 
-    const nav = await screen.findByRole('navigation', { name: 'Connections' });
-    expect(await within(nav).findByText('Personal GitHub')).toBeTruthy();
+    const nav = await screen.findByRole('list', { name: 'Connections' });
+    expect(await within(nav).findByRole('button', { name: 'Personal GitHub' })).toBeTruthy();
     fireEvent.click(within(nav).getByText('Work GitHub'));
     await screen.findByText('acme/widgets');
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -255,6 +268,7 @@ describe('SourceControlConnections', () => {
         json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }),
     });
     renderSection();
+    await openFirstConnection();
     await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(screen.getByLabelText('Repository (owner/repo)'), { target: { value: 'acme/widgets' } });
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
@@ -287,6 +301,7 @@ describe('SourceControlConnections', () => {
         json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }),
     });
     const { queryClient } = renderSection();
+    await openFirstConnection();
     await screen.findByText('acme/widgets');
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
     await screen.findByText('Read access verified');
@@ -305,6 +320,7 @@ describe('SourceControlConnections', () => {
     });
     const onNotice = vi.fn();
     const { queryClient } = renderSection({ onNotice });
+    await openFirstConnection();
     await screen.findByText('acme/widgets');
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
     await waitFor(() => expect(pending).toHaveLength(1));
@@ -365,8 +381,9 @@ describe('SourceControlConnections', () => {
     });
     const onNotice = vi.fn();
     renderSection({ onNotice });
+    await openFirstConnection();
 
-    const nav = await screen.findByRole('navigation', { name: 'Connections' });
+    const nav = await screen.findByRole('list', { name: 'Connections' });
     await screen.findByText('me/notes');
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Testing/ })).toBeTruthy());
@@ -394,14 +411,15 @@ describe('SourceControlConnections', () => {
       },
     });
     const { queryClient, container } = renderSection();
+    await openFirstConnection();
     const form = await fillPatForm('Personal GitHub');
     fireEvent.click(within(form).getByRole('button', { name: 'Save connection' }));
 
     await screen.findByRole('form', { name: 'Edit connection' });
     expect(calls(fetchMock, 'POST', '/api/v1/repository-connections/pat')).toHaveLength(1);
     expect(calls(fetchMock, 'GET', '/api/v1/repository-connections/personal-github')).toHaveLength(1);
-    const nav = screen.getByRole('navigation', { name: 'Connections' });
-    expect(within(nav).getAllByText('Personal GitHub')).toHaveLength(1);
+    const nav = screen.getByRole('list', { name: 'Connections' });
+    expect(within(nav).getAllByRole('button', { name: 'Personal GitHub' })).toHaveLength(1);
     assertNoTokenExposure(queryClient, container);
   });
 
@@ -417,6 +435,7 @@ describe('SourceControlConnections', () => {
       },
     });
     const { queryClient, container } = renderSection();
+    await openFirstConnection();
     const form = await fillPatForm('Personal GitHub');
     fireEvent.click(within(form).getByRole('button', { name: 'Save connection' }));
 
@@ -439,6 +458,7 @@ describe('SourceControlConnections', () => {
       'POST /api/v1/repository-connections/pat': () => json({ detail: 'auth_required' }, 401),
     });
     const { queryClient, container } = renderSection();
+    await openFirstConnection();
     let form = await fillPatForm('Personal GitHub');
     fireEvent.click(within(form).getByRole('button', { name: 'Save connection' }));
     expect(await screen.findByText(/session ended/)).toBeTruthy();
@@ -460,6 +480,7 @@ describe('SourceControlConnections', () => {
       },
     });
     const { queryClient, container } = renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Renamed' } });
     fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
@@ -474,8 +495,8 @@ describe('SourceControlConnections', () => {
     await waitFor(() =>
       expect(calls(fetchMock, 'GET', '/api/v1/repository-connections').length).toBeGreaterThan(1),
     );
-    const nav = screen.getByRole('navigation', { name: 'Connections' });
-    expect(within(nav).getByText('Personal GitHub')).toBeTruthy();
+    const nav = screen.getByRole('list', { name: 'Connections' });
+    expect(within(nav).getByRole('button', { name: 'Personal GitHub' })).toBeTruthy();
     assertNoTokenExposure(queryClient, container);
   });
 
@@ -489,6 +510,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
@@ -519,6 +541,7 @@ describe('SourceControlConnections', () => {
         json({ detail: 'GitHub is unavailable; existing assignments are unchanged.' }, 503),
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Assign repository' });
     fireEvent.change(within(form).getByLabelText(/Assign repository/), { target: { value: 'acme/gadgets' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Assign' }));
@@ -538,10 +561,11 @@ describe('SourceControlConnections', () => {
         }),
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Renamed' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Connections' })).getByText('Work GitHub'));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Connections' })).getByText('Work GitHub'));
     // The unconfirmed edit is still a draft, so switching asks before leaving it.
     fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
     rejectSave(new TypeError('network connection lost'));
@@ -574,6 +598,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const edit = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.click(within(edit).getByLabelText(/Allow publishing/));
     fireEvent.click(within(edit).getByRole('button', { name: 'Save changes' }));
@@ -598,6 +623,7 @@ describe('SourceControlConnections', () => {
     const state = { items: [connection({ allowedOperations: PUBLISH_OPERATIONS, assignments })] };
     stubApi(state);
     const { queryClient } = renderSection();
+    await openFirstConnection();
     await screen.findByRole('form', { name: 'Assign repository' });
     expect(screen.getAllByText('read and publish')).toHaveLength(2);
     act(() => {
@@ -625,6 +651,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const edit = await screen.findByRole('form', { name: 'Edit connection' });
     expect(screen.getByText('read and publish')).toBeTruthy();
     const toggle = within(edit).getByLabelText(/Allow publishing/) as HTMLInputElement;
@@ -647,6 +674,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     expect((within(form).getByLabelText(/Allow publishing/) as HTMLInputElement).checked).toBe(false);
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Renamed' } });
@@ -670,6 +698,7 @@ describe('SourceControlConnections', () => {
       });
       const onNotice = vi.fn();
       const { queryClient, container } = renderSection({ onNotice });
+      await openFirstConnection();
       const form = await screen.findByRole('form', { name: 'Edit connection' });
       fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'My edit' } });
       fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
@@ -699,6 +728,7 @@ describe('SourceControlConnections', () => {
       'PATCH /api/v1/repository-connections/personal-github': () => { throw new TypeError('lost acknowledgment'); },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'First edit' } });
     fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
@@ -719,6 +749,7 @@ describe('SourceControlConnections', () => {
       'PATCH /api/v1/repository-connections/personal-github': () => { throw new TypeError('lost acknowledgment'); },
     });
     const { queryClient } = renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'My edit' } });
     fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
@@ -741,6 +772,7 @@ describe('SourceControlConnections', () => {
       'PATCH /api/v1/repository-connections/personal-github': () => new Promise((resolve) => { finish = resolve; }),
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'My edit' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
@@ -774,6 +806,7 @@ describe('SourceControlConnections', () => {
       },
     });
     const { queryClient } = renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: kind === 'edit' ? 'Edit connection' : 'Assign repository' });
     fireEvent.change(within(form).getByLabelText(kind === 'edit' ? 'Connection name' : /Assign repository/), {
       target: { value: kind === 'edit' ? 'Earlier saved name' : 'acme/widgets' },
@@ -797,6 +830,7 @@ describe('SourceControlConnections', () => {
       'PATCH /api/v1/repository-connections/personal-github': () => { throw new TypeError('lost acknowledgment'); },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
@@ -814,6 +848,7 @@ describe('SourceControlConnections', () => {
       'PATCH /api/v1/repository-connections/personal-github': () => { throw new TypeError('lost acknowledgment'); },
     });
     renderSection();
+    await openFirstConnection();
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText(/Replace token/), { target: { value: TOKEN } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
@@ -832,6 +867,7 @@ describe('SourceControlConnections', () => {
     async (kind) => {
       stubApi({ items: [connection()] });
       renderSection();
+      await openFirstConnection();
       await screen.findByRole('form', { name: 'Edit connection' });
       let form: HTMLElement;
       let field: HTMLElement;
@@ -875,6 +911,7 @@ describe('SourceControlConnections', () => {
   it.each(['pat', 'app', 'edit', 'assignment'] as const)('clears only the canceled %s draft', async (kind) => {
     stubApi({ items: [connection()] });
     renderSection();
+    await openFirstConnection();
     await screen.findByRole('form', { name: 'Edit connection' });
     let form: HTMLElement;
     let cancel: string;
@@ -904,7 +941,8 @@ describe('SourceControlConnections', () => {
   it('asks before another connection replaces the selected connection draft, and discards only it', async () => {
     stubApi({ items: [connection(), connection({ id: 'work-github', displayName: 'Work GitHub' })] });
     renderSection();
-    const nav = await screen.findByRole('navigation', { name: 'Connections' });
+    await openFirstConnection();
+    const nav = await screen.findByRole('list', { name: 'Connections' });
     const form = await screen.findByRole('form', { name: 'Edit connection' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Unsaved name' } });
 
@@ -930,6 +968,7 @@ describe('SourceControlConnections', () => {
   it('asks before Add token connection replaces an unsaved assignment draft', async () => {
     stubApi({ items: [connection()] });
     renderSection();
+    await openFirstConnection();
     const assign = await screen.findByRole('form', { name: 'Assign repository' });
     fireEvent.change(within(assign).getByLabelText(/Assign repository/), { target: { value: 'acme/widgets' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add token connection' }));
@@ -937,6 +976,30 @@ describe('SourceControlConnections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
     expect((within(assign).getByLabelText(/Assign repository/) as HTMLInputElement).value).toBe('acme/widgets');
     expect(screen.queryByRole('form', { name: 'Add token connection' })).toBeNull();
+  });
+
+  it('keeps an open connection and its draft when a background refresh fails', async () => {
+    let failing = false;
+    stubApi({ items: [connection()] }, {
+      'GET /api/v1/repository-connections': () =>
+        failing ? json({ detail: 'unavailable' }, 503) : json({ items: [connection()] }),
+    });
+    const { queryClient } = renderSection();
+    await openFirstConnection();
+    const form = await screen.findByRole('form', { name: 'Edit connection' });
+    const name = within(form).getByLabelText('Connection name') as HTMLInputElement;
+    fireEvent.change(name, { target: { value: 'Draft name' } });
+
+    failing = true;
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: SOURCE_CONTROL_QUERY_KEY });
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Failed to load connections');
+    // The cached rows stay, so the open editor and its unsaved draft survive.
+    expect(screen.getByRole('button', { name: 'Personal GitHub' })).toBeTruthy();
+    expect(name.isConnected).toBe(true);
+    expect(name.value).toBe('Draft name');
   });
 
   it('disables a connection reversibly and keeps its record', async () => {
@@ -954,6 +1017,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection({ onNotice });
+    await openFirstConnection();
     fireEvent.click(await screen.findByRole('button', { name: 'Disable connection' }));
     const enable = await screen.findByRole('button', { name: 'Enable connection' });
     expect(screen.getByText(/Disabled: workflows cannot use it/)).toBeTruthy();
@@ -981,6 +1045,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection();
+    await openFirstConnection();
     const edit = await screen.findByRole('form', { name: 'Edit connection' });
     const assign = screen.getByRole('form', { name: 'Assign repository' });
     fireEvent.change(within(assign).getByLabelText(/Assign repository/), { target: { value: 'acme/widgets' } });
@@ -1000,6 +1065,7 @@ describe('SourceControlConnections', () => {
     const state = { items: [] as ConnectionFixture[] };
     const fetchMock = stubApi(state);
     renderSection();
+    await openFirstConnection();
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub App' }));
     const form = screen.getByRole('form', { name: 'Connect GitHub App' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Acme App' } });
@@ -1028,6 +1094,7 @@ describe('SourceControlConnections', () => {
       expect(unload.defaultPrevented).toBe(false);
     });
     renderSection({ navigate });
+    await openFirstConnection();
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub App' }));
     const form = screen.getByRole('form', { name: 'Connect GitHub App' });
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Acme App' } });
@@ -1063,6 +1130,7 @@ describe('SourceControlConnections', () => {
       },
     });
     renderSection({ initialEntry: '/settings/providers-secrets?installation_id=42&setup_action=install&state=s1' });
+    await openFirstConnection();
 
     expect(await screen.findByText(/Account acme · Installation 42/)).toBeTruthy();
     const callback = calls(fetchMock, 'POST', '/api/v1/repository-connections/github-app/callback');

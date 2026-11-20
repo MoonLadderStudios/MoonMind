@@ -21,27 +21,40 @@ function renderUsage(
   usage: Projection | null | undefined,
   options: {
     oauth?: boolean;
-    variant?: 'compact' | 'full';
+    variant?: 'row' | 'full';
     refresh?: AccountUsageRefreshView;
     onRefresh?: () => void;
     reconnect?: { label: string; onSelect: () => void; disabledReason?: string | null };
   } = {},
 ) {
+  const props = {
+    subject: 'codex-oauth',
+    usage,
+    oauth: options.oauth ?? true,
+    refresh: options.refresh,
+    onRefresh: options.onRefresh ?? (() => undefined),
+    reconnect: options.reconnect ?? null,
+  };
+  if (options.variant === 'full') return render(<ProviderProfileAccountUsage {...props} variant="full" />);
+  // A saved-profile row: the reading in the row, everything else in its details.
   return render(
-    <ProviderProfileAccountUsage
-      subject="codex-oauth"
-      usage={usage}
-      oauth={options.oauth ?? true}
-      variant={options.variant ?? 'compact'}
-      refresh={options.refresh}
-      onRefresh={options.onRefresh ?? (() => undefined)}
-      reconnect={options.reconnect ?? null}
-    />,
+    <div data-testid="usage-row">
+      <ProviderProfileAccountUsage {...props} variant="summary" />
+      <ProviderProfileAccountUsage {...props} variant="details" />
+    </div>,
   );
 }
 
+/** The editor block, or a saved-profile row's summary and details together. */
 function usageRegion(): HTMLElement {
-  return screen.getByRole('group', { name: 'Account and usage for codex-oauth' });
+  return (
+    screen.queryByTestId('usage-row') ??
+    screen.getByRole('group', { name: 'Account and usage for codex-oauth' })
+  );
+}
+
+function usageDetails(): HTMLElement {
+  return screen.getByRole('group', { name: 'Account and usage details for codex-oauth' });
 }
 
 function text(element: HTMLElement): string {
@@ -125,7 +138,13 @@ describe('ProviderProfileAccountUsage', () => {
     expect(refresh.getAttribute('type')).toBe('button');
     fireEvent.click(refresh);
     expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(within(region).getByText('Usage details').tagName).toBe('SUMMARY');
+    // The row reading carries the allowance; the account sits in its details.
+    expect(text(usageDetails())).toContain('personal@example.com');
+    // A current reading needs no age in the row.
+    expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).not.toContain('Updated');
+    expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).not.toContain(
+      'personal@example.com',
+    );
   });
 
   it('keeps short-window and model-specific weekly limits in separate groups with reported labels', () => {
@@ -162,7 +181,7 @@ describe('ProviderProfileAccountUsage', () => {
 
     const region = usageRegion();
     expect(within(region).getByText('36% remaining')).toBeTruthy();
-    const details = within(region).getByText('Usage details').closest('details')!;
+    const details = usageDetails();
     const modelGroup = within(details).getByRole('list', { name: 'Model-specific weekly limits' });
     expect(text(modelGroup)).toContain('Reported Model X (beta)');
     expect(text(modelGroup)).toContain('80% remaining');
@@ -238,6 +257,19 @@ describe('ProviderProfileAccountUsage', () => {
     expect(text(region)).toContain('Updated 42 minutes ago');
     expect(text(region)).toContain('Last known');
     expect(text(region)).toContain('Usage temporarily unavailable: the provider did not respond in time.');
+    // The collapsed row itself marks the reading as outdated.
+    expect(text(screen.getByRole('group', { name: 'Account and usage for codex-oauth' }))).toContain(
+      'Updated 42 minutes ago · Last known',
+    );
+  });
+
+  it('marks a plainly stale weekly reading as last known in the row', () => {
+    vi.setSystemTime(Date.parse('2026-11-18T20:40:00Z'));
+    renderUsage(projection({ status: 'stale' }));
+
+    const row = screen.getByRole('group', { name: 'Account and usage for codex-oauth' });
+    expect(within(row).getByText('36% remaining')).toBeTruthy();
+    expect(text(row)).toContain('Last known');
   });
 
   it('gives update or reconnect guidance when idle sign-in renewal is unsupported', () => {
@@ -407,7 +439,7 @@ describe('ProviderProfileAccountUsage', () => {
           refresh: { last_success_at: null, last_attempt_at: null },
         })}
         oauth
-        variant="compact"
+        variant="summary"
         refresh={undefined}
         onRefresh={() => undefined}
         reconnect={null}
@@ -439,7 +471,7 @@ describe('ProviderProfileAccountUsage', () => {
 
     const emailText = screen.getByText(email);
     expect(emailText.className).toContain('[overflow-wrap:anywhere]');
-    expect(usageRegion().className).toContain('min-w-0');
+    expect(usageDetails().className).toContain('min-w-0');
   });
 
   it('renders nothing when the backend did not project account usage', () => {
