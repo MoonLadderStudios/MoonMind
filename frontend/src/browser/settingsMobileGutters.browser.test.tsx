@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { ProvidersSecretsSettingsPage } from '../entrypoints/settings';
+import type { SettingsCatalogResponse } from '../components/settings/GeneratedSettingsSection';
 import { renderWithClient, screen, within } from '../utils/test-utils';
 import { contrast } from './colorContrast';
 import '../styles/dashboard.css';
@@ -24,6 +25,11 @@ const payload: BootPayload = {
   initialData: {
   },
 } as unknown as BootPayload;
+
+const settingsCatalog: SettingsCatalogResponse = {
+  section: 'user-workspace',
+  categories: {},
+};
 
 const savedProfile = {
   profile_id: 'codex_team_oauth',
@@ -87,6 +93,9 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.startsWith('/api/v1/settings/catalog')) {
+        return jsonResponse(settingsCatalog);
+      }
       if (url.startsWith('/api/v1/provider-profiles')) {
         return jsonResponse([savedProfile]);
       }
@@ -159,11 +168,16 @@ describe('Providers & Secrets phone gutters', () => {
     const menuItems = screen.getAllByRole('menuitem');
     expect(menuItems.map((item) => item.getAttribute('aria-label'))).toContain('Delete');
     expectReadable(menuItems);
+    // The menu assigns its initial keyboard target in a React effect. DOM
+    // presence alone does not mean Escape will be delivered to that target.
+    await vi.waitFor(() => expect(document.activeElement).toBe(menuItems[0]));
     await userEvent.keyboard('{Escape}');
     expect(document.activeElement).toBe(profileButtons[0]);
     for (const button of [profileButtons[0]!, secretButtons[0]!]) {
+      // Establish keyboard modality without assuming native Tab order:
+      // macOS WebKit can omit buttons from sequential keyboard navigation.
+      await userEvent.keyboard('{Tab}');
       button.focus();
-      await userEvent.keyboard('{Tab}{Shift>}{Tab}{/Shift}');
       await userEvent.hover(button);
       expect(document.activeElement).toBe(button);
       expect(getComputedStyle(button).outlineStyle).toBe('solid');
