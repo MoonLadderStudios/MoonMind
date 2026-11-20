@@ -1,7 +1,8 @@
-"""Optional installed-Docker qualification of the selected read-only seed reader."""
+"""Host-runner Docker qualification of the selected read-only seed reader."""
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import uuid
@@ -15,19 +16,15 @@ from moonmind.omnigent.codex_file_seeds import (
 from moonmind.omnigent.credential_materializers import LocalDockerCommandBackend
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
-IMAGE = "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
+IMAGE = os.environ.get("CANDIDATE_IMAGE") or "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
 
 
 async def test_actual_docker_reader_captures_only_selected_nonsecret_files():
-    if shutil.which("docker") is None:
-        pytest.skip("installed Docker unavailable")
+    assert shutil.which("docker"), "host-runner Docker is required"
     available = subprocess.run(
         ["docker", "image", "inspect", IMAGE], capture_output=True, timeout=10
     )
-    if available.returncode:
-        pytest.skip(
-            "installed MoonMind host image unavailable; no image pull attempted"
-        )
+    assert available.returncode == 0, "the host-runner must load its candidate reader image"
     backend = LocalDockerCommandBackend()
     prefix = "moonmind-test-codex-seeds-" + uuid.uuid4().hex
     volume = prefix + "-volume"

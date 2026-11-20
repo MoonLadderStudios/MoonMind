@@ -531,3 +531,13 @@ def test_hermetic_physical_groups_use_exact_marker_universe(monkeypatch):
     errors, _ = verify_physical_hermetic_partitions(nodes)
     assert any("multiple" in error for error in errors)
     assert any("missing" in error for error in errors)
+
+
+def test_seed_reader_transport_has_existing_exact_host_owner():
+    node = CollectedNode(
+        nodeid='tests/integration/omnigent/test_codex_seed_reader_transport.py::test_actual_docker_reader_captures_only_selected_nonsecret_files',
+        path='tests/integration/omnigent/test_codex_seed_reader_transport.py',
+        markers=frozenset({'integration', 'asyncio'}),
+    )
+    assert owners(node) == {'omnigent-exact-artifact'}
+    assert verify([node]) == []

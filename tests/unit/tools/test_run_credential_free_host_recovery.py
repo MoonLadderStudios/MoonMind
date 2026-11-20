@@ -813,6 +813,13 @@ def test_main_checks_exact_server_then_probes_before_recovery(
     monkeypatch.setattr(driver, "_command", command)
     monkeypatch.setattr(driver, "run_test", run_test)
     monkeypatch.setattr(driver, "run_journey", run_journey)
+    def run_seed_reader(args, root):
+        assert observed[-1] == "journey"
+        assert "CANDIDATE_IMAGE=" + HOST_REF in args
+        assert (root / "driver" / driver.SEED_READER_TEST_FILE).is_file()
+        observed.append("seed-reader")
+        return {"status": "passed"}
+    monkeypatch.setattr(driver, "run_seed_reader", run_seed_reader)
     monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
     assert driver.main(
         [
@@ -833,7 +840,7 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         ]
     ) == (0 if proxy_image_matches else 1)
     assert observed == ["server-image", "proxy-image"] + (
-        ["readiness", "temporal", "recovery", "journey"] if proxy_image_matches else []
+        ["readiness", "temporal", "recovery", "journey", "seed-reader"] if proxy_image_matches else []
     )
     if proxy_image_matches:
         evidence = tmp_path / "evidence"
@@ -1348,3 +1355,33 @@ def test_credential_free_session_accepts_idle_snapshot_without_task_error():
     _assert_credential_free_session_healthy(
         {"status": "idle", "last_task_error": None, "pending_inputs": [], "items": []}
     )
+
+
+def test_seed_reader_uses_qualified_host_and_candidate_production_imports(tmp_path):
+    command = driver.seed_reader_command(
+        image=IMAGE_ID, network='moonmind-test-fixture_test',
+        name='moonmind-test-fixture-driver', work=tmp_path,
+        dependencies=tmp_path/'deps', source_commit=SHA,
+        host_image_ref=HOST_REF, server_image_digest=SERVER_DIGEST,
+        token='moonmind-test-' + 'e'*32, project='moonmind-test-fixture')
+    assert 'CANDIDATE_IMAGE=' + HOST_REF in command
+    assert 'PYTHONPATH=/app:/test-driver' in command
+    assert not any('dst=/app' in arg for arg in command)
+    assert f'/test-driver/{driver.SEED_READER_TEST_FILE}::{driver.SEED_READER_TEST_NAME}' in command
+    assert f'--junitxml={tmp_path / driver.SEED_READER_JUNIT}' in command
+
+
+@pytest.mark.parametrize('outcome', ['passed', 'skipped', 'empty', 'failed'])
+def test_seed_reader_requires_current_exact_passing_test(tmp_path, monkeypatch, outcome):
+    def run(*args, **kwargs):
+        cases = '' if outcome == 'empty' else (
+            f'<testcase name="{driver.SEED_READER_TEST_NAME}">' +
+            ('<skipped/>' if outcome == 'skipped' else '<failure/>' if outcome == 'failed' else '') + '</testcase>')
+        (tmp_path / driver.SEED_READER_JUNIT).write_text('<testsuites><testsuite>' + cases + '</testsuite></testsuites>')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    if outcome == 'passed':
+        assert driver.run_seed_reader(['driver'], tmp_path) == {'status': 'passed'}
+    else:
+        with pytest.raises(driver.RecoveryError):
+            driver.run_seed_reader(['driver'], tmp_path)

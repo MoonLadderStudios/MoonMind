@@ -6706,3 +6706,39 @@ async def test_workspace_launch_block_preserves_plan_failure_policy(
         0 if dependent or (boundary_enabled and failure_mode == "FAIL_FAST") else 1
     )
     assert parent.get_step_ledger()["steps"][0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('boundary,seeded', [
+    ('before_execution', False), ('after_execution', True),
+    ('after_gate', True), ('before_publication', True),
+])
+async def test_seeded_step_forwards_only_post_execution_checkpoint_authority(monkeypatch, boundary, seeded):
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, 'patched', lambda _marker: True)
+    owner = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    owner._initialize_step_ledger(ordered_nodes=[{'id': 'implement', 'inputs': {}}],
+        dependency_map={'implement': []}, updated_at=now)
+    owner._mark_step_running('implement', updated_at=now)
+    receipts = {'primary-model': {'artifactRef': 'artifact:seed'}}
+    source = {'planArtifactRef': 'artifact:admitted-plan', 'planDigest': 'sha256:admitted'}
+    owner._step_workspace_capture_inputs['implement'] = {
+        'codexFileSeedReceipts': receipts, 'codexFileSeedSource': source}
+    monkeypatch.setattr(owner, '_reusable_step_checkpoint_workspace', lambda _step: {
+        'workspace': {'kind': 'git_patch', 'baseCommit': 'abc123',
+            'patchRef': 'artifact:patch', 'createdAt': now.isoformat()}, 'diagnosticRefs': []})
+    calls = []
+
+    async def create(**kwargs):
+        calls.append(kwargs)
+        return {'checkpointRef': 'artifact:checkpoint-' + boundary}
+
+    monkeypatch.setattr(owner, '_create_step_checkpoint_via_activity', create)
+    result = await owner._record_canonical_step_checkpoint('implement', boundary=boundary, updated_at=now)
+    assert result == 'artifact:checkpoint-' + boundary
+    assert calls[0]['codex_file_seed_receipts'] == (receipts if seeded else None)
+    assert calls[0]['codex_file_seed_source'] == (source if seeded else None)
+    if boundary == 'after_gate':
+        owner._mark_step_running('implement', updated_at=now)
+        assert owner._previous_step_checkpoint_refs['implement'] == result

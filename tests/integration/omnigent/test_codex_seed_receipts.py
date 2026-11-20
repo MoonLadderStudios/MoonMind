@@ -141,7 +141,7 @@ async def test_new_admission_epoch_reuses_seed_without_checkpoint(native_journey
 
 
 @pytest.mark.parametrize('native_journey', [SELECTION], indirect=True)
-@pytest.mark.parametrize("fallback_writer", [False, True])
+@pytest.mark.parametrize("fallback_writer", [False, True, "after_gate", "before_publication"])
 async def test_cold_checkpoint_restores_seed_after_original_workspace_and_seed_change(native_journey, monkeypatch, fallback_writer):
     import hashlib
     import shutil
@@ -179,6 +179,8 @@ async def test_cold_checkpoint_restores_seed_after_original_workspace_and_seed_c
         payload = {key: checkpoint[key] for key in (
             'boundary', 'taskInputSnapshotRef', 'workspace', 'createdAt',
             'planRef', 'planDigest', 'codexFileSeedReceipts')}
+        if isinstance(fallback_writer, str):
+            payload['boundary'] = fallback_writer
         payload.update(identity=checkpoint['source'],
             codexFileSeedSource=first.metadata['codexFileSeedSource'],
             idempotencyKey='fallback-cold-seed')
@@ -228,15 +230,29 @@ async def test_cold_checkpoint_restores_seed_after_original_workspace_and_seed_c
 
 
 @pytest.mark.parametrize('native_journey', [SELECTION], indirect=True)
-async def test_unsafe_seed_refuses_before_host_or_session(native_journey):
+@pytest.mark.parametrize("secret_text", [
+    "api_key=synthetic-secret", "OPENAI_API_KEY=synthetic-secret",
+    '{"refresh_token": "synthetic-secret"}',
+], ids=["generic-key", "provider-key", "refresh-credential"])
+async def test_unsafe_seed_refuses_before_host_or_session(native_journey, secret_text):
     from moonmind.omnigent.codex_file_seeds import CodexFileSeedUnavailable
     journey = native_journey
-    journey.docker.seed_text = 'api_key=synthetic-secret'
+    journey.docker.seed_text = secret_text
     with pytest.raises(CodexFileSeedUnavailable, match='unsafe'):
         await journey.realizer.execute(journey.request, journey.plan)
     assert journey.docker.create_count == 0
     assert not journey.server.create_payloads
     assert 'journey_oauth' in journey.docker.volumes
+    binding = await journey.services.runtime_binding_store.get(stable_binding_id(
+        execution_plan_ref=journey.plan.planRef, idempotency_key=journey.request.idempotency_key))
+    assert not any(key.startswith('codexFileSeeds:') for key in binding.phaseResults)
+    from sqlalchemy import select
+    from api_service.db.models import TemporalArtifact
+    async with journey.session_factory() as session:
+        rows = (await session.execute(select(TemporalArtifact).where(
+            TemporalArtifact.metadata_json['name'].as_string() == 'codex-file-seeds.json'
+        ))).scalars().all()
+        assert not rows
 
 
 @pytest.mark.parametrize('native_journey', [SELECTION], indirect=True)

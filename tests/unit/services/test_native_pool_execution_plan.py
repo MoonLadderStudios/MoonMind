@@ -335,14 +335,17 @@ async def test_retained_custom_alias_does_not_require_current_profile_lookup(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recorded_resolution", [None, resolution()])
+@pytest.mark.parametrize("boundary", ["after_execution", "after_gate", "before_publication"])
 async def test_account_rotation_does_not_reuse_previous_accounts_tier_policy(
-    monkeypatch, recorded_resolution
+    monkeypatch, recorded_resolution, boundary
 ):
     from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
     from tests.unit.workflows.executions.test_model_selection_4636 import profile
 
     envelope = plan(tier_resolution=recorded_resolution)
     source = checkpoint(envelope)
+    source = source.model_copy(update={"boundary": boundary,
+        "checkpoint_id": source.checkpoint_id.rsplit(":", 1)[0] + ":" + boundary})
     artifacts = SimpleNamespace(
         read=AsyncMock(
             side_effect=[

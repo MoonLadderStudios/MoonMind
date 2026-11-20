@@ -1435,7 +1435,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             raise OmnigentArtifactError("Codex seed checkpoint exceeds its bound")
         checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
         source = checkpoint.source
-        if (checkpoint.boundary != "after_execution"
+        if (checkpoint.boundary not in {"after_execution", "after_gate", "before_publication"}
             or (source.workflow_id, source.run_id, source.logical_step_id)
             != (identity.workflow_id, identity.run_id, identity.logical_step_id)
             or source.execution_ordinal >= identity.execution_ordinal

@@ -211,7 +211,7 @@ async def test_cancel_drains_daemon_reader_before_return():
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert calls[-1][:3] == ["docker", "rm", "--force"]
 
 
@@ -300,7 +300,7 @@ async def test_repeated_cancel_cannot_interrupt_reader_cleanup():
     still_draining = not task.done()
     finish.set()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert still_draining
 
 
@@ -318,3 +318,49 @@ def test_quoted_credentials_in_markdown_cannot_enter_or_restore_receipt(content)
             {'path': 'AGENTS.md', 'present': True, 'content': content},
         ]}, ['AGENTS.md'])
     assert 'synthetic-unrecognized-format' not in str(error.value)
+
+
+@pytest.mark.parametrize('path,content', [
+    ('AGENTS.md', 'OPENAI_API_KEY=opaque-value'),
+    ('AGENTS.md', 'export OPENAI_API_KEY="opaque-value"'),
+    ('AGENTS.md', '{"refresh_token": "opaque-value"}'),
+    ('AGENTS.md', r'{"refresh\u005ftoken": "opaque-value"}'),
+    ('AGENTS.md', '{"settings": {"clientSecret": "opaque-value"}}'),
+    ('AGENTS.md', 'Notes: xoxb-synthetic-token-body'),
+    ('AGENTS.md', 'gho_' + 'a' * 24),
+    ('rules/options.json', '{"OPENAI_API_KEY": "opaque-value"}'),
+    ('rules/options.json', '{"refresh_token": "opaque-value"}'),
+    ('rules/options.json', '{"settings": {"clientSecret": "opaque-value"}}'),
+    ('rules/options.json', '{"note": "xoxb-synthetic-token-body"}'),
+    ('rules/options.toml', 'OPENAI_API_KEY="opaque-value"'),
+    ('rules/options.toml', 'refresh_token="opaque-value"'),
+    ('rules/options.toml', '[settings]\nclientSecret="opaque-value"'),
+    ('rules/options.toml', 'note="xoxb-synthetic-token-body"'),
+])
+def test_known_credential_names_and_prefixes_refuse_before_receipt(content, path):
+    from moonmind.omnigent.codex_file_seeds import validate_seed_capture
+    with pytest.raises(CodexFileSeedUnavailable) as error:
+        validate_seed_capture({'version': 1, 'files': [
+            {'path': path, 'present': True, 'content': content},
+        ]}, [path])
+    assert 'opaque-value' not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cleanup_ok', [True, False])
+async def test_timeout_preserves_retry_type_only_after_confirmed_cleanup(cleanup_ok):
+    calls = []
+    class TimeoutBackend:
+        async def run(self, argv, **kwargs):
+            calls.append(argv[:3])
+            if argv[:3] == ['docker', 'volume', 'inspect']:
+                return 0, b'selected', b''
+            if argv[:3] == ['docker', 'rm', '--force']:
+                return (0 if cleanup_ok else 1), b'', b'private cleanup diagnostic'
+            raise TimeoutError('private transport diagnostic')
+    expected = TimeoutError if cleanup_ok else RuntimeError
+    with pytest.raises(expected) as error:
+        await capture_codex_file_seeds(TimeoutBackend(), volume_ref='selected',
+            writer_image_ref='trusted-image', paths=['AGENTS.md'])
+    assert 'private' not in str(error.value)
+    assert calls[-1] == ['docker', 'rm', '--force']

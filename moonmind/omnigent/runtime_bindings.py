@@ -951,7 +951,7 @@ async def codex_seed_predecessor(*, request, plan, binding, store, artifacts):
     checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
     identity = checkpoint.source
     if (
-        checkpoint.boundary != "after_execution"
+        checkpoint.boundary not in {"after_execution", "after_gate", "before_publication"}
         or (identity.workflow_id, identity.run_id, identity.logical_step_id)
         != (step.workflow_id, step.run_id, step.logical_step_id)
         or identity.execution_ordinal >= step.execution_ordinal

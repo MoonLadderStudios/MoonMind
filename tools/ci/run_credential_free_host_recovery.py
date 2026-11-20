@@ -6,10 +6,11 @@ are mounted into the already built application image; its production imports
 remain image-owned. The upstream server, host and their observed identities
 are supplied by the job's pinned-source builds, never inferred from latest.
 
-Two rows run on one isolated stack: the same-session host recovery row, then
+Three checks run on one isolated stack: the same-session host recovery row, then
 the interrupted-step journey (MoonLadderStudios/MoonMind#4627), which replaces
 a real host mid-step under a real Temporal server and requires the step's
-successor to restore the saved workspace on a new host.
+successor to restore the saved workspace on a new host, followed by bounded
+read-only enrollment seed capture using the same qualified host image.
 """
 
 from __future__ import annotations
@@ -37,6 +38,9 @@ JOURNEY_TEST_FILE = "tests/integration/reliability/test_interrupted_step_replace
 JOURNEY_RECEIPT = "interrupted-step-exact-docker.json"
 JOURNEY_JUNIT = "interrupted-step-junit.xml"
 JOURNEY_STEPS = ("prepare", "analyze", "implement")
+SEED_READER_TEST_FILE = "tests/integration/omnigent/test_codex_seed_reader_transport.py"
+SEED_READER_TEST_NAME = "test_actual_docker_reader_captures_only_selected_nonsecret_files"
+SEED_READER_JUNIT = "codex-seed-reader-junit.xml"
 #: The canonical Compose PostgreSQL service's test-only superuser.
 DATABASE_URL = "postgresql://postgres:moonmind-test-db@postgres:5432/moonmind"
 TEMPORAL_ADDRESS = "temporal:7233"
@@ -457,6 +461,22 @@ def run_journey(command, root, **identity):
     return validate_journey_evidence(root, **identity)
 
 
+def run_seed_reader(command, root):
+    """Require this invocation's exact Docker test, not a skip or stale report."""
+    (root / SEED_READER_JUNIT).unlink(missing_ok=True)
+    result = subprocess.run(command, check=False, timeout=300)
+    _require(result.returncode == 0, "Codex seed reader pytest failed")
+    try:
+        cases = ET.parse(root / SEED_READER_JUNIT).getroot().findall(".//testcase")
+    except (OSError, ET.ParseError) as exc:
+        raise RecoveryError("Codex seed reader evidence is missing or malformed") from exc
+    _require(len(cases) == 1 and cases[0].get("name") == SEED_READER_TEST_NAME,
+             "Codex seed reader did not execute its exact test")
+    _require(all(cases[0].find(kind) is None for kind in ("skipped", "failure", "error")),
+             "Codex seed reader did not pass")
+    return {"status": "passed"}
+
+
 def _annotation(text):
     """Escape a GitHub Actions workflow-command message."""
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -715,6 +735,18 @@ def journey_command(**kwargs):
     )
 
 
+def seed_reader_command(**kwargs):
+    """Run production reader imports from the candidate with the qualified host."""
+    return test_command(
+        **kwargs,
+        target=f"/test-driver/{SEED_READER_TEST_FILE}::{SEED_READER_TEST_NAME}",
+        junit=SEED_READER_JUNIT,
+        extra_environment={"PYTHONPATH": "/app:/test-driver",
+                           "CANDIDATE_IMAGE": kwargs["host_image_ref"]},
+        pytest_options=("--rootdir=/test-driver", "--noconftest", "-s"),
+    )
+
+
 def _cleanup(compose, network, driver_name):
     _command(["docker", "rm", "-f", driver_name], check=False)
     # Restrict orphan cleanup to the unique internal test network. These can
@@ -917,6 +949,13 @@ def main(argv=None):
             host_image_ref=args.host_image,
             host_image_id=images["host"]["id"],
         )
+        seed_reader = run_seed_reader(seed_reader_command(
+            image=app["Id"], network=network, name=driver_name, work=work,
+            dependencies=args.dependencies.resolve(), source_commit=source,
+            host_image_ref=args.host_image,
+            server_image_digest=images["server"]["ref"].split("@", 1)[1],
+            token=token, project=project,
+        ), work)
         (output / "credential-recovery-result.json").write_text(
             json.dumps(
                 {
@@ -924,6 +963,7 @@ def main(argv=None):
                     "status": "passed",
                     "recovery": row,
                     "interruptedStep": journey,
+                    "codexSeedReader": seed_reader,
                 },
                 indent=2,
             )
@@ -993,7 +1033,7 @@ def main(argv=None):
         for name, receipt in ((RECEIPT, row), (JOURNEY_RECEIPT, journey)):
             if receipt is not None:
                 (output / name).write_text(json.dumps(receipt, indent=2) + "\n")
-        for name in (JUNIT, JOURNEY_JUNIT):
+        for name in (JUNIT, JOURNEY_JUNIT, SEED_READER_JUNIT):
             _project_junit(work / name, output / name)
         shutil.rmtree(work, ignore_errors=True)
 

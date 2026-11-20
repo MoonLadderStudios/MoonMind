@@ -17578,7 +17578,7 @@ class TemporalCheckpointActivities:
                 "checkpoint source identity does not match the Activity execution"
             )
         if model.codex_file_seed_receipts or model.codex_file_seed_source:
-            if self._artifact_service is None or model.boundary != "after_execution":
+            if self._artifact_service is None or model.boundary not in {"after_execution", "after_gate", "before_publication"}:
                 raise TemporalActivityRuntimeError(
                     "Codex seed checkpoints require their durable execution owner"
                 )

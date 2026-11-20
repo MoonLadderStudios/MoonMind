@@ -1416,3 +1416,10 @@ def test_hermetic_duration_data_selects_its_real_execution_and_collection_owners
     result = _outputs(["tests/.hermetic-test-durations.json"])
     assert result["integration_hermetic"] == "true"
     assert result["ownership_full"] == "true"
+
+
+def test_seed_reader_only_change_selects_actual_host_recovery():
+    path = 'tests/integration/omnigent/test_codex_seed_reader_transport.py'
+    assert is_exact_artifact_owned(path)
+    selection = select_suites([path], event_name='pull_request')
+    assert selection.host_recovery

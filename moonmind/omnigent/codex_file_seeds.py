@@ -197,10 +197,11 @@ async def _stop_reader(backend, name):
 
 def _scan_seed_data(value):
     from moonmind.omnigent.conformance import assert_secret_free
+    from moonmind.utils.logging import _is_sensitive_key, redact_sensitive_text
 
     assert_secret_free(value)
     if isinstance(value, dict):
-        if _has_authority(dict.fromkeys(value)):
+        if _has_authority(dict.fromkeys(value)) or any(_is_sensitive_key(str(key)) for key in value):
             raise ValueError("credential-bearing seed keys")
         for child in value.values():
             _scan_seed_data(child)
@@ -208,6 +209,10 @@ def _scan_seed_data(value):
         for child in value:
             _scan_seed_data(child)
     elif isinstance(value, str):
+        # Reject rather than rewrite: retained seed bytes must be exact and
+        # must never include recognized credential names or token prefixes.
+        if redact_sensitive_text(value) != value:
+            raise ValueError("credential-bearing seed text")
         # Markdown/text can contain JSON or quoted configuration examples.
         # Scan assignment keys independent of the file extension, including
         # escaped JSON key spellings, before any content becomes a receipt.
@@ -218,7 +223,7 @@ def _scan_seed_data(value):
             except json.JSONDecodeError:
                 continue
         for key in keys:
-            if _has_authority({key: None}):
+            if _has_authority({key: None}) or _is_sensitive_key(key):
                 raise ValueError("credential-bearing seed assignment")
 
 
@@ -268,6 +273,10 @@ async def capture_codex_file_seeds(backend, *, volume_ref, writer_image_ref, pat
             output_limit_bytes=OUTPUT_LIMIT,
             binary_stdout_limit_bytes=OUTPUT_LIMIT,
         )
+    except TimeoutError:
+        # The finally block must confirm daemon cleanup before this retryable
+        # error escapes. Cleanup uncertainty replaces it with a hard failure.
+        raise TimeoutError("Codex seed reader transport timed out") from None
     except Exception:
         raise RuntimeError("Codex seed reader transport failed") from None
     finally:

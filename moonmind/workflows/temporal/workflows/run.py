@@ -7754,8 +7754,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else None
             ),
             omnigent_checkpoint_capture=omnigent_capture_input,
-            codex_file_seed_receipts=step_capture_input.get("codexFileSeedReceipts"),
-            codex_file_seed_source=step_capture_input.get("codexFileSeedSource"),
+            codex_file_seed_receipts=(
+                step_capture_input.get("codexFileSeedReceipts")
+                if boundary in {"after_execution", "after_gate", "before_publication"}
+                else None
+            ),
+            codex_file_seed_source=(
+                step_capture_input.get("codexFileSeedSource")
+                if boundary in {"after_execution", "after_gate", "before_publication"}
+                else None
+            ),
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:
