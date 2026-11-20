@@ -10,7 +10,13 @@ from moonmind.workflows.temporal.runtime.local_repository_authority import (
 
 
 def git(path, *args):
-    return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+    # These fixtures represent a cleaned source owner. Suppress detached Git
+    # maintenance while constructing them, without changing repository config
+    # or relaxing the production exporter's treatment of disappearing files.
+    return subprocess.check_output(
+        ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(path), *args],
+        text=True,
+    ).strip()
 
 
 @pytest.fixture

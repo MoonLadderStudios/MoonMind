@@ -499,11 +499,12 @@ Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
 Codex reasoning summaries, verbosity, context and compaction limits, personality,
-developer instructions, project-instruction discovery and history preferences reach
-its private session config for OAuth and API-key Profiles; native Codex validates
-and normalizes these values. An explicit `web_search = "disabled"` also stays
-frozen in that config; enabling search modes remain on the native route until
-their tool behavior is qualified. API-key Codex Profiles can carry preferences
+developer instructions, project-instruction discovery, history preferences and the
+tool-output token budget reach its private session config for OAuth and API-key
+Profiles. The token budget affects returned context, not which tools are allowed.
+Native Codex validates and normalizes these values. An explicit
+`web_search = "disabled"` also stays frozen in that config; enabling search modes
+remain on the native route until their tool behavior is qualified. API-key Codex Profiles can carry preferences
 without declaring another provider and add nonsecret files within their private
 HOME, including global instructions. Their declared key and endpoint stay selected.
 Codex model-default suppression is frozen with the selected Profile: omitted
