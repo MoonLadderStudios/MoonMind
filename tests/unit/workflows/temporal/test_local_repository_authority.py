@@ -138,6 +138,49 @@ def test_source_export_refuses_external_or_unsupported_authority(
     assert not sentinel.exists()
 
 
+def test_source_capture_qualifies_distinct_branch_without_modifying_owner(source):
+    pin = git(source, "rev-parse", "HEAD")
+    head, branch, refs, *_ = _capture_source_bytes(
+        source, {"branch": "chosen", "targetBranch": "for-agent"}
+    )
+    assert head == pin
+    assert branch == "chosen"
+    assert refs["refs/heads/chosen"]["commit"] == pin
+    assert refs["refs/remotes/origin/chosen"]["commit"] == pin
+    assert "refs/heads/for-agent" not in refs  # Checkout branch is separate.
+    assert git(source, "branch", "--show-current") == "chosen"
+    assert git(source, "branch", "--list", "for-agent") == ""
+
+
+@pytest.mark.parametrize("branch", ["chosen", "chosen/sub", "chosen-dir", "origin/rewrite"])
+def test_source_target_refuses_collision_or_nonliteral_git_selection(source, branch):
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        LocalRepositorySourceUnavailable,
+    )
+
+    (source / "chosen-dir").mkdir()
+    (source / "chosen-dir/file").write_text("tracked archive member\n")
+    git(source, "add", "chosen-dir")
+    git(source, "commit", "-m", "Add path ambiguous with a target branch")
+    with pytest.raises(LocalRepositorySourceUnavailable):
+        _capture_source_bytes(source, {"branch": "chosen", "targetBranch": branch})
+
+
+def test_source_new_target_does_not_hide_existing_source_branch(source):
+    from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        LocalRepositorySourceUnavailable,
+    )
+
+    git(source, "checkout", "-b", "operator/existing")
+    (source / "tracked.txt").write_text("different committed target\n")
+    git(source, "commit", "-am", "Advance existing target")
+    git(source, "checkout", "chosen")
+    with pytest.raises(LocalRepositorySourceUnavailable, match="existing source branch"):
+        _capture_source_bytes(
+            source, {"branch": "chosen", "targetBranch": "operator/existing"}
+        )
+
+
 def test_source_export_rejects_missing_pin(source):
     with pytest.raises(ValueError, match="pin"):
         _capture_source_bytes(source, {"branch": "chosen", "commitSha": "0" * 40})

@@ -55,11 +55,14 @@ def git(path, *args):
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
-@pytest.mark.parametrize(("admission", "pinned"), [
-    ("direct", False), ("lease", False), ("lease", True),
-], ids=["direct", "lease", "lease-ancestor-pin"])
+@pytest.mark.parametrize(("admission", "pinned", "target_branch"), [
+    ("direct", False, None),
+    ("lease", False, None),
+    ("lease", True, None),
+    ("lease", False, "operator/work-branch"),
+], ids=["direct", "lease", "lease-ancestor-pin", "lease-target-branch"])
 async def test_authored_local_source_clones_real_prior_shared_workspace(
-    native_journey, monkeypatch, admission, pinned
+    native_journey, monkeypatch, admission, pinned, target_branch
 ):
     journey = native_journey
     commits = []
@@ -187,15 +190,18 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     # Literal operator-authored source is an existing canonical input. No new
     # result-output field or fabricated owner record grants its identity.
     authored_workspace = {"workspaceSource": {"kind": "repository"}}
-    if pinned:
+    if pinned or target_branch:
         authored_workspace.update(repository=str(source), startingBranch="authored-base")
+    if target_branch:
+        authored_workspace["targetBranch"] = target_branch
+    if pinned:
         authored_workspace["repositoryTarget"] = {
             "provider": "git", "repository": {"name": str(source)},
             "branch": {"name": "authored-base"},
             "revision": {"kind": "git_commit", "commitSha": commits[0]},
         }
     expected_head = commits[0] if pinned else commits[-1]
-    expected_branch = "" if pinned else "authored-base"
+    expected_branch = "" if pinned else target_branch or "authored-base"
     expected_tracked = "first\n" if pinned else "committed second\n"
     request = parent._build_agent_execution_request(
         node_id="clone-next",
@@ -216,6 +222,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     if pinned:
         assert request.pinned_repository_workspace_handoff
         assert not request.workspace_spec.get("targetBranch")
+    assert request.workspace_spec.get("targetBranch") == target_branch
     assert request.workspace_spec["workspaceSource"]["kind"] == "repository"
     assert request.step_execution.workflow_id == first.workflow_id
     assert request.step_execution.run_id == first.run_id
@@ -237,7 +244,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
                 "skill": {"id": native._DURABLE_SKILL_NAME},
                 "runtime": {
                     "mode": "codex_cli",
-                    "workspaceSpec": deepcopy(authored_workspace if pinned else request.workspace_spec),
+                    "workspaceSpec": deepcopy(authored_workspace if pinned or target_branch else request.workspace_spec),
                 },
             }
         ],
@@ -256,6 +263,20 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     )
     snapshot = json.loads(await journey.gateway.read_bytes(snapshot_ref))
     assert _validate_local_source_original_input(request, snapshot)
+    if target_branch:
+        changed_request = request.model_copy(deep=True)
+        changed_request.workspace_spec["targetBranch"] = "different-checkout"
+        with pytest.raises(ValueError, match="frozen authored source"):
+            _validate_local_source_original_input(changed_request, snapshot)
+
+        changed_task = deepcopy(authored_task)
+        changed_task["steps"][0]["runtime"]["workspaceSpec"].pop("targetBranch")
+        changed_snapshot = executions._build_original_workflow_input_snapshot_payload(
+            source_kind="create", payload={"workflow": changed_task},
+            task_payload=changed_task,
+        )
+        with pytest.raises(ValueError, match="frozen authored source"):
+            _validate_local_source_original_input(request, changed_snapshot)
     for changed in ("path", "branch", "pin"):
         tampered = request.model_copy(deep=True)
         if pinned:
@@ -364,7 +385,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     async def revalidate():
         assert await resolve_again() == authority
 
-    if not pinned:
+    if not pinned and not target_branch:
         async with journey.session_factory() as session:
             captured = await capture_initial_source(
                 request=request,
@@ -439,7 +460,10 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         git(destination, "for-each-ref", "--format=%(refname)").splitlines()
     )
     assert "refs/remotes/origin/other-native-branch" not in native_refs
-    if not pinned:
+    if target_branch:
+        assert "refs/heads/" + target_branch in native_refs
+        assert "refs/remotes/origin/" + target_branch not in native_refs
+    if not pinned and not target_branch:
         assert set(descriptor["gitRefs"]) == native_refs
     assert (destination / "tracked.txt").read_text() == expected_tracked
     assert not (destination / "untracked.txt").exists()
@@ -466,12 +490,12 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     )
     # Git versions differ in whether a selected clone creates origin/HEAD.
     # Compare the actual worker toolchain, not an assumed default.
-    if not pinned and origin_head.returncode == 0:
+    if not pinned and not target_branch and origin_head.returncode == 0:
         assert (
             descriptor["gitRefs"]["refs/remotes/origin/HEAD"]["symbolicTarget"]
             == origin_head.stdout.strip()
         )
-    elif not pinned:
+    elif not pinned and not target_branch:
         assert origin_head.returncode == 1
         assert "refs/remotes/origin/HEAD" not in descriptor["gitRefs"]
     # Baseline native clone records its source as origin. This is observed
@@ -492,7 +516,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
             monkeypatch,
         )
         captured = lease_result[0]
-        if pinned:
+        if pinned or target_branch:
             async with journey.session_factory() as session:
                 service = TemporalArtifactService(TemporalArtifactRepository(session))
                 artifact, body = await service.read(
@@ -503,7 +527,10 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
             assert artifact.dependency_closure_sha256
             assert descriptor["workspace"]["baseCommit"] == expected_head
             assert descriptor["selectedBranch"] == "authored-base"
-            assert set(descriptor["gitRefs"]) == native_refs
+            if target_branch:
+                assert descriptor["targetBranch"] == target_branch
+            else:
+                assert set(descriptor["gitRefs"]) == native_refs
             assert all(ref["commit"] == commits[-1] for ref in descriptor["gitRefs"].values())
 
     if pinned:
@@ -656,6 +683,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     if lease_result is not None:
         assert await lease_result[3]() == captured
     observed = {}
+    observed_refs = set()
     changed_head = []
 
     async def inspect_restored_turn():
@@ -668,8 +696,14 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         )
         assert git(restored, "rev-parse", "refs/heads/authored-base") == commits[-1]
         if not pinned:
-            assert git(restored, "rev-parse", "@{upstream}") == commits[-1]
-        assert str(source) not in git(restored, "config", "--local", "--list")
+            assert git(restored, "rev-parse", "authored-base@{upstream}") == commits[-1]
+        configuration = git(restored, "config", "--local", "--list")
+        assert str(source) not in configuration
+        if target_branch:
+            assert f"branch.{target_branch}." not in configuration
+            observed_refs.update(
+                git(restored, "for-each-ref", "--format=%(refname)").splitlines()
+            )
         observed["tracked"] = (restored / "tracked.txt").read_text()
         observed["untracked"] = (restored / "untracked.txt").exists()
         observed["origin"] = (
@@ -690,11 +724,11 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         ).returncode
         git(restored, "config", "user.name", "Test operator")
         git(restored, "config", "user.email", "operator@example.invalid")
-        if not pinned:
+        if not pinned and not target_branch:
             git(restored, "checkout", "--orphan", "continued-work")
         (restored / "tracked.txt").write_text("continued committed work\n")
         git(restored, "add", "tracked.txt")
-        git(restored, "commit", "-m", "Continued work on independent history")
+        git(restored, "commit", "-m", "Continued committed work")
         changed_head.append(git(restored, "rev-parse", "HEAD"))
 
     journey.server.on_first_message = inspect_restored_turn
@@ -708,12 +742,14 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         "untracked": False,
         "origin": 1,
     }
+    if target_branch:
+        assert observed_refs == native_refs
     saved = restored_result.metadata["savedWorkspaceCheckpoint"]
     saved_manifest = json.loads(await journey.gateway.read_bytes(saved["manifestRef"]))
     assert saved_manifest["gitHistory"]["requiresSourceObjects"] is False
     assert not saved_manifest["gitHistory"].get("shallowCommits")
     assert saved_manifest["baseCommit"] == changed_head[0]
-    successor_branch = "" if pinned else "continued-work"
+    successor_branch = "" if pinned else target_branch or "continued-work"
     predecessor_workspace = journey.server.workspace
     shutil.rmtree(predecessor_workspace)
     # Same-attempt finalization must recover from its saved checkpoint without
@@ -818,6 +854,8 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         restored = journey.server.workspace
         cold["head"] = git(restored, "rev-parse", "HEAD")
         cold["branch"] = git(restored, "branch", "--show-current")
+        if target_branch:
+            assert git(restored, "rev-parse", "refs/heads/" + target_branch) == changed_head[0]
         assert git(restored, "rev-parse", "refs/heads/authored-base") == commits[-1]
         cold["tracking"] = git(
             restored, "rev-parse", "refs/remotes/origin/authored-base"

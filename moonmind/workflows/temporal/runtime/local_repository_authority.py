@@ -311,6 +311,7 @@ def _capture_source_bytes(source, intent):
         raise RuntimeError("worker Git executable is unavailable")
     _source_git_layout(source)
     branch = str(intent.get("branch") or "")
+    target_branch = intent.get("targetBranch")
     if not branch or branch.startswith("-"):
         raise LocalRepositorySourceUnavailable(
             "local source requires an explicit branch"
@@ -426,6 +427,45 @@ def _capture_source_bytes(source, intent):
             members.add(name)
             if len(members) > SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_count"]:
                 raise ValueError("local source committed tree exceeds path bounds")
+        if target_branch is not None:
+            if not isinstance(target_branch, str):
+                raise LocalRepositorySourceUnavailable("local source target branch is invalid")
+            target_ref = "refs/heads/" + target_branch
+            if (
+                pin is not None
+                or not target_branch
+                or len(target_branch) > 400
+                or target_branch == "HEAD"
+                or target_branch.startswith(("-", "origin/", "refs/"))
+                or target_branch == branch
+                or target_branch.startswith(branch + "/")
+                or branch.startswith(target_branch + "/")
+                or any(
+                    name == target_branch or name.startswith(target_branch + "/")
+                    for name in members
+                )
+                or git(
+                    destination,
+                    ["check-ref-format", "--normalize", target_ref],
+                    allow_unrelated=True,
+                ).decode().strip() != target_ref
+                or git(
+                    destination,
+                    ["rev-parse", "--quiet", "--verify", target_branch],
+                    allow_unrelated=True,
+                )
+            ):
+                raise LocalRepositorySourceUnavailable(
+                    "local source target branch is not a distinct literal checkout"
+                )
+            if target_ref in git(
+                source, ["for-each-ref", "--format=%(refname)", target_ref]
+            ).decode().splitlines():
+                # The isolated clone only has the selected branch. Absence
+                # there does not prove a target would be created by native.
+                raise LocalRepositorySourceUnavailable(
+                    "local source target already names an existing source branch"
+                )
         git(destination, ["read-tree", head])
         attributes = git(
             destination,
@@ -447,7 +487,11 @@ def _capture_source_bytes(source, intent):
                 "core.hooksPath=" + os.devnull,
                 "checkout",
                 "--force",
-                *(["--detach", head] if pin else [branch]),
+                *(
+                    ["--detach", head] if pin
+                    else ["--no-track", "-b", target_branch] if target_branch
+                    else [branch]
+                ),
             ],
         )
         refs = (
@@ -525,6 +569,8 @@ async def capture_initial_source(
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
         CONTENT_TYPE,
         intent_digest,
+        local_source_uses_default_access,
+        source_intent,
         supports_detached_local_pin,
     )
 
@@ -532,6 +578,14 @@ async def capture_initial_source(
     if pin and not supports_detached_local_pin(request, intent):
         raise LocalRepositorySourceUnavailable(
             "local source pin requires a detached read without a selected connection"
+        )
+    target_branch = intent.get("targetBranch")
+    if target_branch and (
+        source_intent(request, bind_target_branch=True) != intent
+        or not local_source_uses_default_access(request)
+    ):
+        raise LocalRepositorySourceUnavailable(
+            "local source target branch requires a matching default-connection read"
         )
     if intent.get("sourcePath") != authority.get("sourcePath") or any(
         intent.get(key) != authority.get(key) for key in ("workflowId", "runId")
@@ -627,7 +681,7 @@ async def capture_initial_source(
         "pathCount": len(entries),
         "excludedPaths": [],
         "gitHistory": history,
-        "git": {"branch": "" if pin else branch},
+        "git": {"branch": "" if pin else target_branch or branch},
     }
     manifest_ref, manifest_digest = await put(
         encode(manifest), "application/json", "checkpoint_manifest"
@@ -647,7 +701,8 @@ async def capture_initial_source(
         "sourceIntentDigest": intent_digest(intent),
         "workspace": workspace,
         "gitRefs": refs,
-        **({"selectedBranch": branch} if pin else {}),
+        **({"selectedBranch": branch} if pin or target_branch else {}),
+        **({"targetBranch": target_branch} if target_branch else {}),
     }
     ref, digest = await put(
         encode(descriptor), CONTENT_TYPE, "initial_repository_source"

@@ -1403,3 +1403,77 @@ def test_initial_source_detached_refs_refuse_incomplete_or_unrelated_authority(t
     assert "unsafe branch" not in str(error.value)
     assert git("for-each-ref", "--format=%(refname):%(objectname)") == before_refs
     assert git("rev-parse", "HEAD") == manifest["baseCommit"]
+
+
+def _target_initial_source_ref_fixture(tmp_path):
+    service, workspace, descriptor, manifest, git = _initial_source_ref_fixture(
+        tmp_path, ancestor=False
+    )
+    git("checkout", "-b", "authored-target")
+    descriptor["targetBranch"] = "authored-target"
+    manifest["git"]["branch"] = "authored-target"
+    return service, workspace, descriptor, manifest, git
+
+
+@pytest.mark.parametrize("origin_head", [False, True], ids=["without-origin-head", "with-origin-head"])
+def test_initial_source_target_branch_restores_selected_refs_without_tracking_target(tmp_path, origin_head):
+    service, workspace, descriptor, manifest, git = _target_initial_source_ref_fixture(tmp_path)
+    if not origin_head:
+        descriptor["gitRefs"].pop("refs/remotes/origin/HEAD")
+    service._restore_initial_refs(workspace, descriptor, manifest)
+    assert git("symbolic-ref", "HEAD") == "refs/heads/authored-target"
+    assert git("rev-parse", "HEAD") == manifest["baseCommit"]
+    assert git("for-each-ref", "--format=%(refname)").splitlines() == sorted(
+        {"refs/heads/authored-target", *descriptor["gitRefs"]}
+    )
+    for name, value in descriptor["gitRefs"].items():
+        assert git("rev-parse", name) == value["commit"]
+        if "symbolicTarget" in value:
+            assert git("symbolic-ref", name) == value["symbolicTarget"]
+    assert git("config", "branch.authored-base.remote") == "origin"
+    assert git("config", "branch.authored-base.merge") == "refs/heads/authored-base"
+    assert git("config", "remote.origin.fetch") == "+refs/heads/authored-base:refs/remotes/origin/authored-base"
+    for absent in ("remote.origin.url", "branch.authored-target.remote", "branch.authored-target.merge"):
+        assert subprocess.run(
+            ["git", "-C", str(workspace), "config", "--get", absent], capture_output=True
+        ).returncode == 1
+
+
+@pytest.mark.parametrize("damage", [
+    "missing-selection", "null-target", "source-target-collision", "namespace-collision",
+    "wrong-stage-branch", "detached-head", "wrong-base", "invalid-target",
+    "foreign-ref", "missing-origin", "foreign-symref",
+])
+def test_initial_source_target_branch_refuses_mismatched_authority_without_writes(tmp_path, damage):
+    service, workspace, descriptor, manifest, git = _target_initial_source_ref_fixture(tmp_path)
+    refs = descriptor["gitRefs"]
+    if damage == "missing-selection":
+        descriptor.pop("selectedBranch")
+    elif damage == "null-target":
+        descriptor["targetBranch"] = None
+    elif damage in {"source-target-collision", "namespace-collision"}:
+        branch = "authored-base" if damage == "source-target-collision" else "authored-base/nested"
+        git("branch", "-m", branch)
+        descriptor["targetBranch"] = manifest["git"]["branch"] = branch
+    elif damage == "wrong-stage-branch":
+        git("branch", "-m", "different-target")
+    elif damage == "detached-head":
+        git("checkout", "--detach")
+    elif damage == "wrong-base":
+        other = git("commit-tree", git("rev-parse", "HEAD^{tree}"), "-m", "distinct root")
+        for value in refs.values():
+            value["commit"] = other
+    elif damage == "invalid-target":
+        descriptor["targetBranch"] = "unsafe branch"
+    elif damage == "foreign-ref":
+        refs["refs/heads/authored-target"] = {"commit": manifest["baseCommit"]}
+    elif damage == "missing-origin":
+        refs.pop("refs/remotes/origin/authored-base")
+    elif damage == "foreign-symref":
+        refs["refs/remotes/origin/HEAD"]["symbolicTarget"] = "refs/remotes/origin/authored-target"
+    before = (git("for-each-ref", "--format=%(refname):%(objectname)"), git("config", "--local", "--list"))
+    with pytest.raises(CheckpointRestoreError) as error:
+        service._restore_initial_refs(workspace, descriptor, manifest)
+    assert error.value.code == "CHECKPOINT_MANIFEST_CORRUPTED"
+    assert "unsafe branch" not in str(error.value)
+    assert (git("for-each-ref", "--format=%(refname):%(objectname)"), git("config", "--local", "--list")) == before

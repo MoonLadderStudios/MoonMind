@@ -30,7 +30,7 @@ class InitialRepositorySourceSnapshot(BaseModel):
     )
 
 
-def source_intent(request):
+def source_intent(request, *, bind_target_branch=False):
     """Pure eligibility/identity, never permission to open a worker path."""
     from moonmind.omnigent.workspace_intent import authored_repository_source
     from moonmind.omnigent.workspace_sources import compile_workspace_source
@@ -68,7 +68,7 @@ def source_intent(request):
     # Relative paths depend on a worker's current directory, not source identity.
     if not Path(path).is_absolute():
         return None
-    return {
+    intent = {
         "repository": raw,
         "sourcePath": path,
         "branch": compiled.repository_branch,
@@ -78,13 +78,20 @@ def source_intent(request):
         "logicalStepId": request.step_execution.logical_step_id,
     }
 
+    # Retained receipts still attest the old source-only contract. Only a
+    # newly bound, unpinned handoff may name an additional checkout branch.
+    if bind_target_branch and not intent["commitSha"]:
+        target_branch = str(workspace.get("targetBranch") or "").strip()
+        if target_branch:
+            intent["targetBranch"] = target_branch
+    return intent
+
 
 def supports_detached_local_pin(request, intent, *, frozen=False):
     """Select only the launcher's typed, detached, default-connection read."""
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
         RepositoryContractError,
-        authored_repository_access,
         compile_repository_target,
     )
 
@@ -111,6 +118,17 @@ def supports_detached_local_pin(request, intent, *, frozen=False):
     ):
         return False
 
+    return local_source_uses_default_access(request)
+
+
+def local_source_uses_default_access(request):
+    """Preserve explicitly authored transport restrictions on new handoffs."""
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        authored_repository_access,
+    )
+
+    workspace = request.workspace_spec
     source = workspace.get("workspaceSource") or {}
     if not isinstance(source, Mapping):
         return False
@@ -120,7 +138,7 @@ def supports_detached_local_pin(request, intent, *, frozen=False):
         workspace,
         source,
         workspace.get("repository"),
-        raw_target,
+        workspace.get("repositoryTarget"),
         source.get("repository"),
         source.get("repositoryTarget"),
     )
