@@ -364,3 +364,17 @@ async def test_timeout_preserves_retry_type_only_after_confirmed_cleanup(cleanup
             writer_image_ref='trusted-image', paths=['AGENTS.md'])
     assert 'private' not in str(error.value)
     assert calls[-1] == ['docker', 'rm', '--force']
+
+
+@pytest.mark.parametrize('path,content', [
+    ('AGENTS.md', 'Read ~/.codex/AGENTS.md and keep ~/.claude/CLAUDE.md in sync.\n'),
+    ('rules/options.json', '{"instructions": "Read ~/.codex/AGENTS.md"}'),
+    ('rules/options.toml', 'instructions="Read ~/.codex/AGENTS.md"'),
+])
+def test_nonsecret_auth_directory_references_preserve_exact_seed_bytes(path, content):
+    from moonmind.omnigent.codex_file_seeds import validate_seed_capture
+
+    receipt = {'version': 1, 'files': [
+        {'path': path, 'present': True, 'content': content},
+    ]}
+    assert validate_seed_capture(receipt, [path]) == receipt

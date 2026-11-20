@@ -6,18 +6,15 @@ accepted result. This reader never selects credentials or grants retry authority
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import tomllib
-import uuid
 from pathlib import PurePosixPath
 
 from moonmind.provider_profiles.codex_configuration import (
     _validate_additional_file_path,
     _has_authority,
 )
-from moonmind.provider_profiles.volume_mounts import credential_volume_mount
 
 MAX_FILES = 32
 MAX_BYTES = 65536
@@ -184,20 +181,9 @@ except OSError as error:
 """
 
 
-async def _stop_reader(backend, name):
-    code, stdout, stderr = await backend.run(
-        ["docker", "rm", "--force", name],
-        input_bytes=None,
-        timeout_seconds=10,
-        output_limit_bytes=1024,
-    )
-    if code and b"No such container" not in stderr + stdout:
-        raise RuntimeError("Codex seed reader cleanup is unconfirmed")
-
-
 def _scan_seed_data(value):
     from moonmind.omnigent.conformance import assert_secret_free
-    from moonmind.utils.logging import _is_sensitive_key, redact_sensitive_text
+    from moonmind.utils.logging import _is_sensitive_key, redact_credential_text
 
     assert_secret_free(value)
     if isinstance(value, dict):
@@ -211,7 +197,7 @@ def _scan_seed_data(value):
     elif isinstance(value, str):
         # Reject rather than rewrite: retained seed bytes must be exact and
         # must never include recognized credential names or token prefixes.
-        if redact_sensitive_text(value) != value:
+        if redact_credential_text(value) != value:
             raise ValueError("credential-bearing seed text")
         # Markdown/text can contain JSON or quoted configuration examples.
         # Scan assignment keys independent of the file extension, including
@@ -229,73 +215,18 @@ def _scan_seed_data(value):
 
 async def capture_codex_file_seeds(backend, *, volume_ref, writer_image_ref, paths):
     paths = validate_seed_paths(paths)
-    mount = credential_volume_mount(volume_ref, "/selected", read_only=True)
     if (
         not isinstance(writer_image_ref, str)
         or not writer_image_ref
         or writer_image_ref.startswith("-")
     ):
         raise CodexFileSeedUnavailable("Codex seed reader image is unavailable")
-    name = "moonmind-codex-seeds-" + uuid.uuid4().hex
-    started = False
-    try:
-        present, _stdout, _stderr = await backend.run(
-            ["docker", "volume", "inspect", "--format", "{{.Name}}", volume_ref],
-            input_bytes=None,
-            timeout_seconds=30,
-            output_limit_bytes=1024,
-        )
-        if present != 0:
-            raise RuntimeError("selected enrollment volume is unavailable")
-        started = True
-        code, stdout, _stderr = await backend.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--name",
-                name,
-                "-i",
-                "--network",
-                "none",
-                "--read-only",
-                "--mount",
-                mount,
-                "--entrypoint",
-                "python3",
-                writer_image_ref,
-                "-c",
-                SEED_READ_SCRIPT,
-                "/selected",
-            ],
-            input_bytes=json.dumps(paths).encode(),
-            timeout_seconds=30,
-            output_limit_bytes=OUTPUT_LIMIT,
-            binary_stdout_limit_bytes=OUTPUT_LIMIT,
-        )
-    except TimeoutError:
-        # The finally block must confirm daemon cleanup before this retryable
-        # error escapes. Cleanup uncertainty replaces it with a hard failure.
-        raise TimeoutError("Codex seed reader transport timed out") from None
-    except Exception:
-        raise RuntimeError("Codex seed reader transport failed") from None
-    finally:
-        if started:
-            cleanup = asyncio.create_task(_stop_reader(backend, name))
-            cancelled = False
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    cancelled = True
-                except Exception:
-                    break
-            try:
-                cleanup.result()
-            except Exception:
-                raise RuntimeError("Codex seed reader cleanup is unconfirmed") from None
-            if cancelled:
-                raise asyncio.CancelledError()
+    from moonmind.omnigent.host_services.codex_seed_reader import read_selected_seed_files
+
+    code, stdout = await read_selected_seed_files(
+        backend, volume_ref=volume_ref, writer_image_ref=writer_image_ref,
+        paths=paths, script=SEED_READ_SCRIPT, output_limit=OUTPUT_LIMIT,
+    )
     if code == 2:
         raise CodexFileSeedUnavailable("Codex seed source is unsafe or unreadable")
     if code != 0:
