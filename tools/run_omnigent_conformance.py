@@ -173,6 +173,7 @@ def owner_receipt_commands(
     manifest_attempt: str | None = None,
     frontend_attempt: str | None = None,
     require_full_source: bool = False,
+    source_owners_only: bool = False,
 ) -> list[dict]:
     """Prove the same collected corpus through its existing exclusive owners."""
     manifest = json.loads(manifest_path.read_text())
@@ -216,6 +217,16 @@ def owner_receipt_commands(
                 r"integration-ci-(hermetic(?:-shard-[12])?)-attempt-([1-9][0-9]*)",
                 parent.name,
             )
+            recovery = re.fullmatch(
+                r"omnigent-host-recovery-([0-9]+)-([1-9][0-9]*)", parent.name
+            )
+            if recovery:
+                if recovery[1] != run_id:
+                    raise ValueError("Recovery artifact belongs to another run")
+                expected_attempt = admitted(recovery[2])
+                expected_suite = "omnigent-exact-artifact"
+                root = parent
+                break
             if match or hermetic:
                 expected_attempt = admitted(match[2] if match else hermetic[2])
                 expected_suite = match[1] if match else "integration-" + hermetic[1]
@@ -256,15 +267,11 @@ def owner_receipt_commands(
         <= sharded_receipts
     ):
         raise ValueError("Missing main receipt for a hermetic shard")
+    source_owners = {
+        "unit-fast", "unit-slow", "api-component", "temporal-boundary",
+        "reliability-matrix", "integration-ci",
+    }
     if require_full_source:
-        source_owners = {
-            "unit-fast",
-            "unit-slow",
-            "api-component",
-            "temporal-boundary",
-            "reliability-matrix",
-            "integration-ci",
-        }
         expected = {
             node["nodeid"]
             for node in inventory.values()
@@ -287,6 +294,7 @@ def owner_receipt_commands(
                 node["nodeid"]
                 for node in inventory.values()
                 if node["eligible"]
+                and (not source_owners_only or set(node["owners"]) & source_owners)
                 and any(
                     node["path"] == path or node["path"].startswith(path + "/")
                     for path in paths
@@ -388,6 +396,8 @@ def main() -> int:
     parser.add_argument("--ownership-attempt")
     parser.add_argument("--frontend-attempt")
     parser.add_argument("--require-full-source", action="store_true")
+    parser.add_argument("--source-owners-only", action="store_true",
+                        help="Source phase only; installed owners qualify in the later recovery phase")
     parser.add_argument(
         "--fake-provider",
         action="store_true",
@@ -425,6 +435,7 @@ def main() -> int:
                 manifest_attempt=args.ownership_attempt,
                 frontend_attempt=args.frontend_attempt,
                 require_full_source=args.require_full_source,
+                source_owners_only=args.source_owners_only,
             )
             # Retain the secret scan over the actual owners' streamed logs.
             log_paths.extend(

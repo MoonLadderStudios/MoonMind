@@ -993,7 +993,7 @@ def select_suites(
     lanes = _integration_lanes(paths, selection)
     return replace(
         selection,
-        host_recovery=selection.exact_artifact,
+        host_recovery=selection.exact_artifact or selection.omnigent_conformance,
         integration_ci=bool(lanes),
         ownership_full=selection.omnigent_conformance
         or "hermetic" in lanes

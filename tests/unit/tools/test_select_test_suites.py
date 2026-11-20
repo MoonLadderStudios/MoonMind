@@ -49,7 +49,7 @@ def test_source_artifact_and_recovery_phases_partition_full_verification():
 )
 def test_host_recovery_follows_the_exact_artifact_owner(paths):
     selection = select_suites(paths, event_name="pull_request")
-    assert selection.host_recovery == selection.exact_artifact
+    assert selection.host_recovery == (selection.exact_artifact or selection.omnigent_conformance)
 
 
 def test_unknown_verification_phase_is_rejected():
