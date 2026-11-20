@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -76,6 +77,67 @@ def source_intent(request):
         "runId": request.step_execution.run_id,
         "logicalStepId": request.step_execution.logical_step_id,
     }
+
+
+def supports_detached_local_pin(request, intent, *, frozen=False):
+    """Select only the launcher's typed, detached, default-connection read."""
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+        authored_repository_access,
+        compile_repository_target,
+    )
+
+    workspace = request.workspace_spec
+    raw_target = workspace.get("repositoryTarget")
+    if frozen and raw_target is None:
+        # The original API draft may still use its typed repository alias.
+        raw_target = workspace.get("repository")
+    try:
+        target = compile_repository_target(raw_target)
+    except RepositoryContractError:
+        return False
+    if (
+        target.provider != "git"
+        or target.connection_ref != DEFAULT_GIT_CONNECTION_REF
+        or target.revision is None
+        or target.revision.commit_sha.lower() != intent["commitSha"]
+        or target.branch.name != intent["branch"]
+        or target.branch.name.startswith(
+            ("refs/heads/", "refs/remotes/origin/", "origin/")
+        )
+        or target.repository.name != intent["repository"]
+        or str(workspace.get("targetBranch") or "").strip()
+    ):
+        return False
+
+    source = workspace.get("workspaceSource") or {}
+    if not isinstance(source, Mapping):
+        return False
+    # Do not let a projection's preferred alias hide an explicit restriction
+    # on the same source in another authored alias.
+    declarations = (
+        workspace,
+        source,
+        workspace.get("repository"),
+        raw_target,
+        source.get("repository"),
+        source.get("repositoryTarget"),
+    )
+    default = (None, "", DEFAULT_GIT_CONNECTION_REF)
+    connection, anonymous = authored_repository_access(request.parameters or {})
+    return (
+        connection in default
+        and not anonymous
+        and not any(
+            isinstance(row, Mapping)
+            and (
+                row.get("connectionRef") not in default
+                or row.get("accessMode") == "anonymous"
+            )
+            for row in declarations
+        )
+    )
 
 
 def intent_digest(intent):

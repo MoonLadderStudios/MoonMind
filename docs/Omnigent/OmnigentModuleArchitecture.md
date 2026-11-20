@@ -191,10 +191,12 @@ An explicit local Git path can use a committed-source handoff when the existing
 workspace owner proves it is a distinct, completed shared workspace in the same
 Workflow Execution, with a terminal step manifest, cleaned runtime/host and no
 active workspace claim. The authored source and selected pool fence are checked
-before reading files. An explicit branch (optionally pinned to its tip) is
-exported with full ancestry and selected local/tracking refs, not dirty or
-untracked files, remote URLs, helpers or publication authority. Unsafe layouts,
-tags, submodules, external filters, unsupported configuration and arbitrary worker-local paths retain
+before reading files. An explicit branch is exported with full ancestry and
+selected local/tracking refs, not dirty or untracked files, remote URLs, helpers
+or publication authority. A full commit pin on that branch checks out detached
+without moving those refs; requests selecting a target branch or nondefault
+connection for a pin stay native. Unsafe layouts, tags, submodules, external
+filters, unsupported configuration and arbitrary worker-local paths retain
 the native owner before a source receipt is accepted.
 The lease holds a non-executable compiler candidate while the source owner
 exports. The first durable receipt freezes the source; response-loss retries

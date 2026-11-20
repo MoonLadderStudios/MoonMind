@@ -55,9 +55,11 @@ def git(path, *args):
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
-@pytest.mark.parametrize("admission", ["direct", "lease"])
+@pytest.mark.parametrize(("admission", "pinned"), [
+    ("direct", False), ("lease", False), ("lease", True),
+], ids=["direct", "lease", "lease-ancestor-pin"])
 async def test_authored_local_source_clones_real_prior_shared_workspace(
-    native_journey, monkeypatch, admission
+    native_journey, monkeypatch, admission, pinned
 ):
     journey = native_journey
     commits = []
@@ -184,6 +186,17 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
 
     # Literal operator-authored source is an existing canonical input. No new
     # result-output field or fabricated owner record grants its identity.
+    authored_workspace = {"workspaceSource": {"kind": "repository"}}
+    if pinned:
+        authored_workspace.update(repository=str(source), startingBranch="authored-base")
+        authored_workspace["repositoryTarget"] = {
+            "provider": "git", "repository": {"name": str(source)},
+            "branch": {"name": "authored-base"},
+            "revision": {"kind": "git_commit", "commitSha": commits[0]},
+        }
+    expected_head = commits[0] if pinned else commits[-1]
+    expected_branch = "" if pinned else "authored-base"
+    expected_tracked = "first\n" if pinned else "committed second\n"
     request = parent._build_agent_execution_request(
         node_id="clone-next",
         tool_name="codex_cli",
@@ -192,7 +205,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
             "instructions": "Inspect committed history",
             "runtime": {"mode": "codex_cli", "model": journey.server.model},
             "repository": str(source),
-            "workspaceSpec": {"workspaceSource": {"kind": "repository"}},
+            "workspaceSpec": authored_workspace,
             "startingBranch": "authored-base",
             "publishMode": "none",
         },
@@ -200,6 +213,9 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     )
     request = parent._bind_shared_runtime_context(request)
     assert request.canonical_repository_workspace_handoff
+    if pinned:
+        assert request.pinned_repository_workspace_handoff
+        assert not request.workspace_spec.get("targetBranch")
     assert request.workspace_spec["workspaceSource"]["kind"] == "repository"
     assert request.step_execution.workflow_id == first.workflow_id
     assert request.step_execution.run_id == first.run_id
@@ -221,7 +237,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
                 "skill": {"id": native._DURABLE_SKILL_NAME},
                 "runtime": {
                     "mode": "codex_cli",
-                    "workspaceSpec": deepcopy(request.workspace_spec),
+                    "workspaceSpec": deepcopy(authored_workspace if pinned else request.workspace_spec),
                 },
             }
         ],
@@ -242,7 +258,18 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     assert _validate_local_source_original_input(request, snapshot)
     for changed in ("path", "branch", "pin"):
         tampered = request.model_copy(deep=True)
-        if changed == "path":
+        if pinned:
+            typed_target = tampered.workspace_spec["repositoryTarget"]
+            if changed == "path":
+                new_path = str(source / "another")
+                tampered.workspace_spec["repository"] = new_path
+                typed_target["repository"]["name"] = new_path
+            elif changed == "branch":
+                tampered.workspace_spec["startingBranch"] = "another"
+                typed_target["branch"]["name"] = "another"
+            else:
+                typed_target["revision"]["commitSha"] = "0" * 40
+        elif changed == "path":
             tampered.workspace_spec["repository"] = str(source / "another")
         elif changed == "branch":
             tampered.workspace_spec["startingBranch"] = "another"
@@ -337,34 +364,41 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     async def revalidate():
         assert await resolve_again() == authority
 
-    async with journey.session_factory() as session:
-        captured = await capture_initial_source(
-            request=request,
-            intent=intent,
-            authority=authority,
-            workspace_root=journey.worker_root,
-            artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(session)
-            ),
-            access=access_for_test("system"),
-            revalidate_authority=revalidate,
+    if not pinned:
+        async with journey.session_factory() as session:
+            captured = await capture_initial_source(
+                request=request,
+                intent=intent,
+                authority=authority,
+                workspace_root=journey.worker_root,
+                artifact_service=TemporalArtifactService(
+                    TemporalArtifactRepository(session)
+                ),
+                access=access_for_test("system"),
+                revalidate_authority=revalidate,
+            )
+        async with journey.session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact, body = await service.read(
+                artifact_id=captured["artifactRef"].removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
+            assert artifact.dependency_closure_sha256
+            descriptor = json.loads(body)
+        assert descriptor["workspace"]["baseCommit"] == commits[-1]
+        assert (
+            descriptor["gitRefs"]["refs/remotes/origin/authored-base"]["commit"]
+            == commits[-1]
         )
-    async with journey.session_factory() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
-        artifact, body = await service.read(
-            artifact_id=captured["artifactRef"].removeprefix("artifact:"),
-            access=access_for_test("system"),
-        )
-        assert artifact.dependency_closure_sha256
-        descriptor = json.loads(body)
-    assert descriptor["workspace"]["baseCommit"] == commits[-1]
-    assert (
-        descriptor["gitRefs"]["refs/remotes/origin/authored-base"]["commit"]
-        == commits[-1]
-    )
     launcher = ManagedRuntimeLauncher(
         ManagedRunStore(journey.worker_root / "managed_runs")
     )
+    native_request = request.model_copy(deep=True)
+    if pinned:
+        launcher, resolved_target = await _qualify_native_pin(
+            journey, native_request, monkeypatch, expected_head,
+        )
+        native_request.workspace_spec["resolvedRepositoryTarget"] = resolved_target
     # The native comparator runs in the fixture process rather than the
     # provider's uid. Give only that comparator exact source trust; the shared
     # export above and below must supply its own isolated upload-pack trust.
@@ -394,7 +428,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         destination = Path(
             await launcher._prepare_workspace_path(
                 run_id="next-native-attempt",
-                request=request,
+                request=native_request,
                 workspace_path=None,
             )
         )
@@ -405,11 +439,12 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         git(destination, "for-each-ref", "--format=%(refname)").splitlines()
     )
     assert "refs/remotes/origin/other-native-branch" not in native_refs
-    assert set(descriptor["gitRefs"]) == native_refs
-    assert (destination / "tracked.txt").read_text() == "committed second\n"
+    if not pinned:
+        assert set(descriptor["gitRefs"]) == native_refs
+    assert (destination / "tracked.txt").read_text() == expected_tracked
     assert not (destination / "untracked.txt").exists()
-    assert git(destination, "branch", "--show-current") == "authored-base"
-    assert git(destination, "rev-parse", "HEAD") == commits[-1]
+    assert git(destination, "branch", "--show-current") == expected_branch
+    assert git(destination, "rev-parse", "HEAD") == expected_head
     assert git(destination, "rev-parse", "refs/heads/authored-base") == commits[-1]
     assert (
         git(destination, "rev-parse", "refs/remotes/origin/authored-base")
@@ -431,19 +466,20 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     )
     # Git versions differ in whether a selected clone creates origin/HEAD.
     # Compare the actual worker toolchain, not an assumed default.
-    if origin_head.returncode == 0:
+    if not pinned and origin_head.returncode == 0:
         assert (
             descriptor["gitRefs"]["refs/remotes/origin/HEAD"]["symbolicTarget"]
             == origin_head.stdout.strip()
         )
-    else:
+    elif not pinned:
         assert origin_head.returncode == 1
         assert "refs/remotes/origin/HEAD" not in descriptor["gitRefs"]
     # Baseline native clone records its source as origin. This is observed
     # native behavior, not publication or reusable local-path authority for a
     # shared restore: that consumer must not copy this configuration.
     assert git(destination, "remote", "get-url", "origin") == str(source)
-    assert git(destination, "rev-list", "HEAD").splitlines() == list(reversed(commits))
+    expected_history = [commits[0]] if pinned else list(reversed(commits))
+    assert git(destination, "rev-list", "HEAD").splitlines() == expected_history
     assert (source / "tracked.txt").read_text() == "dirty excluded\n"
 
     lease_result = None
@@ -456,6 +492,58 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
             monkeypatch,
         )
         captured = lease_result[0]
+        if pinned:
+            async with journey.session_factory() as session:
+                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                artifact, body = await service.read(
+                    artifact_id=captured["artifactRef"].removeprefix("artifact:"),
+                    access=access_for_test("system"),
+                )
+            descriptor = json.loads(body)
+            assert artifact.dependency_closure_sha256
+            assert descriptor["workspace"]["baseCommit"] == expected_head
+            assert descriptor["selectedBranch"] == "authored-base"
+            assert set(descriptor["gitRefs"]) == native_refs
+            assert all(ref["commit"] == commits[-1] for ref in descriptor["gitRefs"].values())
+
+    if pinned:
+        # The API may materialize the deployment default in a typed target;
+        # spelling that same default explicitly must not change source scope.
+        default_request = request.model_copy(deep=True)
+        normalized_target, _ = executions._normalize_submitted_repository(
+            request.workspace_spec["repositoryTarget"]
+        )
+        assert normalized_target["connectionRef"]
+        default_request.workspace_spec["repositoryTarget"] = normalized_target
+        assert _validate_local_source_original_input(default_request, snapshot)
+
+        def require_native(spec, excluded):
+            if excluded == "target-branch":
+                spec["targetBranch"] = "different-checkout"
+            elif excluded == "connection":
+                spec["repositoryTarget"]["connectionRef"] = "explicit-connection"
+            elif excluded == "nested-connection":
+                spec["workspaceSource"]["repository"] = {
+                    **deepcopy(spec["repositoryTarget"]),
+                    "connectionRef": "different-connection",
+                }
+            elif excluded == "nested-pin":
+                spec["workspaceSource"]["repositoryTarget"] = spec.pop("repositoryTarget")
+            else:
+                spec["workspaceSource"]["accessMode"] = "anonymous"
+
+        for excluded in (
+            "target-branch", "connection", "nested-connection", "nested-pin", "anonymous"
+        ):
+            tampered = request.model_copy(deep=True)
+            require_native(tampered.workspace_spec, excluded)
+            assert not _validate_local_source_original_input(tampered, snapshot)
+            frozen = deepcopy(authored_task)
+            require_native(frozen["steps"][0]["runtime"]["workspaceSpec"], excluded)
+            excluded_snapshot = executions._build_original_workflow_input_snapshot_payload(
+                source_kind="create", payload={"workflow": frozen}, task_payload=frozen,
+            )
+            assert not _validate_local_source_original_input(request, excluded_snapshot)
 
     # Compile a real second shared execution, then prove that its materializer
     # consumes only the durable receipt after the original source disappears.
@@ -578,7 +666,9 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         observed["tracking"] = git(
             restored, "rev-parse", "refs/remotes/origin/authored-base"
         )
-        assert git(restored, "rev-parse", "@{upstream}") == commits[-1]
+        assert git(restored, "rev-parse", "refs/heads/authored-base") == commits[-1]
+        if not pinned:
+            assert git(restored, "rev-parse", "@{upstream}") == commits[-1]
         assert str(source) not in git(restored, "config", "--local", "--list")
         observed["tracked"] = (restored / "tracked.txt").read_text()
         observed["untracked"] = (restored / "untracked.txt").exists()
@@ -600,7 +690,8 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         ).returncode
         git(restored, "config", "user.name", "Test operator")
         git(restored, "config", "user.email", "operator@example.invalid")
-        git(restored, "checkout", "--orphan", "continued-work")
+        if not pinned:
+            git(restored, "checkout", "--orphan", "continued-work")
         (restored / "tracked.txt").write_text("continued committed work\n")
         git(restored, "add", "tracked.txt")
         git(restored, "commit", "-m", "Continued work on independent history")
@@ -610,10 +701,10 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     restored_result = await journey.realizer.execute(next_request, next_plan)
     assert restored_result.failure_class is None, restored_result
     assert observed == {
-        "commits": list(reversed(commits)),
-        "branch": "authored-base",
+        "commits": expected_history,
+        "branch": expected_branch,
         "tracking": commits[-1],
-        "tracked": "committed second\n",
+        "tracked": expected_tracked,
         "untracked": False,
         "origin": 1,
     }
@@ -622,6 +713,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     assert saved_manifest["gitHistory"]["requiresSourceObjects"] is False
     assert not saved_manifest["gitHistory"].get("shallowCommits")
     assert saved_manifest["baseCommit"] == changed_head[0]
+    successor_branch = "" if pinned else "continued-work"
     predecessor_workspace = journey.server.workspace
     shutil.rmtree(predecessor_workspace)
     # Same-attempt finalization must recover from its saved checkpoint without
@@ -655,7 +747,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     assert "publication" in final_phases
     assert journey.events == previous_events
     assert git(predecessor_workspace, "rev-parse", "HEAD") == changed_head[0]
-    assert git(predecessor_workspace, "branch", "--show-current") == "continued-work"
+    assert git(predecessor_workspace, "branch", "--show-current") == successor_branch
     assert git(predecessor_workspace, "rev-parse", "refs/remotes/origin/authored-base") == commits[-1]
     assert (predecessor_workspace / "tracked.txt").read_text() == "continued committed work\n"
     shutil.rmtree(predecessor_workspace)
@@ -726,6 +818,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
         restored = journey.server.workspace
         cold["head"] = git(restored, "rev-parse", "HEAD")
         cold["branch"] = git(restored, "branch", "--show-current")
+        assert git(restored, "rev-parse", "refs/heads/authored-base") == commits[-1]
         cold["tracking"] = git(
             restored, "rev-parse", "refs/remotes/origin/authored-base"
         )
@@ -740,7 +833,7 @@ async def test_authored_local_source_clones_real_prior_shared_workspace(
     assert successor_result.failure_class is None, successor_result
     assert cold == {
         "head": changed_head[0],
-        "branch": "continued-work",
+        "branch": successor_branch,
         "tracking": commits[-1],
         "original_history": list(reversed(commits)),
         "bytes": "continued committed work\n",
@@ -1127,3 +1220,29 @@ async def _rotate_saved_source_account(
         )
         await session.commit()
         return shared, rotated
+
+
+async def _qualify_native_pin(journey, request, monkeypatch, pin):
+    # Use real DB routing and configured local Git client readiness. The
+    # fixture deployment declares an inert value; no provider is contacted.
+    from api_service.db import base
+    from moonmind.workflows.executions.repository_contract import RepositoryClientPolicy
+
+    monkeypatch.setattr(base, "async_session_maker", journey.session_factory)
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-local-readiness")
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(journey.worker_root / "managed_runs"))
+    observed = await launcher._observe_git_client()
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(journey.worker_root / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=observed.client_version, toolBundleRef=observed.tool_bundle_ref,
+            executableSha256=observed.executable_sha256,
+        ),
+    )
+    assert not launcher._request_workspace_needs_github_https_auth(request, None)
+    selected = await launcher._select_request_github_access(request)
+    assert selected.connection is None and selected.credential.resolved
+    resolved = await launcher._repository_readiness_boundary(request, None, selected)
+    assert resolved.remote_tip_expectation == {"kind": "read_only"}
+    assert resolved.prepared_revision.commit_sha == pin
+    return launcher, resolved.model_dump(by_alias=True, mode="json")

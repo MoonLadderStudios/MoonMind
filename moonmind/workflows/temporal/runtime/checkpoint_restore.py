@@ -858,7 +858,63 @@ class ManagedCheckpointRestoreService:
             )
         return result.stdout
 
+    def _restore_detached_initial_refs(self, workspace, descriptor, manifest):
+        """Restore selected clone refs without turning a pinned HEAD into a branch."""
+        try:
+            branch = descriptor["selectedBranch"]
+            refs = descriptor.get("gitRefs")
+            base = manifest.get("baseCommit")
+            git_state = manifest.get("git")
+            if (
+                not isinstance(branch, str) or not branch
+                or not isinstance(git_state, dict) or git_state.get("branch") != ""
+                or not isinstance(refs, dict)
+                or not isinstance(base, str)
+                or not re.fullmatch(r"[0-9a-f]{40}", base)
+            ):
+                raise ValueError("invalid detached source identity")
+            # --branch can resolve shorthand such as @{-1}; it is not authority
+            # to substitute a different branch for the exact admitted literal.
+            if self._git(["check-ref-format", "--branch", branch], workspace) != branch:
+                raise ValueError("nonliteral selected branch")
+            local = "refs/heads/" + branch
+            remote = "refs/remotes/origin/" + branch
+            symbolic = "refs/remotes/origin/HEAD"
+            if set(refs) not in ({local, remote}, {local, remote, symbolic}):
+                raise ValueError("incomplete or foreign selected refs")
+            tip = refs[local].get("commit") if isinstance(refs[local], dict) else None
+            if not isinstance(tip, str) or not re.fullmatch(r"[0-9a-f]{40}", tip):
+                raise ValueError("selected tip must be a full object identity")
+            for name, value in refs.items():
+                expected = {"commit": tip}
+                if name == symbolic:
+                    expected["symbolicTarget"] = remote
+                if value != expected:
+                    raise ValueError("selected refs disagree")
+            for commit in (base, tip):
+                if self._git(["rev-parse", "--verify", commit + "^{commit}"], workspace) != commit:
+                    raise ValueError("source object is not the exact commit")
+            if self._git(["rev-parse", "--verify", "HEAD^{commit}"], workspace) != base:
+                raise ValueError("workspace does not hold the admitted pinned commit")
+            if self._git(["rev-parse", "--abbrev-ref", "HEAD"], workspace) != "HEAD":
+                raise ValueError("workspace HEAD must remain detached")
+            self._git(["merge-base", "--is-ancestor", base, tip], workspace)
+            # All authority/object checks precede any ref or tracking writes.
+            self._git(["update-ref", local, tip], workspace)
+            self._git(["update-ref", remote, tip], workspace)
+            if symbolic in refs:
+                self._git(["symbolic-ref", symbolic, remote], workspace)
+            self._configure_initial_branch_tracking(workspace, branch)
+        except (CheckpointRestoreError, KeyError, TypeError, ValueError, OSError):
+            # Git diagnostics may echo descriptor-controlled branch/ref values.
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED",
+                "detached initial source refs exceed their authority",
+            ) from None
+
     def _restore_initial_refs(self, workspace, descriptor, manifest):
+        if "selectedBranch" in descriptor:
+            return self._restore_detached_initial_refs(workspace, descriptor, manifest)
         branch = (manifest.get("git") or {}).get("branch")
         refs = descriptor.get("gitRefs")
         allowed = {
@@ -895,19 +951,14 @@ class ManagedCheckpointRestoreService:
             else:
                 self._git(["update-ref", name, value["commit"]], workspace)
         if "refs/remotes/origin/" + branch in refs:
-            self._git(["config", "branch." + branch + ".remote", "origin"], workspace)
-            self._git(
-                ["config", "branch." + branch + ".merge", "refs/heads/" + branch],
-                workspace,
-            )
-            self._git(
-                [
-                    "config",
-                    "remote.origin.fetch",
-                    "+refs/heads/" + branch + ":refs/remotes/origin/" + branch,
-                ],
-                workspace,
-            )
+            self._configure_initial_branch_tracking(workspace, branch)
+
+    def _configure_initial_branch_tracking(self, workspace, branch):
+        local = "refs/heads/" + branch
+        remote = "refs/remotes/origin/" + branch
+        self._git(["config", "branch." + branch + ".remote", "origin"], workspace)
+        self._git(["config", "branch." + branch + ".merge", local], workspace)
+        self._git(["config", "remote.origin.fetch", "+" + local + ":" + remote], workspace)
 
     def _restore_saved_local_refs(self, workspace, history, manifest):
         """Restore only bounded local refs, never copied remote URLs or helpers."""

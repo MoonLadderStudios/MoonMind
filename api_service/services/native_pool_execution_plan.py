@@ -1071,6 +1071,7 @@ def _validate_local_source_original_input(request, snapshot):
     """
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
         source_intent,
+        supports_detached_local_pin,
     )
 
     frozen = snapshot.get("draft") if isinstance(snapshot, Mapping) else None
@@ -1138,6 +1139,8 @@ def _validate_local_source_original_input(request, snapshot):
             "repo",
             "startingBranch",
             "branch",
+            "targetBranch",
+            "connectionRef",
         ):
             if layer.get(key) is not None:
                 root_workspace[key] = deepcopy(layer[key])
@@ -1150,20 +1153,26 @@ def _validate_local_source_original_input(request, snapshot):
     # repository input. It does not grant a new source or resolve raw paths.
     workspace.setdefault("workspaceSource", {"kind": "repository"})
     try:
-        expected = source_intent(
-            request.model_copy(
-                update={
-                    "workspace_spec": workspace,
-                    "parameters": {"publishMode": "none"},
-                }
-            )
+        original = request.model_copy(
+            update={
+                "workspace_spec": workspace,
+                "parameters": {"publishMode": "none"},
+            }
         )
+        expected = source_intent(original)
     except (ValueError, TypeError):
         return False
     if expected is None:
         return False
     if expected != source_intent(request):
         raise ValueError("local source differs from the frozen authored source")
+    if expected["commitSha"] and (
+        not supports_detached_local_pin(request, expected)
+        or not supports_detached_local_pin(
+            original.model_copy(update={"parameters": frozen}), expected, frozen=True
+        )
+    ):
+        return False
     return True
 
 
