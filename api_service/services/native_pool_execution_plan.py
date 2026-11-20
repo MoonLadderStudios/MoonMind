@@ -773,7 +773,7 @@ async def prepare_selected_pool_plan(
                 resolve_source_authority,
             )
 
-            intent = source_intent(request)
+            intent = source_intent(request, bind_target_branch=True)
             source_authority = await resolve_source_authority(
                 request=request,
                 intent=intent,
@@ -1070,6 +1070,7 @@ def _validate_local_source_original_input(request, snapshot):
     dependency evidence can be revalidated here; this is not a template engine.
     """
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
+        local_source_uses_default_access,
         source_intent,
         supports_detached_local_pin,
     )
@@ -1159,17 +1160,23 @@ def _validate_local_source_original_input(request, snapshot):
                 "parameters": {"publishMode": "none"},
             }
         )
-        expected = source_intent(original)
+        expected = source_intent(original, bind_target_branch=True)
     except (ValueError, TypeError):
         return False
     if expected is None:
         return False
-    if expected != source_intent(request):
+    if expected != source_intent(request, bind_target_branch=True):
         raise ValueError("local source differs from the frozen authored source")
+    frozen_request = original.model_copy(update={"parameters": frozen})
+    if expected.get("targetBranch") and not (
+        local_source_uses_default_access(request)
+        and local_source_uses_default_access(frozen_request)
+    ):
+        return False
     if expected["commitSha"] and (
         not supports_detached_local_pin(request, expected)
         or not supports_detached_local_pin(
-            original.model_copy(update={"parameters": frozen}), expected, frozen=True
+            frozen_request, expected, frozen=True
         )
     ):
         return False
@@ -1185,7 +1192,11 @@ def _source_grant(request, lease, payload):
     )
 
     grant = (lease.safe_metadata_json or {}).get("initialRepositorySource")
-    intent = source_intent(request)
+    saved_intent = grant.get("intent") if isinstance(grant, Mapping) else None
+    intent = source_intent(
+        request,
+        bind_target_branch=isinstance(saved_intent, Mapping) and "targetBranch" in saved_intent,
+    )
     if (
         not isinstance(grant, Mapping)
         or grant.get("version") != 1

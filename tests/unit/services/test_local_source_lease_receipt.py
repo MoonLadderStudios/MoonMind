@@ -37,6 +37,23 @@ def state():
     return request, lease, grant
 
 
+@pytest.mark.parametrize("recorded_branch", [False, True], ids=["legacy", "bound"])
+def test_local_source_grant_keeps_its_recorded_target_branch_contract(recorded_branch):
+    request, lease, grant = state()
+    request.workspace_spec["targetBranch"] = "operator/work"
+    intent = source_intent(request, bind_target_branch=recorded_branch)
+    grant.update(
+        requestDigest=service._request_digest(request, None),
+        intent=intent,
+        sourceIntentDigest=intent_digest(intent),
+    )
+    assert service._source_grant(request, lease, {}) == grant
+    assert ("targetBranch" in intent) is recorded_branch
+    request.workspace_spec["targetBranch"] = "another"
+    with pytest.raises(ValueError, match="grant differs"):
+        service._source_grant(request, lease, {})
+
+
 @asynccontextmanager
 async def session_factory():
     yield SimpleNamespace(commit=AsyncMock())

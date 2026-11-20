@@ -40,6 +40,63 @@ from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "bound,descriptor_target,mutated,error",
+    [
+        (False, None, False, None),
+        (True, "operator/work", False, None),
+        (False, "operator/work", False, "checkout differs"),
+        (True, None, False, "checkout differs"),
+        (True, "operator/work", True, "launch intent"),
+    ],
+)
+async def test_initial_local_checkout_requires_same_recorded_target(
+    tmp_path, monkeypatch, bound, descriptor_target, mutated, error
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal.runtime import initial_repository_source as local
+
+    request = AgentExecutionRequest.model_construct(
+        canonical_repository_workspace_handoff=True,
+        workspace_spec={
+            "workspaceSource": {"kind": "repository"},
+            "repository": "/worker/source",
+            "startingBranch": "main",
+            "targetBranch": "operator/work",
+        },
+        parameters={"publishMode": "none"},
+        step_execution=SimpleNamespace(
+            workflow_id="mm:local-input", run_id="run", logical_step_id="step"
+        ),
+    )
+    intent = local.source_intent(request, bind_target_branch=bound)
+    snapshot = {"sourceIntentDigest": local.intent_digest(intent)}
+    if mutated:
+        request.workspace_spec["targetBranch"] = "changed"
+    descriptor = {"source": {"workflowId": "mm:local-input", "runId": "run"}}
+    if descriptor_target is not None:
+        descriptor["targetBranch"] = descriptor_target
+    read = AsyncMock(return_value=descriptor)
+    monkeypatch.setattr(local, "read_initial_source", read)
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=AsyncMock(), workspace_root=tmp_path
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(resolvedTools={"initialRepositorySource": snapshot})
+    )
+    source = SimpleNamespace(kind="repository")
+
+    if error:
+        with pytest.raises(ValueError, match=error):
+            await materializer._read_step_input_checkpoint(source, request, plan)
+        if mutated:
+            read.assert_not_awaited()
+    else:
+        assert await materializer._read_step_input_checkpoint(source, request, plan) == descriptor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "input_kind,fault",
     [
         ("direct", None),

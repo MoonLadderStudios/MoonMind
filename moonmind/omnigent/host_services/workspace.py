@@ -790,17 +790,28 @@ class OmnigentWorkspaceMaterializer:
                 source_intent,
             )
 
-            intent = source_intent(request)
-            if intent is None or initial.get("sourceIntentDigest") != intent_digest(
-                intent
-            ):
-                raise ValueError(
-                    "initial source differs from the admitted launch intent"
-                )
+            intent = source_intent(request, bind_target_branch=True)
+            expected = initial.get("sourceIntentDigest")
+            if intent is None:
+                raise ValueError("initial source differs from the admitted launch intent")
+            target_branch = intent.get("targetBranch")
+            if expected != intent_digest(intent):
+                # Older accepted receipts did not bind a target branch. Their
+                # original digest can only authorize the original checkout.
+                if not target_branch or expected != intent_digest(
+                    {key: value for key, value in intent.items() if key != "targetBranch"}
+                ):
+                    raise ValueError("initial source differs from the admitted launch intent")
+                target_branch = None
             access = await step_execution_artifact_access(request)
             descriptor = await read_initial_source(
                 self._remediation_artifacts, initial, access=access
             )
+            if (
+                descriptor.get("targetBranch") != target_branch
+                or ("targetBranch" in descriptor) != (target_branch is not None)
+            ):
+                raise ValueError("initial source checkout differs from admitted intent")
             if (
                 descriptor["source"].get("workflowId"),
                 descriptor["source"].get("runId"),
@@ -1438,7 +1449,7 @@ class OmnigentWorkspaceMaterializer:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
         target_branch = str(spec.get("targetBranch") or "").strip()
-        if source.kind == "repository" and target_branch:
+        if source.kind == "repository" and target_branch and not defer_restore:
             await self._prepare_target_branch(
                 candidate, target_branch=target_branch,
                 runtime_uid=runtime_uid, runtime_gid=runtime_gid,

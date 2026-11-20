@@ -858,25 +858,37 @@ class ManagedCheckpointRestoreService:
             )
         return result.stdout
 
-    def _restore_detached_initial_refs(self, workspace, descriptor, manifest):
-        """Restore selected clone refs without turning a pinned HEAD into a branch."""
+    def _restore_selected_initial_refs(self, workspace, descriptor, manifest):
+        """Restore source tracking without changing the staged HEAD's identity."""
         try:
             branch = descriptor["selectedBranch"]
             refs = descriptor.get("gitRefs")
             base = manifest.get("baseCommit")
             git_state = manifest.get("git")
+            has_target = "targetBranch" in descriptor
+            target = descriptor.get("targetBranch")
             if (
                 not isinstance(branch, str) or not branch
-                or not isinstance(git_state, dict) or git_state.get("branch") != ""
+                or not isinstance(git_state, dict)
+                or git_state.get("branch") != (target if has_target else "")
+                or (has_target and (not isinstance(target, str) or not target))
                 or not isinstance(refs, dict)
                 or not isinstance(base, str)
                 or not re.fullmatch(r"[0-9a-f]{40}", base)
             ):
-                raise ValueError("invalid detached source identity")
+                raise ValueError("invalid selected source identity")
             # --branch can resolve shorthand such as @{-1}; it is not authority
             # to substitute a different branch for the exact admitted literal.
             if self._git(["check-ref-format", "--branch", branch], workspace) != branch:
                 raise ValueError("nonliteral selected branch")
+            if has_target:
+                if (
+                    target == branch
+                    or target.startswith(branch + "/")
+                    or branch.startswith(target + "/")
+                    or self._git(["check-ref-format", "--branch", target], workspace) != target
+                ):
+                    raise ValueError("nonliteral or conflicting target branch")
             local = "refs/heads/" + branch
             remote = "refs/remotes/origin/" + branch
             symbolic = "refs/remotes/origin/HEAD"
@@ -895,10 +907,16 @@ class ManagedCheckpointRestoreService:
                 if self._git(["rev-parse", "--verify", commit + "^{commit}"], workspace) != commit:
                     raise ValueError("source object is not the exact commit")
             if self._git(["rev-parse", "--verify", "HEAD^{commit}"], workspace) != base:
-                raise ValueError("workspace does not hold the admitted pinned commit")
-            if self._git(["rev-parse", "--abbrev-ref", "HEAD"], workspace) != "HEAD":
-                raise ValueError("workspace HEAD must remain detached")
-            self._git(["merge-base", "--is-ancestor", base, tip], workspace)
+                raise ValueError("workspace does not hold the admitted base commit")
+            if has_target:
+                if tip != base or self._git(
+                    ["symbolic-ref", "--no-recurse", "HEAD"], workspace
+                ) != "refs/heads/" + target:
+                    raise ValueError("workspace does not hold the admitted target branch")
+            else:
+                if self._git(["rev-parse", "--abbrev-ref", "HEAD"], workspace) != "HEAD":
+                    raise ValueError("workspace HEAD must remain detached")
+                self._git(["merge-base", "--is-ancestor", base, tip], workspace)
             # All authority/object checks precede any ref or tracking writes.
             self._git(["update-ref", local, tip], workspace)
             self._git(["update-ref", remote, tip], workspace)
@@ -909,12 +927,12 @@ class ManagedCheckpointRestoreService:
             # Git diagnostics may echo descriptor-controlled branch/ref values.
             raise CheckpointRestoreError(
                 "CHECKPOINT_MANIFEST_CORRUPTED",
-                "detached initial source refs exceed their authority",
+                "selected initial source refs exceed their authority",
             ) from None
 
     def _restore_initial_refs(self, workspace, descriptor, manifest):
-        if "selectedBranch" in descriptor:
-            return self._restore_detached_initial_refs(workspace, descriptor, manifest)
+        if "selectedBranch" in descriptor or "targetBranch" in descriptor:
+            return self._restore_selected_initial_refs(workspace, descriptor, manifest)
         branch = (manifest.get("git") or {}).get("branch")
         refs = descriptor.get("gitRefs")
         allowed = {
