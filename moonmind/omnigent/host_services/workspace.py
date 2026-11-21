@@ -795,6 +795,7 @@ class OmnigentWorkspaceMaterializer:
             if intent is None:
                 raise ValueError("initial source differs from the admitted launch intent")
             target_branch = intent.get("targetBranch")
+            legacy_pin = None
             if expected != intent_digest(intent):
                 # Older accepted receipts did not bind a target branch. Their
                 # original digest can only authorize the original checkout.
@@ -802,14 +803,30 @@ class OmnigentWorkspaceMaterializer:
                     {key: value for key, value in intent.items() if key != "targetBranch"}
                 ):
                     raise ValueError("initial source differs from the admitted launch intent")
+                legacy_pin = intent.get("commitSha")
                 target_branch = None
             access = await step_execution_artifact_access(request)
             descriptor = await read_initial_source(
                 self._remediation_artifacts, initial, access=access
             )
+            # The original markerless exporter could accept a same-tip pin
+            # and restore its source branch. Keep that recorded behavior;
+            # a newer detached receipt cannot authorize a late target branch.
+            if legacy_pin and (
+                descriptor["workspace"].get("baseCommit") != legacy_pin
+                or any(key in descriptor for key in ("selectedBranch", "targetBranch", "checkoutPin"))
+            ):
+                raise ValueError("initial source differs from the admitted launch intent")
+            checkout_pin = intent.get("commitSha") if target_branch else None
             if (
                 descriptor.get("targetBranch") != target_branch
                 or ("targetBranch" in descriptor) != (target_branch is not None)
+                or descriptor.get("checkoutPin") != checkout_pin
+                or ("checkoutPin" in descriptor) != (checkout_pin is not None)
+                or (checkout_pin and (
+                    descriptor["workspace"].get("baseCommit") != checkout_pin
+                    or descriptor.get("selectedBranch") != intent["branch"]
+                ))
             ):
                 raise ValueError("initial source checkout differs from admitted intent")
             if (

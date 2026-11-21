@@ -78,17 +78,17 @@ def source_intent(request, *, bind_target_branch=False):
         "logicalStepId": request.step_execution.logical_step_id,
     }
 
-    # Retained receipts still attest the old source-only contract. Only a
-    # newly bound, unpinned handoff may name an additional checkout branch.
-    if bind_target_branch and not intent["commitSha"]:
+    # Retained receipts still attest the old source-only contract. Bind any
+    # additional checkout branch only when the admitted receipt records it.
+    if bind_target_branch:
         target_branch = str(workspace.get("targetBranch") or "").strip()
         if target_branch:
             intent["targetBranch"] = target_branch
     return intent
 
 
-def supports_detached_local_pin(request, intent, *, frozen=False):
-    """Select only the launcher's typed, detached, default-connection read."""
+def supports_local_pin(request, intent, *, frozen=False):
+    """Select only typed default-connection pins with the admitted checkout."""
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
         RepositoryContractError,
@@ -114,7 +114,7 @@ def supports_detached_local_pin(request, intent, *, frozen=False):
             ("refs/heads/", "refs/remotes/origin/", "origin/")
         )
         or target.repository.name != intent["repository"]
-        or str(workspace.get("targetBranch") or "").strip()
+        or str(workspace.get("targetBranch") or "").strip() != (intent.get("targetBranch") or "")
     ):
         return False
 

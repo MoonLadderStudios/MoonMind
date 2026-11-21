@@ -1072,7 +1072,7 @@ def _validate_local_source_original_input(request, snapshot):
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
         local_source_uses_default_access,
         source_intent,
-        supports_detached_local_pin,
+        supports_local_pin,
     )
 
     frozen = snapshot.get("draft") if isinstance(snapshot, Mapping) else None
@@ -1174,8 +1174,8 @@ def _validate_local_source_original_input(request, snapshot):
     ):
         return False
     if expected["commitSha"] and (
-        not supports_detached_local_pin(request, expected)
-        or not supports_detached_local_pin(
+        not supports_local_pin(request, expected)
+        or not supports_local_pin(
             frozen_request, expected, frozen=True
         )
     ):

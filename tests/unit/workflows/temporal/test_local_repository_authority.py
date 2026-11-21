@@ -172,19 +172,22 @@ def test_source_target_refuses_collision_or_nonliteral_git_selection(source, bra
         _capture_source_bytes(source, {"branch": "chosen", "targetBranch": branch})
 
 
-def test_source_new_target_does_not_hide_existing_source_branch(source):
+@pytest.mark.parametrize("pinned", [False, True], ids=["unpinned", "pinned"])
+def test_source_new_target_does_not_hide_existing_source_branch(source, pinned):
     from moonmind.workflows.temporal.runtime.initial_repository_source import (
         LocalRepositorySourceUnavailable,
     )
 
+    pin = git(source, "rev-parse", "HEAD")
     git(source, "checkout", "-b", "operator/existing")
     (source / "tracked.txt").write_text("different committed target\n")
     git(source, "commit", "-am", "Advance existing target")
     git(source, "checkout", "chosen")
+    intent = {"branch": "chosen", "targetBranch": "operator/existing"}
+    if pinned:
+        intent["commitSha"] = pin
     with pytest.raises(LocalRepositorySourceUnavailable, match="existing source branch"):
-        _capture_source_bytes(
-            source, {"branch": "chosen", "targetBranch": "operator/existing"}
-        )
+        _capture_source_bytes(source, intent)
 
 
 def test_source_export_rejects_missing_pin(source):
@@ -192,7 +195,8 @@ def test_source_export_rejects_missing_pin(source):
         _capture_source_bytes(source, {"branch": "chosen", "commitSha": "0" * 40})
 
 
-def test_source_exports_pin_tree_and_complete_selected_ref_history(source, tmp_path):
+@pytest.mark.parametrize("target", [None, "operator/work"], ids=["detached", "new-target"])
+def test_source_exports_pin_tree_and_complete_selected_ref_history(source, tmp_path, target):
     import tarfile
     from io import BytesIO
 
@@ -202,10 +206,14 @@ def test_source_exports_pin_tree_and_complete_selected_ref_history(source, tmp_p
     tip = git(source, "rev-parse", "HEAD")
     (source / "tracked.txt").write_text("dirty\n")
 
-    head, branch, refs, pack, history, archive, entries = _capture_source_bytes(
-        source, {"branch": "chosen", "commitSha": pin}
-    )
+    intent = {"branch": "chosen", "commitSha": pin}
+    if target:
+        intent["targetBranch"] = target
+    head, branch, refs, pack, history, archive, entries = _capture_source_bytes(source, intent)
     assert head == pin
+    if target:
+        assert "refs/heads/" + target not in refs
+        assert git(source, "branch", "--list", target) == ""
     # The capture still has a separate identity for the selected branch.
     assert branch == "chosen"
     assert refs["refs/heads/chosen"]["commit"] == tip

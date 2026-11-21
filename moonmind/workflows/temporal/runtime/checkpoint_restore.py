@@ -867,6 +867,7 @@ class ManagedCheckpointRestoreService:
             git_state = manifest.get("git")
             has_target = "targetBranch" in descriptor
             target = descriptor.get("targetBranch")
+            has_checkout_pin = "checkoutPin" in descriptor
             if (
                 not isinstance(branch, str) or not branch
                 or not isinstance(git_state, dict)
@@ -875,6 +876,10 @@ class ManagedCheckpointRestoreService:
                 or not isinstance(refs, dict)
                 or not isinstance(base, str)
                 or not re.fullmatch(r"[0-9a-f]{40}", base)
+                or (
+                    has_checkout_pin
+                    and (not has_target or descriptor["checkoutPin"] != base)
+                )
             ):
                 raise ValueError("invalid selected source identity")
             # --branch can resolve shorthand such as @{-1}; it is not authority
@@ -909,13 +914,14 @@ class ManagedCheckpointRestoreService:
             if self._git(["rev-parse", "--verify", "HEAD^{commit}"], workspace) != base:
                 raise ValueError("workspace does not hold the admitted base commit")
             if has_target:
-                if tip != base or self._git(
+                if (not has_checkout_pin and tip != base) or self._git(
                     ["symbolic-ref", "--no-recurse", "HEAD"], workspace
                 ) != "refs/heads/" + target:
                     raise ValueError("workspace does not hold the admitted target branch")
             else:
                 if self._git(["rev-parse", "--abbrev-ref", "HEAD"], workspace) != "HEAD":
                     raise ValueError("workspace HEAD must remain detached")
+            if not has_target or has_checkout_pin:
                 self._git(["merge-base", "--is-ancestor", base, tip], workspace)
             # All authority/object checks precede any ref or tracking writes.
             self._git(["update-ref", local, tip], workspace)
@@ -931,7 +937,7 @@ class ManagedCheckpointRestoreService:
             ) from None
 
     def _restore_initial_refs(self, workspace, descriptor, manifest):
-        if "selectedBranch" in descriptor or "targetBranch" in descriptor:
+        if any(key in descriptor for key in ("selectedBranch", "targetBranch", "checkoutPin")):
             return self._restore_selected_initial_refs(workspace, descriptor, manifest)
         branch = (manifest.get("git") or {}).get("branch")
         refs = descriptor.get("gitRefs")
