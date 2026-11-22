@@ -7,7 +7,7 @@
     "exclusions": ["vendor"],
     "allowInlineSuppressions": false,
     "gitleaksOwnsSecrets": false,
-    "feedMaxAgeHours": 72,
+    "feedMaxAgeHours": 48,
     "maxFiles": 4096,
     "maxInputBytes": 134217728,
     "maxReportBytes": 8388608,
