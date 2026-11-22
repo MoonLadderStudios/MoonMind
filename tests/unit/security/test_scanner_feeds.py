@@ -1093,3 +1093,47 @@ def test_required_fresh_feed_stops_before_any_scanner_process(tmp_path, monkeypa
     diagnostic = "feed_snapshot_stale" if prerequisite == "stale" else "feed_snapshot_incomplete"
     assert {diagnostic, "scanner_prerequisite_failed"} <= set(execution.limitations)
     assert execution.feed.snapshot.snapshot_id == snapshot.snapshot_id
+
+
+@pytest.mark.parametrize("invalid", ["regression", "malformed", "oversized"])
+def test_exploitation_refresh_and_offline_import_are_atomic(tmp_path, invalid):
+    from tests.fixtures.security_review.exploitation_feeds import write_component
+
+    root, output = tmp_path / "feeds", tmp_path / "out"
+    components = ["vulnerability", "kev", "epss"]
+    request = FeedRefresh(feedCacheRef="feeds", egressPolicyRef="feeds", components=components)
+
+    def fetch(component, stage, scratch, deadline):
+        if component == "vulnerability":
+            trivy_cache(stage, (component,))
+        else:
+            write_component(stage, component, NOW.date().isoformat())
+
+    assert feeds.run_refresh(request, root, output, fetch=fetch, clock=lambda: NOW) == 0
+    snapshot = feeds.current_snapshot(root)
+    assert snapshot.components["kev"].license_terms == "CC0-1.0"
+    assert "FIRST" in snapshot.components["epss"].attribution
+    assert snapshot.components["epss"].data_version == "v2025.03.14"
+    src = root / "snapshots" / snapshot.snapshot_id
+    members = [(p.relative_to(src).as_posix(), "file", p.read_bytes())
+               for p in src.rglob("*") if p.is_file() and p.name != feeds.MANIFEST]
+    imported = FeedRefresh(feedCacheRef="feeds", acquisition="import", components=components,
+                           archiveArtifactRef="art_fixture")
+    assert feeds.run_refresh(imported, tmp_path / "import", output, archive=archive(tmp_path, members),
+                             fetch=lambda *_: pytest.fail("network during import"), clock=lambda: NOW) == 0
+    other = feeds.current_snapshot(tmp_path / "import")
+    assert other.snapshot_id == snapshot.snapshot_id
+    assert other.components["epss"].upstream == snapshot.components["epss"].upstream
+
+    def bad(component, stage, scratch, deadline):
+        fetch(component, stage, scratch, deadline)
+        if component == "epss":
+            if invalid == "regression":
+                write_component(stage, component, (NOW - timedelta(days=1)).date().isoformat())
+            elif invalid == "malformed":
+                (stage / "epss/scores.csv.gz").write_bytes(b"truncated")
+    if invalid == "oversized":
+        request = request.model_copy(update={"max_bytes": 30})
+    assert feeds.run_refresh(request, root, output, fetch=bad, clock=lambda: NOW) != 0
+    assert refresh_result(output)["failure"].startswith("feed_")
+    assert feeds.current_snapshot(root) == snapshot

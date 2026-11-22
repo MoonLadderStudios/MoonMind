@@ -61,6 +61,9 @@ _PROBE_CODES = frozenset(
         "scanner_rules_unavailable",
         "scanner_rule_integrity_failed",
         "feed_snapshot_available",
+        "feed_component_fresh",
+        "feed_component_stale",
+        "feed_component_missing",
         "feed_freshness_verified",
         "feed_snapshot_stale",
         "feed_snapshot_incomplete",
@@ -73,7 +76,7 @@ _PROBE_CODES = frozenset(
     ]
 )
 _COMPONENTS = frozenset(
-    ["gitleaks", "opengrep", "trivy", "rules", "feeds", "checks", "java", "selection"]
+    ["gitleaks", "opengrep", "trivy", "rules", "feeds", "checks", "java", "kev", "epss", "selection"]
 )
 _REGISTRY_CREDENTIAL_TIMEOUT_SECONDS = 15
 

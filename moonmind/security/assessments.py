@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
+from moonmind.security.exploitation_data import VulnerabilityPriority
 from moonmind.security.evidence_exports import EvidenceExportSelection
 from moonmind.security.frameworks import (
     AssessmentText,
@@ -228,6 +229,8 @@ class Finding(Contract):
     rule_id: Text
     asset: Text
     native_id: Text
+    severity: Text | None = Field(None, exclude_if=lambda value: value is None)
+    priority: VulnerabilityPriority | None = Field(None, exclude_if=lambda value: value is None)
     evidence_refs: Evidence
 
     @property
@@ -1304,7 +1307,12 @@ def compare_observations(
                     else retained.evidence_expires_at
                 ),
                 changed_intelligence=(
-                    []
+                    [
+                        key for key in _intelligence_changes(current, previous_observation, finding)
+                        if key in {"trivy:kev", "trivy:epss"}
+                        and getattr(finding.priority, key.split(":")[1], None)
+                        != getattr(retained.finding.priority, key.split(":")[1], None)
+                    ]
                     if retained
                     else _intelligence_changes(current, previous_observation, finding)
                 ),

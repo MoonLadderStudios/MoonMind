@@ -44,6 +44,8 @@ from moonmind.security.scanner_feeds import (
     FeedSnapshotError,
     copy_snapshot,
     feed_evidence,
+    require_exploitation_feeds,
+    retain_exploitation_matches,
     load_snapshot,
 )
 
@@ -332,10 +334,12 @@ def run_image_assessment(
                     max_age_hours=assessment.feed_max_age_hours,
                     now=datetime.now(UTC),
                 )
-                if execution.feed.stale_components:
+                if assessment.require_fresh_feeds and execution.feed.stale_components:
+                    raise FeedSnapshotError("feed_snapshot_stale")
+                if assessment.require_fresh_feeds:
+                    require_exploitation_feeds(execution.feed)
+                if set(execution.feed.stale_components) - {"kev", "epss"}:
                     limitations.append("feed_snapshot_stale")
-                    if assessment.require_fresh_feeds:
-                        raise FeedSnapshotError("feed_snapshot_stale")
             version = root / "version"
             processes.run(["trivy", "--version"], cwd=root, env=env, capture=version)
             if version.exists():
@@ -376,6 +380,7 @@ def run_image_assessment(
                     secrets,
                     input_digest,
                     archive_identity,
+                    cache,
                 )
             )
         except InputError as exc:
@@ -407,7 +412,7 @@ def run_image_assessment(
 
 
 def _retain(
-    assessment, execution, raw, output, secrets, input_digest, archive_identity
+    assessment, execution, raw, output, secrets, input_digest, archive_identity, cache
 ) -> list[str]:
     """Check native output, record the examined subject, then release it."""
     generate = assessment.operation == "sbom-generate"
@@ -461,7 +466,9 @@ def _retain(
         (output / "sbom.json").write_bytes(body)
     else:
         try:
-            (output / "report.json").write_bytes(sanitize_native("trivy", body, limit))
+            safe = sanitize_native("trivy", body, limit)
+            (output / "report.json").write_bytes(safe)
+            retain_exploitation_matches(execution.feed, cache, json.loads(safe))
         except (ValueError, TypeError, RecursionError):
             limitations.append("native_sanitization_failed")
     return limitations

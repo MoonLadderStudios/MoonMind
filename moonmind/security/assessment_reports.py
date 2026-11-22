@@ -29,6 +29,24 @@ def _text(value):
     return re.sub(r"([\\`*[\]{}()#!|>])", r"\\\1", value)
 
 
+def _priority_order(row):
+    priority = row["finding"].get("priority") or {}
+    epss = priority.get("epss") or {}
+    return (priority.get("kev") is None, -epss.get("probability", -1))
+
+
+def _priority_text(priority):
+    kev, epss = priority.get("kev"), priority.get("epss")
+    parts = []
+    if kev:
+        parts.append(f"Known exploited (CISA KEV), added {kev['dateAdded']}, due {kev['dueDate']}, "
+                     f"ransomware campaign use {kev['ransomwareUse']}.")
+    if epss:
+        parts.append(f"EPSS probability {epss['probability']:.2%}, percentile {epss['percentile']:.2%} "
+                     f"on {epss['scoreDate']}.")
+    return " ".join(parts) or "Unscored. No matching exploitation intelligence."
+
+
 def render_assessment_details(
     comparison,
     *,
@@ -83,6 +101,12 @@ def render_assessment_details(
             f"  Configuration: {_text(row['configRef'])}. Intelligence: {_text(row.get('intelligence', {}))}.",
             f"  Source observation window: {_text(window if window else 'not separately recorded; aggregate window above')}.",
         ]
+        intelligence = row.get("intelligence", {})
+        if "kevStatus" in intelligence:
+            lines.append(f"  Exploitation data — CISA KEV: {_text(intelligence['kevStatus'])}. "
+                         f"FIRST EPSS: {_text(intelligence['epssStatus'])}.")
+    if not any("kevStatus" in row.get("intelligence", {}) for row in observation["coverage"]):
+        lines.append("Exploitation data: not requested or unavailable in the retained evidence.")
     covered = {asset for row in observation["coverage"] for asset in row["assets"]}
     lines.append(
         "Unassessed assets: "
@@ -105,7 +129,7 @@ def render_assessment_details(
         {row.finding_id: row for row in context.annotations} if context else {}
     )
     finding_bytes = omitted_findings = 0
-    for row in comparison["findings"]:
+    for row in sorted(comparison["findings"], key=_priority_order):
         block_start = len(lines)
         finding = row["finding"]
         lines += [
@@ -117,6 +141,10 @@ def render_assessment_details(
             + ".",
             f"Verification: {_text(row.get('verification') or 'not verified')}. Coverage identity: {_text(row.get('observedCoverageKey') or 'unavailable')}.",
         ]
+        if finding.get("severity"):
+            lines.append(f"Native severity: {_text(finding['severity'])}.")
+        if finding.get("priority") is not None:
+            lines.append(_priority_text(finding["priority"]))
         annotation = annotations.get(row["findingId"])
         if annotation:
             lines.append(
@@ -143,7 +171,8 @@ def render_assessment_details(
             )
         else:
             lines.append(
-                "Severity, CVSS metrics and business risk: undefined. Reproduce using the retained native evidence, assess environment-specific impact, remediate the affected rule, and run a scope-matched retest. No authored remediation or management response was supplied."
+                ("CVSS metrics and business risk: undefined. " if finding.get("severity") else "Severity, CVSS metrics and business risk: undefined. ")
+                + "Reproduce using the retained native evidence, assess environment-specific impact, remediate the affected rule, and run a scope-matched retest. No authored remediation or management response was supplied."
             )
         block_bytes = len(("\n".join(lines[block_start:]) + "\n").encode("utf-8"))
         if finding_bytes + block_bytes > MAX_FINDING_DETAIL_BYTES:

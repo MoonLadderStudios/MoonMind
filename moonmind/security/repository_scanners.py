@@ -11,6 +11,7 @@ from pydantic import Field
 from moonmind.schemas.repository_scanner_models import RepositoryScan, ScannerRule
 from moonmind.security.assessments import Contract, Finding, Items, Text, content_key
 from moonmind.security.scanner_feeds import FeedEvidence
+from moonmind.security.exploitation_data import VulnerabilityPriority
 from moonmind.utils.logging import redact_sensitive_text
 
 Scanner = Literal["gitleaks", "opengrep", "trivy"]
@@ -329,7 +330,7 @@ def normalize_native(
     try:
         native = _document(scanner, body, MAX_REPORT_BYTES)
 
-        def finding(rule, asset, identity):
+        def finding(rule, asset, identity, *, vulnerability=False, severity=None):
             if not isinstance(rule, str) or not rule:
                 raise ValueError("missing native rule")
             findings.append(
@@ -340,6 +341,8 @@ def normalize_native(
                     asset=_asset(asset),
                     native_id=content_key(identity),
                     evidence_refs=[native_ref],
+                    priority=VulnerabilityPriority() if vulnerability else None,
+                    severity=severity if isinstance(severity, str) else None,
                 )
             )
             if len(findings) > 4096:
@@ -461,6 +464,8 @@ def normalize_native(
                                     item.get("StartLine"),
                                     item.get("CauseMetadata", {}).get("StartLine"),
                                 ],
+                                vulnerability=family == "Vulnerabilities",
+                                severity=item.get("Severity"),
                             )
                         except (ValueError, KeyError, TypeError, AttributeError):
                             limitations.append("missing_malformed_or_truncated_report")

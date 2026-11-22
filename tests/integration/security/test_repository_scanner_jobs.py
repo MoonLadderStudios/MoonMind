@@ -126,7 +126,8 @@ def native(scanner):
                     "Target": "requirements.txt",
                     "Vulnerabilities": [
                         {
-                            "VulnerabilityID": "CVE-EXAMPLE",
+                            "VulnerabilityID": "CVE-2024-0001",
+                            "Severity": "LOW",
                             "PkgName": "fixture-dependency",
                             "InstalledVersion": "1.0",
                             "Description": MARKER,
@@ -246,10 +247,14 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         (stage / "db" / "metadata.json").write_text(
             json.dumps({"Version": 2, "UpdatedAt": now, "DownloadedAt": now})
         )
+        from tests.fixtures.security_review.exploitation_feeds import write_component
+
+        for component in ("kev", "epss"):
+            write_component(stage, component, now[:10])
         snapshot, _ = publish_snapshot(
             db,
             stage,
-            components=["vulnerability"],
+            components=["vulnerability", "kev", "epss"],
             acquisition="import",
             upstreams={"vulnerability": "artifact:art_fixture"},
             now=datetime.now(UTC),
@@ -419,6 +424,11 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
             artifact_id=ref, access=access_for_test("workflow:assessment")
         )
         assert MARKER.encode() not in body
+        if scanner == "trivy" and ref == outputs["comparisonRef"]:
+            row = next(item for item in json.loads(body)["findings"]
+                       if item["finding"]["ruleId"] == "CVE-2024-0001")
+            assert row["finding"]["priority"]["kev"]["ransomwareUse"] == "Unknown"
+            assert row["finding"]["severity"] == "LOW"
     record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
     record.logs_ref = result.logs_ref
     record.artifacts_ref = result.artifacts_ref

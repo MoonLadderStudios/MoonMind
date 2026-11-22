@@ -27,6 +27,9 @@ import tarfile
 import tempfile
 import time
 import uuid
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -41,6 +44,7 @@ from moonmind.schemas.repository_scanner_models import (
     Text,
 )
 from moonmind.security.assessments import content_key
+from moonmind.security import exploitation_data as exploitation
 
 SNAPSHOT_SCHEMA = "scanner-feed-snapshot/v1"
 MANIFEST = "manifest.json"
@@ -53,12 +57,14 @@ UPSTREAMS: dict[str, str] = {
     "vulnerability": "ghcr.io/aquasecurity/trivy-db:2",
     "java": "ghcr.io/aquasecurity/trivy-java-db:1",
     "checks": "ghcr.io/aquasecurity/trivy-checks:1",
+    **exploitation.SOURCES,
 }
 #: GHCR answers registry requests and redirects blob transfers to its CDN.
 FEED_HOSTS = frozenset({"ghcr.io", "pkg-containers.githubusercontent.com"})
 
 #: Each component's Trivy cache-dir location and supported metadata schema.
 _LAYOUT: dict[str, str] = {"vulnerability": "db", "java": "java-db", "checks": "policy"}
+_LAYOUT.update({name: name for name in exploitation.SOURCES})
 _SCHEMA = {"vulnerability": 2, "java": 1}
 _DATABASE = {"vulnerability": "trivy.db", "java": "trivy-java.db"}
 _JAVA_ARCHIVES = (".jar", ".war", ".ear", ".par")
@@ -89,6 +95,10 @@ class FeedSnapshotError(ValueError):
 
 class FeedComponentRecord(Contract):
     upstream: Text
+    data_version: str | None = None
+    license_terms: str | None = None
+    attribution: str | None = None
+    archive_ref: str | None = None
     schema_version: int | None = None
     content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     upstream_digest: str | None = Field(None, pattern=r"^sha256:[0-9a-f]{64}$")
@@ -105,6 +115,7 @@ class FeedSnapshot(Contract):
     schema_version: Literal["scanner-feed-snapshot/v1"] = SNAPSHOT_SCHEMA
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     acquisition: Literal["download", "import"]
+    trivy_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     published_at: datetime
     components: dict[FeedComponent, FeedComponentRecord]
     validation: Literal["passed"] = "passed"
@@ -119,6 +130,8 @@ class FeedEvidence(Contract):
     max_age_hours: int
     evaluated_at: datetime
     stale_components: list[FeedComponent] = Field(default_factory=list)
+    # Only records needed by this scan cross the artifact boundary.
+    matches: dict[str, exploitation.VulnerabilityPriority] = Field(default_factory=dict, max_length=4096)
 
 
 class FeedRefreshResult(Contract):
@@ -149,7 +162,8 @@ def _timestamp(value) -> datetime | None:
 
 
 def tree_digest(
-    root: Path, *, exclude: frozenset[str] = frozenset(), max_bytes=MAX_SNAPSHOT_BYTES
+    root: Path, *, exclude: frozenset[str] = frozenset(), max_bytes=MAX_SNAPSHOT_BYTES,
+    file_records: list | None = None,
 ) -> str:
     """SHA-256 of sorted ``[relative_path, file_sha256]`` pairs.
 
@@ -185,7 +199,10 @@ def tree_digest(
             records.append([relative, digest])
     if not records:
         raise FeedSnapshotError("feed_snapshot_incomplete")
-    return content_key(sorted(records))
+    records.sort()
+    if file_records is not None:
+        file_records.extend(records)
+    return content_key(records)
 
 
 def _metadata(path: Path) -> dict:
@@ -226,6 +243,20 @@ def _component_records(
         directory = stage / _LAYOUT[component]
         if directory.is_symlink() or not directory.is_dir():
             raise FeedSnapshotError("feed_snapshot_incomplete")
+        if component in exploitation.SOURCES:
+            try:
+                version, updated, _ = exploitation.read_component(stage, component, max_bytes=max_bytes)
+            except ValueError as exc:
+                raise FeedSnapshotError("feed_snapshot_incompatible") from exc
+            terms, attribution = exploitation.TERMS[component]
+            origin = upstreams.get(component, "")
+            records[component] = FeedComponentRecord(
+                upstream=UPSTREAMS[component], archiveRef=origin if origin.startswith("artifact:") else None,
+                contentDigest=tree_digest(directory, max_bytes=max_bytes),
+                downloadedAt=acquired_at, updatedAt=updated, dataVersion=version,
+                licenseTerms=terms, attribution=attribution,
+            )
+            continue
         meta = _metadata(directory / "metadata.json")
         if component == "checks":
             content = directory / "content"
@@ -415,8 +446,11 @@ def publish_snapshot(
     filesystem. Identical content published concurrently is reused.
     """
     records = _component_records(stage, components, upstreams, now, max_bytes)
+    file_records = []
+    snapshot_id = tree_digest(stage, max_bytes=max_bytes, file_records=file_records)
     snapshot = FeedSnapshot(
-        snapshotId=tree_digest(stage, max_bytes=max_bytes),
+        snapshotId=snapshot_id,
+        trivyDigest=content_key([row for row in file_records if row[0].split("/")[0] not in exploitation.SOURCES]),
         acquisition=acquisition,
         publishedAt=now,
         components=records,
@@ -425,6 +459,15 @@ def publish_snapshot(
     target = _snapshots(root) / snapshot.snapshot_id
     reused = False
     with _writer_lock(root):
+        pointer = root / "current.json"
+        # Carry the last accepted date even across Trivy-only publications and retention.
+        dates = _metadata(pointer).get("upstreamDates", {}) if pointer.exists() else {}
+        for name in exploitation.SOURCES.keys() & records.keys():
+            updated = records[name].updated_at
+            previous = _timestamp(dates.get(name))
+            if previous and updated < previous:
+                raise FeedSnapshotError("feed_snapshot_incompatible")
+            dates[name] = updated.isoformat()
         if target.exists():
             try:
                 snapshot = load_snapshot(
@@ -437,7 +480,7 @@ def publish_snapshot(
             os.rename(stage, target)
         _write_atomic(
             root / "current.json",
-            json.dumps({"snapshotId": snapshot.snapshot_id}).encode(),
+            json.dumps({"snapshotId": snapshot.snapshot_id, "upstreamDates": dates}).encode(),
         )
     return snapshot, reused
 
@@ -527,6 +570,36 @@ def extract_archive(
 Fetch = Callable[[str, Path, Path, float], None]
 
 
+class _FeedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        dest = urlsplit(newurl)
+        if (dest.scheme != "https" or dest.hostname != urlsplit(req.full_url).hostname
+                or dest.port not in (None, 443) or dest.username is not None):
+            raise FeedSnapshotError("feed_download_failed")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def fetch_component(component: str, stage: Path, scratch: Path, deadline: float) -> None:
+    if component not in exploitation.SOURCES:
+        trivy_fetch(component, stage, scratch, deadline)
+        return
+    directory = stage / component
+    directory.mkdir()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise FeedSnapshotError("feed_download_failed")
+    opener = urllib.request.build_opener(_FeedRedirect())
+    try:
+        with opener.open(UPSTREAMS[component], timeout=min(60, remaining)) as response:
+            with (directory / exploitation.FILES[component]).open("xb") as output:
+                while chunk := response.read(64 * 1024):
+                    if output.tell() + len(chunk) > exploitation.MAX_BYTES[component] or time.monotonic() > deadline:
+                        raise FeedSnapshotError("feed_download_failed")
+                    output.write(chunk)
+    except (OSError, urllib.error.URLError) as exc:
+        raise FeedSnapshotError("feed_download_failed") from exc
+
+
 def trivy_fetch(component: str, stage: Path, scratch: Path, deadline: float) -> None:
     """Fetch one component into private scratch, then move only its layout.
 
@@ -613,6 +686,43 @@ def feed_evidence(
     )
 
 
+def component_state(evidence: FeedEvidence | None, component: str) -> str:
+    if evidence is None or evidence.snapshot is None or component not in evidence.snapshot.components:
+        return "missing"
+    return "stale" if component in evidence.stale_components else "fresh"
+
+
+def require_exploitation_feeds(evidence: FeedEvidence | None) -> None:
+    for name in exploitation.SOURCES:
+        state = component_state(evidence, name)
+        if state == "missing":
+            raise FeedSnapshotError("feed_snapshot_incomplete")
+        if state == "stale":
+            raise FeedSnapshotError("feed_snapshot_stale")
+
+
+def retain_exploitation_matches(evidence: FeedEvidence | None, cache: Path, native: dict) -> None:
+    """Carry a bounded subset from the verified private cache into security.assess."""
+    wanted = set()
+    for result in native.get("Results") or ():
+        vulnerabilities = result.get("Vulnerabilities") if isinstance(result, dict) else None
+        if not isinstance(vulnerabilities, list):
+            continue
+        for item in vulnerabilities:
+            cve = item.get("VulnerabilityID") if isinstance(item, dict) else None
+            if isinstance(cve, str) and exploitation.CVE.fullmatch(cve) and len(wanted) < 4096:
+                wanted.add(cve)
+    if not wanted:
+        return
+    for name in exploitation.SOURCES:
+        if component_state(evidence, name) != "fresh":
+            continue
+        _, _, matches = exploitation.read_component(cache, name, wanted)
+        for cve, match in matches.items():
+            priority = evidence.matches.setdefault(cve, exploitation.VulnerabilityPriority())
+            setattr(priority, name, match)
+
+
 def scanner_feed(
     scan, root: Path, destination: Path, assets: list[str], *, now: datetime
 ) -> tuple[FeedEvidence | None, list[str]]:
@@ -633,7 +743,7 @@ def scanner_feed(
         max_age_hours=scan.feed_max_age_hours,
         now=now,
     )
-    limitations = ["feed_snapshot_stale"] if evidence.stale_components else []
+    limitations = ["feed_snapshot_stale"] if set(evidence.stale_components) - exploitation.SOURCES.keys() else []
     # The Java index is required only when Java archives are examined.
     if (
         "vuln" in scan.trivy_scanners
@@ -650,7 +760,7 @@ def run_refresh(
     output: Path,
     *,
     archive: Path | None = None,
-    fetch: Fetch = trivy_fetch,
+    fetch: Fetch = fetch_component,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
     """Publish a validated snapshot, or report the usable prior one."""
@@ -855,10 +965,23 @@ def validate_feed_refresh_job(spec) -> None:
             raise ValueError("feed refresh mounts differ from its admission")
 
 
-def feed_policy_admits(policy) -> bool:
+def component_hosts(components) -> set[str]:
+    hosts = set()
+    for component in components:
+        if component in exploitation.SOURCES:
+            hosts.add(urlsplit(UPSTREAMS[component]).hostname)
+        else:
+            hosts.update(FEED_HOSTS)
+    return hosts
+
+
+def feed_policy_admits(policy, components=None) -> bool:
     """A refresh's egress reaches feed hosts only, never broader provider egress."""
+    allowed = component_hosts(UPSTREAMS if components is None else components)
+    if components is not None and {d.host for d in policy.destinations} != allowed:
+        return False
     return all(
-        d.host in FEED_HOSTS
+        d.host in allowed
         and d.protocol == "https"
         and d.port == 443
         and d.target_network_ref is None

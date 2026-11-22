@@ -25,6 +25,7 @@ from moonmind.security.repository_scanner_runner import (
 from moonmind.security.scanner_feeds import (
     FeedSnapshotError,
     current_snapshot,
+    component_state,
     feed_evidence,
     load_snapshot,
 )
@@ -113,7 +114,14 @@ def inspect_selection(
                 max_age_hours=admitted.feed_max_age_hours,
                 now=now or datetime.now(UTC),
             )
-            if evidence.stale_components:
+            vulnerabilities = ("vuln" in admitted.trivy_scanners if repository
+                               else admitted.operation != "sbom-generate")
+            if vulnerabilities:
+                for name in ("kev", "epss"):
+                    state = component_state(evidence, name)
+                    checks.append(_check(name, "feed_component_" + state,
+                        "ready" if state == "fresh" else ("blocked" if admitted.require_fresh_feeds else "unverified")))
+            if set(evidence.stale_components) - {"kev", "epss"}:
                 checks.append(
                     _check(
                         "feeds",

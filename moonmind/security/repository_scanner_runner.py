@@ -23,7 +23,9 @@ from moonmind.security.repository_scanners import (
     ScannerOutputSanitizer,
     sanitize_native,
 )
-from moonmind.security.scanner_feeds import FeedSnapshotError, scanner_feed
+from moonmind.security.scanner_feeds import (
+    FeedSnapshotError, require_exploitation_feeds, retain_exploitation_matches, scanner_feed,
+)
 
 
 class BoundedProcesses:
@@ -376,8 +378,10 @@ def run_scanner(
             if metadata.feed is not None and metadata.feed.snapshot is not None:
                 metadata.database_digest = metadata.feed.snapshot.snapshot_id
             if scan.require_fresh_feeds:
-                if metadata.feed is not None and metadata.feed.stale_components:
+                if "feed_snapshot_stale" in feed_limitations:
                     raise FeedSnapshotError("feed_snapshot_stale")
+                if scan.scanner == "trivy" and "vuln" in scan.trivy_scanners:
+                    require_exploitation_feeds(metadata.feed)
                 if "java_db_unavailable" in feed_limitations:
                     raise FeedSnapshotError("feed_snapshot_incomplete")
             version = root / "version"
@@ -483,6 +487,8 @@ def run_scanner(
                         scan.scanner, body, scan.max_report_bytes, sanitizer=sanitizer
                     )
                     (output / f"{mode}.json").write_bytes(safe)
+                    if scan.scanner == "trivy" and "vuln" in scan.trivy_scanners:
+                        retain_exploitation_matches(metadata.feed, cache, json.loads(safe))
                 except Exception:  # noqa: BLE001
                     unsafe_metadata = True
                     metadata.limitations.append("native_sanitization_failed")
