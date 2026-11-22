@@ -71,19 +71,43 @@ def prepare_evidence_payload(payload: Any) -> Any:
 
 def validation_summary(error, model: type[BaseModel]) -> str:
     """Expose declared field names and error types, never values or authored keys."""
+    from moonmind.security.frameworks import (
+        AssessmentInputError,
+        FrameworkPackSelection,
+    )
+
     fields = {name for name in model.model_fields} | {
         field.alias for field in model.model_fields.values() if field.alias
     }
     details = []
-    for item in error.errors(
-        include_input=False, include_context=False, include_url=False
-    )[:8]:
+    for item in error.errors(include_input=False, include_url=False)[:8]:
         location = item.get("loc", ())
         field = location[0] if location and location[0] in fields else "input"
+        if field in {
+            "frameworkPack",
+            "frameworkPacks",
+            "framework_pack",
+            "framework_packs",
+        }:
+            rest = list(location[1:])
+            if rest and isinstance(rest[0], int):
+                field += f"[{rest.pop(0)}]"
+            selection_fields = FrameworkPackSelection.model_fields
+            if rest and (
+                rest[0] in selection_fields
+                or rest[0] in {f.alias for f in selection_fields.values()}
+            ):
+                field += f".{rest[0]}"
+        context = item.get("ctx", {})
+        if isinstance(context.get("error"), AssessmentInputError):
+            details.append(f"{field}: {context['error']}")
+            continue
         kind = item.get("type", "invalid_input")
         if not re.fullmatch(r"[a-z_]{1,64}", kind):
             kind = "invalid_input"
-        details.append(f"{field}: {kind}")
+        limit = context.get("max_length")
+        suffix = f" (maximum {limit})" if isinstance(limit, int) else ""
+        details.append(f"{field}: {kind}{suffix}")
     return "; ".join(details)
 
 

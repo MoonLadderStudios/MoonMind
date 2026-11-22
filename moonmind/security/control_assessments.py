@@ -7,7 +7,9 @@ Context claims and mappings never substitute for executed checks or widen scope.
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from functools import cache, partial
 
 from moonmind.security.assessments import (
     Comparison,
@@ -18,7 +20,7 @@ from moonmind.security.assessments import (
 )
 
 
-def _in_period(window, period, now):
+def _window(window, now):
     """A scan is a point observation, not proof of continuous operation."""
     try:
         observed = datetime.fromisoformat(window["observedAt"])
@@ -30,8 +32,65 @@ def _in_period(window, period, now):
         )
         fresh = observed <= now < expires and valid_from <= now
     except (KeyError, TypeError, ValueError):
-        return False, False
-    return fresh, period.start == period.end == observed.date()
+        return False, None
+    return fresh, observed.date()
+
+
+@dataclass
+class CellObservation:
+    """Native facts shared across requirements. Period and applicability stay local."""
+
+    methods: set[str] = field(default_factory=set)
+    configs: set[str] = field(default_factory=set)
+    finding_ids: set[str] = field(default_factory=set)
+    limitations: set[str] = field(default_factory=set)
+    dates: set[date | None] = field(default_factory=set)
+    deterministic_dates: set[date] = field(default_factory=set)
+    stale: bool = False
+    incomplete: bool = False
+    blocked: bool = False
+
+
+def _observe_cell(observation, windows, now, source, tool, asset, rule):
+    cell = CellObservation()
+    for index, row in enumerate(observation.coverage):
+        if (
+            (source, tool) != (row.source, row.tool)
+            or asset not in row.assets
+            or rule not in row.rule_ids
+        ):
+            continue
+        cell.configs.add(row.config_ref)
+        if row.evidence_method != "unclassified":
+            cell.methods.add(row.evidence_method)
+        fresh, observed_date = _window(
+            windows[index] if index < len(windows) else None, now
+        )
+        cell.dates.add(observed_date)
+        if not fresh:
+            cell.stale = True
+            cell.limitations.add(
+                "Evidence is stale, future-dated, or lacks its observation window."
+            )
+        if row.evidence_method != "deterministic_check":
+            cell.incomplete = True
+            cell.limitations.add(
+                "The source does not identify this evidence as an executed deterministic check."
+            )
+        elif fresh:
+            cell.deterministic_dates.add(observed_date)
+        if row.status != "complete":
+            cell.incomplete = True
+            cell.limitations.add(
+                "Matching source evidence includes incomplete or blocked execution."
+            )
+        cell.blocked |= row.status in {"authentication_failed", "failed", "unsupported"}
+    cell.finding_ids = {
+        row.finding_id
+        for row in observation.findings
+        if (row.source, row.tool, row.asset, row.rule_id) == (source, tool, asset, rule)
+    }
+    return cell
 
 
 def review_organisational_evidence(request, requirement, availability, now):
@@ -125,7 +184,9 @@ def assess_controls(
     review_ref: str | None = None,
     review_status: str = "not_requested",
 ) -> ControlAssessment:
-    observation = comparison.observation
+    observe_cell = cache(
+        partial(_observe_cell, comparison.observation, coverage_windows, now)
+    )
     results = []
     for requirement in plan.requirements:
         applicable = requirement.applicability == "applicable"
@@ -161,74 +222,25 @@ def assess_controls(
             configs, matched_ids, failed = set(), set(), False
             if applicable:
                 for asset, rule in cells:
-                    matching = [
-                        (index, row)
-                        for index, row in enumerate(observation.coverage)
-                        if row.source == objective.source
-                        and row.tool == objective.tool
-                        and asset in row.assets
-                        and rule in row.rule_ids
-                    ]
-                    # allRules describes a source's configuration, not proof an
-                    # arbitrary mapped rule was installed or actually selected.
-                    complete, valid = False, False
-                    cell_stale = False
-                    cell_incomplete = False
-                    for index, row in matching:
-                        configs.add(row.config_ref)
-                        deterministic = row.evidence_method == "deterministic_check"
-                        if row.evidence_method != "unclassified":
-                            methods.add(row.evidence_method)
-                        cell_incomplete |= not deterministic or row.status != "complete"
-                        if not deterministic:
-                            objective_limits.append(
-                                "The source does not identify this evidence as an executed deterministic check."
-                            )
-                        if row.status != "complete":
-                            objective_limits.append(
-                                "Matching source evidence includes incomplete or blocked execution."
-                            )
-                        window = (
-                            coverage_windows[index]
-                            if index < len(coverage_windows)
-                            else {}
+                    cell = observe_cell(objective.source, objective.tool, asset, rule)
+                    configs.update(cell.configs)
+                    methods.update(cell.methods)
+                    matched_ids.update(cell.finding_ids)
+                    objective_limits.extend(cell.limitations)
+                    stale |= cell.stale
+                    blocked |= cell.blocked
+                    point = (
+                        requirement.period.start
+                        if requirement.period.start == requirement.period.end
+                        else None
+                    )
+                    if cell.dates and (point is None or cell.dates != {point}):
+                        objective_limits.append(
+                            "Point-in-time observations do not cover the selected assessment period."
                         )
-                        fresh, in_period = _in_period(window, requirement.period, now)
-                        cell_stale |= not fresh
-                        if not fresh:
-                            objective_limits.append(
-                                "Evidence is stale, future-dated, or lacks its observation window."
-                            )
-                        if not in_period:
-                            objective_limits.append(
-                                "Point-in-time observations do not cover the selected assessment period."
-                            )
-                        valid |= deterministic and fresh and in_period
-                        complete |= (
-                            deterministic
-                            and row.status == "complete"
-                            and fresh
-                            and in_period
-                        )
-                        blocked |= row.status in {
-                            "authentication_failed",
-                            "failed",
-                            "unsupported",
-                        }
-                    stale |= cell_stale
-                    ids = {
-                        row.finding_id
-                        for row in observation.findings
-                        if row.source == objective.source
-                        and row.tool == objective.tool
-                        and row.asset == asset
-                        and row.rule_id == rule
-                    }
-                    matched_ids.update(ids)
-                    # An older observation cannot borrow a newer one's timestamp.
-                    # Mixed unavailable/stale windows remain inconclusive.
-                    failed |= bool(ids) and valid and not cell_stale
-                    if complete and not cell_stale and not cell_incomplete:
+                    valid = point in cell.deterministic_dates and not cell.stale
+                    failed |= bool(cell.finding_ids) and valid
+                    if valid and not cell.incomplete:
                         checked += 1
                     else:
                         objective_limits.append(
@@ -421,7 +433,9 @@ def assess_controls(
     )
 
 
-def render_control_assessment(report: ControlAssessment) -> str:
+def render_control_assessment(
+    report: ControlAssessment, *, structured_ref: str | None = None
+) -> str:
     """Use the ordinary assessment report, with evidence refs in its bundle."""
 
     from moonmind.utils.logging import redact_evidence_text
@@ -440,19 +454,59 @@ def render_control_assessment(report: ControlAssessment) -> str:
         ),
         f"Structured native comparison: {clean(report.comparison_ref)}.",
     ]
-    if report.framework_pack:
-        pack = report.framework_pack
+    packs = report.pack_metadata
+    record = (
+        f"[structured control assessment](/api/artifacts/{structured_ref}/download)"
+        if structured_ref
+        else "structured control assessment"
+    )
+    for pack in packs:
         lines += [
-            f"Framework pack: {clean(pack['id'])} / {clean(pack['edition'])} / {clean(pack['revision'])}.",
+            "",
+            f"### Framework pack: {clean(pack['id'])} / {clean(pack['edition'])} / {clean(pack['revision'])}.",
             f"Pack artifact: {clean(pack['artifactRef'])}; SHA-256: {clean(pack['sha256'])}.",
             f"Publication: {clean(pack['publicationStatus'])}; distribution: {clean(pack['distribution'])}.",
-            *[
-                f"- Assessment intelligence: {clean(value)}"
-                for value in report.intelligence_changes
-            ],
-            *[f"- Pack limitation: {clean(value)}" for value in report.diagnostics],
+            f"Previous assessment: {clean(pack.get('previousAssessmentStatus', 'initial'))}.",
         ]
+        for name, label in (
+            ("conclusionCounts", "Conclusions"),
+            ("coverageCounts", "Coverage"),
+        ):
+            counts = pack.get(name, {})
+            if counts:
+                lines.append(
+                    f"{label}: "
+                    + ", ".join(f"{clean(k)} {v}" for k, v in sorted(counts.items()))
+                )
+        for prior in pack.get("previousOnlyFrameworks", []):
+            lines.append(
+                f"- Prior pack {clean(prior['id'])} / {clean(prior['edition'])}: Unverified in this assessment."
+            )
+        changes = pack.get("intelligenceChanges", report.intelligence_changes)
+        lines.extend(f"- Assessment intelligence: {clean(value)}" for value in changes)
+        diagnostics = pack.get("diagnostics", report.diagnostics)
+        lines.extend(f"- Pack limitation: {clean(value)}" for value in diagnostics[:4])
+        if len(diagnostics) > 4:
+            lines.append(
+                f"{len(diagnostics) - 4} further pack limitations in the {record}."
+            )
+        for result in report.requirements:
+            row = result.requirement
+            if (row.framework_id, row.framework_edition) == (
+                pack["id"],
+                pack["edition"],
+            ):
+                lines.append(
+                    f"- {clean(row.id)}: **{result.conclusion}** ({result.coverage})."
+                )
+
+    # Keep all pack conclusions together. Additional detail is retained by
+    # whole requirement so a cut never separates a conclusion from its basis.
+    from moonmind.security.assessment_reports import MAX_REPORT_BYTES
+
+    detail_bytes = omitted = 0
     for result in report.requirements:
+        start = len(lines)
         row = result.requirement
         lines += [
             "",
@@ -503,4 +557,15 @@ def render_control_assessment(report: ControlAssessment) -> str:
             lines.append(
                 f"- Exception: {decision.disposition}, {exception.status}; {clean(decision.author)}: {clean(decision.reason)}. Review due: {decision.review_at.isoformat()}."
             )
+        if packs:
+            size = len(("\n".join(lines[start:]) + "\n").encode())
+            if detail_bytes + size > MAX_REPORT_BYTES // 8:
+                del lines[start:]
+                omitted += 1
+            else:
+                detail_bytes += size
+    if omitted:
+        lines.append(
+            f"Details for {omitted} requirements omitted from this presentation. See the {record}."
+        )
     return "\n".join(lines) + "\n"

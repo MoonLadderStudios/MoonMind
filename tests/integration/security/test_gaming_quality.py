@@ -202,11 +202,12 @@ async def test_native_gaming_corpus(environment, tmp_path, monkeypatch, case):
         if repeated["findings"]
         else ("clean" if repeat["coverageStatus"] == "complete" else "incomplete")
     )
+    assert result["publicationOutcome"] == "published", result["diagnostics"]
     report_ref = recurring.report_ref(result)
     _, exported = await service.read(
         artifact_id=report_ref, access=access_for_test("workflow:assessment")
     )
-    assert exported and result["publicationOutcome"] == "published"
+    assert exported
     assert re.findall(rb"Conclusion: \*\*([a-z_]+)\*\*", exported) == [
         conclusion.encode()
     ], "exported conclusion differs from retained control"
@@ -492,10 +493,14 @@ async def test_gaming_corpus_rejects_false_native_conclusion(
         monkeypatch.setattr(control_assessments, "assess_controls", false_pass)
     else:
         render = control_assessments.render_control_assessment
+
+        def false_export(report, *, structured_ref=None):
+            return render(report, structured_ref=structured_ref).replace(
+                "**not_satisfied**", "**satisfied**"
+            )
+
         monkeypatch.setattr(
-            control_assessments,
-            "render_control_assessment",
-            lambda report: render(report).replace("**not_satisfied**", "**satisfied**"),
+            control_assessments, "render_control_assessment", false_export
         )
     case = next(c for c in CASES if c["id"] == "gaming-math-defective")
     expected_failure = (

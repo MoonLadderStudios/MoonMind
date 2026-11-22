@@ -3,24 +3,26 @@
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
 There is no remote registry, scheduler or source download. Bundled preparation
-packs use `framework`; declared packs use `frameworkPack` and the existing
+packs use `framework`. Declared packs use `frameworkPacks` and the existing
 requirement evaluator. [SOC 2 readiness](SOC2Readiness.md) uses the shared preset
 catalog, documentary evidence owner and private reports.
 
-## Selecting a pack
+## Selecting packs
 
-Supply `frameworkPack` with `artifactRef`, `packId`, `edition`, `revision`, the
-artifact's `sha256`, and an assessment `period` (`start`, `end`). Optional
-`requirementChoices` is keyed by requirement ID. Each choice can narrow `systems`
-and `period`, and records `applicability` plus `applicabilityReason`. Omitted
+Supply up to 16 selections in `frameworkPacks`. Each names its `artifactRef`,
+`packId`, `edition`, `revision`, `sha256` and assessment `period` (`start`,
+`end`). Use each pack ID and edition pair once. The singular `frameworkPack`
+form in saved requests and schedules selects one pack through the same evaluator.
+Key each selection’s optional `requirementChoices` by requirement ID. A choice
+can narrow `systems` and `period`, and records `applicability` plus `applicabilityReason`. Omitted
 applicability remains undetermined. Explicit applicable/not-applicable choices
 need a rationale; `notApplicableReason` is also accepted. Choices cannot expand
 admitted assets or drop exclusions and repository exceptions.
 
-`previousAssessmentRef` optionally selects a retained control-assessment report
-for comparison. Do not also supply `controlAssessment`: the selected pack compiles
-the sole requirement plan. Native evidence tools or an explicit review are still
-required. A pack and its crosswalks are not evidence that checks ran.
+A request-level `previousAssessmentRef` compares all selections against one
+retained control report. A selection can supply its own previous report. All
+selections compile into one plan and are mutually exclusive with
+`controlAssessment`. Native evidence tools or an explicit review are still required. A pack and its crosswalks are not evidence that checks ran.
 
 The artifact owner verifies access and stored bytes before any native collection.
 The declared ID, edition and revision must match the selected values, and the
@@ -44,7 +46,7 @@ Use `schemaVersion: declared-framework-pack/v1` with:
 - `license` and `distribution`: `redistributable`, `restricted` or `prohibited`.
   The operator must have the relevant rights. Declaring a license or writing an
   original summary does not establish permission to redistribute source text.
-- One to 64 `requirements`, each with `id`, `title`, original `summary`,
+- One to 512 `requirements`, each with `id`, `title`, original `summary`,
   `category`, `applicability`, `evidencePrompt`, `objectiveBasis`, and explicit
   `objectives`. Objectives use `id`, `description`, `source`, `tool` and `ruleIds`.
   `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
@@ -80,13 +82,23 @@ source sections, rationales and objective descriptions, with an explicit omissio
 diagnostic. Prohibited packs are refused. Retention does not grant sharing rights
 or permission to export the underlying licensed artifact.
 
-A control report seals the selected pack alongside its actual native evidence.
-Retries recheck access and integrity, then reuse native work when unchanged.
-Edition, mapping, objective, provenance and rights changes appear as assessment
-intelligence changes, never a newly remediated system. A missing, foreign or
-unsealed previous report makes that comparison Unverified; it does not rewrite
-history or discard usable current evidence. Changed applicability and methods are
-reevaluated rather than inheriting a prior green conclusion.
+The combined plan admits 1,024 requirements, 16,384 asset-by-rule cells
+and 64 distinct supporting and organisational evidence references, including
+revision history. Each declared pack must fit in 2 MiB and the structured
+control report in 8 MiB. Web/API methodology admits 512 planned objectives and
+512 procedure results.
+Native facts for a shared source, tool, rule and asset are evaluated once.
+Each requirement applies its own period, applicability and evidence conditions.
+
+The control report seals each selected artifact and summarizes conclusions and
+coverage by pack. The 1 MiB readable presentation lists each conclusion ahead
+of budgeted detail and links omitted details to the structured record.
+`previousAssessmentRef` reads the prior sealed record once even when several
+selections cite it. New packs start with an initial comparison. Packs found
+only in the previous report are marked Unverified. Missing or unreadable
+history leaves comparison Unverified. A change in revision,
+objectives or rights is reported as an intelligence change. Both export tools
+return an explicit unsupported result for a multi-pack run.
 
 ## Organisational evidence requests and imports
 

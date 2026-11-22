@@ -12909,10 +12909,13 @@ async def _create_execution_from_workflow_request(
         if frozen_rollout:
             initial_parameters["runtimeProviderTarget"] = dict(frozen_rollout)
 
+    from moonmind.security.frameworks import AssessmentInputError
     from moonmind.security.organisational_evidence import organisational_evidence_refs
 
     try:
         evidence_input_refs = organisational_evidence_refs(normalized_task_for_planner)
+    except AssessmentInputError as exc:
+        raise _invalid_workflow_request(str(exc)) from None
     except (TypeError, ValueError):
         raise _invalid_workflow_request("Invalid organisational evidence inputs.") from None
     try:

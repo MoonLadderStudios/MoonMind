@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import re
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
@@ -24,6 +25,7 @@ from moonmind.security.assessments import (
     AssessmentRequest,
     Comparison,
     ControlAssessment,
+    ControlAssessmentPlan,
     Coverage,
     CoverageWindow,
     Finding,
@@ -45,6 +47,7 @@ from moonmind.security.dns_assessments import (
     build_dns_query_plan,
     summarize_dns_assessment,
 )
+from moonmind.security.frameworks import PACK_IDENTIFIER_PATTERN
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
@@ -78,6 +81,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactDependency,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
     TemporalArtifactStorageAccessError,
@@ -1577,34 +1581,29 @@ class AssessmentExecution:
         await self.seal(root, dependencies)
         return root, report
 
-    async def prepare_framework_pack(self, request):
-        """Resolve exact artifact bytes before collecting any assessment evidence."""
-        selection = request.framework_pack
-        if selection is None:
-            return request, None
+    async def read_declared_pack(self, selection, index, scope, now):
         from moonmind.security.evidence_exports import validation_summary
         from moonmind.security.framework_packs import (
             VersionedFrameworkPack,
-            compare_pack_metadata,
             compile_framework_plan,
             load_declared_pack,
             retained_pack_metadata,
         )
 
+        label = f"frameworkPacks[{index}] ({selection.pack_id})"
         try:
             _, raw = await self.read(selection.artifact_ref)
             if self.digests[selection.artifact_ref] != selection.sha256:
-                raise ValueError("framework pack content digest differs from selection")
+                raise ValueError("sha256 differs from the pack artifact")
             pack = load_declared_pack(
                 raw,
                 pack_id=selection.pack_id,
                 edition=selection.edition,
                 revision=selection.revision,
             )
-            now = datetime.now(UTC)
             plan, diagnostics = compile_framework_plan(
                 pack,
-                scope=request.scope,
+                scope=scope,
                 period=selection.period,
                 choices=selection.requirement_choices,
                 now=now,
@@ -1616,63 +1615,99 @@ class AssessmentExecution:
                 now=now,
             )
         except ValidationError as exc:
-            # Both Pydantic values and authored extra-field locations can carry
-            # private source text. Preserve only declared fields and error types.
-            raise ToolFailure(
-                "INVALID_INPUT",
-                "Invalid framework pack: "
-                + validation_summary(exc, VersionedFrameworkPack),
-                False,
-            ) from None
-        except ValueError:
-            raise ToolFailure(
-                "INVALID_INPUT",
-                "Invalid framework pack: value_error. Check declared identity, digest, distribution and assessment period.",
-                False,
-            ) from None
-        previous, previous_ref = None, None
-        if selection.previous_assessment_ref:
-            try:
-                _, raw = await self.read(selection.previous_assessment_ref)
-                retained = ControlAssessment.model_validate_json(raw)
-                previous = retained.framework_pack
-                if previous is None or previous.get("id") != pack.id:
-                    raise ValueError("previous assessment is for a different framework")
-                if (
-                    await _proof(
-                        self.service, selection.previous_assessment_ref, self.access
-                    )
-                    is None
-                ):
-                    raise ValueError(
-                        "previous assessment has no retained evidence seal"
-                    )
-                previous_ref = selection.previous_assessment_ref
-            except (
-                TemporalArtifactNotFoundError,
-                TemporalArtifactAuthorizationError,
-                TemporalArtifactStateError,
-                TemporalArtifactValidationError,
-                TemporalArtifactStorageAccessError,
-                TemporalArtifactUnavailableError,
-                ToolFailure,
-                ValueError,
-            ):
-                previous = None
-                diagnostics.append(
-                    "Previous framework assessment is unavailable, invalid or unsealed; assessment-intelligence comparison is Unverified."
-                )
-        if selection.previous_assessment_ref:
-            metadata["previousAssessmentRef"] = selection.previous_assessment_ref
-            metadata["previousAssessmentStatus"] = (
-                "available" if previous_ref else "unavailable"
+            detail = validation_summary(exc, VersionedFrameworkPack)
+        except (UnicodeError, json.JSONDecodeError, RecursionError):
+            detail = "artifactRef must contain valid framework pack JSON"
+        except ValueError as exc:
+            # The compiler and loader use fixed diagnostics; Pydantic input and
+            # JSON decoder errors (which can contain source text) are handled above.
+            detail = str(exc)
+        except TemporalArtifactError as exc:
+            code = getattr(exc, "code", None) or (
+                "POLICY_VIOLATION"
+                if isinstance(exc, TemporalArtifactAuthorizationError)
+                else "INVALID_INPUT"
             )
-        return request.model_copy(update={"control_assessment": plan}), {
-            "metadata": metadata,
-            "diagnostics": diagnostics,
-            "changes": compare_pack_metadata(metadata, previous),
-            "previousRef": previous_ref,
-        }
+            raise ToolFailure(
+                code,
+                f"{label}.artifactRef is unreadable ({type(exc).__name__})",
+                exc.retryable,
+            ) from None
+        except ToolFailure as exc:
+            raise ToolFailure(
+                exc.error_code, f"{label}.artifactRef: {exc.message}", exc.retryable
+            ) from None
+        else:
+            metadata["diagnostics"] = diagnostics
+            return plan.requirements, metadata
+        raise ToolFailure("INVALID_INPUT", f"Invalid {label}: {detail}", False)
+
+    async def previous_framework_metadata(self, ref):
+        try:
+            _, raw = await self.read(ref)
+            retained = ControlAssessment.model_validate_json(raw)
+            packs = retained.pack_metadata
+            if (
+                packs
+                and all(
+                    isinstance(p.get(field), str)
+                    and re.fullmatch(PACK_IDENTIFIER_PATTERN, p[field])
+                    for p in packs
+                    for field in ("id", "edition")
+                )
+                and await _proof(self.service, ref, self.access) is not None
+            ):
+                return packs
+        except (
+            TemporalArtifactNotFoundError,
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactStateError,
+            TemporalArtifactValidationError,
+            TemporalArtifactStorageAccessError,
+            TemporalArtifactUnavailableError,
+            ToolFailure,
+            ValueError,
+        ):
+            # An unreadable history record makes only the comparison unavailable.
+            # The current assessment still evaluates its own evidence.
+            pass
+        return None
+
+    async def prepare_framework_pack(self, request):
+        """Compile all selected packs and check aggregate bounds before collection."""
+        from moonmind.security.framework_packs import compare_selected_frameworks
+
+        selections = request.selected_packs
+        if not selections:
+            return request, []
+        requirements, packs = [], []
+        now = datetime.now(UTC)
+        for index, selection in enumerate(selections):
+            rows, metadata = await self.read_declared_pack(
+                selection, index, request.scope, now
+            )
+            requirements.extend(rows)
+            packs.append(metadata)
+        try:
+            plan = ControlAssessmentPlan(requirements=requirements)
+        except ValidationError as exc:
+            # Every row has already passed its own pack's validation.
+            error = exc.errors(include_input=False, include_url=False)[0]
+            raise ToolFailure(
+                "INVALID_INPUT", f"frameworkPacks.requirements: {error['msg']}", False
+            ) from None
+
+        history = {}
+        for selection, metadata in zip(selections, packs):
+            metadata["intelligenceChanges"] = []
+            metadata["previousAssessmentStatus"] = "initial"
+            ref = selection.previous_assessment_ref or request.previous_assessment_ref
+            if ref:
+                metadata["previousAssessmentRef"] = ref
+                if ref not in history:
+                    history[ref] = await self.previous_framework_metadata(ref)
+        compare_selected_frameworks(packs, history)
+        return request.model_copy(update={"control_assessment": plan}), packs
 
     async def prepare_controls(
         self,
@@ -1725,15 +1760,45 @@ class AssessmentExecution:
             review_ref=request.review_ref,
             review_status=review_status,
         )
-        if framework_pack_context is not None:
-            report = report.model_copy(
-                update={
-                    "framework_pack": framework_pack_context["metadata"],
-                    "intelligence_changes": framework_pack_context["changes"],
-                    "diagnostics": framework_pack_context["diagnostics"],
+        if framework_pack_context:
+            conclusions, coverage = Counter(), Counter()
+            for result in report.requirements:
+                key = (
+                    result.requirement.framework_id,
+                    result.requirement.framework_edition,
+                )
+                conclusions[key, result.conclusion] += 1
+                coverage[key, result.coverage] += 1
+            for pack in framework_pack_context:
+                key = (pack["id"], pack["edition"])
+                pack["conclusionCounts"] = {
+                    value: conclusions[key, value]
+                    for value in (
+                        "satisfied",
+                        "not_satisfied",
+                        "inconclusive",
+                        "not_assessed",
+                    )
                 }
-            )
+                pack["coverageCounts"] = {
+                    value: coverage[key, value]
+                    for value in ("complete", "partial", "blocked", "not_assessed")
+                }
+            if len(framework_pack_context) == 1:
+                pack = framework_pack_context[0]
+                report.framework_pack = pack
+                report.intelligence_changes = pack["intelligenceChanges"]
+                report.diagnostics = pack["diagnostics"]
+            else:
+                report.framework_packs = framework_pack_context
         document = report.model_dump(mode="json", by_alias=True)
+        payload = _json(document)
+        if len(payload) > MAX_RETAINED_REPORT_BYTES:
+            raise ToolFailure(
+                "INVALID_INPUT",
+                "controlAssessment exceeds the 8 MiB retained report bound",
+                False,
+            )
         # Reevaluate accessibility, freshness and triage on every invocation;
         # identical effective evidence reuses its immutable original assessment.
         key = content_key(
@@ -1748,13 +1813,14 @@ class AssessmentExecution:
             report = ControlAssessment.model_validate(document)
         else:
             root = await self.write(
-                _json(document), kind="security.control-assessment", key=key
+                payload, kind="security.control-assessment", key=key
             )
 
         async def dependencies():
             required = [scan_ref, comparison_ref, *readable]
-            if framework_pack_context is not None:
-                required.append(request.framework_pack.artifact_ref)
+            required.extend(
+                pack["artifactRef"] for pack in framework_pack_context or []
+            )
             if review_readable:
                 required.append(request.review_ref)
             if review is not None:
@@ -1765,10 +1831,15 @@ class AssessmentExecution:
                 )
                 for ref in dict.fromkeys(required)
             ]
-            if framework_pack_context and framework_pack_context["previousRef"]:
-                # Only the prior report's retained pack metadata contributes to
-                # this comparison. Its old scan closure is not current evidence.
-                ref = framework_pack_context["previousRef"]
+            # An initial result against a readable prior report also depends
+            # on that report: it establishes the absence of a matching pack.
+            prior_refs = dict.fromkeys(
+                p["previousAssessmentRef"]
+                for p in framework_pack_context or []
+                if "previousAssessmentRef" in p
+                and p["previousAssessmentStatus"] != "unavailable"
+            )
+            for ref in prior_refs:
                 entries.append(
                     ArtifactDependency(ref, await self.digest(ref), True, BASELINE_ROLE)
                 )
@@ -2030,7 +2101,7 @@ class AssessmentExecution:
         refs = [*request.report_refs]
         if request.inventory_ref:
             refs += [request.inventory_ref, request.feed_ref]
-        inputs = {ref: await self.read(ref) for ref in refs}
+        inputs = {ref: await self.read(ref) for ref in dict.fromkeys(refs)}
         baseline = None
         baseline_unavailable = False
         # Evidence identities the baseline's own seal already verified.
@@ -2196,7 +2267,7 @@ class AssessmentExecution:
                         scan_diagnostics.append(
                             {"boundary": "inventory-feed", "error": type(exc).__name__}
                         )
-                for ref in request.report_refs:
+                for ref in dict.fromkeys(request.report_refs):
                     metadata, raw = inputs[ref]
                     try:
                         payload = json.loads(raw)
@@ -3089,7 +3160,14 @@ class AssessmentExecution:
             except Exception as exc:
                 # Control/report failures cannot erase sealed native outcomes.
                 diagnostics.append(
-                    {"boundary": "control-assessment", "error": type(exc).__name__}
+                    {
+                        "boundary": "control-assessment",
+                        "error": (
+                            exc.message
+                            if isinstance(exc, ToolFailure)
+                            else type(exc).__name__
+                        ),
+                    }
                 )
         outputs = {
             "scanOutcome": work["scanOutcome"],
@@ -3151,7 +3229,7 @@ class AssessmentExecution:
                     else None
                 ),
                 assessmentIntelligenceChanges=control_report.intelligence_changes,
-                frameworkPackDiagnostics=control_report.diagnostics,
+                frameworkPackDiagnostics=control_report.diagnostics[:8],
                 controlAssessmentCounts={
                     value: sum(
                         row.conclusion == value for row in control_report.requirements
@@ -3164,6 +3242,27 @@ class AssessmentExecution:
                     )
                 },
             )
+            if len(control_report.diagnostics) > 8:
+                outputs["frameworkPackDiagnosticsOmitted"] = (
+                    len(control_report.diagnostics) - 8
+                )
+            if control_report.framework_packs:
+                outputs["frameworkPacks"] = [
+                    {
+                        k: pack[k]
+                        for k in (
+                            "id",
+                            "edition",
+                            "revision",
+                            "artifactRef",
+                            "sha256",
+                            "conclusionCounts",
+                            "coverageCounts",
+                            "previousAssessmentStatus",
+                        )
+                    }
+                    for pack in control_report.framework_packs
+                ]
         github = work.get("githubAlerts")
         if github is not None:
             outputs["githubAlerts"] = {
@@ -3338,7 +3437,14 @@ class AssessmentExecution:
                     render_control_assessment,
                 )
 
-                summary += render_control_assessment(control_report).encode()
+                controls_text = render_control_assessment(
+                    control_report, structured_ref=control_ref
+                ).encode()
+                if framework_pack_context:
+                    title, _, rest = summary.partition(b"\n")
+                    summary = title + b"\n" + controls_text + rest
+                else:
+                    summary += controls_text
             elif request.control_assessment is not None:
                 summary += b"\nRequirement assessment is unavailable. Native results are retained; requirement conclusions remain Unverified.\n"
             from moonmind.security.assessment_reports import bound_report_presentation
@@ -3498,7 +3604,17 @@ class AssessmentExecution:
                 comparison_ref=comparison_ref,
                 framework=framework,
             )
-        if request.evidence_export is not None:
+        if request.evidence_export is not None and len(request.selected_packs) > 1:
+            outputs["evidenceExport"] = {
+                "status": "unsupported",
+                "diagnostics": [
+                    {
+                        "code": "multiple_framework_packs",
+                        "message": "Evidence export supports one framework pack per assessment. This assessment selected multiple packs.",
+                    }
+                ],
+            }
+        elif request.evidence_export is not None:
             from moonmind.workflows.skills.security_evidence_export import (
                 associated_evidence,
                 export_selected_evidence,

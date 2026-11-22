@@ -212,10 +212,14 @@ def test_requirement_period_and_pack_bounds():
     with pytest.raises(ValueError, match="duplicate"):
         load(data)
     data = payload()
+    from moonmind.security.frameworks import MAX_PACK_REQUIREMENTS
+
     data["requirements"] = [
-        dict(data["requirements"][0], id=f"R{i}") for i in range(65)
+        dict(data["requirements"][0], id=f"R{i}") for i in range(MAX_PACK_REQUIREMENTS)
     ]
-    with pytest.raises(ValueError):
+    assert len(load(data).requirements) == MAX_PACK_REQUIREMENTS
+    data["requirements"].append(dict(data["requirements"][0], id="overflow"))
+    with pytest.raises(ValueError, match="requirements"):
         load(data)
 
 

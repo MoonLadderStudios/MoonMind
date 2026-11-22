@@ -13,32 +13,25 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, model_validator
 
 from moonmind.security.assessments import ControlObjective
 from moonmind.security.frameworks import (
+    MAX_PACK_REQUIREMENTS,
     AssessmentText,
     DeclaredRequirementChoice,
     EvidencePeriod,
     FrameworkContract,
     FrameworkRequirement,
     FrameworkSource,
-    Text,
 )
+from moonmind.security.frameworks import PackIdentifier as Identifier
+from moonmind.security.frameworks import Text
 from moonmind.security.web_api_methodology import AssessmentProcedure
 
 if TYPE_CHECKING:
     from moonmind.security.assessments import AssessmentScope, ControlAssessmentPlan
 
-Identifier = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=1,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
-    ),
-]
 Identifiers = Annotated[list[Identifier], Field(min_length=1, max_length=64)]
 
 
@@ -164,7 +157,9 @@ class VersionedFrameworkPack(FrameworkContract):
     methodology_editions: Annotated[
         dict[AssessmentText, Identifier], Field(max_length=16)
     ] = Field(default_factory=dict)
-    requirements: Annotated[list[PackRequirement], Field(min_length=1, max_length=64)]
+    requirements: Annotated[
+        list[PackRequirement], Field(min_length=1, max_length=MAX_PACK_REQUIREMENTS)
+    ]
     mapping_targets: Annotated[list[MappingTarget], Field(max_length=64)] = Field(
         default_factory=list
     )
@@ -213,7 +208,7 @@ def load_declared_pack(
     payload: bytes, *, pack_id: str, edition: str, revision: str
 ) -> VersionedFrameworkPack:
     if len(payload) > 2 * 1024 * 1024:
-        raise ValueError("framework pack exceeds byte bound")
+        raise ValueError("framework pack artifact exceeds the 2 MiB byte bound")
 
     # Reject duplicate JSON keys rather than silently admitting the last edition.
     def pairs(items):
@@ -438,3 +433,41 @@ def compare_pack_metadata(current: dict, previous: dict | None) -> list[str]:
         for key in keys
         if current.get(key) != previous.get(key)
     ]
+
+
+def compare_selected_frameworks(packs, history):
+    """Match exact editions first. A unique edition change retains its lineage."""
+    from collections import Counter
+
+    current_ids = Counter(pack["id"] for pack in packs)
+    for ref, previous in history.items():
+        readers = [pack for pack in packs if pack.get("previousAssessmentRef") == ref]
+        if previous is None:
+            for pack in readers:
+                pack["previousAssessmentStatus"] = "unavailable"
+                pack["diagnostics"].append(
+                    "Previous framework assessment is unavailable, invalid or unsealed; assessment-intelligence comparison is Unverified."
+                )
+            continue
+
+        by_key = {(p["id"], p["edition"]): p for p in previous}
+        previous_ids = Counter(p["id"] for p in previous)
+        matched = set()
+        for pack in packs:
+            key = (pack["id"], pack["edition"])
+            prior = by_key.get(key)
+            if prior is None and current_ids[key[0]] == previous_ids[key[0]] == 1:
+                prior = next(p for p in previous if p["id"] == key[0])
+            if prior is not None:
+                matched.add((prior["id"], prior["edition"]))
+                if pack.get("previousAssessmentRef") == ref:
+                    pack["previousAssessmentStatus"] = "available"
+                    pack["intelligenceChanges"] = compare_pack_metadata(pack, prior)
+        missing = [
+            {"id": ident, "edition": edition, "status": "unverified"}
+            for ident, edition in by_key
+            if (ident, edition) not in matched
+        ]
+        if missing:
+            for pack in readers:
+                pack["previousOnlyFrameworks"] = missing

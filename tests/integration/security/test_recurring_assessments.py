@@ -1730,6 +1730,12 @@ async def test_product_api_security_schedule_lifecycle(
         key="baseline",
     )
     request["baselineRef"] = baseline["comparisonRef"]
+    pack_attachment = []
+    if not bounded and authored_runtime is None:
+        from tests.integration.security.test_framework_pack_journey import select_pack
+
+        await select_pack(service, request)
+        pack_attachment = [{"artifactId": request["frameworkPack"]["artifactRef"]}]
     await record_finished(environment, "assessment")
     async def artifact_client(_self):
         return client
@@ -1765,7 +1771,8 @@ async def test_product_api_security_schedule_lifecycle(
                 "inputAttachments": [
                     {"artifactId": request[key]}
                     for key in ("inventoryRef", "feedRef", "baselineRef")
-                ],
+                ]
+                + pack_attachment,
                 "steps": [
                     {
                         "id": "assess",
@@ -1953,6 +1960,8 @@ async def test_product_api_security_schedule_lifecycle(
                 run_id=action.first_execution_run_id,
             )
             assert result["publicationOutcome"] == "published"
+            if pack_attachment:
+                assert result["controlAssessmentCounts"]["not_satisfied"] == 1
             # The occurrence admits the attached baseline through its seal.
             assert result["baselineStatus"] == "available"
             assert {request["baselineRef"], request["inventoryRef"]} <= await required(

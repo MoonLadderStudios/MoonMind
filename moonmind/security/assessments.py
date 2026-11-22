@@ -19,15 +19,22 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
-from moonmind.security.exploitation_data import VulnerabilityPriority
 from moonmind.security.evidence_exports import EvidenceExportSelection
+from moonmind.security.exploitation_data import VulnerabilityPriority
 from moonmind.security.frameworks import (
+    MAX_CONTROL_CELLS,
+    MAX_CONTROL_EVIDENCE_REFS,
+    MAX_CONTROL_REQUIREMENTS,
+    MAX_FRAMEWORK_PACKS,
+    MAX_PACK_REQUIREMENTS,
+    AssessmentInputError,
     AssessmentText,
     EvidencePeriod,
     FrameworkAssessmentInput,
     FrameworkPackSelection,
     OrganisationalEvidenceRequest,
     OrganisationalEvidenceResult,
+    selected_framework_packs,
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
 from moonmind.security.oscal_export import OscalExportRequest
@@ -44,6 +51,7 @@ MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
 Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
 Evidence = Annotated[list[Text], Field(min_length=1, max_length=64)]
+PackMetadata = Annotated[dict[str, Any], Field(max_length=32)]
 CoverageStatus = Literal[
     "complete", "partial", "authentication_failed", "unsupported", "failed"
 ]
@@ -118,7 +126,9 @@ class WebAPITestPlan(Contract):
     source_refs: Annotated[list[Text], Field(max_length=32)]
     api_context_refs: Annotated[list[Text], Field(max_length=32)]
     allowed_methods: Annotated[list[Method], Field(min_length=1, max_length=6)]
-    objectives: Annotated[list[PlannedObjective], Field(min_length=1, max_length=64)]
+    objectives: Annotated[
+        list[PlannedObjective], Field(min_length=1, max_length=MAX_PACK_REQUIREMENTS)
+    ]
 
 
 class SecurityInterpretation(Contract):
@@ -592,7 +602,8 @@ class ControlRequirement(Contract):
 
 class ControlAssessmentPlan(Contract):
     requirements: Annotated[
-        list[ControlRequirement], Field(min_length=1, max_length=64)
+        list[ControlRequirement],
+        Field(min_length=1, max_length=MAX_CONTROL_REQUIREMENTS),
     ]
 
     @model_validator(mode="after")
@@ -608,11 +619,15 @@ class ControlAssessmentPlan(Contract):
             for row in self.requirements
             for objective in row.objectives
         )
-        if cells > 16384:
-            raise ValueError("control assessment check population exceeds the bound")
+        if cells > MAX_CONTROL_CELLS:
+            raise AssessmentInputError(
+                f"requirements.objectives population exceeds the {MAX_CONTROL_CELLS} asset-by-rule cell bound"
+            )
         refs = set(self.evidence_refs())
-        if len(refs) > 64:
-            raise ValueError("control supporting evidence exceeds the reference bound")
+        if len(refs) > MAX_CONTROL_EVIDENCE_REFS:
+            raise AssessmentInputError(
+                f"requirements evidence exceeds the {MAX_CONTROL_EVIDENCE_REFS} reference bound"
+            )
         return self
 
     def evidence_refs(self, *, current_only: bool = False) -> list[str]:
@@ -686,14 +701,23 @@ class ControlAssessment(Contract):
     review_ref: Text | None = None
     review_status: Text
     requirements: Annotated[
-        list[ControlRequirementResult], Field(min_length=1, max_length=64)
+        list[ControlRequirementResult],
+        Field(min_length=1, max_length=MAX_CONTROL_REQUIREMENTS),
     ]
-    framework_pack: Annotated[dict[str, Any], Field(max_length=32)] | None = None
+    framework_pack: PackMetadata | None = None
+    framework_packs: Annotated[
+        list[PackMetadata], Field(max_length=MAX_FRAMEWORK_PACKS)
+    ] = Field(default_factory=list)
+
     intelligence_changes: Items = Field(default_factory=list)
     diagnostics: Items = Field(default_factory=list)
     assurance: Literal["independent_assessment_unverified"] = (
         "independent_assessment_unverified"
     )
+
+    @property
+    def pack_metadata(self):
+        return selected_framework_packs(self.framework_pack, self.framework_packs)
 
 
 class InventoryComponent(Contract):
@@ -911,15 +935,41 @@ class AssessmentRequest(Contract):
     framework: FrameworkAssessmentInput | None = None
     control_assessment: ControlAssessmentPlan | None = None
     framework_pack: FrameworkPackSelection | None = None
+    previous_assessment_ref: (
+        Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
+    ) = None
+    framework_packs: Annotated[
+        list[FrameworkPackSelection], Field(max_length=MAX_FRAMEWORK_PACKS)
+    ] = Field(default_factory=list)
+
     oscal_export: OscalExportRequest | None = None
     evidence_export: EvidenceExportSelection | None = None
     report_context: AssessmentReportContext | None = None
     product_baseline_ref: Text | None = None
 
+    @property
+    def selected_packs(self):
+        return selected_framework_packs(self.framework_pack, self.framework_packs)
+
     @model_validator(mode="after")
     def validate_admission(self):
-        if self.framework_pack is not None and self.control_assessment is not None:
-            raise ValueError("frameworkPack cannot also supply controlAssessment")
+        packs = self.selected_packs
+        if self.previous_assessment_ref and not packs:
+            raise AssessmentInputError(
+                "previousAssessmentRef requires a declared framework pack"
+            )
+        seen = set()
+        for index, pack in enumerate(packs):
+            key = (pack.pack_id, pack.edition)
+            if key in seen:
+                raise AssessmentInputError(
+                    f"frameworkPacks[{index}].packId repeats {pack.pack_id} edition {pack.edition}"
+                )
+            seen.add(key)
+        if packs and self.control_assessment is not None:
+            raise AssessmentInputError(
+                "frameworkPack cannot also supply controlAssessment"
+            )
         if (
             not self.tools
             and not self.review_ref
