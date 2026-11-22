@@ -490,7 +490,10 @@ async def test_pack_bounds_name_field_and_limit_before_collection(environment, b
     pack = pack_payload()
     row = pack["requirements"][0]
     if bound == "cells":
-        request["scope"]["assets"] = [f"app-{i}" for i in range(256)]
+        request["scope"] = {
+            **request["scope"],
+            "assets": [f"app-{i}" for i in range(256)],
+        }
         row["objectives"][0]["ruleIds"] = [f"r-{i}" for i in range(32)]
         row["objectives"] = [dict(row["objectives"][0], id=f"o-{i}") for i in range(3)]
     await select_pack(service, request, pack)
