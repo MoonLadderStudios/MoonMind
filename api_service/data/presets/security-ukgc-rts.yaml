@@ -17,13 +17,9 @@ annotations:
         minItems: 1
         description: List the admitted system identifiers used in the audit scope.
       system_inputs:
-        type: object
         title: Saved system and licence inputs
-        description: Record operatorName, businessDescription, licenceClass, licenceGrantedOn, regulatorDueOn, systemIdentification, criticalSystems and thirdParties. Cover customer_information, outcome_rng, gambling_state, entry_exit and communications with systems, inScope and rationale. The UKGC section of PassiveRepoScan documents the fields.
-        properties:
-          licenceClass:
-            type: string
-            enum: [remote_general_betting, remote_betting_host_real, remote_betting_host_virtual, remote_pool_betting, remote_betting_intermediary, remote_bingo, remote_game_host_bingo, remote_casino, remote_game_host_casino, remote_lottery, remote_external_lottery_manager, remote_society_lottery, software_supplier, telephone_only, trading_room]
+        description: Identify the critical systems in scope and record third-party responsibilities. The external audit uses the separate audit reference.
+        x-framework-inputs: ukgc-rts-security
       period:
         type: object
         title: Audit evidence period

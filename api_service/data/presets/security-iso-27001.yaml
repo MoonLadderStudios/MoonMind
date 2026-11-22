@@ -27,15 +27,9 @@ annotations:
         minItems: 1
         description: Admit the system identifiers examined by this assessment.
       system_inputs:
-        type: object
         title: Saved ISMS scope, risks and applicability decisions
-        description: Supply systems, scopeStatement, context, interestedParties, climateRelevance, risks
-          and controls. Risks retain id, version, owner, assessment, treatment, treatmentPlan, controlIds
-          and residualRiskApproval. Key controls by Annex A identifier (A.8.8) or EXTRA. identifier with
-          title, decision (include/exclude/undetermined), rationale, riskIds, owner and implementationStatus.
-          Attach purpose-specific organisational requests in requirementEvidence keyed by requirement
-          ID, with current revision, period, population and attributed review. Generated drafts and management
-          assertions do not establish adoption or operation.
+        description: Record control decisions by Annex A or EXTRA. identifier. Supply the risk owner, rationale and evidence for each decision.
+        x-framework-inputs: iso-27001-readiness
       period:
         type: object
         title: Assessment evidence period

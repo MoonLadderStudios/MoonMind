@@ -17,18 +17,9 @@ annotations:
         minItems: 1
         description: List the system identifiers admitted to this assessment. All system and requirement scopes must fit these assets.
       system_inputs:
-        type: object
         title: Saved entity and system inputs
-        description: Record entityName, entityType, systems and applicabilityBasis with licence, contract and inventory evidence. Set offersInternetGaming for a casino licensee or providesContentToOtherOperator for an RGS. annualRules may select nj.internet.annual, nj.network.annual and nj.rgs.annual; omission evaluates all three against entity scope. See the New Jersey section of PassiveRepoScan for record fields.
-        properties:
-          entityType:
-            type: string
-            enum: [casino_licensee, rgs_content_provider, unrelated_supplier]
-          annualRules:
-            type: array
-            items:
-              type: string
-              enum: [nj.internet.annual, nj.network.annual, nj.rgs.annual]
+        description: Record the licence, contract or inventory evidence that supports applicability. Omit annualRules to evaluate all three against the entity scope.
+        x-framework-inputs: nj-dge-readiness
       period:
         type: object
         title: Assessment evidence period

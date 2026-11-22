@@ -606,3 +606,50 @@ async def test_combined_requirement_bound_applies_before_collection(environment)
     request["frameworkPacks"] = selections
     with pytest.raises(ApplicationError, match=r"frameworkPacks.requirements.*1024"):
         await recurring.invoke(service, request)
+
+
+async def test_one_readiness_registration_lists_prepares_and_renders(environment, monkeypatch):
+    from functools import partial
+    from pydantic import Field
+
+    from moonmind.security.builtin_frameworks import prepare_scoped_framework
+    from moonmind.security.framework_registry import READINESS_PACKS, ReadinessPack, readiness_catalog
+    from moonmind.security.frameworks import FrameworkContract, FrameworkEvidence, load_framework_pack
+
+    class Inputs(FrameworkContract):
+        systems: list[str]
+        sample_size: int = Field(ge=1)
+
+    pack = load_framework_pack("gli-19-readiness")
+    pack.id = "fixture-readiness"
+
+    def evaluate(selection, *, evidence, audit):
+        return {
+            "schemaVersion": "fixture/v1", "pack": pack.model_dump(mode="json", by_alias=True),
+            "readiness": "incomplete", "evidenceRequests": [],
+            "sampleSize": selection.system_inputs["sampleSize"],
+        }
+
+    entry = ReadinessPack(
+        definition=lambda: pack, input_model=Inputs,
+        prepare=partial(prepare_scoped_framework, prepare=evaluate, evidence_type=FrameworkEvidence),
+        render=lambda report: f"Reviewed fixture sample of {report['sampleSize']}",
+        sector=None, jurisdiction=None, external_evidence=(), conclusion="Fixture review",
+    )
+    monkeypatch.setitem(READINESS_PACKS, pack.id, entry)
+    catalog = next(item for item in readiness_catalog() if item["id"] == pack.id)
+    assert catalog["requirementCount"] == len(load_framework_pack(pack.id).requirements)
+    assert catalog["inputSchema"]["properties"]["sampleSize"]["minimum"] == 1
+    result = await recurring.invoke(environment.service, {
+        "scope": {"assets": ["app"]}, "tools": [], "credentialRefs": [], "networkRefs": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+        "framework": {"packId": pack.id, "systemInputs": {"systems": ["app"], "sampleSize": 3},
+                      "period": {"start": "2026-01-01", "end": "2026-01-31"}},
+    })
+    assert result["frameworkEdition"] == pack.edition
+    assert result["publicationOutcome"] == "published"
+    _, primary = await environment.service.read(
+        artifact_id=result["reportBundle"]["primary_report_ref"]["artifact_id"],
+        access=recurring.access_for_test("workflow:assessment"),
+    )
+    assert b"Reviewed fixture sample of 3" in primary

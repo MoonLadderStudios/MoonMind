@@ -60,9 +60,13 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             )
         framework = inputs.get("framework") or {}
         builtin_rows = []
-        if isinstance(framework, Mapping) and framework.get(
-            "packId", framework.get("pack_id")
-        ) in {"iso-27001-readiness", "soc2-readiness"}:
+        if framework and isinstance(framework, Mapping):
+            from moonmind.security.framework_registry import READINESS_PACKS
+
+            entry = READINESS_PACKS.get(framework.get("packId", framework.get("pack_id")))
+        else:
+            entry = None
+        if entry and entry.admits_requirement_evidence:
             system = framework.get("systemInputs", framework.get("system_inputs", {}))
             if not isinstance(system, Mapping):
                 raise TypeError("invalid built-in framework system inputs")

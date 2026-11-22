@@ -32,6 +32,8 @@ from moonmind.security.web_api_methodology import AssessmentProcedure
 if TYPE_CHECKING:
     from moonmind.security.assessments import AssessmentScope, ControlAssessmentPlan
 
+MAX_PACK_BYTES = 2 * 1024 * 1024
+
 Identifiers = Annotated[list[Identifier], Field(min_length=1, max_length=64)]
 
 
@@ -204,10 +206,8 @@ class VersionedFrameworkPack(FrameworkContract):
         return self
 
 
-def load_declared_pack(
-    payload: bytes, *, pack_id: str, edition: str, revision: str
-) -> VersionedFrameworkPack:
-    if len(payload) > 2 * 1024 * 1024:
+def parse_declared_pack(payload: bytes) -> VersionedFrameworkPack:
+    if len(payload) > MAX_PACK_BYTES:
         raise ValueError("framework pack artifact exceeds the 2 MiB byte bound")
 
     # Reject duplicate JSON keys rather than silently admitting the last edition.
@@ -219,9 +219,13 @@ def load_declared_pack(
             result[key] = value
         return result
 
-    pack = VersionedFrameworkPack.model_validate(
-        json.loads(payload, object_pairs_hook=pairs)
-    )
+    return VersionedFrameworkPack.model_validate(json.loads(payload, object_pairs_hook=pairs))
+
+
+def load_declared_pack(
+    payload: bytes, *, pack_id: str, edition: str, revision: str
+) -> VersionedFrameworkPack:
+    pack = parse_declared_pack(payload)
     if (pack.id, pack.edition, pack.revision) != (pack_id, edition, revision):
         raise ValueError(
             "framework pack selection does not match declared identity/edition/revision"
@@ -229,7 +233,7 @@ def load_declared_pack(
     return pack
 
 
-def _operative(
+def validate_pack_effectivity(
     pack: VersionedFrameworkPack, now: datetime, period: EvidencePeriod | None = None
 ):
     if pack.distribution == "prohibited":
@@ -265,7 +269,7 @@ def compile_framework_plan(
         ControlRequirement,
     )
 
-    _operative(pack, now, period)
+    validate_pack_effectivity(pack, now, period)
     if set(choices) - {row.id for row in pack.requirements}:
         raise ValueError("choices name unknown framework requirement")
     restricted = pack.distribution == "restricted"
@@ -359,7 +363,7 @@ def _digest(value) -> str:
 def retained_pack_metadata(
     pack: VersionedFrameworkPack, *, artifact_ref: str, sha256: str, now: datetime
 ) -> dict:
-    _operative(pack, now)
+    validate_pack_effectivity(pack, now)
     # Restricted source text stays in its authorized artifact. Digests preserve
     # comparison without copying that text into portable report metadata.
     data = pack.model_dump(mode="json", by_alias=True)

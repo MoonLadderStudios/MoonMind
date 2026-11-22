@@ -241,3 +241,15 @@ async def test_export_cannot_read_foreign_assessor_approval_evidence(environment
     data["framework"]["auditRef"] = await put(service, data["audit"])
     with pytest.raises(ApplicationError):
         await invoke(service, request_payload(data))
+
+
+async def test_comparison_accepts_retained_nj_rule_source_metadata(environment):
+    service = environment.service
+    data, _ = await materialize(service)
+    payload = request_payload(data)
+    original = await invoke(service, payload)
+    payload["framework"]["previousAssessmentRef"] = original["frameworkRef"]
+    current = await invoke(service, payload, key="comparison")
+    report = json.loads(await read(service, current["frameworkRef"]))
+    assert report["reassessment"]["previousRef"] == original["frameworkRef"]
+    assert report["reassessment"]["packChanged"] is False

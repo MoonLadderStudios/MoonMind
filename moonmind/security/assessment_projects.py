@@ -19,7 +19,7 @@ from pydantic import (
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.schemas.repository_scanner_models import web_origin
-from moonmind.security.frameworks import EvidencePeriod, FrameworkContract
+from moonmind.security.frameworks import EvidencePeriod, FrameworkContract, FrameworkPackIdentity
 
 SETTINGS_KEY = "security.assessment_projects"
 Text = Annotated[
@@ -136,7 +136,7 @@ class AssessmentEnvironment(FrameworkContract):
         "internal"
     )
     evidence_processing: EvidenceProcessingPolicy | None = None
-    frameworks: Annotated[list[AssessmentFramework], Field(max_length=16)] = Field(
+    frameworks: Annotated[list[AssessmentFramework | FrameworkPackIdentity], Field(max_length=16)] = Field(
         default_factory=list
     )
     jurisdictions: Strings = Field(default_factory=list)

@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any
 from uuid import uuid4
 
 from pydantic import Field, model_validator
 
+from moonmind.schemas.form_fields import form_fields_schema
 from moonmind.security.workload_profiles import (
     _REF,
     AdmittedAssessmentScope,
@@ -72,37 +72,9 @@ def authorization_scope_input_schema() -> dict[str, Any]:
     cannot add a target or credential grant. Native validation remains final.
     """
     native = AdmittedAssessmentScope.model_json_schema(by_alias=True)
-    definitions = native.get("$defs", {})
-
-    def inline(value):
-        if isinstance(value, list):
-            return [inline(item) for item in value]
-        if not isinstance(value, dict):
-            return value
-        value = dict(value)
-        if "$ref" in value:
-            definition = value.pop("$ref").removeprefix("#/$defs/")
-            value = {**definitions[definition], **value}
-        choices = value.get("anyOf")
-        if isinstance(choices, list):
-            concrete = [choice for choice in choices if choice.get("type") != "null"]
-            if len(concrete) == 1 and len(concrete) != len(choices):
-                value.pop("anyOf")
-                value = {**concrete[0], **value}
-                if value.get("default") is None:
-                    value.pop("default", None)
-                return inline(value)
-        result = {key: inline(item) for key, item in value.items() if key != "$defs"}
-        if "const" in result:
-            result["enum"] = [result["const"]]
-        for name, field in result.get("properties", {}).items():
-            words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).replace("_", " ")
-            field["title"] = words[0].upper() + words[1:]
-        return result
-
     # Engagement identity/generation is stamped only by trusted launch admission.
     native["properties"].pop("engagement")
-    schema = inline(native)
+    schema = form_fields_schema(native)
     schema["required"] = [*schema["required"], "maxCpuMillis", "maxMemoryMiB"]
     schema["properties"]["assessmentRef"]["description"] = (
         "Use this same assessment reference in the selected cloud or web preset."
