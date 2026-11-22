@@ -103,6 +103,13 @@ PROFILE = "journey-model"
 SECRET = "synthetic-opencode-journey-key"
 _CLAUDE_KEY_PROCESS_HOME = {"harness": "claude-native-api-key", "processHome": True}
 RESULT_PATH = "report.md"
+# What each image-installed CLI prints for --version; the image build, not
+# the runtime pack, chooses the release.
+VENDOR_CLI_VERSION_OUTPUT = {
+    "codex": "codex-cli 0.171.0",
+    "claude": "2.1.330 (Claude Code)",
+    "opencode": "2.0.32",
+}
 GENERATED = (
     "# Native generated result\n\n"
     f"Skill sha256:{hashlib.sha256(_durable_skill_payload(_DURABLE_SKILL_NAME)).hexdigest()}\n"
@@ -852,12 +859,8 @@ class NativeDocker(CodexDocker):
                     for item in self.host_class.declaredHarnessImplementations
                     if item.harnessId == self.server.harness
                 )
-                dependency = next(
-                    item
-                    for item in entry.runtimeDependencies
-                    if item["name"] == argv[3]
-                )
-                return 0, dependency["version"], ""
+                assert argv[3] in {item["name"] for item in entry.runtimeDependencies}
+                return 0, VENDOR_CLI_VERSION_OUTPUT[argv[3]], ""
             if argv[3:5] == ["python3", "-c"]:
                 from moonmind.omnigent.opencode_runtime_validation import (
                     opencode_catalog_probe_argv,
