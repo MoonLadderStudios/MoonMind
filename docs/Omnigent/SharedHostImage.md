@@ -71,7 +71,7 @@ saved-work/finalization evidence remains authoritative during discovery gaps.
 
 **One sentence:** One neutral digest-pinned host image carries every approved vendor runtime, while trusted runtime-pack descriptors, separate Host Classes, profile-owned credential materialization, and a gated planner keep harness support, credentials, and lifecycle authority exact.
 
-**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's pinned version, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes both harnesses through `generic-omnigent-host@1` by default; a rollout stop fails closed unless an explicit supported restore control applies.
+**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's binary, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes both harnesses through `generic-omnigent-host@1` by default; a rollout stop fails closed unless an explicit supported restore control applies.
 
 The [seven product outcomes](./PrimaryRuntimeProviderStrategy.md#11-seven-required-product-outcomes) are the acceptance contract for this infrastructure. A shared image is not the product outcome by itself: each claimed harness must complete the on-demand launch, bound Workflow Detail interaction, recovery, durable-evidence, and cleanup journey. Runtime and one Profile remain the ordinary choices; the image, Host Class, runtime pack, materializer, and execution configuration resolve behind that selection.
 
@@ -86,18 +86,26 @@ ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 The image derives from the digest-pinned stock Omnigent host base and installs at build time only:
 
 ```text
-@openai/codex@0.170.0
-@anthropic-ai/claude-code@2.1.281
-@opencode/cli@2.0.32
+@openai/codex               newest supported release
+@anthropic-ai/claude-code   newest supported release
+@opencode/cli               newest supported release (+ @opencode/plugin at the same release)
 gh (pinned by services/omnigent/tools/manifest.lock.json, e.g. 2.76.2)
 moonmind (copied from services/omnigent/scripts/moonmind-container-cli.py)
 ```
 
-OpenCode uses the v2 native harness supplied by Omnigent v0.22.0. The SDK
-package is `@opencode/plugin`, not the incompatible v1 `@opencode-ai/plugin`.
+Vendor CLIs follow their newest release rather than a version recorded in the
+repository, so new models reach hosts without a repository edit.
+`tools/vendor_cli_releases.py` chooses each one inside the range the base's
+Omnigent install specs declare (Omnigent v0.22.0 accepts OpenCode >=2.0.18,
+<2.1.0), and only once npm has published every Linux platform package for it:
+npm can serve a CLI wrapper before its binaries and silently skips a missing
+optional dependency. MoonMind adds a floor only where a provider requires one;
+Anthropic rejects Opus 5.5 requests from Claude Code older than 2.1.280. The
+chosen releases are recorded in `/opt/moonmind/vendor-cli-versions.json` and
+the image's `moonmind.<cli>.version` labels.
 
-The Claude Code 2.1.281 pin supports Opus 5.5, which rejects clients older
-than 2.1.280.
+OpenCode uses the v2 native harness supplied by Omnigent. The SDK package is
+`@opencode/plugin`, not the incompatible v1 `@opencode-ai/plugin`.
 
 Workflow launches never install runtimes. The build records each installed vendor release as provenance; a release number alone neither admits nor rejects a runtime.
 
@@ -118,9 +126,9 @@ missing.
 
 ### Publication
 
-`.github/workflows/docker-publish-moonmind-host.yml` is the sole MoonMind host-image publisher. It checks the upstream Omnigent host base every six hours and rebuilds `linux/amd64` and `linux/arm64` images when that base changes, on relevant changes to `main`, or by manual dispatch. An unchanged scheduled check skips the build. Builds use the normal layer cache and resolve the upstream `latest` base unless `OMNIGENT_BASE_IMAGE_REF` explicitly selects a digest; the build label records the actual base.
+`.github/workflows/docker-publish-moonmind-host.yml` is the sole MoonMind host-image publisher. It checks the upstream Omnigent host base and the vendor CLI releases every six hours and rebuilds `linux/amd64` and `linux/arm64` images when that base changes or a newer supported CLI release is fully published, on relevant changes to `main`, or by manual dispatch. An unchanged scheduled check skips the build. Builds use the normal layer cache and resolve the upstream `latest` base unless `OMNIGENT_BASE_IMAGE_REF` explicitly selects a digest; the build label records the actual base.
 
-Vendor CLI versions come from the Dockerfile and `gh` from `services/omnigent/tools/manifest.lock.json`. Scheduled builds retain those tested pins; upgrading vendor runtimes requires updating the Dockerfile pins and runtime-pack pins together. Manual inputs may override vendor versions with any exact release; the native readiness checks decide whether the result publishes. Every build verifies the vendor runtimes, offline OpenCode plugin startup, and image-owned helper tools before publishing the combined manifest, provenance, and SBOM. The dedicated `omnigent-host-opencode` Dockerfile and publisher are discontinued; OpenCode uses the shared image.
+The workflow resolves vendor CLI releases inside the upstream base and passes the exact versions to the build, so labels and layer caches name them; `gh` comes from `services/omnigent/tools/manifest.lock.json`. A dispatch input builds one exact release, and the repository variables `CODEX_CLI_VERSION_HOLD`, `CLAUDE_CLI_VERSION_HOLD`, and `OPENCODE_VERSION_HOLD` keep a CLI on one release until cleared. Handle a bad or half-published upstream release with a hold, or let that build fail while the published image stays in place; do not write a version back into the Dockerfile or runtime packs, because those hand-maintained pins went stale and kept new models out of profile catalogs. The native readiness checks still decide whether a build publishes. Every build verifies the vendor runtimes, offline OpenCode plugin startup, and image-owned helper tools before publishing the combined manifest, provenance, and SBOM. The dedicated `omnigent-host-opencode` Dockerfile and publisher are discontinued; OpenCode uses the shared image.
 
 ### Deployment configuration
 
@@ -160,18 +168,18 @@ A runtime pack is trusted deployment data, never workflow-authored. The registry
 
 | Pack | Harness | Vendor runtime | Credential home |
 | --- | --- | --- | --- |
-| `codex-native-pack@1` | `codex-native` | `codex` (pin `0.170.0`) | `/home/app/.codex` |
-| `claude-native-pack@1` | `claude-native` | `claude` (pin `2.1.281`) | `/home/app/.claude` |
-| `opencode-native-pack@1` | `opencode-native` | `opencode` (pin `2.0.32`) | `/home/app/.local/share/opencode` |
+| `codex-native-pack@1` | `codex-native` | `codex` | `/home/app/.codex` |
+| `claude-native-pack@1` | `claude-native` | `claude` | `/home/app/.claude` |
+| `opencode-native-pack@1` | `opencode-native` | `opencode` | `/home/app/.local/share/opencode` |
 
-Each pack declares the vendor version command, the pinned image release, the credential-home layout (target path, writability, uid/gid ownership), the bounded environment the generic startup may shape, the ambient environment keys the row must reject, and the exact-host readiness probe kind.
+Each pack declares the vendor version command, the credential-home layout (target path, writability, uid/gid ownership), the bounded environment the generic startup may shape, the ambient environment keys the row must reject, and the exact-host readiness probe kind.
 
 The packs drive two production boundaries:
 
 1. **Host Class selection.** Pack-backed Host Class templates carry `runtime_pack_ref`; the selector resolves the pack, proves it owns the requested harness, and compiles the vendor runtime dependencies from the pack. A pack/harness mismatch or an unknown pack fails selection.
 2. **Exact-host attestation.** The session Activity validates the launched container with `validate_exact_host_attestation` against the planned Host Class, image, harness, vendor runtimes compiled from the pack, required capabilities, and lease generation. The vendor runtime must be present, and the planned capabilities must be positively reported. Every harness, OpenCode included, uses this one function; there are no harness-specific attestation branches.
 
-Changing a vendor pin is a deployment change that lands in the image build args and the pack descriptors together. The launched host's observed vendor release is recorded as provenance; generic exact-host attestation rejects an absent runtime, not a different release.
+Packs record no vendor release; the image build chooses it, and the support key binds to the exact image digest. The launched host's observed vendor release is recorded as provenance; generic exact-host attestation rejects an absent runtime, not a different release.
 
 ## 3. Host Classes on the shared digest
 

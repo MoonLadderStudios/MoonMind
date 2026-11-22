@@ -35,6 +35,9 @@ def test_scheduled_host_publication_only_rebuilds_on_upstream_changes():
     )
     assert "tools/omnigent_host_release_drift.sh" in drift["run"]
     assert '"$EVENT_NAME" != "schedule"' in drift["run"]
+    # A newer supported vendor CLI release is drift too.
+    for label in ("codex", "claude", "opencode"):
+        assert f'"moonmind.{label}.version=$' in drift["run"]
     assert build["with"]["pull"] is True
     assert not build["with"].get("no-cache")
     assert (
@@ -59,11 +62,16 @@ def test_shared_host_is_the_only_host_image_publisher():
 
 
 @pytest.mark.parametrize(
-    ("published_digest", "expected"),
-    [(BASE_DIGEST, "false"), (OLD_DIGEST, "true"), (None, "true")],
+    ("published_digest", "published_claude", "expected"),
+    [
+        (BASE_DIGEST, "2.1.330", "false"),
+        (BASE_DIGEST, "2.1.281", "true"),
+        (OLD_DIGEST, "2.1.330", "true"),
+        (None, None, "true"),
+    ],
 )
-def test_host_drift_uses_base_digest_not_server_version(
-    tmp_path, published_digest, expected
+def test_host_drift_follows_base_digest_and_vendor_releases(
+    tmp_path, published_digest, published_claude, expected
 ):
     docker = tmp_path / "docker"
     docker.write_text(
@@ -76,6 +84,10 @@ def test_host_drift_uses_base_digest_not_server_version(
         f"  'inspect --format={{{{index .RepoDigests 0}}}}') echo 'ghcr.io/omnigent-ai/omnigent-host@{BASE_DIGEST}'; exit 0 ;;\n"
         "  'inspect --format={{index .Config.Labels \"moonmind.omnigent.build_digest\"}}') "
         f"echo '{published_digest or ''}'; exit 0 ;;\n"
+        "  'inspect --format={{index .Config.Labels \"moonmind.codex.version\"}}') "
+        "echo '0.171.0'; exit 0 ;;\n"
+        "  'inspect --format={{index .Config.Labels \"moonmind.claude.version\"}}') "
+        f"echo '{published_claude or ''}'; exit 0 ;;\n"
         "esac\n"
         "exit 2\n",
         encoding="utf-8",
@@ -88,6 +100,8 @@ def test_host_drift_uses_base_digest_not_server_version(
             str(SCRIPT),
             "moonmind-host:current",
             "ghcr.io/omnigent-ai/omnigent-host:latest",
+            "moonmind.codex.version=0.171.0",
+            "moonmind.claude.version=2.1.330",
         ],
         cwd=ROOT,
         env={
@@ -103,6 +117,29 @@ def test_host_drift_uses_base_digest_not_server_version(
     assert output.read_text(encoding="utf-8") == f"rebuild_required={expected}\n"
 
 
+def test_vendor_releases_resolve_inside_the_base_unless_held():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    cli = next(
+        step
+        for step in workflow["jobs"]["metadata"]["steps"]
+        if step.get("id") == "cli"
+    )
+    # The base's Omnigent declares the supported ranges, and both published
+    # architectures must have their binaries before a release is chosen.
+    assert '"$PWD/tools/vendor_cli_releases.py:' in cli["run"]
+    assert "vendor_cli_releases.py --omnigent-bounds" in cli["run"]
+    assert "--platform linux-x64 --platform linux-arm64" in cli["run"]
+    assert '"$BASE_REF"' in cli["run"]
+    for name, input_name, hold in (
+        ("CODEX", "codex_cli_version", "CODEX_CLI_VERSION_HOLD"),
+        ("CLAUDE", "claude_cli_version", "CLAUDE_CLI_VERSION_HOLD"),
+        ("OPENCODE", "opencode_version", "OPENCODE_VERSION_HOLD"),
+    ):
+        assert cli["env"][f"{name}_REQUEST"] == (
+            f"${{{{ inputs.{input_name} || vars.{hold} || 'latest' }}}}"
+        )
+
+
 @pytest.fixture
 def resolve_metadata(tmp_path):
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -110,13 +147,6 @@ def resolve_metadata(tmp_path):
         step
         for step in workflow["jobs"]["metadata"]["steps"]
         if step.get("id") == "meta"
-    )
-    dockerfile = tmp_path / "services/omnigent/moonmind-host/Dockerfile"
-    dockerfile.parent.mkdir(parents=True)
-    dockerfile.write_text(
-        "ARG CODEX_CLI_VERSION=0.160.0\n"
-        "ARG CLAUDE_CLI_VERSION=2.2.0\n"
-        "ARG OPENCODE_VERSION=1.18.12\n"
     )
     manifest = tmp_path / "services/omnigent/tools/manifest.lock.json"
     manifest.parent.mkdir(parents=True)
@@ -131,9 +161,9 @@ def resolve_metadata(tmp_path):
                 **os.environ,
                 "GITHUB_OUTPUT": str(output),
                 "REGISTRY_IMAGE": "ghcr.io/MoonLadderStudios/omnigent-host-moonmind",
-                "CODEX_CLI_VERSION_INPUT": "",
-                "CLAUDE_CLI_VERSION_INPUT": "",
-                "OPENCODE_VERSION_INPUT": "",
+                "CODEX_VERSION": "0.171.0",
+                "CLAUDE_VERSION": "2.1.330",
+                "OPENCODE_VERSION": "2.0.32",
                 "GH_VERSION_INPUT": "",
                 **inputs,
             },
@@ -146,48 +176,30 @@ def resolve_metadata(tmp_path):
     return resolve
 
 
-@pytest.mark.parametrize("overrides", [False, True])
-def test_publication_versions_follow_build_sources(resolve_metadata, overrides):
-    inputs = (
-        {
-            "CODEX_CLI_VERSION_INPUT": "0.161.0",
-            "CLAUDE_CLI_VERSION_INPUT": "2.2.1",
-            "OPENCODE_VERSION_INPUT": "1.18.13",
-            "GH_VERSION_INPUT": "2.80.0",
-        }
-        if overrides
-        else {}
-    )
-    result, output = resolve_metadata(**inputs)
+def test_publication_metadata_names_the_resolved_releases(resolve_metadata):
+    result, output = resolve_metadata(GH_VERSION_INPUT="2.80.0")
     assert result.returncode == 0, result.stderr
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert values["image_name"] == "ghcr.io/moonladderstudios/omnigent-host-moonmind"
-    assert values["codex_version"] == ("0.161.0" if overrides else "0.160.0")
-    assert values["claude_version"] == ("2.2.1" if overrides else "2.2.0")
-    assert values["opencode_version"] == ("1.18.13" if overrides else "1.18.12")
+    assert values["codex_version"] == "0.171.0"
+    assert values["claude_version"] == "2.1.330"
+    assert values["opencode_version"] == "2.0.32"
     assert values["gh_version"] == "2.80.0"
-    assert values["version_tag"] == (
-        f"{values['opencode_version']}-codex{values['codex_version']}-claude{values['claude_version']}"
-    )
+    assert values["version_tag"] == "2.0.32-codex0.171.0-claude2.1.330"
 
 
 @pytest.mark.parametrize(
     ("inputs", "error"),
     [
         ({"GH_VERSION_INPUT": "2.79.0"}, "gh_version must match manifest.lock.json"),
+        ({"CODEX_VERSION": ""}, "CODEX_VERSION must be an exact release version"),
         (
-            {"CODEX_CLI_VERSION_INPUT": "latest"},
-            "CODEX_CLI_VERSION must be an exact release version",
-        ),
-        (
-            {"OPENCODE_VERSION_INPUT": "1.18.13\nimage_name=injected"},
+            {"OPENCODE_VERSION": "2.0.32\nimage_name=injected"},
             "OPENCODE_VERSION must be an exact release version",
         ),
     ],
 )
-def test_invalid_build_overrides_fail_before_publication(
-    resolve_metadata, inputs, error
-):
+def test_invalid_build_inputs_fail_before_publication(resolve_metadata, inputs, error):
     result, output = resolve_metadata(**inputs)
     assert result.returncode != 0
     assert error in result.stderr

@@ -14,18 +14,18 @@
 #   OMNIGENT_BUILD_DIGEST    - exact sha256 digest of the upstream host base
 #                              used to build this image
 #
-# Vendor pins: each CLI is installed at build time only; the workflow launcher
-# must never install runtimes. The pinned versions below mirror the trusted
-# runtime-pack descriptors in
-# moonmind/omnigent/harness_platform/runtime_packs.py and the OpenCode pin in
-# host_classes.py. Update image pins and pack descriptors in the same change;
-# exact-host attestation records the observed release.
+# Vendor CLIs are installed at build time only; the workflow launcher never
+# installs runtimes. "latest" installs the newest release this base's Omnigent
+# supports that npm has fully published (tools/vendor_cli_releases.py), so new
+# models reach hosts without a repository edit. The release workflow passes the
+# exact versions it resolved so labels and layer caches name them; an exact
+# version holds that CLI. Exact-host attestation records the observed release.
 
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST
-ARG CODEX_CLI_VERSION=0.170.0
-ARG CLAUDE_CLI_VERSION=2.1.281
-ARG OPENCODE_VERSION=2.0.32
+ARG CODEX_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=latest
+ARG OPENCODE_VERSION=latest
 ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache
 # Image-owned helper tools (MoonLadderStudios/MoonMind#4558): gh and the
 # non-secret MoonMind container CLI. The single pin source is
@@ -54,15 +54,23 @@ RUN apt-get update \
 RUN [[ "${OMNIGENT_BUILD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || { echo "OMNIGENT_BUILD_DIGEST must be an exact sha256 build identity" >&2; exit 1; }
 
-# Install every approved vendor CLI at image build time.
+# Install every approved vendor CLI at image build time, choosing releases
+# against the supported ranges of this exact Omnigent base. The chosen releases
+# are recorded for the steps below.
+COPY tools/vendor_cli_releases.py /tmp/vendor_cli_releases.py
 RUN npm config set fund false \
     && npm config set audit false \
     && npm config set update-notifier false \
     && npm uninstall -g --no-audit --no-fund opencode-ai \
-    && npm install -g --include=optional --no-audit --no-fund \
-        "@openai/codex@${CODEX_CLI_VERSION}" \
-        "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
-        "@opencode/cli@${OPENCODE_VERSION}" \
+    && mkdir -p /opt/moonmind \
+    && specs="$(/opt/venv/bin/python /tmp/vendor_cli_releases.py --omnigent-bounds \
+        --json /opt/moonmind/vendor-cli-versions.json --npm-specs \
+        "codex=${CODEX_CLI_VERSION}" \
+        "claude=${CLAUDE_CLI_VERSION}" \
+        "opencode=${OPENCODE_VERSION}")" \
+    && rm -f /tmp/vendor_cli_releases.py \
+    && echo "Installing ${specs}" \
+    && npm install -g --include=optional --no-audit --no-fund ${specs} \
     && echo "Verifying vendor runtime installations..." \
     && command -v codex >/dev/null || { echo "codex binary missing after install" >&2; exit 1; } \
     && command -v claude >/dev/null || { echo "claude binary missing after install" >&2; exit 1; } \
@@ -103,9 +111,10 @@ RUN GH_VERSION="${OMNIGENT_GH_VERSION}" \
 # access. The release smoke installs a fresh SDK-backed plugin offline and
 # verifies that the authenticated v2 server actually activates it.
 RUN set -eu \
+    && opencode_version="$(jq -er .opencode /opt/moonmind/vendor-cli-versions.json)" \
     && warm="$(mktemp -d)" \
     && verify="$(mktemp -d)" \
-    && printf '{"dependencies":{"@opencode/plugin":"%s"}}\n' "${OPENCODE_VERSION}" > "${warm}/package.json" \
+    && printf '{"dependencies":{"@opencode/plugin":"%s"}}\n' "${opencode_version}" > "${warm}/package.json" \
     && cp "${warm}/package.json" "${verify}/package.json" \
     && (cd "${warm}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --prefer-online) \
     && (cd "${verify}" && npm install --cache "${OPENCODE_PLUGIN_NPM_CACHE}" --no-audit --no-fund --offline) \
@@ -113,7 +122,7 @@ RUN set -eu \
     && rm -rf "${warm}" "${verify}" "${OPENCODE_PLUGIN_NPM_CACHE}/_logs" \
     && chown -R 1000:1000 "${OPENCODE_PLUGIN_NPM_CACHE}" \
     && chmod -R u+rwX,go+rX "${OPENCODE_PLUGIN_NPM_CACHE}" \
-    && echo "opencode plugin npm cache warmed at ${OPENCODE_PLUGIN_NPM_CACHE} for @opencode/plugin@${OPENCODE_VERSION}"
+    && echo "opencode plugin npm cache warmed at ${OPENCODE_PLUGIN_NPM_CACHE} for @opencode/plugin@${opencode_version}"
 
 # The exact-host launcher owns the portable numeric runtime contract. Upstream
 # Omnigent images may run as root or may name UID 1000 differently, so ensure

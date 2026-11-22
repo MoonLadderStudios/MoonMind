@@ -1,8 +1,9 @@
 name: Release / Build omnigent-host-moonmind Image
 
 # One shared image carries Codex, Claude Code, and OpenCode. Scheduled checks
-# rebuild it when the upstream base changes; source changes and manual dispatch
-# also rebuild it using the normal layer cache.
+# rebuild it when the upstream base changes or a newer supported vendor CLI
+# release is fully published; source changes and manual dispatch also rebuild
+# it using the normal layer cache.
 
 on:
   schedule:
@@ -15,21 +16,22 @@ on:
       - "services/omnigent/scripts/moonmind-container-cli.py"
       - "services/omnigent/scripts/moonmind-tools.sh"
       - "tools/omnigent_host_release_drift.sh"
+      - "tools/vendor_cli_releases.py"
       - "moonmind/omnigent/harness_platform/host_classes.py"
       - "moonmind/omnigent/harness_platform/runtime_packs.py"
       - ".github/workflows/docker-publish-moonmind-host.yml"
   workflow_dispatch:
     inputs:
       codex_cli_version:
-        description: "Override the Dockerfile Codex pin (exact release)"
+        description: "Build this exact Codex release instead of the newest supported one"
         required: false
         type: string
       claude_cli_version:
-        description: "Override the Dockerfile Claude Code pin (exact release)"
+        description: "Build this exact Claude Code release instead of the newest supported one"
         required: false
         type: string
       opencode_version:
-        description: "Override the Dockerfile OpenCode pin (exact release)"
+        description: "Build this exact OpenCode release instead of the newest supported one"
         required: false
         type: string
       gh_version:
@@ -63,12 +65,35 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Resolve build pins and image metadata
+      - name: Resolve vendor CLI releases
+        id: cli
+        env:
+          BASE_REF: ${{ vars.OMNIGENT_BASE_IMAGE_REF || 'ghcr.io/omnigent-ai/omnigent-host:latest' }}
+          # A dispatch input builds that exact release once. A *_HOLD
+          # repository variable keeps a CLI on one release (for example after a
+          # bad upstream release) until it is cleared; nothing in the
+          # repository records a CLI version.
+          CODEX_REQUEST: ${{ inputs.codex_cli_version || vars.CODEX_CLI_VERSION_HOLD || 'latest' }}
+          CLAUDE_REQUEST: ${{ inputs.claude_cli_version || vars.CLAUDE_CLI_VERSION_HOLD || 'latest' }}
+          OPENCODE_REQUEST: ${{ inputs.opencode_version || vars.OPENCODE_VERSION_HOLD || 'latest' }}
+        run: |
+          set -euo pipefail
+          docker pull "$BASE_REF" >/dev/null
+          # Resolve inside the base the image builds on: its Omnigent declares
+          # which CLI releases its harnesses accept.
+          docker run --rm --entrypoint /opt/venv/bin/python \
+            -v "$PWD/tools/vendor_cli_releases.py:/tmp/vendor_cli_releases.py:ro" \
+            "$BASE_REF" /tmp/vendor_cli_releases.py --omnigent-bounds \
+            --platform linux-x64 --platform linux-arm64 \
+            "codex=$CODEX_REQUEST" "claude=$CLAUDE_REQUEST" "opencode=$OPENCODE_REQUEST" \
+            | tee -a "$GITHUB_OUTPUT"
+
+      - name: Resolve image metadata
         id: meta
         env:
-          CODEX_CLI_VERSION_INPUT: ${{ inputs.codex_cli_version }}
-          CLAUDE_CLI_VERSION_INPUT: ${{ inputs.claude_cli_version }}
-          OPENCODE_VERSION_INPUT: ${{ inputs.opencode_version }}
+          CODEX_VERSION: ${{ steps.cli.outputs.codex_version }}
+          CLAUDE_VERSION: ${{ steps.cli.outputs.claude_version }}
+          OPENCODE_VERSION: ${{ steps.cli.outputs.opencode_version }}
           GH_VERSION_INPUT: ${{ inputs.gh_version }}
         run: |
           python3 - <<'PY'
@@ -77,17 +102,15 @@ jobs:
           import re
           from pathlib import Path
 
-          dockerfile = Path("services/omnigent/moonmind-host/Dockerfile").read_text()
-          pins = dict(re.findall(r"^ARG ([A-Z_]+)=(.+)$", dockerfile, re.MULTILINE))
           versions = {}
-          for output, argument in (
-              ("codex_version", "CODEX_CLI_VERSION"),
-              ("claude_version", "CLAUDE_CLI_VERSION"),
+          for output, variable in (
+              ("codex_version", "CODEX_VERSION"),
+              ("claude_version", "CLAUDE_VERSION"),
               ("opencode_version", "OPENCODE_VERSION"),
           ):
-              version = os.environ.get(f"{argument}_INPUT") or pins[argument]
+              version = os.environ.get(variable, "")
               if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-                  raise SystemExit(f"{argument} must be an exact release version")
+                  raise SystemExit(f"{variable} must be an exact release version")
               versions[output] = version
           manifest = json.loads(Path("services/omnigent/tools/manifest.lock.json").read_text())
           gh_pin = next(tool["version"] for tool in manifest["tools"] if tool["name"] == "gh")
@@ -104,12 +127,15 @@ jobs:
                   print(f"{key}={value}", file=output)
           PY
 
-      - name: Detect upstream Omnigent drift
+      - name: Detect upstream base or vendor CLI drift
         id: drift
         env:
           EVENT_NAME: ${{ github.event_name }}
           IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
           BASE_REF: ${{ vars.OMNIGENT_BASE_IMAGE_REF || 'ghcr.io/omnigent-ai/omnigent-host:latest' }}
+          CODEX_VERSION: ${{ steps.meta.outputs.codex_version }}
+          CLAUDE_VERSION: ${{ steps.meta.outputs.claude_version }}
+          OPENCODE_VERSION: ${{ steps.meta.outputs.opencode_version }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != "schedule" ]; then
@@ -118,7 +144,10 @@ jobs:
           fi
 
           HOST_TAG="${IMAGE_NAME}:latest"
-          bash tools/omnigent_host_release_drift.sh "$HOST_TAG" "$BASE_REF"
+          bash tools/omnigent_host_release_drift.sh "$HOST_TAG" "$BASE_REF" \
+            "moonmind.codex.version=$CODEX_VERSION" \
+            "moonmind.claude.version=$CLAUDE_VERSION" \
+            "moonmind.opencode.version=$OPENCODE_VERSION"
 
   build:
     needs: metadata

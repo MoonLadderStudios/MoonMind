@@ -22,12 +22,15 @@ FROM ${NODE_BASE} AS node-runtime
 # CLIs in the shared API/worker image. Remove this stage only after those
 # consumers migrate to Omnigent and their existing work has drained.
 FROM node-runtime AS managed-tooling
+# A rebuilt layer installs the newest fully published releases
+# (tools/vendor_cli_releases.py); an exact version holds that CLI.
 ARG CODEX_CLI_VERSION=latest
-ARG CLAUDE_CLI_VERSION=2.1.281
+ARG CLAUDE_CLI_VERSION=latest
+COPY tools/vendor_cli_releases.py /tmp/vendor_cli_releases.py
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --global --prefix /opt/moonmind-managed-cli --include=optional --no-audit --no-fund \
-        "@openai/codex@${CODEX_CLI_VERSION}" \
-        "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
+    specs="$(python3 /tmp/vendor_cli_releases.py --npm-specs \
+        "codex=${CODEX_CLI_VERSION}" "claude=${CLAUDE_CLI_VERSION}")" \
+    && npm install --global --prefix /opt/moonmind-managed-cli --include=optional --no-audit --no-fund ${specs} \
     && /opt/moonmind-managed-cli/bin/codex --version \
     && /opt/moonmind-managed-cli/bin/claude --version
 

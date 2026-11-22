@@ -762,17 +762,18 @@ def compile_execution_plan(
             and entry.implementationRef == profile.harness.implementationRef
         ):
             for dep in entry.runtimeDependencies:
-                # dep is dict with name, version, and optional digest.
-                # Packs pin the vendor version identity while the launched
-                # image attests the installed runtime; bind the support key
-                # to the exact host image digest when no per-runtime digest
-                # is recorded so rebuilt images cannot reuse prior evidence.
-                # Never emit a literal "#None" suffix.
+                # dep is a dict with a name and optional version and digest.
+                # Pack dependencies name only the binary: the image build
+                # chooses the release, so bind the support key to the exact
+                # host image digest when no per-runtime digest is recorded
+                # and rebuilt images cannot reuse prior evidence. Never emit
+                # a literal "@None" or "#None" suffix.
                 name = dep.get("name")
                 version = dep.get("version")
+                runtime = f"{name}@{version}" if version else str(name)
                 digest = dep.get("digest")
                 if digest:
-                    vendor_refs.append(f"{name}@{version}#{digest}")
+                    vendor_refs.append(f"{runtime}#{digest}")
                 else:
                     image_ref = str(selected_host_class.imageRef or "")
                     image_digest = (
@@ -781,9 +782,9 @@ def compile_execution_plan(
                         else ""
                     )
                     if image_digest:
-                        vendor_refs.append(f"{name}@{version}#{image_digest}")
+                        vendor_refs.append(f"{runtime}#{image_digest}")
                     else:
-                        vendor_refs.append(f"{name}@{version}")
+                        vendor_refs.append(runtime)
             break
     # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
     agent_source_full = profile.source.model_dump(by_alias=True, mode="json")

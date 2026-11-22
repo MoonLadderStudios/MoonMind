@@ -676,9 +676,11 @@ class DockerOmnigentHostAttestor:
                 failure_code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
             runtime_versions[name] = observed.strip()[:256]
-            declared_runtime_versions[name] = str(
-                dependency.get("version") or ""
-            ).strip()
+            # Pack dependencies declare no release (the image build chooses
+            # it); record a declared one only when a template supplies it.
+            declared = str(dependency.get("version") or "").strip()
+            if declared:
+                declared_runtime_versions[name] = declared
         mounts = container.get("Mounts") or []
         workspace_mount_evidence = _attest_workspace_mount(
             mounts, spec.workspaceAttachment

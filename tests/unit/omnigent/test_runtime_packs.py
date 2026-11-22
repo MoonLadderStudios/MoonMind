@@ -101,8 +101,8 @@ def test_pack_schema_and_credential_layout_contract():
     assert "ANTHROPIC_API_KEY" in opencode_forbidden
 
 
-def test_vendor_runtime_descriptor_carries_no_release_ceiling():
-    """Packs pin the image's vendor build; they do not gate other releases."""
+def test_vendor_runtime_descriptor_records_no_release():
+    """The image build chooses each release; a pack names only the binary."""
 
     for ref in (
         "opencode-native-pack@1",
@@ -111,46 +111,22 @@ def test_vendor_runtime_descriptor_carries_no_release_ceiling():
     ):
         vendor = get_runtime_pack(ref).vendorRuntime.model_dump(by_alias=True)
         assert "supportedRange" not in vendor
-        assert vendor["pinnedVersion"]
-
-
-def test_pinned_codex_runtime_meets_native_harness_readiness_floor():
-    from packaging.version import Version
-
-    codex = get_runtime_pack("codex-native-pack@1")
-    # Omnigent's native Codex installer/readiness contract requires this floor.
-    assert Version(codex.vendorRuntime.pinnedVersion) >= Version("0.137.0")
-
-
-def test_pinned_opencode_runtime_matches_native_v2_api():
-    from packaging.version import Version
-
-    opencode = get_runtime_pack("opencode-native-pack@1")
-    # The released Omnigent native harness consumes the 2.0 API, not v1.
-    assert Version("2.0.18") <= Version(opencode.vendorRuntime.pinnedVersion) < Version("2.1.0")
-
-
-def test_pinned_claude_runtime_supports_opus_5_5():
-    from packaging.version import Version
-
-    claude = get_runtime_pack("claude-native-pack@1")
-    # Anthropic rejects Opus 5.5 requests from Claude Code older than 2.1.280.
-    assert Version(claude.vendorRuntime.pinnedVersion) >= Version("2.1.280")
+        assert "pinnedVersion" not in vendor
 
 
 def test_re_registering_a_changed_pack_fails():
     original = get_runtime_pack("codex-native-pack@1")
     payload = original.model_dump(by_alias=True, mode="json")
-    payload["vendorRuntime"]["pinnedVersion"] = "9.9.9"
+    payload["vendorRuntime"]["versionCommand"] = ["codex", "version"]
     changed = RuntimePackDescriptor.model_validate(payload)
     with pytest.raises(HarnessPlatformError):
         register_runtime_pack(changed)
 
 
-def test_runtime_dependencies_declare_pinned_vendor_identity():
+def test_runtime_dependencies_name_the_vendor_binary():
     pack = get_runtime_pack("claude-native-pack@1")
     deps = runtime_dependencies_for_pack(pack)
-    assert deps == ({"name": "claude", "version": pack.vendorRuntime.pinnedVersion},)
+    assert deps == ({"name": "claude"},)
 
 
 # ---- Shared image env authority ----
@@ -261,12 +237,8 @@ def test_codex_and_claude_host_classes_use_the_shared_digest(monkeypatch):
         "claude-native"
     }
     # Runtime-pack-driven vendor dependencies land in the declared entry.
-    codex_pack = get_runtime_pack("codex-native-pack@1")
     codex_dep = codex.declaredHarnessImplementations[0].runtimeDependencies[0]
-    assert codex_dep == {
-        "name": "codex",
-        "version": codex_pack.vendorRuntime.pinnedVersion,
-    }
+    assert codex_dep == {"name": "codex"}
 
 
 @pytest.mark.parametrize(

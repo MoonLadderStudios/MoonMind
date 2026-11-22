@@ -21,13 +21,15 @@
 
 **One sentence:** OpenCode, Codex, and Claude Code use the shared MoonMind Omnigent image with separate Host Classes and credential authority.
 
-**One paragraph:** The image derives from an immutable stock Omnigent host and installs pinned vendor CLIs at build time. Each Host Class, Provider Profile, materializer, and exact-host attestation authorizes only its selected runtime. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
+**One paragraph:** The image derives from an immutable stock Omnigent host and installs the newest vendor CLIs that host's Omnigent supports at build time. Each Host Class, Provider Profile, materializer, and exact-host attestation authorizes only its selected runtime. Credentials remain strictly isolated. A shared image does not share OAuth homes, API keys, materializers, Host Classes, or support evidence.
 
 ## 1. Supported runtime
 
 ### Current supported implementation
 
-The repository integrates released Omnigent v0.22.0 and OpenCode 2.0.32.
+The repository integrates released Omnigent v0.22.0. Images install the newest
+OpenCode release its native harness accepts (2.0.x for v0.22.0), so a new
+Omnigent base that widens that range moves OpenCode forward on its own.
 New images use the v2 native harness. Previously admitted immutable v1 hosts
 retain their own catalog helper based on the observed runtime, never as a
 fallback after a v2 failure. This compatibility path can retire when no v1
@@ -51,18 +53,19 @@ Conceptually:
 
 ```dockerfile
 FROM ghcr.io/omnigent-ai/omnigent-host@sha256:<base-digest>
-RUN npm install -g --no-audit --no-fund '@opencode/cli@2.0.32'
+# <release>: the newest OpenCode the base's Omnigent accepts, fully published.
+RUN npm install -g --no-audit --no-fund '@opencode/cli@<release>'
 RUN opencode --version
 # Warm the OpenCode plugin SDK closure and prove it resolves offline.
-RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode/plugin@1.18.11' \
-    && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode/plugin@1.18.11'
+RUN npm install --cache /opt/moonmind/opencode-npm-cache '@opencode/plugin@<release>' \
+    && npm install --cache /opt/moonmind/opencode-npm-cache --offline '@opencode/plugin@<release>'
 ```
 
 ### Shared-image implementation
 
 The shared image, its publication, and its deployment configuration are owned
-by [`SharedHostImage.md`](./SharedHostImage.md) §1, which also holds the
-verified vendor pins. OpenCode-specific rules that remain here: no workflow
+by [`SharedHostImage.md`](./SharedHostImage.md) §1, which also describes how
+vendor CLI releases are chosen. OpenCode-specific rules that remain here: no workflow
 installs OpenCode dynamically, and the warm plugin-SDK cache contract in §4
 below. No Host Class launches the deprecated `OMNIGENT_OPENCODE_HOST_IMAGE_REF`
 (§13).
@@ -114,8 +117,6 @@ declaredHarnessImplementations:
     implementationRef: omnigent-harness-implementation:sha256:...
     runtimeDependencies:
       - name: opencode
-        version: 2.0.32
-        digest: sha256:...
 integrationModes:
   - native-server
 materializerRefs:
@@ -151,7 +152,6 @@ harnessId: opencode-native
 providerRuntimeId: opencode
 binary:
   command: opencode
-  version: 2.0.32
 credentialMaterializers:
   - opencode-auth-json@1
   - none@1
