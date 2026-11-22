@@ -52,7 +52,7 @@ SUPPORTED_CONTAINER_BACKEND_KINDS: Final[frozenset[str]] = frozenset({"docker-en
 
 #: Deployment default when the endpoint is not otherwise configured. Matches the
 #: ``docker-proxy`` service the ``temporal-worker-agent-runtime`` container reaches.
-_DEFAULT_DOCKER_ENDPOINT: Final[str] = "tcp://docker-proxy:2375"
+COMPOSE_DOCKER_ENDPOINT: Final[str] = "tcp://docker-proxy:2375"
 
 _TRUTHY: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSEY: Final[frozenset[str]] = frozenset({"0", "false", "no", "off", ""})
@@ -664,7 +664,7 @@ def resolve_container_backend_settings(
     endpoint = (
         (source.get("SYSTEM_DOCKER_HOST") or "").strip()
         or (source.get("DOCKER_HOST") or "").strip()
-        or _DEFAULT_DOCKER_ENDPOINT
+        or COMPOSE_DOCKER_ENDPOINT
     ) or None
 
     prebuilt_python_test_image = str(

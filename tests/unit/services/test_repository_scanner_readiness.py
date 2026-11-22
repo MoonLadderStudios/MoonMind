@@ -445,6 +445,10 @@ def test_feed_component_state_uses_the_matching_published_manifest(
         "java": "missing",
         "checks": "missing",
     }
+    remote = replace(configured(), endpoint="tcp://remote-worker.example:2376")
+    assert set(
+        repository_scanner_readiness(remote, database=tmp_path)["feedComponents"].values()
+    ) == {"unverified"}
     monkeypatch.setenv("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "different-volume")
     assert set(
         repository_scanner_readiness(configured(), database=tmp_path)[

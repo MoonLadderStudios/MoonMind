@@ -6,7 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from moonmind.config.container_backend_settings import ContainerBackendSettings
+from moonmind.config.container_backend_settings import (
+    COMPOSE_DOCKER_ENDPOINT,
+    ContainerBackendSettings,
+)
 from moonmind.schemas.repository_scanner_models import DEFAULT_FEED_MAX_AGE_HOURS
 from moonmind.security.scanner_feeds import (
     FEED_CACHE_TARGET,
@@ -42,6 +45,7 @@ def repository_scanner_readiness(
     components = dict.fromkeys(UPSTREAMS, "unverified")
     if (
         cache_configured
+        and settings.endpoint == COMPOSE_DOCKER_ENDPOINT
         and database.is_dir()
         and reader.volume_name
         == os.environ.get("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "scanner_feeds_volume")
