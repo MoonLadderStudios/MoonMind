@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.provider_profiles.model_families import (
+    catalog_lists_family,
     catalog_rows_from_evidence,
     first_party_family_tier_template,
     pinned_model_status,
@@ -156,6 +157,21 @@ def test_automatic_opus_advances_to_a_new_release_only_in_its_family() -> None:
     assert resolved.model == "claude-opus-6"
     assert resolved.status == "resolved"
     assert resolved.source == "profile_catalog"
+
+
+def test_a_context_variant_row_shows_its_base_release_is_offered() -> None:
+    # Claude Code can list Opus only as its 1M-context picker row. The route
+    # still serves the base release, and a tier never resolves to the variant.
+    rows = _rows("claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5")
+
+    resolved = resolve_family_model("opus", provider_id="anthropic", catalog_rows=rows)
+
+    assert resolved.model == "claude-opus-5-5"
+    assert resolved.status == "resolved"
+    assert catalog_lists_family("opus", rows)
+    assert pinned_model_status("claude-opus-5-5", catalog_rows=rows) == "available"
+    # A pin of the variant itself still matches its own row.
+    assert pinned_model_status("claude-opus-5-5[1m]", catalog_rows=rows) == "available"
 
 
 @pytest.mark.parametrize(

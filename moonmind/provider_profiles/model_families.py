@@ -6,7 +6,8 @@ module owns the small amount of provider knowledge needed to turn that policy
 into a concrete model for one profile route:
 
 * which concrete IDs belong to a family (strict ID shapes, so specialized
-  lines, previews, and context variants never count as the family);
+  lines, previews, and context variants are never selected as the family; a
+  context-variant row still shows that its base release is offered);
 * how releases order (major/minor version, not timestamps or lexicographic
   IDs); and
 * which observed catalog rows the selected route can actually use.
@@ -210,6 +211,18 @@ def _row_model_id(row: Mapping[str, Any]) -> str:
     return ""
 
 
+# Claude Code can list a release only as a context-window picker row
+# (``claude-opus-5-5[1m]``). That row shows the route offers the release, so it
+# counts as the base id; automatic tiers resolve to the base, never the variant.
+_CONTEXT_VARIANT_RE = re.compile(r"^(?P<base>.+)\[[0-9]+[km]\]$")
+
+
+def _row_release_id(row: Mapping[str, Any]) -> str:
+    model_id = _row_model_id(row)
+    match = _CONTEXT_VARIANT_RE.match(model_id)
+    return match.group("base") if match else model_id
+
+
 def _row_efforts(row: Mapping[str, Any]) -> frozenset[str] | None:
     for key in (
         "supportedReasoningEfforts",
@@ -279,7 +292,7 @@ def catalog_lists_family(
     if family is None:
         return False
     return any(
-        _parse_release(_row_model_id(row), family) is not None
+        _parse_release(_row_release_id(row), family) is not None
         and _row_declared_family(row) in {None, family.family_id}
         for row in catalog_rows or ()
     )
@@ -321,7 +334,7 @@ def _eligible_releases(
     excluded_by_effort = False
     wanted_effort = str(effort or "").strip().lower() or None
     for row in rows:
-        model_id = _row_model_id(row)
+        model_id = _row_release_id(row)
         declared = _row_declared_family(row)
         if declared is not None and declared != family.family_id:
             continue
@@ -436,7 +449,7 @@ def pinned_model_status(
     if not catalog_rows:
         return STATUS_UNVERIFIED
     for row in catalog_rows:
-        if _row_model_id(row) == text:
+        if text in {_row_model_id(row), _row_release_id(row)}:
             status = _row_status(row)
             return "available" if status in {"available", "active", "ga"} else status
     return STATUS_UNAVAILABLE
