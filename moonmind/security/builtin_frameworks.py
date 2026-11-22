@@ -15,7 +15,7 @@ def review_requirement(
     requests,
     required_purposes,
     now,
-    evidence_availability
+    evidence_availability,
 ):
     requirement = ControlRequirement(
         id=requirement_id,
@@ -188,19 +188,33 @@ async def prepare_builtin_framework(
 
 
 async def prepare_scoped_framework(
-    execution, request, *, system, collected_evidence_refs, prepare, evidence_type,
-    audit_type=None, scoped_systems=lambda system: system.systems,
-    system_refs=lambda system: (), evidence_refs_for=lambda evidence: (),
-    audit_refs=lambda audit: (), evidence_guidance="",
+    execution,
+    request,
+    *,
+    system,
+    collected_evidence_refs,
+    prepare,
+    evidence_type,
+    audit_type=None,
+    scoped_systems=lambda system: system.systems,
+    system_refs=lambda system: (),
+    evidence_refs_for=lambda evidence: (),
+    audit_refs=lambda audit: (),
+    evidence_guidance="",
 ):
     """Resolve evidence and retain the scoped report using the registered contracts."""
     import json
     from moonmind.security.assessments import content_key
     from moonmind.security.frameworks import load_framework_pack
-    from moonmind.workflows.temporal.artifacts import ARTIFACT_ID_PATTERN, ArtifactDependency
+    from moonmind.workflows.temporal.artifacts import (
+        ARTIFACT_ID_PATTERN,
+        ArtifactDependency,
+    )
 
     selection = request.framework
     pack = load_framework_pack(selection.pack_id)
+    if selection.audit_ref and audit_type is None:
+        raise ValueError("This framework accepts evidenceRefs only for audit evidence")
     systems = set(scoped_systems(system))
     if not systems <= set(request.scope.assets):
         raise ValueError("Framework systems exceed admitted assessment scope")
@@ -221,10 +235,10 @@ async def prepare_scoped_framework(
                 "Previous assessment must be a report for the selected framework"
             )
         refs.append(selection.previous_assessment_ref)
-    refs.extend(ref for ref in system_refs(system) if ref and ARTIFACT_ID_PATTERN.fullmatch(ref))
+    refs.extend(
+        ref for ref in system_refs(system) if ref and ARTIFACT_ID_PATTERN.fullmatch(ref)
+    )
     if selection.audit_ref:
-        if audit_type is None:
-            raise ValueError("GLI evidence belongs in evidenceRefs")
         _, body = await execution.read(selection.audit_ref)
         audit = audit_type.model_validate_json(body)
         refs.append(selection.audit_ref)
@@ -254,9 +268,7 @@ async def prepare_scoped_framework(
     )
     if previous is not None:
         if previous.get("schemaVersion") != report["schemaVersion"]:
-            raise ValueError(
-                "Previous assessment must use the selected report schema"
-            )
+            raise ValueError("Previous assessment must use the selected report schema")
         report["reassessment"] = {
             "previousRef": selection.previous_assessment_ref,
             "previousEdition": previous["pack"]["edition"],
@@ -286,7 +298,11 @@ async def prepare_scoped_framework(
     if saved:
         root, report = saved
     else:
-        root = await execution.write(json.dumps(report, sort_keys=True, separators=(",", ":")).encode(), kind="security.framework", key=key)
+        root = await execution.write(
+            json.dumps(report, sort_keys=True, separators=(",", ":")).encode(),
+            kind="security.framework",
+            key=key,
+        )
 
     async def dependencies():
         return [

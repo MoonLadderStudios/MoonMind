@@ -116,7 +116,20 @@ async def test_restricted_pack_text_is_omitted_from_portable_reports(environment
     assert b"licensed-secret-marker" not in summary
 
 
-@pytest.mark.parametrize("change", ["digest", "edition", "draft", "missing", "foreign"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "digest",
+        "edition",
+        "draft",
+        "superseded",
+        "expired",
+        "future",
+        "prohibited",
+        "missing",
+        "foreign",
+    ],
+)
 async def test_invalid_or_inaccessible_pack_never_collects_native_work(
     environment, monkeypatch, change
 ):
@@ -130,8 +143,14 @@ async def test_invalid_or_inaccessible_pack_never_collects_native_work(
 
     service = environment.service
     pack = pack_payload()
-    if change == "draft":
-        pack["publicationStatus"] = "draft"
+    if change in {"draft", "superseded"}:
+        pack["publicationStatus"] = change
+    elif change == "expired":
+        pack["effectiveUntil"] = "2026-02-01"
+    elif change == "future":
+        pack["effectiveFrom"] = "2099-01-01"
+    elif change == "prohibited":
+        pack["distribution"] = "prohibited"
     request = await select_pack(service, await inputs(service), pack)
     if change == "digest":
         request["frameworkPack"]["sha256"] = "0" * 64

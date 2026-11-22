@@ -219,7 +219,9 @@ def parse_declared_pack(payload: bytes) -> VersionedFrameworkPack:
             result[key] = value
         return result
 
-    return VersionedFrameworkPack.model_validate(json.loads(payload, object_pairs_hook=pairs))
+    return VersionedFrameworkPack.model_validate(
+        json.loads(payload, object_pairs_hook=pairs)
+    )
 
 
 def load_declared_pack(

@@ -63,7 +63,9 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
         if framework and isinstance(framework, Mapping):
             from moonmind.security.framework_registry import READINESS_PACKS
 
-            entry = READINESS_PACKS.get(framework.get("packId", framework.get("pack_id")))
+            entry = READINESS_PACKS.get(
+                framework.get("packId", framework.get("pack_id"))
+            )
         else:
             entry = None
         if entry and entry.admits_requirement_evidence:

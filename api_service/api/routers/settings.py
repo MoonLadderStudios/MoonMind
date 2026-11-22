@@ -18,7 +18,7 @@ from api_service.services.assessment_projects import (
     AssessmentProjectResolveRequest,
     resolve_saved_assessment_project,
 )
-from api_service.services.framework_catalog import framework_catalog
+from api_service.services.framework_catalog import FrameworkCatalog, framework_catalog
 from api_service.services.repository_scanner_readiness import (
     repository_scanner_readiness,
 )
@@ -261,7 +261,7 @@ def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None
     return section  # type: ignore[return-value]
 
 
-@router.get("/framework-packs")
+@router.get("/framework-packs", response_model=FrameworkCatalog)
 async def list_framework_packs(
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
     access: ArtifactAccessContext = Depends(get_artifact_access),
