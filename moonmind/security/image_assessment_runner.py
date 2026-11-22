@@ -44,7 +44,6 @@ from moonmind.security.scanner_feeds import (
     FeedSnapshotError,
     copy_snapshot,
     feed_evidence,
-    require_exploitation_feeds,
     retain_exploitation_matches,
     load_snapshot,
 )
@@ -336,8 +335,8 @@ def run_image_assessment(
                 )
                 if assessment.require_fresh_feeds and execution.feed.stale_components:
                     raise FeedSnapshotError("feed_snapshot_stale")
-                if assessment.require_fresh_feeds:
-                    require_exploitation_feeds(execution.feed)
+                if "vulnerability" not in snapshot.components:
+                    raise FeedSnapshotError("feed_snapshot_incomplete")
                 if set(execution.feed.stale_components) - {"kev", "epss"}:
                     limitations.append("feed_snapshot_stale")
             version = root / "version"

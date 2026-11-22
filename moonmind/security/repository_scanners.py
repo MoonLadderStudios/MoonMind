@@ -342,7 +342,12 @@ def normalize_native(
                     native_id=content_key(identity),
                     evidence_refs=[native_ref],
                     priority=VulnerabilityPriority() if vulnerability else None,
-                    severity=severity if isinstance(severity, str) else None,
+                    severity=(
+                        severity
+                        if isinstance(severity, str)
+                        and 0 < len(severity.strip()) <= 1024
+                        else None
+                    ),
                 )
             )
             if len(findings) > 4096:

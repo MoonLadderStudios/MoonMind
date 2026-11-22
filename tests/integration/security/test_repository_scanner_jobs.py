@@ -70,7 +70,7 @@ def repository(root):
         ".gitignore": "untracked.txt\n",
         ".semgrepignore": "*\n",
         "trivy.yaml": "scanners: []\n",
-        ".trivyignore": "CVE-EXAMPLE\n",
+        ".trivyignore": "CVE-2024-0001\n",
     }.items():
         (root / name).write_text(body)
     git("add", "-A")
@@ -125,13 +125,16 @@ def native(scanner):
                 {
                     "Target": "requirements.txt",
                     "Vulnerabilities": [
+                        {"VulnerabilityID": "GHSA-example", "Severity": "HIGH"},
+                        {"VulnerabilityID": "CVE-2024-9999", "Severity": "HIGH"},
+                        {"VulnerabilityID": "CVE-2024-0002", "Severity": "MEDIUM"},
                         {
                             "VulnerabilityID": "CVE-2024-0001",
                             "Severity": "LOW",
                             "PkgName": "fixture-dependency",
                             "InstalledVersion": "1.0",
                             "Description": MARKER,
-                        }
+                        },
                     ],
                 },
                 {
@@ -242,7 +245,7 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         stage = db / "staging" / "fixture"
         (stage / "db").mkdir(parents=True)
         (db / "snapshots").mkdir()
-        (stage / "db" / "trivy.db").write_text('{"CVE-EXAMPLE":"1.0"}')
+        (stage / "db" / "trivy.db").write_text('{"CVE-2024-0001":"1.0"}')
         now = datetime.now(UTC).isoformat()
         (stage / "db" / "metadata.json").write_text(
             json.dumps({"Version": 2, "UpdatedAt": now, "DownloadedAt": now})
@@ -425,10 +428,33 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         )
         assert MARKER.encode() not in body
         if scanner == "trivy" and ref == outputs["comparisonRef"]:
-            row = next(item for item in json.loads(body)["findings"]
-                       if item["finding"]["ruleId"] == "CVE-2024-0001")
+            row = next(
+                item
+                for item in json.loads(body)["findings"]
+                if item["finding"]["ruleId"] == "CVE-2024-0001"
+            )
             assert row["finding"]["priority"]["kev"]["ransomwareUse"] == "Unknown"
             assert row["finding"]["severity"] == "LOW"
+            findings = {
+                item["finding"]["ruleId"]: item["finding"]
+                for item in json.loads(body)["findings"]
+            }
+            assert findings["CVE-2024-0002"]["priority"]["epss"]["percentile"] == 0.99
+            for unscored in ("CVE-2024-9999", "GHSA-example"):
+                assert findings[unscored]["priority"] == {"kev": None, "epss": None}
+        if (
+            scanner == "trivy"
+            and ref == outputs["reportBundle"]["primary_report_ref"]["artifact_id"]
+        ):
+            details = body.decode().split("## Technical findings and remediation")[1]
+            assert (
+                details.index("CVE-2024-0001")
+                < details.index("CVE-2024-0002")
+                < details.index("CVE-2024-9999")
+            )
+            assert "Unscored" in details and "not exploited" not in details.lower()
+            assert b"CISA KEV: fresh" in body and b"FIRST EPSS: fresh" in body
+            assert now[:10].encode() in body
     record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
     record.logs_ref = result.logs_ref
     record.artifacts_ref = result.artifacts_ref

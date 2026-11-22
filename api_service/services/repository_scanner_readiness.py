@@ -1,28 +1,28 @@
 """Read-only deployment configuration, never a live scanner health claim."""
 
 import os
-from pathlib import Path
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from moonmind.config.container_backend_settings import ContainerBackendSettings
+from moonmind.schemas.repository_scanner_models import DEFAULT_FEED_MAX_AGE_HOURS
 from moonmind.security.scanner_feeds import (
     FEED_CACHE_TARGET,
     FEED_HOSTS,
     UPSTREAMS,
     FeedSnapshotError,
+    component_state,
     current_snapshot,
     feed_evidence,
-    component_state,
     feed_policy_admits,
 )
 
 
-from moonmind.schemas.repository_scanner_models import DEFAULT_FEED_MAX_AGE_HOURS
-
-
-def repository_scanner_readiness(settings: ContainerBackendSettings, *, database=Path("/opt/moonmind-scanner-db")) -> dict:
+def repository_scanner_readiness(
+    settings: ContainerBackendSettings, *, database=Path("/opt/moonmind-scanner-db")
+) -> dict:
     """Read configuration and the published manifest on the matching read-only mount."""
     source_ref = "repository-security"
     image = next(
@@ -40,14 +40,26 @@ def repository_scanner_readiness(settings: ContainerBackendSettings, *, database
         and reader.volume_name == writer.volume_name
     )
     components = dict.fromkeys(UPSTREAMS, "unverified")
-    if (cache_configured and database.is_dir()
-            and reader.volume_name == os.environ.get("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "scanner_feeds_volume")):
+    if (
+        cache_configured
+        and database.is_dir()
+        and reader.volume_name
+        == os.environ.get("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "scanner_feeds_volume")
+    ):
         try:
             snapshot = current_snapshot(database, verify=False)
-            feed = feed_evidence(snapshot, misconfig=False, max_age_hours=DEFAULT_FEED_MAX_AGE_HOURS, now=datetime.now(UTC))
+            feed = feed_evidence(
+                snapshot,
+                misconfig=False,
+                max_age_hours=DEFAULT_FEED_MAX_AGE_HOURS,
+                now=datetime.now(UTC),
+            )
             components = {name: component_state(feed, name) for name in UPSTREAMS}
         except FeedSnapshotError as exc:
-            if exc.code == "feed_snapshot_unavailable" and not (database / "current.json").exists():
+            if (
+                exc.code == "feed_snapshot_unavailable"
+                and not (database / "current.json").exists()
+            ):
                 components = dict.fromkeys(UPSTREAMS, "missing")
         except OSError:
             pass
@@ -59,7 +71,10 @@ def repository_scanner_readiness(settings: ContainerBackendSettings, *, database
         for policy in settings.egress_policies
         if source_ref in policy.allowed_image_source_refs
         and feed_policy_admits(policy)
-        and FEED_HOSTS <= {d.host for d in policy.destinations}
+        and (
+            FEED_HOSTS <= {d.host for d in policy.destinations}
+            or not FEED_HOSTS.intersection(d.host for d in policy.destinations)
+        )
     ]
     diagnostics = []
     if not settings.enabled or not settings.endpoint:
@@ -87,7 +102,7 @@ def repository_scanner_readiness(settings: ContainerBackendSettings, *, database
         diagnostics.append(
             {
                 "code": "refresh_egress_unavailable",
-                "action": "Authorize a feed-only HTTPS egress policy for repository-security and an explicit refresh workflow, covering ghcr.io and pkg-containers.githubusercontent.com. Offline feed import remains available.",
+                "action": "Authorize a feed-only HTTPS egress policy for repository-security and an explicit refresh workflow, covering the HTTPS hosts for its selected components. Offline feed import remains available.",
             }
         )
     return {

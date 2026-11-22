@@ -838,6 +838,10 @@ def test_feed_refresh_cli_has_simple_scoped_preparation_and_preserves_components
             "vulnerability",
             "--component",
             "java",
+            "--component",
+            "kev",
+            "--component",
+            "epss",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -845,7 +849,7 @@ def test_feed_refresh_cli_has_simple_scoped_preparation_and_preserves_components
     assert spec["inputAttachments"] == []
     assert not spec.get("environment")
     assert spec["feedRefresh"]["feedCacheRef"] == "scanner-feeds"
-    assert spec["feedRefresh"]["components"] == ["vulnerability", "java"]
+    assert spec["feedRefresh"]["components"] == ["vulnerability", "java", "kev", "epss"]
     assert spec["egressPolicyRef"] == "feeds"
 
 

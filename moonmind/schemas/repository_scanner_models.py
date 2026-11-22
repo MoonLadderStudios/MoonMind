@@ -166,8 +166,10 @@ class FeedRefresh(Contract):
     def admitted_choices(self):
         if len(set(self.components)) != len(self.components):
             raise ValueError("duplicate feed component")
-        if "vulnerability" not in self.components:
-            raise ValueError("feed snapshots require the vulnerability database")
+        if {"java", "checks"}.intersection(
+            self.components
+        ) and "vulnerability" not in self.components:
+            raise ValueError("Trivy feed snapshots require the vulnerability database")
         download = self.acquisition == "download"
         if download != (self.egress_policy_ref is not None):
             raise ValueError("feed downloads, and only downloads, need egress")

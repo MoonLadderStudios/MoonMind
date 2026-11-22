@@ -76,7 +76,18 @@ _PROBE_CODES = frozenset(
     ]
 )
 _COMPONENTS = frozenset(
-    ["gitleaks", "opengrep", "trivy", "rules", "feeds", "checks", "java", "kev", "epss", "selection"]
+    [
+        "gitleaks",
+        "opengrep",
+        "trivy",
+        "rules",
+        "feeds",
+        "checks",
+        "java",
+        "kev",
+        "epss",
+        "selection",
+    ]
 )
 _REGISTRY_CREDENTIAL_TIMEOUT_SECONDS = 15
 

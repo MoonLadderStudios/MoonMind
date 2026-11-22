@@ -39,11 +39,15 @@ def _priority_text(priority):
     kev, epss = priority.get("kev"), priority.get("epss")
     parts = []
     if kev:
-        parts.append(f"Known exploited (CISA KEV), added {kev['dateAdded']}, due {kev['dueDate']}, "
-                     f"ransomware campaign use {kev['ransomwareUse']}.")
+        parts.append(
+            f"Known exploited (CISA KEV), added {kev['dateAdded']}, due {kev['dueDate']}, "
+            f"ransomware campaign use {kev['ransomwareUse']}."
+        )
     if epss:
-        parts.append(f"EPSS probability {epss['probability']:.2%}, percentile {epss['percentile']:.2%} "
-                     f"on {epss['scoreDate']}.")
+        parts.append(
+            f"EPSS probability {epss['probability']:.2%}, percentile {epss['percentile']:.2%} "
+            f"on {epss['scoreDate']}."
+        )
     return " ".join(parts) or "Unscored. No matching exploitation intelligence."
 
 
@@ -103,10 +107,19 @@ def render_assessment_details(
         ]
         intelligence = row.get("intelligence", {})
         if "kevStatus" in intelligence:
-            lines.append(f"  Exploitation data — CISA KEV: {_text(intelligence['kevStatus'])}. "
-                         f"FIRST EPSS: {_text(intelligence['epssStatus'])}.")
-    if not any("kevStatus" in row.get("intelligence", {}) for row in observation["coverage"]):
-        lines.append("Exploitation data: not requested or unavailable in the retained evidence.")
+            lines.append(
+                f"  Exploitation data — CISA KEV: {_text(intelligence['kevStatus'])}. "
+                f"FIRST EPSS: {_text(intelligence['epssStatus'])}."
+            )
+    if not any(
+        "kevStatus" in row.get("intelligence", {}) for row in observation["coverage"]
+    ):
+        status = (
+            "missing from retained evidence"
+            if any(row["tool"] == "trivy" for row in observation["coverage"])
+            else "not requested"
+        )
+        lines.append(f"Exploitation data: {status}.")
     covered = {asset for row in observation["coverage"] for asset in row["assets"]}
     lines.append(
         "Unassessed assets: "
@@ -171,7 +184,11 @@ def render_assessment_details(
             )
         else:
             lines.append(
-                ("CVSS metrics and business risk: undefined. " if finding.get("severity") else "Severity, CVSS metrics and business risk: undefined. ")
+                (
+                    "CVSS metrics and business risk: undefined. "
+                    if finding.get("severity")
+                    else "Severity, CVSS metrics and business risk: undefined. "
+                )
                 + "Reproduce using the retained native evidence, assess environment-specific impact, remediate the affected rule, and run a scope-matched retest. No authored remediation or management response was supplied."
             )
         block_bytes = len(("\n".join(lines[block_start:]) + "\n").encode("utf-8"))

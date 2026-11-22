@@ -1095,13 +1095,25 @@ def test_required_fresh_feed_stops_before_any_scanner_process(tmp_path, monkeypa
     assert execution.feed.snapshot.snapshot_id == snapshot.snapshot_id
 
 
-@pytest.mark.parametrize("invalid", ["regression", "malformed", "oversized"])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "regression",
+        "malformed",
+        "oversized",
+        "score_range",
+        "catalog_version",
+        "catalog_count",
+    ],
+)
 def test_exploitation_refresh_and_offline_import_are_atomic(tmp_path, invalid):
     from tests.fixtures.security_review.exploitation_feeds import write_component
 
     root, output = tmp_path / "feeds", tmp_path / "out"
     components = ["vulnerability", "kev", "epss"]
-    request = FeedRefresh(feedCacheRef="feeds", egressPolicyRef="feeds", components=components)
+    request = FeedRefresh(
+        feedCacheRef="feeds", egressPolicyRef="feeds", components=components
+    )
 
     def fetch(component, stage, scratch, deadline):
         if component == "vulnerability":
@@ -1115,25 +1127,182 @@ def test_exploitation_refresh_and_offline_import_are_atomic(tmp_path, invalid):
     assert "FIRST" in snapshot.components["epss"].attribution
     assert snapshot.components["epss"].data_version == "v2025.03.14"
     src = root / "snapshots" / snapshot.snapshot_id
-    members = [(p.relative_to(src).as_posix(), "file", p.read_bytes())
-               for p in src.rglob("*") if p.is_file() and p.name != feeds.MANIFEST]
-    imported = FeedRefresh(feedCacheRef="feeds", acquisition="import", components=components,
-                           archiveArtifactRef="art_fixture")
-    assert feeds.run_refresh(imported, tmp_path / "import", output, archive=archive(tmp_path, members),
-                             fetch=lambda *_: pytest.fail("network during import"), clock=lambda: NOW) == 0
+    members = [
+        (p.relative_to(src).as_posix(), "file", p.read_bytes())
+        for p in src.rglob("*")
+        if p.is_file() and p.name != feeds.MANIFEST
+    ]
+    imported = FeedRefresh(
+        feedCacheRef="feeds",
+        acquisition="import",
+        components=components,
+        archiveArtifactRef="art_fixture",
+    )
+    assert (
+        feeds.run_refresh(
+            imported,
+            tmp_path / "import",
+            output,
+            archive=archive(tmp_path, members),
+            fetch=lambda *_: pytest.fail("network during import"),
+            clock=lambda: NOW,
+        )
+        == 0
+    )
     other = feeds.current_snapshot(tmp_path / "import")
     assert other.snapshot_id == snapshot.snapshot_id
     assert other.components["epss"].upstream == snapshot.components["epss"].upstream
 
     def bad(component, stage, scratch, deadline):
         fetch(component, stage, scratch, deadline)
+        if component == "kev" and invalid.startswith("catalog_"):
+            path = stage / "kev/catalog.json"
+            catalog = json.loads(path.read_bytes())
+            if invalid == "catalog_count":
+                catalog["count"] += 1
+            else:
+                catalog["catalogVersion"] = ""
+            path.write_text(json.dumps(catalog))
         if component == "epss":
             if invalid == "regression":
-                write_component(stage, component, (NOW - timedelta(days=1)).date().isoformat())
+                write_component(
+                    stage, component, (NOW - timedelta(days=1)).date().isoformat()
+                )
             elif invalid == "malformed":
                 (stage / "epss/scores.csv.gz").write_bytes(b"truncated")
+            elif invalid == "score_range":
+                write_component(
+                    stage, component, NOW.date().isoformat(), probability="NaN"
+                )
+            elif invalid == "oversized":
+                import gzip
+
+                path = stage / "epss/scores.csv.gz"
+                expanded = gzip.decompress(path.read_bytes()) + (
+                    b"CVE-2024-9999,0.1,0.5\n" * 1000
+                )
+                path.write_bytes(gzip.compress(expanded))
+                assert path.stat().st_size < request.max_bytes < len(expanded)
+
     if invalid == "oversized":
-        request = request.model_copy(update={"max_bytes": 30})
+        request = request.model_copy(update={"max_bytes": 4096})
     assert feeds.run_refresh(request, root, output, fetch=bad, clock=lambda: NOW) != 0
     assert refresh_result(output)["failure"].startswith("feed_")
     assert feeds.current_snapshot(root) == snapshot
+
+
+def test_feed_download_selects_only_authorized_hosts(tmp_path, monkeypatch):
+    from urllib.request import Request
+    from tests.fixtures.security_review.exploitation_feeds import write_component
+
+    components = ["kev", "epss"]
+    request = FeedRefresh(
+        feedCacheRef="feeds", components=components, egressPolicyRef="feeds"
+    )
+    spec = refresh_spec(request)
+    accepted = ContainerJobSubmitRequest.model_validate(
+        {
+            "idempotencyKey": "intel",
+            "source": {"source": "workflow", "workflowId": "mm:feeds"},
+            "spec": spec,
+        }
+    )
+    hosts = ["www.cisa.gov", "epss.empiricalsecurity.com"]
+
+    def authorize(destinations):
+        settings = resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES": _policy(*destinations)}
+        )
+        return settings.authorize_egress(accepted)
+
+    assert authorize(hosts).policy_ref == "feeds"
+    for invalid in (hosts[:1], hosts + ["ghcr.io"], hosts + ["unadmitted.example"]):
+        with pytest.raises(ValueError, match="feed hosts"):
+            authorize(invalid)
+    requests = []
+    urls = {feeds.UPSTREAMS[name]: name for name in components}
+
+    class Responses:
+        def open(self, url, *, timeout):
+            name = urls[url]
+            requests.append(name)
+            return (tmp_path / "upstream" / name / feeds.exploitation.FILES[name]).open(
+                "rb"
+            )
+
+    for name in components:
+        write_component(tmp_path / "upstream", name, NOW.date().isoformat())
+    monkeypatch.setattr(feeds.urllib.request, "build_opener", lambda *_: Responses())
+    root, output = tmp_path / "feed", tmp_path / "out"
+    assert feeds.run_refresh(request, root, output, clock=lambda: NOW) == 0
+    assert requests == components
+    original = feeds.current_snapshot(root)
+    assert set(original.components) == set(components)
+
+    def reject_redirect(self, url, *, timeout):
+        return feeds._FeedRedirect().redirect_request(
+            Request(url), None, 302, "", {}, "https://unadmitted.example/scores"
+        )
+
+    monkeypatch.setattr(Responses, "open", reject_redirect)
+    assert feeds.run_refresh(request, root, output, clock=lambda: NOW) == 2
+    assert refresh_result(output)["failure"] == "feed_download_failed"
+    assert feeds.current_snapshot(root) == original
+
+
+@pytest.mark.parametrize("state", ["fresh", "missing", "stale"])
+def test_supplemental_feed_state_preserves_native_coverage(tmp_path, state):
+    from tests.fixtures.security_review.exploitation_feeds import write_component
+
+    root = tmp_path / "feeds"
+    stage = root / "staging" / "mixed"
+    (root / "snapshots").mkdir(parents=True)
+    trivy_cache(stage)
+    components = ["vulnerability"]
+    if state != "missing":
+        components += ["kev", "epss"]
+        for component in components[1:]:
+            write_component(
+                stage,
+                component,
+                (NOW - timedelta(days=3 if state == "stale" else 0)).date().isoformat(),
+            )
+    snapshot, _ = feeds.publish_snapshot(
+        root,
+        stage,
+        components=components,
+        acquisition="download",
+        upstreams=feeds.UPSTREAMS,
+        now=NOW,
+    )
+    from moonmind.security import scanner_readiness as readiness
+    from unittest.mock import patch
+
+    with patch.object(
+        readiness,
+        "_tool_check",
+        return_value={
+            "status": "ready",
+            "code": "scanner_available",
+            "component": "trivy",
+        },
+    ):
+        result = readiness.inspect_selection(
+            {
+                "repositoryScan": scan(
+                    snapshot.snapshot_id, requireFreshFeeds=True
+                ).model_dump(by_alias=True)
+            },
+            database=root,
+            now=NOW,
+        )
+    assert result["status"] == ("blocked" if state == "stale" else "ready")
+    evidence, limitations, private = use(root, snapshot.snapshot_id, tmp_path)
+    assert limitations == []
+    feeds.retain_exploitation_matches(
+        evidence,
+        private,
+        {"Results": [{"Vulnerabilities": [{"VulnerabilityID": "CVE-2024-0001"}]}]},
+    )
+    assert bool(evidence.matches) == (state == "fresh")
+    assert feeds.component_state(evidence, "kev") == state

@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -26,14 +27,13 @@ import sys
 import tarfile
 import tempfile
 import time
-import uuid
-import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError
 
@@ -43,8 +43,8 @@ from moonmind.schemas.repository_scanner_models import (
     FeedRefresh,
     Text,
 )
-from moonmind.security.assessments import content_key
 from moonmind.security import exploitation_data as exploitation
+from moonmind.security.assessments import content_key
 
 SNAPSHOT_SCHEMA = "scanner-feed-snapshot/v1"
 MANIFEST = "manifest.json"
@@ -95,10 +95,10 @@ class FeedSnapshotError(ValueError):
 
 class FeedComponentRecord(Contract):
     upstream: Text
-    data_version: str | None = None
-    license_terms: str | None = None
-    attribution: str | None = None
-    archive_ref: str | None = None
+    data_version: str | None = Field(None, exclude_if=lambda value: value is None)
+    license_terms: str | None = Field(None, exclude_if=lambda value: value is None)
+    attribution: str | None = Field(None, exclude_if=lambda value: value is None)
+    archive_ref: str | None = Field(None, exclude_if=lambda value: value is None)
     schema_version: int | None = None
     content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     upstream_digest: str | None = Field(None, pattern=r"^sha256:[0-9a-f]{64}$")
@@ -115,7 +115,9 @@ class FeedSnapshot(Contract):
     schema_version: Literal["scanner-feed-snapshot/v1"] = SNAPSHOT_SCHEMA
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     acquisition: Literal["download", "import"]
-    trivy_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    trivy_digest: str | None = Field(
+        None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
     published_at: datetime
     components: dict[FeedComponent, FeedComponentRecord]
     validation: Literal["passed"] = "passed"
@@ -130,8 +132,13 @@ class FeedEvidence(Contract):
     max_age_hours: int
     evaluated_at: datetime
     stale_components: list[FeedComponent] = Field(default_factory=list)
+    unavailable_components: list[Literal["kev", "epss"]] = Field(
+        default_factory=list, max_length=2
+    )
     # Only records needed by this scan cross the artifact boundary.
-    matches: dict[str, exploitation.VulnerabilityPriority] = Field(default_factory=dict, max_length=4096)
+    matches: dict[str, exploitation.VulnerabilityPriority] = Field(
+        default_factory=dict, max_length=4096
+    )
 
 
 class FeedRefreshResult(Contract):
@@ -161,11 +168,10 @@ def _timestamp(value) -> datetime | None:
     return parsed
 
 
-def tree_digest(
-    root: Path, *, exclude: frozenset[str] = frozenset(), max_bytes=MAX_SNAPSHOT_BYTES,
-    file_records: list | None = None,
-) -> str:
-    """SHA-256 of sorted ``[relative_path, file_sha256]`` pairs.
+def _file_digests(
+    root: Path, *, exclude: frozenset[str] = frozenset(), max_bytes=MAX_SNAPSHOT_BYTES
+) -> list[list[str]]:
+    """Collect sorted ``[relative_path, file_sha256]`` pairs.
 
     Links, special files and multiply-linked files are rejected: published
     content must not alias anything a later writer could change.
@@ -199,10 +205,13 @@ def tree_digest(
             records.append([relative, digest])
     if not records:
         raise FeedSnapshotError("feed_snapshot_incomplete")
-    records.sort()
-    if file_records is not None:
-        file_records.extend(records)
-    return content_key(records)
+    return sorted(records)
+
+
+def tree_digest(
+    root: Path, *, exclude=frozenset(), max_bytes=MAX_SNAPSHOT_BYTES
+) -> str:
+    return content_key(_file_digests(root, exclude=exclude, max_bytes=max_bytes))
 
 
 def _metadata(path: Path) -> dict:
@@ -245,16 +254,26 @@ def _component_records(
             raise FeedSnapshotError("feed_snapshot_incomplete")
         if component in exploitation.SOURCES:
             try:
-                version, updated, _ = exploitation.read_component(stage, component, max_bytes=max_bytes)
+                version, updated, _ = exploitation.read_component(
+                    stage, component, max_bytes=max_bytes
+                )
             except ValueError as exc:
                 raise FeedSnapshotError("feed_snapshot_incompatible") from exc
             terms, attribution = exploitation.TERMS[component]
             origin = upstreams.get(component, "")
+            files = _file_digests(directory, max_bytes=max_bytes)
+            if updated > acquired_at:
+                raise FeedSnapshotError("feed_snapshot_incompatible")
             records[component] = FeedComponentRecord(
-                upstream=UPSTREAMS[component], archiveRef=origin if origin.startswith("artifact:") else None,
-                contentDigest=tree_digest(directory, max_bytes=max_bytes),
-                downloadedAt=acquired_at, updatedAt=updated, dataVersion=version,
-                licenseTerms=terms, attribution=attribution,
+                upstream=UPSTREAMS[component],
+                archiveRef=origin if origin.startswith("artifact:") else None,
+                contentDigest=content_key(files),
+                upstreamDigest="sha256:" + files[0][1],
+                downloadedAt=acquired_at,
+                updatedAt=updated,
+                dataVersion=version,
+                licenseTerms=terms,
+                attribution=attribution,
             )
             continue
         meta = _metadata(directory / "metadata.json")
@@ -446,11 +465,19 @@ def publish_snapshot(
     filesystem. Identical content published concurrently is reused.
     """
     records = _component_records(stage, components, upstreams, now, max_bytes)
-    file_records = []
-    snapshot_id = tree_digest(stage, max_bytes=max_bytes, file_records=file_records)
+    file_records = _file_digests(stage, max_bytes=max_bytes)
+    trivy_files = [
+        row
+        for row in file_records
+        if row[0].partition("/")[0] not in exploitation.SOURCES
+    ]
     snapshot = FeedSnapshot(
-        snapshotId=snapshot_id,
-        trivyDigest=content_key([row for row in file_records if row[0].split("/")[0] not in exploitation.SOURCES]),
+        snapshotId=content_key(file_records),
+        trivyDigest=(
+            content_key(trivy_files)
+            if trivy_files and len(trivy_files) != len(file_records)
+            else None
+        ),
         acquisition=acquisition,
         publishedAt=now,
         components=records,
@@ -480,7 +507,9 @@ def publish_snapshot(
             os.rename(stage, target)
         _write_atomic(
             root / "current.json",
-            json.dumps({"snapshotId": snapshot.snapshot_id, "upstreamDates": dates}).encode(),
+            json.dumps(
+                {"snapshotId": snapshot.snapshot_id, "upstreamDates": dates}
+            ).encode(),
         )
     return snapshot, reused
 
@@ -551,6 +580,11 @@ def extract_archive(
                 directories |= created
                 count += len(created)
                 if member.isreg():
+                    if (
+                        parts[0] in exploitation.MAX_BYTES
+                        and member.size > exploitation.MAX_BYTES[parts[0]]
+                    ):
+                        raise FeedSnapshotError("feed_archive_rejected")
                     count += 1
                     total += member.size
                 if count > max_files or total > max_bytes:
@@ -573,13 +607,19 @@ Fetch = Callable[[str, Path, Path, float], None]
 class _FeedRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         dest = urlsplit(newurl)
-        if (dest.scheme != "https" or dest.hostname != urlsplit(req.full_url).hostname
-                or dest.port not in (None, 443) or dest.username is not None):
+        if (
+            dest.scheme != "https"
+            or dest.hostname != urlsplit(req.full_url).hostname
+            or dest.port not in (None, 443)
+            or dest.username is not None
+        ):
             raise FeedSnapshotError("feed_download_failed")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def fetch_component(component: str, stage: Path, scratch: Path, deadline: float) -> None:
+def fetch_component(
+    component: str, stage: Path, scratch: Path, deadline: float
+) -> None:
     if component not in exploitation.SOURCES:
         trivy_fetch(component, stage, scratch, deadline)
         return
@@ -593,10 +633,13 @@ def fetch_component(component: str, stage: Path, scratch: Path, deadline: float)
         with opener.open(UPSTREAMS[component], timeout=min(60, remaining)) as response:
             with (directory / exploitation.FILES[component]).open("xb") as output:
                 while chunk := response.read(64 * 1024):
-                    if output.tell() + len(chunk) > exploitation.MAX_BYTES[component] or time.monotonic() > deadline:
+                    if (
+                        output.tell() + len(chunk) > exploitation.MAX_BYTES[component]
+                        or time.monotonic() > deadline
+                    ):
                         raise FeedSnapshotError("feed_download_failed")
                     output.write(chunk)
-    except (OSError, urllib.error.URLError) as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise FeedSnapshotError("feed_download_failed") from exc
 
 
@@ -687,39 +730,50 @@ def feed_evidence(
 
 
 def component_state(evidence: FeedEvidence | None, component: str) -> str:
-    if evidence is None or evidence.snapshot is None or component not in evidence.snapshot.components:
+    if (
+        evidence is None
+        or evidence.snapshot is None
+        or component not in evidence.snapshot.components
+    ):
         return "missing"
+    if component in evidence.unavailable_components:
+        return "unavailable"
     return "stale" if component in evidence.stale_components else "fresh"
 
 
-def require_exploitation_feeds(evidence: FeedEvidence | None) -> None:
-    for name in exploitation.SOURCES:
-        state = component_state(evidence, name)
-        if state == "missing":
-            raise FeedSnapshotError("feed_snapshot_incomplete")
-        if state == "stale":
-            raise FeedSnapshotError("feed_snapshot_stale")
-
-
-def retain_exploitation_matches(evidence: FeedEvidence | None, cache: Path, native: dict) -> None:
+def retain_exploitation_matches(
+    evidence: FeedEvidence | None, cache: Path, native: dict
+) -> None:
     """Carry a bounded subset from the verified private cache into security.assess."""
     wanted = set()
     for result in native.get("Results") or ():
-        vulnerabilities = result.get("Vulnerabilities") if isinstance(result, dict) else None
+        vulnerabilities = (
+            result.get("Vulnerabilities") if isinstance(result, dict) else None
+        )
         if not isinstance(vulnerabilities, list):
             continue
         for item in vulnerabilities:
             cve = item.get("VulnerabilityID") if isinstance(item, dict) else None
-            if isinstance(cve, str) and exploitation.CVE.fullmatch(cve) and len(wanted) < 4096:
+            if (
+                isinstance(cve, str)
+                and exploitation.CVE.fullmatch(cve)
+                and len(wanted) < 4096
+            ):
                 wanted.add(cve)
     if not wanted:
         return
     for name in exploitation.SOURCES:
         if component_state(evidence, name) != "fresh":
             continue
-        _, _, matches = exploitation.read_component(cache, name, wanted)
+        try:
+            _, _, matches = exploitation.read_component(cache, name, wanted)
+        except ValueError:
+            evidence.unavailable_components.append(name)
+            continue
         for cve, match in matches.items():
-            priority = evidence.matches.setdefault(cve, exploitation.VulnerabilityPriority())
+            priority = evidence.matches.setdefault(
+                cve, exploitation.VulnerabilityPriority()
+            )
             setattr(priority, name, match)
 
 
@@ -737,13 +791,21 @@ def scanner_feed(
             else current_snapshot(root, verify=False)
         )
         copy_snapshot(root, snapshot, destination)
+    if "vuln" in scan.trivy_scanners and (
+        snapshot is None or "vulnerability" not in snapshot.components
+    ):
+        raise FeedSnapshotError("feed_snapshot_incomplete")
     evidence = feed_evidence(
         snapshot,
         misconfig="misconfig" in scan.trivy_scanners,
         max_age_hours=scan.feed_max_age_hours,
         now=now,
     )
-    limitations = ["feed_snapshot_stale"] if set(evidence.stale_components) - exploitation.SOURCES.keys() else []
+    limitations = (
+        ["feed_snapshot_stale"]
+        if set(evidence.stale_components) - exploitation.SOURCES.keys()
+        else []
+    )
     # The Java index is required only when Java archives are examined.
     if (
         "vuln" in scan.trivy_scanners

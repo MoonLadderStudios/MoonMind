@@ -41,7 +41,7 @@ export function RepositoryScannerReadiness() {
             <div><dt>Configured image ({data.imageSourceRef})</dt><dd className="break-all">{data.sourceImage ?? 'Not configured'}</dd></div>
             <div><dt>Supported scanners</dt><dd>{data.scanners.join(', ')}. Installed binaries: Unverified.</dd></div>
             <div><dt>Default rules: {data.ruleSelection}</dt><dd>{data.ruleCoverage}</dd></div>
-            <div><dt>Feed cache</dt><dd>{data.databaseCacheRef} (read-only), {data.refreshCacheRef} (refresh). Shared volume: {data.feedCacheConfigured ? 'configured' : 'not configured'}. </dd></div>
+            <div><dt>Feed cache</dt><dd>{data.databaseCacheRef} (read-only), {data.refreshCacheRef} (refresh). Shared volume: {data.feedCacheConfigured ? 'configured' : 'not configured'}.</dd></div>
             <div><dt>Feed components</dt><dd><ul>{Object.entries(data.feedComponents).map(([name, state]) => <li key={name}>{name}: {state}</li>)}</ul></dd></div>
             <div><dt>Refresh egress</dt><dd>{data.refreshPolicies.length ? data.refreshPolicies.map(policy => `${policy.policyRef} (workflows: ${policy.workflowIds.join(', ')})`).join('; ') : 'No matching deployment policy configured'}. Connectivity: Unverified.</dd></div>
           </dl>

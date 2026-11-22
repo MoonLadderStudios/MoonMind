@@ -114,13 +114,18 @@ def inspect_selection(
                 max_age_hours=admitted.feed_max_age_hours,
                 now=now or datetime.now(UTC),
             )
-            vulnerabilities = ("vuln" in admitted.trivy_scanners if repository
-                               else admitted.operation != "sbom-generate")
+            vulnerabilities = (
+                "vuln" in admitted.trivy_scanners
+                if repository
+                else admitted.operation != "sbom-generate"
+            )
             if vulnerabilities:
                 for name in ("kev", "epss"):
                     state = component_state(evidence, name)
-                    checks.append(_check(name, "feed_component_" + state,
-                        "ready" if state == "fresh" else ("blocked" if admitted.require_fresh_feeds else "unverified")))
+                    status = "ready" if state == "fresh" else "unverified"
+                    if admitted.require_fresh_feeds and state == "stale":
+                        status = "blocked"
+                    checks.append(_check(name, "feed_component_" + state, status))
             if set(evidence.stale_components) - {"kev", "epss"}:
                 checks.append(
                     _check(

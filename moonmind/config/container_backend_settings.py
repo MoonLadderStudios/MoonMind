@@ -247,7 +247,9 @@ class ContainerBackendSettings:
                 if request.spec.feed_refresh is not None:
                     from moonmind.security.scanner_feeds import feed_policy_admits
 
-                    if not feed_policy_admits(policy, request.spec.feed_refresh.components):
+                    if not feed_policy_admits(
+                        policy, request.spec.feed_refresh.components
+                    ):
                         raise ValueError(
                             "feed refresh egress may reach only feed hosts"
                         )

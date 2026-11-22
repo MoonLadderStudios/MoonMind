@@ -10,15 +10,15 @@ it('shows configuration and diagnostics without claiming a verified scan or star
     scanners: ['gitleaks', 'opengrep', 'trivy'], ruleSelection: 'image-default',
     ruleCoverage: 'Narrow Python, JavaScript and TypeScript eval/shell rules.',
     databaseCacheRef: 'scanner-db', refreshCacheRef: 'scanner-feeds', feedCacheConfigured: false,
-    feedSnapshot: 'unverified', feedComponents: { vulnerability: 'unverified', kev: 'unverified', epss: 'unverified' }, refreshPolicies: [],
+    feedSnapshot: 'unverified', feedComponents: { vulnerability: 'unverified', kev: 'stale', epss: 'fresh' }, refreshPolicies: [],
     diagnostics: [{ code: 'feed_cache_unavailable', action: 'Configure shared cache aliases.' }],
     verificationNote: 'Configuration only. No scan or refresh is started here.',
   }), { status: 200 }));
   renderWithClient(<RepositoryScannerReadiness />);
   expect(await screen.findByText('example/scanner:custom')).toBeTruthy();
   expect(screen.getByText(/Configure shared cache aliases/)).toBeTruthy();
-  expect(screen.getByText(/kev: unverified/i)).toBeTruthy();
-  expect(screen.getByText(/epss: unverified/i)).toBeTruthy();
+  expect(screen.getByText(/kev: stale/i)).toBeTruthy();
+  expect(screen.getByText(/epss: fresh/i)).toBeTruthy();
   expect(screen.getByText(/image-default/)).toBeTruthy();
   expect(screen.getAllByText(/Unverified/).length).toBeGreaterThan(0);
   expect(fetcher).toHaveBeenCalledTimes(1);
