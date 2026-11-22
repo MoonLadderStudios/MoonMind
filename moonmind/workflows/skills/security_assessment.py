@@ -1668,6 +1668,8 @@ class AssessmentExecution:
             ToolFailure,
             ValueError,
         ):
+            # An unreadable history record makes only the comparison unavailable.
+            # The current assessment still evaluates its own evidence.
             pass
         return None
 
