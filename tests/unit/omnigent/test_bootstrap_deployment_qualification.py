@@ -318,6 +318,20 @@ async def test_qualification_attests_the_launch_policy_admission_selects(
 
 
 @pytest.mark.asyncio
+async def test_qualification_binds_the_vendor_runtime_to_the_host_image(
+    qualification_boundary,
+    monkeypatch,
+) -> None:
+    """Packs name the binary; the image digest identifies the installed release."""
+
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _HOST_IMAGE_REF)
+    evidence = await _qualify(qualification_boundary)
+
+    digest = _HOST_IMAGE_REF.split("@", 1)[1]
+    assert evidence["supportIdentity"]["vendorRuntimeRefs"] == [f"opencode#{digest}"]
+
+
+@pytest.mark.asyncio
 async def test_qualification_attests_the_selected_provider_route(
     qualification_boundary,
 ) -> None:

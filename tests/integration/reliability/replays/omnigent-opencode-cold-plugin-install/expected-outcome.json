@@ -17,6 +17,6 @@
   "dockerfileOfflineVerify": "--cache \"${OPENCODE_PLUGIN_NPM_CACHE}\" --no-audit --no-fund --offline",
   "releaseVerifyScript": "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh",
   "releaseWorkflow": ".github/workflows/docker-publish-moonmind-host.yml",
-  "currentRuntimeVersion": "2.0.32",
+  "dockerfilePluginVersionSource": "opencode_version=\"$(jq -er .opencode /opt/moonmind/vendor-cli-versions.json)\"",
   "currentPluginPackage": "@opencode/plugin"
 }

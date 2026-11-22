@@ -53,7 +53,6 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import (
     OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
     OMNIGENT_SHARED_HOST_IMAGE_ENV,
-    OPENCODE_PINNED_VERSION,
     HostClass,
     LaunchPolicy,
     get_host_class,
@@ -122,7 +121,6 @@ __all__ = [
     "OPENCODE_AUTH_FILE_MODE",
     "OPENCODE_AUTH_PARENT_MODE",
     "OPENCODE_AUTH_TARGET_PATH",
-    "OPENCODE_PINNED_VERSION",
     "OPENCODE_PROVIDER_KEY",
     "RUNTIME_PACK_SCHEMA_VERSION",
     "BundleSource",

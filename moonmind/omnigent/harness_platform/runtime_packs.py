@@ -1,8 +1,8 @@
 """Trusted runtime-pack descriptors for the shared Omnigent host image.
 
 A runtime pack is the deployment-owned declaration of how one vendor runtime
-behaves inside the shared ``omnigent-host-moonmind`` image: the exact vendor
-runtime identity the image must contain, the bounded environment the generic
+behaves inside the shared ``omnigent-host-moonmind`` image: the vendor
+runtime binary the image must contain, the bounded environment the generic
 startup may shape, the credential-home layout it mounts, and the exact-host
 readiness and attestation probes that must pass before a runner starts.
 
@@ -31,18 +31,21 @@ from moonmind.omnigent.harness_platform.failures import (
 RUNTIME_PACK_SCHEMA_VERSION = "moonmind.omnigent-harness-runtime-pack.v1"
 
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){0,3}$")
 
 
 class VendorRuntimeDescriptor(BaseModel):
-    """One vendor runtime binary the pack requires in the shared image."""
+    """One vendor runtime binary the pack requires in the shared image.
+
+    The image build chooses the release (the newest one its Omnigent base
+    supports), so a pack records no version; exact-host attestation records
+    the release a launched host actually reports.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     versionCommand: tuple[str, ...] = Field(alias="versionCommand")
     versionRegex: str = Field(alias="versionRegex")
-    pinnedVersion: str = Field(alias="pinnedVersion")
 
     @model_validator(mode="after")
     def validate_top(self) -> VendorRuntimeDescriptor:
@@ -56,10 +59,6 @@ class VendorRuntimeDescriptor(BaseModel):
             re.compile(self.versionRegex)
         except re.error as exc:
             raise ValueError(f"invalid versionRegex: {exc}") from exc
-        if not _VERSION_RE.fullmatch(self.pinnedVersion):
-            raise ValueError(
-                f"pinnedVersion must be a plain version (got {self.pinnedVersion!r})"
-            )
         return self
 
 
@@ -205,18 +204,12 @@ def pack_ref_for_harness(harness_id: str) -> str:
 def runtime_dependencies_for_pack(pack: RuntimePackDescriptor) -> tuple[dict[str, Any], ...]:
     """Return the Host Class ``runtimeDependencies`` entries for a pack.
 
-    The descriptor pins the vendor version identity, while the launched image
-    attests the installed runtime. The planner binds the support key to the
-    exact host image digest when no per-runtime digest is recorded, so a
-    rebuilt image cannot reuse prior evidence.
+    The launched image attests the installed release. The planner binds the
+    support key to the exact host image digest, so a rebuilt image with a
+    newer release cannot reuse prior evidence.
     """
 
-    return (
-        {
-            "name": pack.vendorRuntime.name,
-            "version": pack.vendorRuntime.pinnedVersion,
-        },
-    )
+    return ({"name": pack.vendorRuntime.name},)
 
 
 def _register(pack: RuntimePackDescriptor) -> None:
@@ -230,7 +223,6 @@ def _pack(
     vendor_name: str,
     version_command: tuple[str, ...],
     version_regex: str,
-    pinned_version: str,
     credential_target: str,
     environment: dict[str, str] | None = None,
     forbidden: tuple[str, ...] = (),
@@ -244,7 +236,6 @@ def _pack(
                 "name": vendor_name,
                 "versionCommand": list(version_command),
                 "versionRegex": version_regex,
-                "pinnedVersion": pinned_version,
             },
             "credentialLayout": {"targetPath": credential_target},
             "environment": environment or {},
@@ -273,7 +264,6 @@ register_runtime_pack(
         vendor_name="opencode",
         version_command=("opencode", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        pinned_version="2.0.32",
         credential_target="/home/app/.local/share/opencode",
         environment={
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
@@ -283,10 +273,6 @@ register_runtime_pack(
         forbidden=_OPENCODE_FORBIDDEN + _SHARED_OAUTH_FORBIDDEN,
     )
 )
-# Vendor pins mirror ``services/omnigent/moonmind-host/Dockerfile`` and
-# ``host_classes.OPENCODE_PINNED_VERSION``. Updating a pin is a deployment
-# change that must land in the shared image build args and these descriptors
-# in the same change; exact-host attestation records the observed release.
 register_runtime_pack(
     _pack(
         pack_id="codex-native-pack",
@@ -294,7 +280,6 @@ register_runtime_pack(
         vendor_name="codex",
         version_command=("codex", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        pinned_version="0.170.0",
         credential_target="/home/app/.codex",
         forbidden=_SHARED_OAUTH_FORBIDDEN
         + ("CODEX_ACCESS_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
@@ -307,7 +292,6 @@ register_runtime_pack(
         vendor_name="claude",
         version_command=("claude", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        pinned_version="2.1.281",
         credential_target="/home/app/.claude",
         forbidden=_SHARED_OAUTH_FORBIDDEN
         + ("CLAUDE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"),

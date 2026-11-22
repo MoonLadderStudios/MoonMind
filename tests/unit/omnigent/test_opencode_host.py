@@ -27,7 +27,6 @@ from moonmind.omnigent.harness_platform import (
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     HOST_CLASSES,
-    OPENCODE_PINNED_VERSION,
     OmnigentHostClassSelector,
 )
 from moonmind.omnigent.harness_platform.materializers import (
@@ -35,7 +34,6 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_PROVIDER_KEY,
     materializer_ref_for_provider,
 )
-from moonmind.omnigent.harness_platform.runtime_packs import get_runtime_pack
 
 _RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-moonmind-host.yml")
 _SERVER_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
@@ -146,10 +144,10 @@ def test_opencode_host_class_is_dedicated(monkeypatch):
     assert hc.features["workspaceBind"] is True
     assert hc.features["restrictedEgress"] is True
     assert hc.features["mountedSkills"] is True
-    # Check RuntimeDependency version is pinned
+    # The image build chooses the OpenCode release; the Host Class names the
+    # binary and exact-host attestation records the installed release.
     dep = hc.declaredHarnessImplementations[0].runtimeDependencies[0]
-    assert dep["name"] == "opencode"
-    assert dep["version"] == OPENCODE_PINNED_VERSION
+    assert dep == {"name": "opencode"}
 
 
 def test_opencode_host_class_accepts_credentialless_zen(monkeypatch):
@@ -191,11 +189,6 @@ def test_production_registry_has_no_synthetic_host_classes():
         get_host_class("omnigent-codex-current@1")
     with pytest.raises(HarnessPlatformError):
         get_host_class("omnigent-native-standard@3")
-
-
-def test_opencode_pack_pin_matches_host_class_pin():
-    pack = get_runtime_pack("opencode-native-pack@1")
-    assert pack.vendorRuntime.pinnedVersion == OPENCODE_PINNED_VERSION
 
 
 def test_opencode_image_ref_fail_closed(monkeypatch):
@@ -478,11 +471,13 @@ def test_opencode_auth_json_bytes_structure(provider_key: str):
 def test_shared_image_installs_all_supported_harnesses_and_offline_plugin_cache():
     dockerfile = Path("services/omnigent/moonmind-host/Dockerfile")
     content = dockerfile.read_text()
-    assert '"@openai/codex@${CODEX_CLI_VERSION}"' in content
-    assert '"@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"' in content
-    assert '"@opencode/cli@${OPENCODE_VERSION}"' in content
-    # Should verify opencode version
-    assert "2.0.32" in content
+    # Each CLI follows the newest release this base's Omnigent supports.
+    assert "vendor_cli_releases.py --omnigent-bounds" in content
+    assert '"codex=${CODEX_CLI_VERSION}"' in content
+    assert '"claude=${CLAUDE_CLI_VERSION}"' in content
+    assert '"opencode=${OPENCODE_VERSION}"' in content
+    # The plugin SDK is warmed at the OpenCode release actually installed.
+    assert "jq -er .opencode /opt/moonmind/vendor-cli-versions.json" in content
     # SDK-backed directory plugins resolve the current SDK closure offline.
     assert "ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache" in content
     assert '{"dependencies":{"@opencode/plugin":"%s"}}' in content
