@@ -42,6 +42,11 @@ async def export_assessment(
     }
     selection = request.oscal_export
     try:
+        if len(request.selected_packs) > 1:
+            raise UnsupportedExport(
+                "OSCAL export supports one framework pack per assessment. This assessment selected multiple packs.",
+                "multiple_framework_packs",
+            )
         if framework is None:
             raise UnsupportedExport(
                 "Select a native framework assessment before requesting OSCAL export.",

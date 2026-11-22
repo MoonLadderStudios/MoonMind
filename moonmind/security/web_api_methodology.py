@@ -14,6 +14,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from moonmind.security.frameworks import MAX_PACK_REQUIREMENTS
 from moonmind.security.frameworks import AssessmentText as Text
 from moonmind.security.frameworks import FrameworkContract as Contract
 
@@ -124,7 +125,7 @@ class ProcedureResults(Contract):
         "web-api-procedure-results/v1"
     )
     plan_ref: Text
-    runs: Annotated[list[ProcedureRun], Field(max_length=256)]
+    runs: Annotated[list[ProcedureRun], Field(max_length=MAX_PACK_REQUIREMENTS)]
     limitations: Annotated[Texts, Field(min_length=1)]
     review_status: Literal["pending", "reviewed"] = "pending"
     reviewer: Text | None = None

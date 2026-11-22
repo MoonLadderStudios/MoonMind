@@ -334,3 +334,20 @@ async def test_document_request_or_review_never_adds_model_delivery_permission(p
             access=None,
         )
     assert not artifacts.read.called
+
+
+def test_schedule_retains_current_evidence_from_all_selected_packs():
+    workflow = task()
+    inputs = workflow["steps"][0]["tool"]["inputs"]
+    row = inputs.pop("controlAssessment")["requirements"][0]
+    packs = []
+    for ref in ["art_first", "art_second"]:
+        evidence = organisational_request()
+        evidence["revisions"][0]["artifactRef"] = ref
+        packs.append(
+            {"requirementChoices": {row["id"]: {"organisationalEvidence": [evidence]}}}
+        )
+    inputs["frameworkPacks"] = packs
+    assert schedule_input_artifact_ids(
+        {"initialParameters": {"workflow": workflow}}
+    ) == {"art_first", "art_second"}

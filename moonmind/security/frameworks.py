@@ -15,6 +15,28 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
+MAX_PACK_REQUIREMENTS = 512
+MAX_CONTROL_REQUIREMENTS = 1024
+MAX_FRAMEWORK_PACKS = 16
+MAX_CONTROL_EVIDENCE_REFS = 64
+MAX_CONTROL_CELLS = 16384
+
+
+class AssessmentInputError(ValueError):
+    """Field-addressable admission diagnostic safe to expose without input values."""
+
+
+def selected_framework_packs(single, multiple):
+    """Normalize both wire shapes at assessment and artifact-grant admission."""
+    if not isinstance(multiple, list) or len(multiple) > MAX_FRAMEWORK_PACKS:
+        raise AssessmentInputError(
+            f"frameworkPacks must be a list of at most {MAX_FRAMEWORK_PACKS} selections"
+        )
+    if single is not None and multiple:
+        raise AssessmentInputError("supply either frameworkPack or frameworkPacks")
+    return [single] if single is not None else multiple
+
+
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)
 ]
@@ -23,6 +45,15 @@ Strings = Annotated[list[Text], Field(max_length=256)]
 # Legacy framework narrative fields retain their wider original contract.
 AssessmentText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
+]
+
+
+PACK_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
+PackIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=PACK_IDENTIFIER_PATTERN, max_length=128
+    ),
 ]
 
 
@@ -195,13 +226,13 @@ class FrameworkPackSelection(FrameworkContract):
     """An explicitly selected, retained pack, not a mutable registry alias."""
 
     artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
-    pack_id: Text
-    edition: Text
-    revision: Text
+    pack_id: PackIdentifier
+    edition: PackIdentifier
+    revision: PackIdentifier
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     period: EvidencePeriod
     requirement_choices: Annotated[
-        dict[Text, DeclaredRequirementChoice], Field(max_length=64)
+        dict[Text, DeclaredRequirementChoice], Field(max_length=MAX_PACK_REQUIREMENTS)
     ] = Field(default_factory=dict)
     previous_assessment_ref: (
         Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None

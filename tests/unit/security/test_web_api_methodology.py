@@ -703,3 +703,38 @@ def test_application_content_cannot_replace_the_pre_execution_case_oracle():
         next(o for o in coverage["objectives"] if o["id"] == "authorization")["status"]
         == "partially_tested"
     )
+
+
+def test_large_methodology_plan_retains_one_result_for_every_objective():
+    from moonmind.security.assessments import WebAPITestPlan
+    from moonmind.security.web_api_methodology import ProcedureResults
+
+    source = plan_payload()
+    source["objectives"] = [
+        {
+            "id": f"R{i}",
+            "applicability": "applicable",
+            "procedures": [
+                {"id": "inspect", "assets": ["app"], "interfaceIds": ["api"]},
+            ],
+        }
+        for i in range(350)
+    ]
+    plan = WebAPITestPlan.model_validate(source)
+    runs = [
+        {
+            "objectiveId": row.id,
+            "procedureId": "inspect",
+            "status": "completed",
+            "evidenceKind": "review_judgment",
+            "outcome": "clear",
+            "evidenceRefs": ["art_source"],
+        }
+        for row in plan.objectives
+    ]
+    results = ProcedureResults(
+        planRef="art_plan", runs=runs, limitations=["Synthetic fixture"]
+    )
+    assert [run.objective_id for run in results.runs] == [
+        row.id for row in plan.objectives
+    ]

@@ -2,7 +2,14 @@
 
 from collections.abc import Mapping
 
-from moonmind.security.frameworks import OrganisationalEvidenceRequest
+from moonmind.security.frameworks import (
+    MAX_CONTROL_EVIDENCE_REFS,
+    MAX_CONTROL_REQUIREMENTS,
+    MAX_PACK_REQUIREMENTS,
+    AssessmentInputError,
+    OrganisationalEvidenceRequest,
+    selected_framework_packs,
+)
 
 
 def organisational_evidence_refs(task: Mapping) -> list[str]:
@@ -26,17 +33,31 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
         control = (
             inputs.get("controlAssessment", inputs.get("control_assessment")) or {}
         )
-        pack = inputs.get("frameworkPack", inputs.get("framework_pack")) or {}
-        if not isinstance(control, Mapping) or not isinstance(pack, Mapping):
-            raise TypeError("invalid assessment evidence plan")
+        packs = selected_framework_packs(
+            inputs.get("frameworkPack", inputs.get("framework_pack")),
+            inputs.get("frameworkPacks", inputs.get("framework_packs", [])),
+        )
+        if not isinstance(control, Mapping):
+            raise TypeError("invalid controlAssessment")
         requirements = control.get("requirements", [])
-        choices = pack.get("requirementChoices", pack.get("requirement_choices", {}))
-        if (
-            not isinstance(requirements, list)
-            or not isinstance(choices, Mapping)
-            or len(requirements) + len(choices) > 64
-        ):
-            raise ValueError("invalid assessment requirement collection")
+        if not isinstance(requirements, list):
+            raise ValueError("invalid controlAssessment.requirements")
+        selected_rows = list(requirements)
+        for index, pack in enumerate(packs):
+            if not isinstance(pack, Mapping):
+                raise TypeError(f"invalid frameworkPacks[{index}]")
+            choices = pack.get(
+                "requirementChoices", pack.get("requirement_choices", {})
+            )
+            if not isinstance(choices, Mapping) or len(choices) > MAX_PACK_REQUIREMENTS:
+                raise AssessmentInputError(
+                    f"frameworkPacks[{index}].requirementChoices exceeds the {MAX_PACK_REQUIREMENTS} choice bound or is invalid"
+                )
+            selected_rows.extend(choices.values())
+        if len(selected_rows) > MAX_CONTROL_REQUIREMENTS:
+            raise AssessmentInputError(
+                f"requirements exceeds the {MAX_CONTROL_REQUIREMENTS} aggregate bound"
+            )
         framework = inputs.get("framework") or {}
         builtin_rows = []
         if isinstance(framework, Mapping) and framework.get(
@@ -53,7 +74,7 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             builtin_rows = [
                 {"organisationalEvidence": requests} for requests in evidence.values()
             ]
-        for row in [*requirements, *choices.values(), *builtin_rows]:
+        for row in [*selected_rows, *builtin_rows]:
             if not isinstance(row, Mapping):
                 raise TypeError("invalid assessment requirement")
             requests = row.get(
@@ -65,6 +86,8 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
                 parsed = OrganisationalEvidenceRequest.model_validate(request)
                 refs.extend(revision.artifact_ref for revision in parsed.revisions[-1:])
     refs = list(dict.fromkeys(refs))
-    if len(refs) > 64:
-        raise ValueError("organisational evidence exceeds reference bound")
+    if len(refs) > MAX_CONTROL_EVIDENCE_REFS:
+        raise AssessmentInputError(
+            f"organisationalEvidence exceeds the {MAX_CONTROL_EVIDENCE_REFS} reference bound"
+        )
     return refs
