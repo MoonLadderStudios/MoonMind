@@ -66,6 +66,7 @@ def repository_scanner_readiness(
             ):
                 components = dict.fromkeys(UPSTREAMS, "missing")
         except OSError:
+            # A read error leaves feed freshness unknown. Keep every component unverified.
             pass
     policies = [
         {
