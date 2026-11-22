@@ -90,6 +90,7 @@ services:
       # on the worker is rejected as unconfigured before the request ever
       # reaches Temporal.
       - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}","registryCredentialRef":"${MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF:-}"},{"sourceRef":"repository-security","image":"${MOONMIND_REPOSITORY_SECURITY_IMAGE:-ghcr.io/moonladderstudios/repository-security:latest}","pullPolicy":"${MOONMIND_REPOSITORY_SECURITY_IMAGE_PULL_POLICY:-always}","registryCredentialRef":"${MOONMIND_REPOSITORY_SECURITY_REGISTRY_CREDENTIAL_REF:-}"},{"sourceRef":"web-assessment","image":"${MOONMIND_WEB_ASSESSMENT_IMAGE:-ghcr.io/zaproxy/zaproxy:stable}","pullPolicy":"${MOONMIND_WEB_ASSESSMENT_IMAGE_PULL_POLICY:-always}"},{"sourceRef":"cloud-posture","image":"${MOONMIND_CLOUD_POSTURE_IMAGE:-prowlercloud/prowler:stable}","pullPolicy":"${MOONMIND_CLOUD_POSTURE_IMAGE_PULL_POLICY:-always}"}]}
+      - MOONMIND_SCANNER_FEEDS_VOLUME_NAME=${MOONMIND_SCANNER_FEEDS_VOLUME_NAME:-scanner_feeds_volume}
       - MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES=${MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES:-[{"cacheRef":"scanner-feeds","volumeName":"${MOONMIND_SCANNER_FEEDS_VOLUME_NAME:-scanner_feeds_volume}","target":"/opt/moonmind-scanner-feeds","readOnly":false},{"cacheRef":"scanner-db","volumeName":"${MOONMIND_SCANNER_FEEDS_VOLUME_NAME:-scanner_feeds_volume}","target":"/opt/moonmind-scanner-db","readOnly":true},{"cacheRef":"unreal-ccache","volumeName":"${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}","target":"/home/ue4/.ccache"},{"cacheRef":"unreal-ubt","volumeName":"${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}","target":"/home/ue4/.config/Epic/UnrealBuildTool"},{"cacheRef":"unreal-ddc","volumeName":"${MOONMIND_UNREAL_DDC_VOLUME_NAME:-unreal_ddc_volume}","target":"/home/ue4/.cache/UnrealEngine/Common/DerivedDataCache","readOnly":false}]}
       - MOONMIND_CONTAINER_BACKEND_SERVICE_CONNECTIONS=${MOONMIND_CONTAINER_BACKEND_SERVICE_CONNECTIONS:-[]}
       - MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES=${MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES:-[]}
@@ -212,6 +213,12 @@ services:
       - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
+      - type: volume
+        source: scanner_feeds_volume
+        target: /opt/moonmind-scanner-db
+        read_only: true
+        volume:
+          nocopy: true
       - moonmind_secrets:/app/var/secrets
       # Live retrieval capability authority, accounting, and bounded evidence.
       # Must outlive container recreation or an update would invalidate
@@ -1250,6 +1257,8 @@ volumes:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
   moonmind_retrieval_state:
     name: ${MOONMIND_RETRIEVAL_STATE_VOLUME_NAME:-moonmind_retrieval_state}
+  scanner_feeds_volume:
+    name: ${MOONMIND_SCANNER_FEEDS_VOLUME_NAME:-scanner_feeds_volume}
   unreal_ccache_volume:
     name: ${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
   unreal_ubt_volume:

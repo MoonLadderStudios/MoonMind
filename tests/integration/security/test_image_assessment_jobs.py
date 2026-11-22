@@ -205,7 +205,7 @@ output.write_text(json.dumps({{
     return calls
 
 
-def database(root, advisories, name):
+def database(root, advisories, name, *, probability=None):
     """One published feed snapshot; matching reads its ``trivy.db`` fixture."""
     stage = root / "staging" / name
     (stage / "db").mkdir(parents=True)
@@ -215,10 +215,17 @@ def database(root, advisories, name):
     (stage / "db" / "metadata.json").write_text(
         json.dumps({"Version": 2, "UpdatedAt": now, "DownloadedAt": now})
     )
+    from tests.fixtures.security_review.exploitation_feeds import write_component
+
+    components = ["vulnerability"]
+    if probability is not None:
+        components.extend(["kev", "epss"])
+        for component in ("kev", "epss"):
+            write_component(stage, component, now[:10], probability=probability)
     snapshot, _ = publish_snapshot(
         root,
         stage,
-        components=["vulnerability"],
+        components=components,
         acquisition="import",
         upstreams={"vulnerability": f"artifact:art_{name}"},
         now=datetime.now(UTC),
@@ -743,6 +750,7 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
             "pkg:pypi/requests@2.0.0": ["CVE-2024-0002"],
         },
         "newer",
+        probability="0.25",
     )
     second, *_, flagged_job = await harness.run(
         ImageAssessment(
@@ -785,6 +793,47 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     )
     asset = second["subject"]["asset"]
     flagged = await report(environment, summary_ref(harness, flagged_job), asset)
+    comparison = await recurring.read(environment.service, flagged["comparisonRef"])
+    by_rule = {row["finding"]["ruleId"]: row for row in comparison["findings"]}
+    assert by_rule["CVE-2024-0001"]["finding"]["priority"]["kev"]["dateAdded"]
+    assert (
+        by_rule["CVE-2024-0002"]["finding"]["priority"]["epss"]["probability"] == 0.25
+    )
+    refreshed = database(
+        harness.db,
+        {
+            "pkg:apk/openssl@3.0.1": ["CVE-2024-0001"],
+            "pkg:pypi/requests@2.0.0": ["CVE-2024-0002"],
+        },
+        "rescore",
+        probability="0.90",
+    )
+    _, *_, rescore_job = await harness.run(
+        ImageAssessment(
+            operation="sbom-reassess",
+            target="sbom",
+            inputArtifactRef=retained["artifactRef"],
+            databaseCacheRef="scanner-db",
+            databaseDigest=refreshed,
+        ),
+        "rescore",
+    )
+    rescored = await report(
+        environment,
+        summary_ref(harness, rescore_job),
+        asset,
+        baseline=flagged["comparisonRef"],
+        key="rescore",
+    )
+    changed = await recurring.read(environment.service, rescored["comparisonRef"])
+    assert changed["counts"]["still_observed"] == 2
+    priority_row = next(
+        row
+        for row in changed["findings"]
+        if row["finding"]["ruleId"] == "CVE-2024-0002"
+    )
+    assert priority_row["findingId"] == by_rule["CVE-2024-0002"]["findingId"]
+    assert "trivy:epss" in priority_row["changedIntelligence"]
     cleared = await report(
         environment,
         summary_ref(harness, clean_job),

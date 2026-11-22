@@ -22,9 +22,9 @@ Text = Annotated[
 Items = Annotated[list[Text], Field(max_length=4096)]
 Scanner = Literal["gitleaks", "opengrep", "trivy"]
 MAX_REPORT_BYTES = 8 * 1024 * 1024
-FeedComponent = Literal["vulnerability", "java", "checks"]
+FeedComponent = Literal["vulnerability", "java", "checks", "kev", "epss"]
 #: Freshness policy default; independent of scanner-image maintenance.
-DEFAULT_FEED_MAX_AGE_HOURS = 72
+DEFAULT_FEED_MAX_AGE_HOURS = 48
 
 
 class Contract(BaseModel):
@@ -147,7 +147,7 @@ class FeedRefresh(Contract):
 
     acquisition: Literal["download", "import"] = "download"
     components: list[FeedComponent] = Field(
-        default_factory=lambda: ["vulnerability"], min_length=1, max_length=3
+        default_factory=lambda: ["vulnerability"], min_length=1, max_length=5
     )
     feed_cache_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]*$")
     egress_policy_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
@@ -166,8 +166,10 @@ class FeedRefresh(Contract):
     def admitted_choices(self):
         if len(set(self.components)) != len(self.components):
             raise ValueError("duplicate feed component")
-        if "vulnerability" not in self.components:
-            raise ValueError("feed snapshots require the vulnerability database")
+        if {"java", "checks"}.intersection(
+            self.components
+        ) and "vulnerability" not in self.components:
+            raise ValueError("Trivy feed snapshots require the vulnerability database")
         download = self.acquisition == "download"
         if download != (self.egress_policy_ref is not None):
             raise ValueError("feed downloads, and only downloads, need egress")

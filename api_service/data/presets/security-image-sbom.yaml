@@ -101,7 +101,7 @@ annotations:
             type: string
             title: Database digest
           feedMaxAgeHours:
-            default: 72
+            default: 48
             maximum: 8760
             minimum: 1
             title: Feed max age hours

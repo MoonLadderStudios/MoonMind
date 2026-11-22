@@ -603,7 +603,12 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
 ):
     image.install_trivy(tmp_path, monkeypatch)
     db = tmp_path / "feeds"
-    digest = image.database(db, {"pkg:apk/openssl@3.0.1": ["CVE-2024-0001"]}, "one")
+    digest = image.database(
+        db,
+        {"pkg:apk/openssl@3.0.1": ["CVE-2024-0001"]},
+        "one",
+        probability="0.75" if entrypoint == "preset-api" else None,
+    )
     archive = await recurring.put(
         environment.service, image.image_archive(image.VULNERABLE)
     )
@@ -681,6 +686,11 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
     )
     assert summary["coverage"] == "complete", summary["limitations"]
     assert [f["ruleId"] for f in summary["result"]["findings"]] == ["CVE-2024-0001"]
+    matches = summary["execution"]["feed"]["matches"]
+    if entrypoint == "preset-api":
+        assert matches["CVE-2024-0001"]["kev"]["ransomwareUse"] == "Unknown"
+    else:
+        assert matches == {}
 
     await finish(backend, request, tmp_path)
     await assert_retained(environment, [summary["nativeRef"]], published)

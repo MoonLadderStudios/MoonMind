@@ -108,17 +108,53 @@ def _check_cancelled() -> None:
         raise asyncio.CancelledError()
 
 
-def _feed_intelligence(execution) -> dict[str, str]:
+def _feed_intelligence(execution, *, vulnerabilities=None) -> dict[str, str]:
     """Scanner version and the vulnerability/check data snapshot it read."""
-    if execution is None:
-        return {}
-    values = {"version": execution.version or "unavailable"}
-    snapshot = execution.feed.snapshot if execution.feed else None
-    if snapshot is not None:
-        values["feedSnapshot"] = snapshot.snapshot_id
-    elif execution.database_digest:
-        values["database"] = execution.database_digest
+    from moonmind.security.exploitation_data import SOURCES
+    from moonmind.security.scanner_feeds import component_state
+
+    values = {}
+    feed = execution.feed if execution else None
+    snapshot = feed.snapshot if feed else None
+    if execution:
+        values["version"] = execution.version or "unavailable"
+        if snapshot:
+            values["feedSnapshot"] = snapshot.snapshot_id
+        elif execution.database_digest:
+            values["database"] = execution.database_digest
+    if vulnerabilities is None:
+        return values
+    for name in SOURCES:
+        state = component_state(feed, name) if vulnerabilities else "not requested"
+        record = snapshot.components.get(name) if snapshot and vulnerabilities else None
+        values[name] = record.content_digest if record else state
+        values[name + "Status"] = (
+            f"{state} ({record.updated_at.date()})"
+            if record and record.updated_at
+            else state
+        )
     return values
+
+
+def _prioritize(findings, execution):
+    from moonmind.security.exploitation_data import CVE, VulnerabilityPriority
+
+    feed = execution.feed if execution else None
+    result = []
+    for finding in findings:
+        # Older native summaries have no vulnerability marker. An explicit CVE
+        # still identifies a Trivy vulnerability in those retained reports.
+        if finding.tool == "trivy" and (
+            finding.priority is not None or CVE.fullmatch(finding.rule_id)
+        ):
+            priority = (
+                feed.matches.get(finding.rule_id) if feed and feed.snapshot else None
+            )
+            finding = finding.model_copy(
+                update={"priority": priority or VulnerabilityPriority()}
+            )
+        result.append(finding)
+    return result
 
 
 def observe_inventory(
@@ -309,11 +345,28 @@ def _scanner_observation(
     )
     if not assets:
         complete = False
+    config = (
+        admission.model_dump(mode="json", exclude={"output_directory"})
+        if admission
+        else None
+    )
+    feed = summary.execution.feed if summary.execution else None
+    if (
+        config
+        and feed
+        and feed.snapshot
+        and feed.snapshot.trivy_digest
+        and config["database_digest"]
+    ):
+        config["database_digest"] = feed.snapshot.trivy_digest
+    vulnerabilities = None
+    if summary.scanner == "trivy":
+        vulnerabilities = admission is not None and "vuln" in admission.trivy_scanners
     return Observation(
         scope=request.scope,
         observed_at=created_at,
         expires_at=created_at + timedelta(days=1),
-        findings=findings[:4096],
+        findings=_prioritize(findings[:4096], summary.execution),
         coverage=[
             Coverage(
                 source="repository",
@@ -323,13 +376,7 @@ def _scanner_observation(
                 all_rules=admission is not None,
                 config_ref=content_key(
                     [
-                        (
-                            admission.model_dump(
-                                mode="json", exclude={"output_directory"}
-                            )
-                            if admission
-                            else None
-                        ),
+                        config,
                         (
                             summary.execution.version
                             if summary.execution
@@ -338,7 +385,9 @@ def _scanner_observation(
                     ]
                 ),
                 status="complete" if complete else "partial",
-                intelligence=_feed_intelligence(summary.execution),
+                intelligence=_feed_intelligence(
+                    summary.execution, vulnerabilities=vulnerabilities
+                ),
             )
         ],
         provenance={
@@ -401,7 +450,7 @@ def _image_observation(
         scope=request.scope,
         observed_at=created_at,
         expires_at=created_at + timedelta(days=1),
-        findings=findings,
+        findings=_prioritize(findings, execution),
         coverage=[
             Coverage(
                 source="image",
@@ -413,7 +462,7 @@ def _image_observation(
                 # reassessment compares one inventory across vulnerability data.
                 config_ref=content_key(["image-vulnerabilities", version]),
                 status="complete" if complete and assets else "partial",
-                intelligence=_feed_intelligence(execution),
+                intelligence=_feed_intelligence(execution, vulnerabilities=True),
             )
         ],
         provenance={

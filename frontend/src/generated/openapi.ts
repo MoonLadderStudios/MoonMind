@@ -8984,7 +8984,7 @@ export interface components {
              */
             acquisition: "download" | "import";
             /** Components */
-            components?: ("vulnerability" | "java" | "checks")[];
+            components?: ("vulnerability" | "java" | "checks" | "kev" | "epss")[];
             /** Feedcacheref */
             feedCacheRef: string;
             /** Egresspolicyref */
@@ -8998,7 +8998,7 @@ export interface components {
             outputDirectory: string;
             /**
              * Maxagehours
-             * @default 72
+             * @default 48
              */
             maxAgeHours: number;
             /**
@@ -9332,7 +9332,7 @@ export interface components {
             databaseDigest?: string | null;
             /**
              * Feedmaxagehours
-             * @default 72
+             * @default 48
              */
             feedMaxAgeHours: number;
             /**
@@ -12573,7 +12573,7 @@ export interface components {
             databaseDigest?: string | null;
             /**
              * Feedmaxagehours
-             * @default 72
+             * @default 48
              */
             feedMaxAgeHours: number;
             /**

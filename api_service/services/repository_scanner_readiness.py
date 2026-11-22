@@ -1,23 +1,32 @@
 """Read-only deployment configuration, never a live scanner health claim."""
 
+import os
 from collections.abc import Mapping
-from datetime import UTC
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from moonmind.config.container_backend_settings import ContainerBackendSettings
+from moonmind.config.container_backend_settings import (
+    COMPOSE_DOCKER_ENDPOINT,
+    ContainerBackendSettings,
+)
+from moonmind.schemas.repository_scanner_models import DEFAULT_FEED_MAX_AGE_HOURS
 from moonmind.security.scanner_feeds import (
     FEED_CACHE_TARGET,
     FEED_HOSTS,
+    UPSTREAMS,
+    FeedSnapshotError,
+    component_state,
+    current_snapshot,
+    feed_evidence,
     feed_policy_admits,
 )
 
 
-def repository_scanner_readiness(settings: ContainerBackendSettings) -> dict:
-    """Project configured defaults without pulling images or inspecting volumes.
-
-    The API does not run on the container worker. Image contents, feed freshness,
-    and network reachability remain unverified until execution evidence exists.
-    """
+def repository_scanner_readiness(
+    settings: ContainerBackendSettings, *, database=Path("/opt/moonmind-scanner-db")
+) -> dict:
+    """Read configuration and the published manifest on the matching read-only mount."""
     source_ref = "repository-security"
     image = next(
         (s for s in settings.image_sources if s.source_ref == source_ref), None
@@ -33,6 +42,32 @@ def repository_scanner_readiness(settings: ContainerBackendSettings) -> dict:
         and writer.target == FEED_CACHE_TARGET
         and reader.volume_name == writer.volume_name
     )
+    components = dict.fromkeys(UPSTREAMS, "unverified")
+    if (
+        cache_configured
+        and settings.endpoint == COMPOSE_DOCKER_ENDPOINT
+        and database.is_dir()
+        and reader.volume_name
+        == os.environ.get("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "scanner_feeds_volume")
+    ):
+        try:
+            snapshot = current_snapshot(database, verify=False)
+            feed = feed_evidence(
+                snapshot,
+                misconfig=False,
+                max_age_hours=DEFAULT_FEED_MAX_AGE_HOURS,
+                now=datetime.now(UTC),
+            )
+            components = {name: component_state(feed, name) for name in UPSTREAMS}
+        except FeedSnapshotError as exc:
+            if (
+                exc.code == "feed_snapshot_unavailable"
+                and not (database / "current.json").exists()
+            ):
+                components = dict.fromkeys(UPSTREAMS, "missing")
+        except OSError:
+            # A read error leaves feed freshness unknown. Keep every component unverified.
+            pass
     policies = [
         {
             "policyRef": policy.policy_ref,
@@ -41,7 +76,10 @@ def repository_scanner_readiness(settings: ContainerBackendSettings) -> dict:
         for policy in settings.egress_policies
         if source_ref in policy.allowed_image_source_refs
         and feed_policy_admits(policy)
-        and FEED_HOSTS <= {d.host for d in policy.destinations}
+        and (
+            FEED_HOSTS <= {d.host for d in policy.destinations}
+            or not FEED_HOSTS.intersection(d.host for d in policy.destinations)
+        )
     ]
     diagnostics = []
     if not settings.enabled or not settings.endpoint:
@@ -69,7 +107,7 @@ def repository_scanner_readiness(settings: ContainerBackendSettings) -> dict:
         diagnostics.append(
             {
                 "code": "refresh_egress_unavailable",
-                "action": "Authorize a feed-only HTTPS egress policy for repository-security and an explicit refresh workflow, covering ghcr.io and pkg-containers.githubusercontent.com. Offline feed import remains available.",
+                "action": "Authorize a feed-only HTTPS egress policy for repository-security and an explicit refresh workflow, covering the HTTPS hosts for its selected components. Offline feed import remains available.",
             }
         )
     return {
@@ -83,9 +121,10 @@ def repository_scanner_readiness(settings: ContainerBackendSettings) -> dict:
         "refreshCacheRef": "scanner-feeds",
         "feedCacheConfigured": cache_configured,
         "feedSnapshot": "unverified",
+        "feedComponents": components,
         "refreshPolicies": policies,
         "diagnostics": diagnostics,
-        "verificationNote": "Configuration only. Image contents, installed rules, feed snapshot freshness and refresh connectivity are Unverified until actual execution evidence is available. No scan or refresh is started here.",
+        "verificationNote": "Component freshness uses the published manifest. Installed contents and connectivity remain Unverified until execution. No scan or refresh is started here.",
     }
 
 

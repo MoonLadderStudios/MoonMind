@@ -405,3 +405,53 @@ def test_repository_readiness_does_not_borrow_live_scope():
             settings=configured(),
             assessment_scope={"assessmentRef": "fixture"},
         )
+
+
+def test_feed_component_state_uses_the_matching_published_manifest(
+    tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+    from moonmind.security import scanner_feeds as feeds
+    from tests.fixtures.security_review.exploitation_feeds import write_component
+    from tests.unit.security.test_scanner_feeds import trivy_cache
+
+    monkeypatch.setenv("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "feeds")
+    assert set(
+        repository_scanner_readiness(configured(), database=tmp_path)[
+            "feedComponents"
+        ].values()
+    ) == {"missing"}
+    now = datetime.now(UTC)
+    stage = tmp_path / "staging" / "new"
+    (tmp_path / "snapshots").mkdir()
+    trivy_cache(stage, updated=now)
+    write_component(stage, "epss", now.date().isoformat())
+    write_component(stage, "kev", (now - timedelta(days=5)).date().isoformat())
+    feeds.publish_snapshot(
+        tmp_path,
+        stage,
+        components=["vulnerability", "kev", "epss"],
+        acquisition="download",
+        upstreams=feeds.UPSTREAMS,
+        now=now,
+    )
+    states = repository_scanner_readiness(configured(), database=tmp_path)[
+        "feedComponents"
+    ]
+    assert states == {
+        "vulnerability": "fresh",
+        "kev": "stale",
+        "epss": "fresh",
+        "java": "missing",
+        "checks": "missing",
+    }
+    remote = replace(configured(), endpoint="tcp://remote-worker.example:2376")
+    assert set(
+        repository_scanner_readiness(remote, database=tmp_path)["feedComponents"].values()
+    ) == {"unverified"}
+    monkeypatch.setenv("MOONMIND_SCANNER_FEEDS_VOLUME_NAME", "different-volume")
+    assert set(
+        repository_scanner_readiness(configured(), database=tmp_path)[
+            "feedComponents"
+        ].values()
+    ) == {"unverified"}

@@ -300,7 +300,7 @@ def container_repository_scan(
 
 @container_app.command(
     "feed-refresh",
-    help="Prepare selected Trivy feeds without repository content or assessment credentials.",
+    help="Prepare selected scanner feeds without repository content or assessment credentials.",
 )
 def container_feed_refresh(
     admission: Annotated[
@@ -318,7 +318,7 @@ def container_feed_refresh(
     component: list[str] | None = typer.Option(
         None,
         "--component",
-        help="Repeat vulnerability, java or checks. Default: vulnerability and checks.",
+        help="Repeat vulnerability, java, checks, kev or epss. Default: vulnerability and checks.",
     ),
     max_age_hours: int | None = typer.Option(None, "--max-age-hours", min=1, max=8760),
 ) -> None:
@@ -343,7 +343,7 @@ def container_feed_refresh(
                 components=(
                     component if component is not None else ["vulnerability", "checks"]
                 ),
-                maxAgeHours=max_age_hours if max_age_hours is not None else 72,
+                **({"maxAgeHours": max_age_hours} if max_age_hours is not None else {}),
             )
         result = run_container_job(
             build_feed_refresh_job(refresh, image_source_ref=image_source)

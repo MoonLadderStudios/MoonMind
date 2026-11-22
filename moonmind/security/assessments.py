@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import ExecutionBudget
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
+from moonmind.security.exploitation_data import VulnerabilityPriority
 from moonmind.security.evidence_exports import EvidenceExportSelection
 from moonmind.security.frameworks import (
     AssessmentText,
@@ -228,6 +229,10 @@ class Finding(Contract):
     rule_id: Text
     asset: Text
     native_id: Text
+    severity: Text | None = Field(None, exclude_if=lambda value: value is None)
+    priority: VulnerabilityPriority | None = Field(
+        None, exclude_if=lambda value: value is None
+    )
     evidence_refs: Evidence
 
     @property
@@ -1044,6 +1049,26 @@ def _intelligence(observation: Observation, finding: Finding | None = None) -> d
     }
 
 
+def _changed_priority(
+    finding: Finding, retained: Finding, changed: list[str]
+) -> list[str]:
+    """Attach changed scores to the feed that supplied them across observations."""
+    result = []
+    for name in ("kev", "epss"):
+        before = getattr(retained.priority, name, None)
+        after = getattr(finding.priority, name, None)
+        if name == "epss" and before and after:
+            before = (before.probability, before.percentile)
+            after = (after.probability, after.percentile)
+        if before != after:
+            identity = f"trivy:{name}"
+            if identity in changed:
+                result.append(identity)
+            elif "trivy:feedSnapshot" in changed and "trivy:feedSnapshot" not in result:
+                result.append("trivy:feedSnapshot")
+    return result
+
+
 def _intelligence_changes(
     current: Observation, previous: Observation | None, finding: Finding | None = None
 ) -> list[str]:
@@ -1304,7 +1329,11 @@ def compare_observations(
                     else retained.evidence_expires_at
                 ),
                 changed_intelligence=(
-                    []
+                    _changed_priority(
+                        finding,
+                        retained.finding,
+                        _intelligence_changes(current, previous_observation, finding),
+                    )
                     if retained
                     else _intelligence_changes(current, previous_observation, finding)
                 ),
